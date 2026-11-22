@@ -1,4 +1,4 @@
-#include "duckdb/common/enums/decide.hpp"
+#include "duckdb/planner/decide/decide_tree_nodes.hpp"
 #include "duckdb/optimizer/statistics_propagator.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
@@ -6,8 +6,7 @@
 namespace duckdb {
 
 void StatisticsPropagator::FoldSkipNullTests(unique_ptr<Expression> &expr) {
-	if (expr->GetExpressionType() != ExpressionType::OPERATOR_IS_NOT_NULL ||
-	    !HasDecideTag(expr->GetAlias(), SKIP_NULL_TAG)) {
+	if (expr->GetExpressionType() != ExpressionType::OPERATOR_IS_NOT_NULL || !IsDecideNullTest(*expr)) {
 		ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) { FoldSkipNullTests(child); });
 		return;
 	}

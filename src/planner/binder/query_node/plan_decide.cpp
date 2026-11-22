@@ -1,4 +1,5 @@
 #include "duckdb/planner/binder.hpp"
+#include "duckdb/planner/decide/decide_tree_nodes.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_subquery_expression.hpp"
@@ -104,22 +105,18 @@ unique_ptr<LogicalOperator> Binder::PlanDecide(BoundSelectNode &statement, uniqu
 	unordered_set<idx_t> query_wide_table_indexes;
 	collect_flattened_indexes(uncorrelated_subquery_slots, query_wide_table_indexes);
 
-	auto tag_flattened_values = [](const vector<SourceSubquerySlot> &slots, const string &tag) {
+	auto mark_flattened_values = [](const vector<SourceSubquerySlot> &slots, DecideValueKind kind) {
 		for (auto &entry : slots) {
 			auto *slot = entry.slot;
 			if (!slot || !*slot) {
 				continue;
 			}
-			auto alias = (*slot)->GetAlias();
-			if (!HasDecideTag(alias, tag)) {
-				AddDecideTag(alias, tag);
-			}
-			(*slot)->SetAlias(std::move(alias));
+			MarkDecideValue(**slot, kind);
 			(*slot)->SetQueryLocation(entry.location);
 		}
 	};
-	tag_flattened_values(uncorrelated_subquery_slots, QUERY_WIDE_VALUE_TAG);
-	tag_flattened_values(correlated_subquery_slots, ROW_VARYING_SUBQUERY_TAG);
+	mark_flattened_values(uncorrelated_subquery_slots, DecideValueKind::UNCORRELATED_SUBQUERY);
+	mark_flattened_values(correlated_subquery_slots, DecideValueKind::CORRELATED_SUBQUERY);
 	// Canonicalization: the single point at which the shape of a user-written
 	// constraint is decided (decision terms left, data right). Runs here rather
 	// than during binding because it needs bound expressions -- a decision

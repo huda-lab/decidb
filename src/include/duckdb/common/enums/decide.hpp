@@ -248,17 +248,6 @@ inline bool TryParseDecideIndexTag(const string &alias, const string &prefix, id
 //! the reducer takes one value from. The scope may have no variable declared on it.
 static constexpr const char *QUALIFIED_REDUCER_SCOPE_TAG_PREFIX = "__qualified_by_";
 
-//! Builds the alias tag naming the keyed scope a reducer is qualified by ("__qualified_by_<i>__").
-inline string MakeQualifiedReducerTag(idx_t keyed_scope_idx) {
-	return string(QUALIFIED_REDUCER_SCOPE_TAG_PREFIX) + to_string(keyed_scope_idx) + "__";
-}
-
-//! Reads back the keyed scope index from an alias written by MakeQualifiedReducerTag.
-//! Returns false (leaving `scope_idx` untouched) when the alias carries no such tag.
-inline bool TryParseQualifiedReducerTag(const string &alias, idx_t &scope_idx) {
-	return TryParseDecideIndexTag(alias, QUALIFIED_REDUCER_SCOPE_TAG_PREFIX, scope_idx);
-}
-
 //! Tag on an objective's reducer that holds a reducer: the canonicalizer stamps it once, and
 //! DecideOptimizer::RewriteScopedReducers replaces the reducer by a helper decision
 //! (LogicalDecide::reducer_value_links). A clause in the VALUE shape says so in a field
@@ -270,10 +259,6 @@ static constexpr const char *VALUE_REWRITE_TAG = "__value_rewrite__";
 //! value. No tag means `BY ()`: every kept row. The key the decision reducers of an aggregate
 //! clause share is the clause's (BoundDecideClause::group_key).
 static constexpr const char *GROUP_KEY_TAG_PREFIX = "__group_key_";
-
-inline string MakeGroupKeyTag(idx_t group_key_idx) {
-	return string(GROUP_KEY_TAG_PREFIX) + to_string(group_key_idx) + "__";
-}
 
 //! Tag prefix naming a frame selector: "__frame_<i>__" indexes LogicalDecide::frames. It
 //! stands on the aggregate a frame binds to -- `first(e)` for a point frame, its reducer
@@ -332,22 +317,6 @@ static constexpr const char *WRITTEN_NORM_TAG_PREFIX = "__written_norm_";
 //! the user wrote, which a plan and a message print. Display only: two calls that differ in it are equal.
 static constexpr const char *WRITTEN_NAME_TAG_PREFIX = "__written_name_";
 
-//! The name a call was written under, from its tags, else `name`.
-inline string DecideWrittenName(const string &tags, const string &name) {
-	string written;
-	return ExtractDecideTagPayload(tags, WRITTEN_NAME_TAG_PREFIX, written) ? written : name;
-}
-
-//! The tags without the written-name tag, for comparing structure.
-inline string WithoutWrittenName(const string &tags) {
-	string written;
-	string result = tags;
-	if (ExtractDecideTagPayload(tags, WRITTEN_NAME_TAG_PREFIX, written)) {
-		RemoveDecideTag(result, string(WRITTEN_NAME_TAG_PREFIX) + written + "__");
-	}
-	return result;
-}
-
 //! Semantic provenance stamped on the flattened value produced by an UNCORRELATED
 //! scalar subquery. Shape alone cannot distinguish that query-wide column ref from
 //! ordinary row data after PlanSubqueries.
@@ -372,10 +341,6 @@ static constexpr const char *SKIP_NULL_TAG = "__skip_null__";
 //! IR's GuardCoefficients): the query never wrote it, so a render prints the value it guards.
 static constexpr const char *NULL_GUARD_TAG = "__null_guard__";
 
-inline bool TryParseGroupKeyTag(const string &alias, idx_t &group_key_idx) {
-	return TryParseDecideIndexTag(alias, GROUP_KEY_TAG_PREFIX, group_key_idx);
-}
-
 inline bool TryParseFrameTag(const string &alias, idx_t &frame_idx) {
 	return TryParseDecideIndexTag(alias, FRAME_TAG_PREFIX, frame_idx);
 }
@@ -384,18 +349,6 @@ inline bool TryParseFrameTag(const string &alias, idx_t &frame_idx) {
 //! every component is query-wide. Physical evaluation consumes this fact and does not
 //! re-decide the RHS shape.
 static constexpr const char *QUERY_WIDE_BOUND_TAG = "__query_wide_bound__";
-
-inline bool IsQueryWideValueTag(const string &alias) {
-	return HasDecideTag(alias, QUERY_WIDE_VALUE_TAG);
-}
-
-inline bool IsRowVaryingSubqueryTag(const string &alias) {
-	return HasDecideTag(alias, ROW_VARYING_SUBQUERY_TAG);
-}
-
-inline bool IsQueryWideBoundTag(const string &alias) {
-	return HasDecideTag(alias, QUERY_WIDE_BOUND_TAG);
-}
 
 //! On the comparison of a clause over groups: its bound reads a frame and may differ within a group, so it takes the
 //! group's tightest value among the rows where it has one (D85). No side table can read a frame, so execution takes it.

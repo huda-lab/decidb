@@ -459,10 +459,10 @@ private:
 			slot = frame_aggregate_slots.emplace(index, columns.size() - 1).first;
 		}
 		auto name = op.frame_aggregates[index].text;
-		AddDecideTag(name, BOUND_REDUCER_TAG);
 		AddDecideTag(name, FRAME_COLUMN_TAG);
 		auto column = make_uniq<BoundReferenceExpression>(std::move(name), marker.return_type,
 		                                                  frame_reads.column_base + slot->second);
+		MarkDecideValue(*column, DecideValueKind::BOUND_REDUCER);
 		// It equals the reducer in value, so a message quotes it as the reducer was written (the location rule).
 		DecideReplaces(*column, marker);
 		return std::move(column);
@@ -619,19 +619,18 @@ private:
 	// Reducer metadata and peeled scales
 	//===------------------------------------------------------------------===//
 
-	//! Keyed scope a reducer is qualified by (`sum(per D: ...)`), read back from the tag the
-	//! binder stamped on the aggregate; INVALID_INDEX when the reducer is unqualified.
+	//! Keyed scope a reducer is qualified by (`sum(per D: ...)`); INVALID_INDEX when the reducer is unqualified.
 	static idx_t QualifierScopeOf(const BoundAggregateExpression &agg) {
 		idx_t scope_idx = DConstants::INVALID_INDEX;
-		TryParseQualifiedReducerTag(agg.alias, scope_idx);
+		DecideReducerPer(agg, scope_idx);
 		return scope_idx;
 	}
 
-	//! A reducer's AVG tag, qualifier and reduction on every term or product group extracted from its body since
+	//! A reducer's count scale, qualifier and reduction on every term or product group extracted from its body since
 	//! `begin`.
 	template <class TERM>
 	static void ApplyAggregateMetadata(vector<TERM> &items, idx_t begin, const BoundAggregateExpression &agg) {
-		bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
+		bool is_avg = DecideReducerCountScale(agg);
 		idx_t qualifier_scope = QualifierScopeOf(agg);
 		for (idx_t i = begin; i < items.size(); i++) {
 			items[i].avg_scale = is_avg;
@@ -645,7 +644,7 @@ private:
 	template <class TERM>
 	static void ApplyAvgGroupKey(vector<TERM> &items, idx_t begin, const BoundAggregateExpression &agg) {
 		const idx_t avg_group_key =
-		    HasDecideTag(agg.alias, AVG_REWRITE_TAG) ? DecideReducerGroupKey(agg) : DConstants::INVALID_INDEX;
+		    DecideReducerCountScale(agg) ? DecideReducerGroupKey(agg) : DConstants::INVALID_INDEX;
 		for (idx_t i = begin; i < items.size(); i++) {
 			items[i].avg_group_key = avg_group_key;
 		}

@@ -1,4 +1,5 @@
 #include "catch.hpp"
+#include "duckdb/planner/decide/decide_tree_nodes.hpp"
 #include "test_helpers.hpp"
 
 #include "duckdb/common/enums/decide.hpp"
@@ -67,14 +68,14 @@ TEST_CASE("Canonicalization replaces norm with its definition and keeps the writ
 		REQUIRE(atoms.size() == 1);
 		auto &aggregate = atoms[0].term->Cast<BoundAggregateExpression>();
 		REQUIRE(StringUtil::Lower(aggregate.function.name) == test.reducer);
-		REQUIRE(!HasDecideTag(aggregate.GetAlias(), NORM_MARKER_TAG_PREFIX));
-		REQUIRE(HasDecideTag(aggregate.GetAlias(), WRITTEN_NORM_TAG_PREFIX));
+		REQUIRE(!IsDecideNormMarker(aggregate));
+		REQUIRE(DecideWrittenNorm(aggregate).order != DecideNorm::Order::NONE);
 	}
 	// L0 needs indicator variables, so its marker stays for the optimizer.
 	CanonicalObjective l0(con, "norm(x, 0)");
 	auto atoms = ReadCanonicalAtoms(*l0.decide->bound.objective.body, l0.decide->decide_index);
 	REQUIRE(atoms.size() == 1);
-	REQUIRE(HasDecideTag(atoms[0].term->GetAlias(), NORM_MARKER_TAG_PREFIX));
+	REQUIRE(IsDecideNormMarker(*atoms[0].term));
 }
 
 TEST_CASE("Canonical atoms carry the sign and the factor canonicalization left on a reducer", "[decidb]") {

@@ -15,12 +15,6 @@
 
 namespace duckdb {
 
-idx_t DecideReducerGroupKey(const BoundAggregateExpression &reducer) {
-	idx_t group_key = DConstants::INVALID_INDEX;
-	TryParseGroupKeyTag(reducer.GetAlias(), group_key);
-	return group_key;
-}
-
 bool TryGetDecideFrame(const Expression &expr, idx_t &frame) {
 	return expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && TryParseFrameTag(expr.GetAlias(), frame);
 }
@@ -58,10 +52,10 @@ bool DecideExpressionsEqual(const Expression &a, const Expression &b) {
 	return a_frames == b_frames;
 }
 
-//! The conjuncts of a reducer's filter that its `when` wrote. Its NULL tests (SKIP_NULL_TAG,
-//! DecideCanonicalizer::SkipNullData) drop its own members only: a reducer inside reads its group whole.
+//! The conjuncts of a reducer's filter that its `when` wrote. Its NULL tests (IsDecideNullTest) drop its own
+//! members only: a reducer inside reads its group whole.
 static void AddWrittenConditions(const Expression &filter, vector<const Expression *> &out) {
-	if (HasDecideTag(filter.GetAlias(), SKIP_NULL_TAG)) {
+	if (IsDecideNullTest(filter)) {
 		return;
 	}
 	if (filter.GetExpressionType() == ExpressionType::CONJUNCTION_AND) {

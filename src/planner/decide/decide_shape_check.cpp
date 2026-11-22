@@ -30,7 +30,7 @@ void DecideShapeCheck::Refuse(const Expression &term, const string &problem) con
 static string OperatorName(const Expression &expr) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &func = expr.Cast<BoundFunctionExpression>();
-		return DecideWrittenName(func.GetAlias(), func.function.name);
+		return DecideWrittenName(func);
 	}
 	auto name = EnumUtil::ToString(expr.type).substr(strlen("OPERATOR_"));
 	return StringUtil::Replace(name, "_", " ");
@@ -192,11 +192,8 @@ static bool DecideTypeIsWholeNumbered(const LogicalType &type) {
 //! Is this bound node the inert `norm(e, 0, M)` marker? The L0 "norm" counts nonzeros, so its value is a count whatever
 //! `e` is typed as.
 static bool IsBoundL0NormMarker(const Expression &expr) {
-	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-		return false;
-	}
-	string payload;
-	return ExtractDecideTagPayload(expr.alias, NORM_MARKER_TAG_PREFIX, payload) && StringUtil::StartsWith(payload, "0");
+	DecideNorm norm;
+	return IsDecideNormMarker(expr, norm) && norm.IsCount();
 }
 
 //! Is this bound node an AVG aggregate? A range frame's marker is a value of the row, which no rewrite multiplies
@@ -252,7 +249,7 @@ static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoi
 		}
 		if (StringUtil::CIEquals(name, "sum")) {
 			return DecideSideIsWholeNumbered(*agg.children[0], false, decide_index,
-			                                 addends_count || HasDecideTag(agg.alias, NORM_MARKER_TAG_PREFIX));
+			                                 addends_count || IsDecideNormMarker(agg));
 		}
 		return DecideTypeIsWholeNumbered(expr.return_type);
 	}

@@ -1,4 +1,5 @@
 #include "catch.hpp"
+#include "duckdb/planner/decide/decide_tree_nodes.hpp"
 #include "test_helpers.hpp"
 
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
@@ -53,14 +54,14 @@ struct QueryIR {
 		client = con.context.get();
 		ir = DirectIR::Read(*client, *decide);
 	}
-	//! Rewrites every norm tag in the constraints to `payload` and reads the IR again.
-	void RetagNorms(const string &payload) {
+	//! Gives every norm marker in the constraints the order `order` and reads the IR again.
+	void ReorderNorms(DecideNorm::Order order) {
 		for (auto &clause : decide->bound.clauses) {
 			ExpressionIterator::EnumerateExpression(clause.body, [&](Expression &expression) {
-				string old_payload;
-				if (ExtractDecideTagPayload(expression.alias, NORM_MARKER_TAG_PREFIX, old_payload)) {
-					RemoveDecideTag(expression.alias, string(NORM_MARKER_TAG_PREFIX) + old_payload + "__");
-					AddDecideTag(expression.alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");
+				if (IsDecideNormMarker(expression)) {
+					DecideNorm norm;
+					norm.order = order;
+					SetDecideNormMarker(expression.Cast<BoundAggregateExpression>(), norm);
 				}
 			});
 		}
@@ -416,21 +417,17 @@ TEST_CASE("Direct-solve IR models reducers, filters, qualifiers, scales and norm
 	REQUIRE(constraints[7].lhs[0].terms[0].IsAbs());
 }
 
-TEST_CASE("Direct-solve IR reads an unexpected norm tag as a not-proved part, never an exception", "[decidb]") {
+TEST_CASE("Direct-solve IR reads a norm marker of any order as a not-proved part, never an exception", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	QueryIR query(con, IRQuery("y(INT)", "norm(y, 0) <= 2", "MINIMIZE SUM(w*y)"));
 	REQUIRE(query.ir.constraints.size() == 1);
 	REQUIRE(query.ir.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
-	// An order canonicalization would have expanded, a malformed order 0, and a tag that is not a number.
-	for (string payload : {"2", "0_not_a_number", "garbage"}) {
-		DYNAMIC_SECTION("payload '" << payload << "'") {
-			REQUIRE_NOTHROW(query.RetagNorms(payload));
-			auto &constraint = query.ir.constraints[0];
-			REQUIRE(constraint.status == DirectAnalysisStatus::NOT_PROVED);
-			REQUIRE(constraint.lhs[0].status == DirectAnalysisStatus::NOT_PROVED);
-		}
-	}
+	// An order canonicalization would have expanded.
+	REQUIRE_NOTHROW(query.ReorderNorms(DecideNorm::Order::L2));
+	auto &constraint = query.ir.constraints[0];
+	REQUIRE(constraint.status == DirectAnalysisStatus::NOT_PROVED);
+	REQUIRE(constraint.lhs[0].status == DirectAnalysisStatus::NOT_PROVED);
 }
 
 TEST_CASE("Direct-solve IR models products and squares, and declines a nested objective", "[decidb]") {

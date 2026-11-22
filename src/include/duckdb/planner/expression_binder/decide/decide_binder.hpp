@@ -77,7 +77,7 @@ struct DecideQualifierContext {
 	//! Table index the decision-variable column refs bind to.
 	idx_t decide_index = DConstants::INVALID_INDEX;
 	vector<KeyedScopeInfo> *keyed_scopes = nullptr;
-	//! Every key bound so far; a reducer's GROUP_KEY_TAG_PREFIX tag names its `by` key.
+	//! Every key bound so far; a reducer names its `by` key by its index (DecideReducerGroupKey).
 	vector<DecideKey> *keys = nullptr;
 	//! Every frame selector bound so far; a frame's FRAME_TAG_PREFIX tag indexes it.
 	vector<DecideFrameSpec> *frames = nullptr;
@@ -178,7 +178,7 @@ protected:
 	BindResult BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) override;
 	//! Binds `agg([when c] [per K]: e) [BY (key)]`: `agg(e)` with `c` as the aggregate's filter and `K` as the key it
 	//! keeps one row of each class by (an exact key scope, tagged like a qualifier; `per ()` is the empty key), then
-	//! the `by` key into LogicalDecide::keys, named on the aggregate by a GROUP_KEY_TAG_PREFIX tag (none for `BY ()`).
+	//! the `by` key into LogicalDecide::keys, named on the aggregate by SetDecideReducerGroupKey (none for `BY ()`).
 	BindResult BindReducer(DecideReducerExpression &reducer, idx_t depth);
 	//! Binds a frame selector (language/guide.md §5.6) to an aggregate over its payload
 	//! -- `first(e)` for a point frame, its reducer for a range -- tagged by

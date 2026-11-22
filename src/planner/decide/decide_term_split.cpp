@@ -39,9 +39,7 @@ unique_ptr<Expression> DecideRebindOperator(ClientContext &context, const string
 		throw InternalException("DECIDE failed to bind '%s': %s", name, error.Message());
 	}
 	if (!written_name.empty()) {
-		auto tags = result->GetAlias();
-		AddDecideTag(tags, string(WRITTEN_NAME_TAG_PREFIX) + written_name + "__");
-		result->SetAlias(std::move(tags));
+		SetDecideWrittenName(*result, written_name);
 	}
 	return result;
 }

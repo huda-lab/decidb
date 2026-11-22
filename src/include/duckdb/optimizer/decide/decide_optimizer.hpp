@@ -116,7 +116,7 @@ private:
 	void RewriteAvgToSum(LogicalDecide &decide);
 
 	//! Helper: recursively walk a bound expression tree, replacing AVG aggregates with SUM.
-	//! The replacement is tagged with AVG_REWRITE_TAG so coefficient evaluation can scale terms.
+	//! The replacement says so (SetDecideReducerCountScale) so coefficient evaluation can scale terms.
 	//! A decision-free AVG is skipped: there is nothing to linearize, and rebinding it as SUM
 	//! would redeclare it with SUM's integral type while its value stays fractional.
 	//! `origin` is the clause the walk stands in (the objective's origin for the

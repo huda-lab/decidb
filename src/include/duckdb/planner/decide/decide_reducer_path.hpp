@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include "duckdb/planner/decide/decide_tree_nodes.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
@@ -42,9 +43,6 @@ struct DecideReducerPath {
 	//! The keys a reducer on this path whose own `by` key is `own` groups by.
 	vector<idx_t> KeysOf(idx_t own) const;
 };
-
-//! The `by` key index of `reducer`, or INVALID_INDEX for `by ()`.
-idx_t DecideReducerGroupKey(const BoundAggregateExpression &reducer);
 
 //! The key holding the elements of `path_keys`, each once (FindOrCreateDecideKey), written as
 //! its parts are; INVALID_INDEX when every key is `by ()`.

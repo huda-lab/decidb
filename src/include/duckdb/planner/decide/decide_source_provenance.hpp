@@ -8,6 +8,7 @@
 #pragma once
 
 #include "duckdb/common/decide_source_info.hpp"
+#include "duckdb/planner/decide/decide_tree_nodes.hpp"
 #include "duckdb/common/unordered_map.hpp"
 #include "duckdb/parser/parsed_expression.hpp"
 #include "duckdb/planner/expression.hpp"
@@ -105,13 +106,13 @@ DecideSourceNames DecidePlanNames(const DecideSourceText &text, const vector<Key
 //! parenthesized.
 string RenderDecideSource(const Expression &expr, const DecideSourceNames &names, int parent_precedence = 0);
 
-//! The body `e` of a reducer canonicalization built from `norm(e, p)` (WRITTEN_NORM_TAG_PREFIX), read back out of
+//! The body `e` of a reducer canonicalization built from `norm(e, p)` (DecideWrittenNorm), read back out of
 //! its definition (DecideCanonicalizer::DesugarNormsInPlace); null for any other reducer. Every reader of a written
 //! norm's body goes through here, so a new definition changes one function.
 const Expression *DecideWrittenNormBody(const BoundAggregateExpression &reducer);
 
-//! The body of the definition `reducer` holds of a norm of order `order`, or nullptr with no order.
-const Expression *DecideNormBody(const BoundAggregateExpression &reducer, const string &order);
+//! The body of the definition `reducer` holds of the norm `norm`, or nullptr with no order.
+const Expression *DecideNormBody(const BoundAggregateExpression &reducer, const DecideNorm &norm);
 
 //! The key of a clause's `per`, as written (`D.region`, `()`): cut from the query where the `per` stands (`location`),
 //! else the key as it was first written (`keys`).

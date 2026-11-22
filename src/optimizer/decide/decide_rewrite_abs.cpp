@@ -420,8 +420,7 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 
 		// F6: a diagnosis and a plan name the helper by the user's ABS(inner), under the name it was written with
 		// (`abs` or `@`), rendered before nested ABS nodes receive their helper tags.
-		string label = DecideWrittenName(func.GetAlias(), func.function.name) + "(" +
-		               RenderForPlan(*func.children[0], decide) + ")";
+		string label = DecideWrittenName(func) + "(" + RenderForPlan(*func.children[0], decide) + ")";
 
 		// Innermost first: an ABS inside this one gets its helper first. The copied
 		// operand retains that tagged function, which term extraction resolves to the

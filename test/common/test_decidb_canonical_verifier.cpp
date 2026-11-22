@@ -1,4 +1,5 @@
 #include "catch.hpp"
+#include "duckdb/planner/decide/decide_tree_nodes.hpp"
 
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/exception.hpp"
@@ -108,18 +109,14 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 	SECTION("missing query-wide bound provenance breaks the fixed point") {
 		auto canonical = canonical_of(bound_on_x());
 		auto &comparison = canonical.body->Cast<BoundComparisonExpression>();
-		auto alias = comparison.right->GetAlias();
-		RemoveDecideTag(alias, QUERY_WIDE_BOUND_TAG);
-		comparison.right->SetAlias(std::move(alias));
+		SetDecideQueryWideBound(*comparison.right, false);
 		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(canonical));
 	}
 
 	SECTION("stale query-wide provenance on row data breaks the fixed point") {
 		auto invalid = Clause(Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO, DecideRef(0), DataRef()));
 		auto &comparison = invalid.body->Cast<BoundComparisonExpression>();
-		auto alias = comparison.right->GetAlias();
-		AddDecideTag(alias, QUERY_WIDE_BOUND_TAG);
-		comparison.right->SetAlias(std::move(alias));
+		SetDecideQueryWideBound(*comparison.right, true);
 		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(invalid));
 	}
 

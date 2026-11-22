@@ -47,9 +47,6 @@ inline bool IsExtremumName(const string &name) {
 //! `SUM(body)` bound as a reducer, reading the rows `filter` keeps (null: every row).
 unique_ptr<Expression> BindSumOver(Optimizer &optimizer, unique_ptr<Expression> body, const Expression *filter);
 
-//! Recognize the binder's `norm` marker alias and return its payload.
-bool TryParseNormMarker(const string &alias, string &payload);
-
 //! A row this layer emits (rather than one the user wrote) with the body `body`: structural, and of the clause
 //! `origin`, so diagnostics still name the clause the user typed; a row defining auxiliary `defined` says so
 //! (BoundDecideClause::defines). It has no scope.

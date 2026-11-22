@@ -161,7 +161,7 @@ private:
 		// Canonicalization put every decision on the left, so the right is data.
 		bool aggregate_data_bound =
 		    !comparison.right->IsFoldable() && clause.shape == CanonicalConstraintClass::AGGREGATE;
-		bool query_wide = IsQueryWideBoundTag(comparison.right->GetAlias());
+		bool query_wide = IsDecideQueryWideBound(*comparison.right);
 		if (!comparison.right->IsFoldable() && !query_wide) {
 			clause.bound_read_shape = clause.shape;
 			clause.bound_read_type = comparison.type;
@@ -280,7 +280,7 @@ private:
 		record.arguments = std::move(arguments);
 		record.key = PathKeyOf(reducer, path);
 		idx_t scope_idx;
-		if (TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx)) {
+		if (DecideReducerPer(reducer, scope_idx)) {
 			D_ASSERT(scope_idx < decide.keyed_scopes.size());
 			// Only the optimizer's helper decisions have scopes over a link, and they are made after this pass.
 			D_ASSERT(decide.keyed_scopes[scope_idx].value_link == DConstants::INVALID_INDEX);
@@ -319,15 +319,15 @@ private:
 		LogicalDecide::FrameAggregate record;
 		record.key = PathKeyOf(reducer, path);
 		idx_t scope_idx;
-		if (TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx)) {
+		const bool has_per = DecideReducerPer(reducer, scope_idx);
+		if (has_per) {
 			record.class_key = decide.bound.keyed_scopes[scope_idx].key;
 		}
 		record.text = Written(reducer);
-		auto alias = MakeFrameAggregateTag(decide.frame_aggregates.size());
-		if (TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx)) {
-			AddDecideTag(alias, string(TREE_REDUCER_SCOPE_TAG_PREFIX) + to_string(scope_idx) + "__");
+		aggregate.SetAlias(MakeFrameAggregateTag(decide.frame_aggregates.size()));
+		if (has_per) {
+			SetDecideTreeReducerPer(aggregate, scope_idx);
 		}
-		aggregate.SetAlias(alias);
 		decide.frame_aggregates.push_back(std::move(record));
 		return marker;
 	}
@@ -364,9 +364,8 @@ private:
 		         name == "arg_max" || name == "sum" || name == "avg");
 		// The binder rejects DISTINCT and drops an ORDER BY these functions ignore, canonicalization gave every norm of
 		// data its definition, and the AVG rewrite of `<>` runs after this pass.
-		string payload;
-		D_ASSERT(!reducer.IsDistinct() && !reducer.order_bys && !HasDecideTag(reducer.GetAlias(), AVG_REWRITE_TAG) &&
-		         !ExtractDecideTagPayload(reducer.GetAlias(), NORM_MARKER_TAG_PREFIX, payload));
+		D_ASSERT(!reducer.IsDistinct() && !reducer.order_bys && !DecideReducerCountScale(reducer) &&
+		         !IsDecideNormMarker(reducer));
 		if (!argument || name == "count") {
 			return nullptr;
 		}
@@ -392,18 +391,14 @@ private:
 		if (in_objective && key == DConstants::INVALID_INDEX) {
 			// The objective is produced once: a reducer over data with no `by` is one value for the whole query, as a
 			// subquery is, so it may scale a reducer there.
-			auto alias = result->GetAlias();
-			AddDecideTag(alias, QUERY_WIDE_VALUE_TAG);
-			result->SetAlias(std::move(alias));
+			MarkDecideQueryWideValue(*result);
 		}
 		return result;
 	}
 
-	//! `value` stands for a recorded reducer and is read whole (BOUND_REDUCER_TAG).
+	//! `value` stands for a recorded reducer and is read whole.
 	static void MarkReducerValue(Expression &value) {
-		auto alias = value.GetAlias();
-		AddDecideTag(alias, BOUND_REDUCER_TAG);
-		value.SetAlias(std::move(alias));
+		MarkDecideValue(value, DecideValueKind::BOUND_REDUCER);
 	}
 
 	//! `value` stands in for `written`, equal to it for the rows it is read on, so it is quoted as `written` is: it
@@ -587,10 +582,8 @@ private:
 
 	//! The key a reducer groups by (an index into `keys`); INVALID_INDEX for the whole query.
 	idx_t GroupKeyIndex(const BoundAggregateExpression &reducer) const {
-		idx_t index = DConstants::INVALID_INDEX;
-		if (TryParseGroupKeyTag(reducer.GetAlias(), index)) {
-			D_ASSERT(index < decide.bound.keys.size());
-		}
+		const idx_t index = DecideReducerGroupKey(reducer);
+		D_ASSERT(index == DConstants::INVALID_INDEX || index < decide.bound.keys.size());
 		return index;
 	}
 

@@ -165,21 +165,6 @@ unique_ptr<Expression> decide_rewrite::BindSumOver(Optimizer &optimizer, unique_
 	return sum;
 }
 
-bool decide_rewrite::TryParseNormMarker(const string &alias, string &payload) {
-	auto start = alias.find(NORM_MARKER_TAG_PREFIX);
-	if (start == string::npos) {
-		return false;
-	}
-	start += strlen(NORM_MARKER_TAG_PREFIX);
-	auto end = alias.find("__", start);
-	if (end == string::npos) {
-		throw InternalException("DECIDE: NORM marker '%s' has no closing '__'; the canonicalizer promises to write it",
-		                        alias);
-	}
-	payload = alias.substr(start, end - start);
-	return true;
-}
-
 void decide_rewrite::AddValueCheck(LogicalDecide &decide, unique_ptr<Expression> check) {
 	if (!check) {
 		return;
@@ -256,9 +241,8 @@ DecideVarScopeInfo decide_rewrite::ScopeOf(const LogicalDecide &decide, const De
 		}
 		// An ungrouped reducer has one query-wide value. A reducer with a `by` or relation qualifier has multiple
 		// values whose groups are not a declared DECIDE scope, so its ABS helper must retain row identity.
-		idx_t qualifier;
-		if (TryParseQualifiedReducerTag(expr.GetAlias(), qualifier) ||
-		    DecideReducerGroupKey(expr.Cast<BoundAggregateExpression>()) != DConstants::INVALID_INDEX) {
+		auto &reducer = expr.Cast<BoundAggregateExpression>();
+		if (DecideReducerHasPer(reducer) || DecideReducerGroupKey(reducer) != DConstants::INVALID_INDEX) {
 			return DecideVarScopeInfo::Row();
 		}
 		return DecideVarScopeInfo::Global();
@@ -320,11 +304,10 @@ void decide_rewrite::AddRewriteAccount(LogicalDecide &decide, idx_t source_claus
 
 //! Does `expr` hold a NORM marker anywhere beneath it?
 //!
-//! Only the L0 counts over decisions are still markers here (`0_auto`, `0_<double>`): canonicalization replaced every
+//! Only the L0 counts over decisions are still markers here: canonicalization replaced every
 //! other norm by its definition (DecideCanonicalizer::DesugarNorms).
 static bool ContainsNormMarker(const Expression &expr) {
-	string payload;
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && TryParseNormMarker(expr.GetAlias(), payload)) {
+	if (IsDecideNormMarker(expr)) {
 		return true;
 	}
 	bool found = false;

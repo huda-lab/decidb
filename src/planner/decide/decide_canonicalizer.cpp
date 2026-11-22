@@ -329,9 +329,7 @@ void DecideCanonicalizer::SkipNullData(Expression &expr, const vector<KeyedScope
 		CollectAbsentDecisionKeys(*child, decide_index, variable_scopes, scopes, keys, data);
 	}
 	for (auto &value : data) {
-		auto test = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NOT_NULL, LogicalType::BOOLEAN);
-		test->children.push_back(std::move(value));
-		test->SetAlias(SKIP_NULL_TAG);
+		auto test = MakeDecideNullTest(std::move(value));
 		if (!reducer.filter) {
 			reducer.filter = std::move(test);
 			continue;
@@ -415,7 +413,7 @@ bool DecideCanonicalizer::IsQueryWideConstant(const Expression &expr) const {
 	// "not one of the reduced relation's own bindings" -- reads identically for
 	// `weight` but silently admits a CORRELATED subquery, which also lands on a fresh
 	// table index yet yields a different value per row.
-	if (IsQueryWideValueTag(expr.GetAlias())) {
+	if (IsDecideQueryWideValue(expr)) {
 		return true;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
@@ -482,7 +480,7 @@ static bool KeyHolds(const vector<DecideKey> &keys, idx_t key, const Expression 
 }
 
 idx_t DecideCanonicalizer::ScopeKeyOf(const Expression &expr, idx_t data_key) const {
-	if (IsQueryWideValueTag(expr.GetAlias())) {
+	if (IsDecideQueryWideValue(expr)) {
 		return DConstants::INVALID_INDEX;
 	}
 	if (!ReferencesDecideVar(expr) && KeyHolds(keys, data_key, expr)) {
@@ -515,31 +513,24 @@ unique_ptr<Expression>
 DecideCanonicalizer::FinalizeBoundProvenance(unique_ptr<BoundComparisonExpression> comparison) const {
 	// Root classification describes the complete canonical bound, so never trust a
 	// copied value blindly: optimizer rewrites may have replaced children since the
-	// previous canonicalization. Component-level QUERY_WIDE_VALUE_TAG facts remain and
-	// are the semantic leaves from which the classification is recomputed.
-	auto alias = comparison->right->GetAlias();
-	RemoveDecideTag(alias, QUERY_WIDE_BOUND_TAG);
-	comparison->right->SetAlias(std::move(alias));
-	if (IsQueryWideConstant(*comparison->right)) {
-		auto bound_alias = comparison->right->GetAlias();
-		AddDecideTag(bound_alias, QUERY_WIDE_BOUND_TAG);
-		comparison->right->SetAlias(std::move(bound_alias));
-	}
+	// previous canonicalization. Each query-wide value inside it (IsDecideQueryWideValue) remains and is a semantic
+	// leaf from which the classification is recomputed.
+	SetDecideQueryWideBound(*comparison->right, IsQueryWideConstant(*comparison->right));
 	return std::move(comparison);
 }
 
-//! The norm `aggregate` was written as, with its body, or nullptr when it was not one: a desugared norm carries
-//! its order in a display tag, and an L0 norm is still the binder's marker.
+//! The norm `aggregate` was written as, with its body, or nullptr when it was not one: a desugared norm keeps the
+//! order it was written with, and an L0 norm is still the binder's marker.
 static const Expression *WrittenNormBody(const BoundAggregateExpression &aggregate, string &order) {
+	DecideNorm norm;
 	const Expression *body;
-	if (ExtractDecideTagPayload(aggregate.GetAlias(), NORM_MARKER_TAG_PREFIX, order)) {
+	if (IsDecideNormMarker(aggregate, norm)) {
 		body = aggregate.children[0].get();
-	} else if (ExtractDecideTagPayload(aggregate.GetAlias(), WRITTEN_NORM_TAG_PREFIX, order)) {
-		body = DecideWrittenNormBody(aggregate);
 	} else {
-		return nullptr;
+		norm = DecideWrittenNorm(aggregate);
+		body = DecideWrittenNormBody(aggregate);
 	}
-	order = order == "0_auto" ? "0" : order.rfind("0_", 0) == 0 ? "0, " + order.substr(2) : order;
+	order = norm.order == DecideNorm::Order::INF ? "inf" : norm.Written();
 	return body;
 }
 
@@ -554,8 +545,7 @@ static string UserFacingName(const Expression &expr) {
 		if (auto body = WrittenNormBody(agg, order)) {
 			return "NORM(" + UserFacingName(*body) + ", " + order + ")";
 		}
-		return StringUtil::Upper(DecideWrittenName(agg.GetAlias(), agg.function.name)) + "(" +
-		       UserFacingName(*agg.children[0]) + ")";
+		return StringUtil::Upper(DecideWrittenName(agg)) + "(" + UserFacingName(*agg.children[0]) + ")";
 	}
 	auto name = StripDecideTags(cur->GetName());
 	return name.empty() ? cur->ToString() : name;
@@ -873,21 +863,23 @@ static unique_ptr<Expression> BindReducer(ClientContext &context, const string &
 	                                             std::move(children));
 }
 
-unique_ptr<Expression> DecideNormDefinition(ClientContext &context, unique_ptr<Expression> body, const string &order) {
+unique_ptr<Expression> DecideNormDefinition(ClientContext &context, unique_ptr<Expression> body,
+                                            const DecideNorm &norm) {
 	// Each operator by its primary name, with the name a plan prints for it (DecideRebindOperator).
 	auto unary = [&](const string &name, unique_ptr<Expression> operand, const string &written_name) {
 		vector<unique_ptr<Expression>> children;
 		children.push_back(std::move(operand));
 		return DecideRebindOperator(context, name, std::move(children), written_name);
 	};
-	if (order == "2") {
+	if (norm.order == DecideNorm::Order::L2) {
 		vector<unique_ptr<Expression>> square;
 		square.push_back(std::move(body));
 		square.push_back(make_uniq<BoundConstantExpression>(Value::INTEGER(2)));
 		return BindReducer(context, "sum", DecideRebindOperator(context, "**", std::move(square), "power"));
 	}
-	if (order == "1" || order == "inf") {
-		return BindReducer(context, order == "1" ? "sum" : "max", unary("@", std::move(body), "abs"));
+	if (!norm.IsCount()) {
+		return BindReducer(context, norm.order == DecideNorm::Order::L1 ? "sum" : "max",
+		                   unary("@", std::move(body), "abs"));
 	}
 	// An L0 norm of data counts the rows whose value is not 0; its `M` bounds a decision and means nothing here.
 	// SIGN reads a NaN as 0, so a value check reads the body (DecideWrittenNormBody), not this definition.
@@ -897,17 +889,13 @@ unique_ptr<Expression> DecideNormDefinition(ClientContext &context, unique_ptr<E
 //! Whether `expr` is a norm marker whose order has an expression for a definition: 1, 2, 'inf', and an L0 norm of
 //! data. An L0 norm of a decision does not: its count needs indicator variables, which only the optimizer can add
 //! (DecideOptimizer::RewriteNorm).
-static bool IsDesugarableNorm(const Expression &expr, idx_t decide_index, string &order) {
-	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE ||
-	    !ExtractDecideTagPayload(expr.GetAlias(), NORM_MARKER_TAG_PREFIX, order)) {
-		return false;
-	}
-	return order == "1" || order == "2" || order == "inf" || !BoundExpressionReferencesDecide(expr, decide_index);
+static bool IsDesugarableNorm(const Expression &expr, idx_t decide_index, DecideNorm &norm) {
+	return IsDecideNormMarker(expr, norm) && (!norm.IsCount() || !BoundExpressionReferencesDecide(expr, decide_index));
 }
 
 static bool ContainsDesugarableNorm(const Expression &expr, idx_t decide_index) {
-	string order;
-	if (IsDesugarableNorm(expr, decide_index, order)) {
+	DecideNorm norm;
+	if (IsDesugarableNorm(expr, decide_index, norm)) {
 		return true;
 	}
 	bool found = false;
@@ -926,8 +914,8 @@ unique_ptr<Expression> DecideCanonicalizer::DesugarNorms(const Expression &expr)
 }
 
 void DecideCanonicalizer::DesugarNormsInPlace(unique_ptr<Expression> &expr) const {
-	string order;
-	if (!IsDesugarableNorm(*expr, decide_index, order)) {
+	DecideNorm norm;
+	if (!IsDesugarableNorm(*expr, decide_index, norm)) {
 		// A marker stands wherever a scalar may: under a comparison, `+`, `*` or a cast.
 		ExpressionIterator::EnumerateChildren(*expr,
 		                                      [&](unique_ptr<Expression> &child) { DesugarNormsInPlace(child); });
@@ -937,18 +925,19 @@ void DecideCanonicalizer::DesugarNormsInPlace(unique_ptr<Expression> &expr) cons
 	if (marker.children.size() != 1) {
 		throw InternalException("DECIDE norm marker must contain one bound expression");
 	}
-	auto definition = DecideNormDefinition(context, marker.children[0]->Copy(), order);
+	auto definition = DecideNormDefinition(context, marker.children[0]->Copy(), norm);
 	// The binder gave the marker this type (BindFunction), so what reads it reads this value in place.
 	D_ASSERT(definition->return_type == marker.return_type);
 	if (marker.filter) {
 		definition->Cast<BoundAggregateExpression>().filter = marker.filter->Copy();
 	}
-	// A norm and its definition are one value (the order is in the alias, for a display).
+	// A norm and its definition are one value: the definition keeps the marker's facts and the order it was written
+	// with, for a display.
 	DecideReplaces(*definition, marker);
-	auto alias = marker.GetAlias();
-	RemoveDecideTag(alias, string(NORM_MARKER_TAG_PREFIX) + order + "__");
-	AddDecideTag(alias, string(WRITTEN_NORM_TAG_PREFIX) + order + "__");
-	definition->SetAlias(std::move(alias));
+	auto &reducer = definition->Cast<BoundAggregateExpression>();
+	reducer.SetAlias(marker.GetAlias());
+	ClearDecideNormMarker(reducer);
+	SetDecideWrittenNorm(reducer, norm);
 	expr = std::move(definition);
 }
 
@@ -1270,11 +1259,8 @@ static void TagNestedObjectiveReducers(const DecideCanonicalizer &canonicalizer,
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		auto &reducer = expr.Cast<BoundAggregateExpression>();
 		if (!reducer.children.empty() && BoundExpressionReferencesDecide(reducer, decide_index) &&
-		    canonicalizer.ContainsDecisionReducer(*reducer.children[0]) &&
-		    !HasDecideTag(reducer.GetAlias(), VALUE_REWRITE_TAG)) {
-			auto alias = reducer.GetAlias();
-			AddDecideTag(alias, VALUE_REWRITE_TAG);
-			reducer.SetAlias(std::move(alias));
+		    canonicalizer.ContainsDecisionReducer(*reducer.children[0])) {
+			SetDecideReducerHoldsReducer(reducer, true);
 		}
 		return;
 	}
@@ -1403,17 +1389,13 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 		if (!reducer.children.empty() && ContainsReducer(*reducer.children[0])) {
 			value = true; // a reducer inside it: a helper at every level (language/guide.md §5.5)
 		}
-		idx_t qualifier;
-		bool is_avg =
-		    StringUtil::CIEquals(reducer.function.name, "avg") || HasDecideTag(reducer.GetAlias(), AVG_REWRITE_TAG);
+		bool is_avg = StringUtil::CIEquals(reducer.function.name, "avg") || DecideReducerCountScale(reducer);
 		has_avg = has_avg || is_avg;
-		only_plain_avgs =
-		    only_plain_avgs && is_avg && !reducer.filter && !TryParseQualifiedReducerTag(reducer.GetAlias(), qualifier);
+		only_plain_avgs = only_plain_avgs && is_avg && !reducer.filter && !DecideReducerHasPer(reducer);
 		if (atom.scale && !IsQueryWideConstant(*atom.scale)) {
 			value = true; // a factor that varies by row: a tuple term of the row's constraint
 		}
-		idx_t key = DConstants::INVALID_INDEX;
-		TryParseGroupKeyTag(root->GetAlias(), key);
+		const idx_t key = DecideReducerGroupKey(reducer);
 		if (first_reducer) {
 			group_key = key;
 			first_reducer = false;
@@ -1748,8 +1730,8 @@ void DecideCanonicalizer::CollectSignatureFields(const Expression &expr, idx_t k
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		// A reducer reads a group, not the row: its `by` key is the field, and its body is a scoped expression of its
 		// own.
-		idx_t by;
-		if (TryParseGroupKeyTag(expr.GetAlias(), by) && by < keys.size()) {
+		const idx_t by = DecideReducerGroupKey(expr.Cast<BoundAggregateExpression>());
+		if (by < keys.size()) {
 			DecideSignatureField field;
 			field.kind = DecideSignatureFieldKind::BY_KEY;
 			field.key = by;
@@ -1829,8 +1811,8 @@ void DecideCanonicalizer::SignQualifiedReducers(Expression &expr, const DecideRe
 	idx_t scope_idx;
 	// A reducer over data reads one value per class and value of its body: its table groups on both
 	// (DirectAddBoundTables), so it needs no scope of its own.
-	if (!TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx) || scope_idx >= out.keyed_scopes.size() ||
-	    reducer.children.empty() || !ReferencesDecideVar(reducer)) {
+	if (!DecideReducerPer(reducer, scope_idx) || scope_idx >= out.keyed_scopes.size() || reducer.children.empty() ||
+	    !ReferencesDecideVar(reducer)) {
 		return;
 	}
 	// The reducer's own `per K'` hands it one value per class and signature
@@ -1851,10 +1833,7 @@ void DecideCanonicalizer::SignQualifiedReducers(Expression &expr, const DecideRe
 	variant_scope.key = key;
 	variant_scope.signature = signature;
 	out.keyed_scopes.push_back(std::move(variant_scope));
-	auto alias = reducer.GetAlias();
-	RemoveDecideTag(alias, MakeQualifiedReducerTag(scope_idx));
-	AddDecideTag(alias, MakeQualifiedReducerTag(out.keyed_scopes.size() - 1));
-	reducer.SetAlias(std::move(alias));
+	SetDecideReducerPer(reducer, out.keyed_scopes.size() - 1);
 }
 
 void DecideCanonicalizer::BuildConstraintSignatures(vector<BoundDecideClause> &clauses, DecideSignatures &out) const {
@@ -1907,7 +1886,7 @@ void DecideCanonicalizer::BuildObjectiveSignatures(BoundDecideClause &objective,
 bool DecideCanonicalizer::ReducerPerKey(const BoundAggregateExpression &reducer,
                                         const vector<KeyedScopeInfo> &keyed_scopes, FramePerKey &out) const {
 	idx_t scope_idx;
-	if (!TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx) || scope_idx >= keyed_scopes.size()) {
+	if (!DecideReducerPer(reducer, scope_idx) || scope_idx >= keyed_scopes.size()) {
 		return false;
 	}
 	out.key = keyed_scopes[scope_idx].key;

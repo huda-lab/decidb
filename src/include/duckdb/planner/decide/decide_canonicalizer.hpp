@@ -32,8 +32,8 @@
 // `factor * AGG` or `AGG / factor` (see PeelScale). `norm(e, p)` arrives from the
 // binder as a SUM(e) aggregate whose alias names the order -- an aggregate whose
 // meaning is not what it says -- and leaves as its definition: `SUM(ABS(e))` for
-// p = 1, `SUM(POWER(e, 2))` for p = 2, `MAX(ABS(e))` for 'inf', each carrying a
-// display-only WRITTEN_NORM_TAG_PREFIX tag so its text still reads as written. This
+// p = 1, `SUM(POWER(e, 2))` for p = 2, `MAX(ABS(e))` for 'inf', each keeping the
+// order it was written with (DecideWrittenNorm) so its text still reads as written. This
 // replaces one atom with another and opens nothing. The L0 order needs indicator
 // variables, which are formulation rather than meaning, so its marker stays for
 // DecideOptimizer::RewriteNorm.
@@ -184,7 +184,8 @@ struct DecideFramePlacement {
 //! What a norm of `body` and order `order` stands for (language/guide.md §5): 1 `SUM(ABS(e))`, 2 `SUM(POWER(e, 2))`,
 //! 'inf' `MAX(ABS(e))`, and 0 of data the count of its nonzero rows. Its type is the norm's: the binder gives it to the
 //! marker, which parses as `SUM(e)`, so what reads the norm reads the value it holds.
-unique_ptr<Expression> DecideNormDefinition(ClientContext &context, unique_ptr<Expression> body, const string &order);
+unique_ptr<Expression> DecideNormDefinition(ClientContext &context, unique_ptr<Expression> body,
+                                            const DecideNorm &norm);
 
 class DecideCanonicalizer {
 public:
@@ -197,7 +198,7 @@ public:
 	bool ContainsDecisionReducer(const Expression &expr) const;
 
 	//! Provenance-only form: no table-index evidence is available, so arbitrary column
-	//! refs are never promoted to query-wide. Explicit QUERY_WIDE_VALUE_TAG metadata is
+	//! refs are never promoted to query-wide. A value marked query-wide (IsDecideQueryWideValue) is
 	//! still honored. Variable scopes remain available for homogeneity validation.
 	//! Used by LogicalDecide::AddClause for optimizer output.
 	//!
@@ -465,7 +466,7 @@ private:
 
 	//! Recompute semantic provenance for the complete canonical bound. A stale root
 	//! classification is removed before inspecting the rebuilt tree; only an RHS whose
-	//! every component is query-wide receives QUERY_WIDE_BOUND_TAG.
+	//! every component is query-wide is marked so (SetDecideQueryWideBound).
 	unique_ptr<Expression> FinalizeBoundProvenance(unique_ptr<BoundComparisonExpression> comparison) const;
 
 	//! The refusal of a decision-bearing `factor` on a reducer: the decision's type when `positive` (the factor without

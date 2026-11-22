@@ -49,27 +49,26 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 	    [&](unique_ptr<Expression> &expr, const DecideRowOrigin &origin, const Expression *when) {
 		    if (!expr)
 			    return;
-		    string payload;
+		    DecideNorm norm;
 		    if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
-		        ExtractDecideTagPayload(expr->GetAlias(), WRITTEN_NORM_TAG_PREFIX, payload)) {
+		        (norm = DecideWrittenNorm(expr->Cast<BoundAggregateExpression>()))) {
 			    // The canonical text has been rendered; from here the clause is formulated, and every layer after this
 			    // one shows the definition the solver receives rather than the norm it came from. Canonicalization
-			    // replaced the norm by that definition, so its EXPLAIN account (D27) is recorded here, while the tag
-			    // still renders the clause as written.
+			    // replaced the norm by that definition, so its EXPLAIN account (D27) is recorded here, while the
+			    // definition still renders as the norm written.
 			    using Kind = LogicalDecide::RewriteAccount::Kind;
 			    // A norm of data reads no decision, so it stands on a bound, which the right-hand-side window rewrite
 			    // made a column before this pass; an L0 norm is desugared only there.
-			    D_ASSERT(payload == "1" || payload == "2" || payload == "inf");
-			    AddRewriteAccount(decide, origin.source_clause_id,
-			                      payload == "1" ? Kind::NORM_SUM_ABS
-			                                     : (payload == "2" ? Kind::NORM_SUM_SQUARES : Kind::NORM_MAX_ABS),
-			                      RenderForPlan(*expr, decide));
-			    auto alias = expr->GetAlias();
-			    RemoveDecideTag(alias, string(WRITTEN_NORM_TAG_PREFIX) + payload + "__");
-			    expr->SetAlias(std::move(alias));
+			    D_ASSERT(!norm.IsCount());
+			    AddRewriteAccount(
+			        decide, origin.source_clause_id,
+			        norm.order == DecideNorm::Order::L1
+			            ? Kind::NORM_SUM_ABS
+			            : (norm.order == DecideNorm::Order::L2 ? Kind::NORM_SUM_SQUARES : Kind::NORM_MAX_ABS),
+			        RenderForPlan(*expr, decide));
+			    SetDecideWrittenNorm(expr->Cast<BoundAggregateExpression>(), DecideNorm());
 		    }
-		    if (expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE ||
-		        !TryParseNormMarker(expr->GetAlias(), payload)) {
+		    if (!IsDecideNormMarker(*expr, norm)) {
 			    // A marker stands wherever a scalar may stand. Under a comparison, but just
 			    // as much under `+`, `*` or a cast -- which is how a regularizer is normally
 			    // written: `MINIMIZE SUM(cost*x) + 0.5 * norm(x - base, 1)`. Descend through
@@ -85,9 +84,9 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		    if (aggregate.children.size() != 1) {
 			    throw InternalException("DECIDE NORM marker must contain one bound expression");
 		    }
-		    // The orders left are the L0 counts: `0_auto`, and `0_<M>` for a written M.
-		    bool auto_m = payload == "0_auto";
-		    double m = auto_m ? 1.0 : std::stod(payload.substr(2));
+		    // The orders left are the L0 counts, with a written M or none.
+		    bool auto_m = norm.bound == 0;
+		    double m = auto_m ? 1.0 : norm.bound;
 		    string z_name =
 		        (auto_m ? L0_AUTO_INDICATOR_NAME_PREFIX : L0_INDICATOR_NAME_PREFIX) + to_string(l0_counter++) + "__";
 		    // An indicator is a column defined by the counted expression: one per instance of the scopes it reads, its
@@ -130,7 +129,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		             optimizer.BindScalarFunction("*", std::move(tolerance), z->Copy()));
 		    auto count = BindSumOver(optimizer, std::move(z), aggregate.filter.get());
 		    count->alias = aggregate.GetAlias();
-		    RemoveDecideTag(count->alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");
+		    ClearDecideNormMarker(count->Cast<BoundAggregateExpression>());
 		    expr = std::move(count);
 		    lowered = true;
 		    decide.l0_indicator_functions.push_back(std::move(indicator));

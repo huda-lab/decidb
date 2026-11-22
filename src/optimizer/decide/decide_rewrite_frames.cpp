@@ -77,8 +77,7 @@ void CollectRangeSigns(ClientContext &context, const LogicalDecide &decide, uniq
 		}
 		auto &reducer = node->Cast<BoundAggregateExpression>();
 		auto name = StringUtil::Lower(reducer.function.name);
-		string norm;
-		const bool is_norm = TryParseNormMarker(reducer.GetAlias(), norm);
+		const bool is_norm = IsDecideNormMarker(reducer);
 		if ((name == "sum" || name == "avg") && !is_norm) {
 			return false;
 		}

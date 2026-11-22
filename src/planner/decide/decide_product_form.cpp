@@ -111,7 +111,7 @@ static bool DecisionAliasesEqual(const Expression &left, const Expression &right
 	if (!BoundExpressionReferencesDecide(left, decide_index)) {
 		return true;
 	}
-	if (WithoutWrittenName(left.GetAlias()) != WithoutWrittenName(right.GetAlias())) {
+	if (!DecideFactsEqual(left, right)) {
 		return false;
 	}
 	vector<const Expression *> left_children;

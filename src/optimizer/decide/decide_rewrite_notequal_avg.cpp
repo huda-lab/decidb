@@ -115,7 +115,7 @@ bool DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, Logic
 			// Carry the AVG's own tags across — a relation qualifier was stamped by
 			// the binder and still names the relation the SUM de-duplicates by.
 			new_sum->alias = agg.alias;
-			AddDecideTag(new_sum->alias, AVG_REWRITE_TAG);
+			SetDecideReducerCountScale(new_sum->Cast<BoundAggregateExpression>());
 
 			expr = std::move(new_sum);
 			return true;

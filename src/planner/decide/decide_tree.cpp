@@ -26,7 +26,7 @@
 namespace duckdb {
 
 string DecideTreeReducerName(const BoundAggregateExpression &aggregate) {
-	return HasDecideTag(aggregate.GetAlias(), AVG_REWRITE_TAG) ? "avg" : StringUtil::Lower(aggregate.function.name);
+	return DecideReducerCountScale(aggregate) ? "avg" : StringUtil::Lower(aggregate.function.name);
 }
 
 unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const LogicalDecide &op,
@@ -698,7 +698,7 @@ private:
 		if (!condition) {
 			return;
 		}
-		if (HasDecideTag(condition->GetAlias(), SKIP_NULL_TAG)) {
+		if (IsDecideNullTest(*condition)) {
 			// A test the statistics proved true (StatisticsPropagator::FoldSkipNullTests) keeps every entry: it is no
 			// member test, so no program is compiled for it and none runs per entry.
 			if (condition->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
@@ -1020,12 +1020,12 @@ private:
 			return Lower(owner, *op.bilinear_function_groups[product_group].expansion, carried);
 		}
 		idx_t retained;
-		if (TryParseDecideIndexTag(expression.GetAlias(), TREE_RETAINED_EXPRESSION_TAG_PREFIX, retained)) {
+		if (DecideRetainedExpression(expression, retained)) {
 			if (retained >= op.retained_expressions.size()) {
 				throw InternalException("DECIDE tree: a retained expression is missing");
 			}
 			auto lowered = Lower(owner, *op.retained_expressions[retained], carried);
-			// Stage 05 lowers the inlined reducer this tag marks; it ranges over the nest the copy became.
+			// Stage 05 lowers the inlined reducer that names it; it ranges over the nest the copy became.
 			if (expression.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
 			    lowered->GetExpressionClass() == ExpressionClass::BOUND_REF &&
 			    lowered->Cast<BoundReferenceExpression>().index >= tree->input_column_count) {
@@ -1034,8 +1034,8 @@ private:
 			}
 			return lowered;
 		}
-		carried = carried || IsQueryWideValueTag(expression.GetAlias()) || IsQueryWideBoundTag(expression.GetAlias()) ||
-		          HasDecideTag(expression.GetAlias(), BOUND_REDUCER_TAG);
+		carried = carried || IsDecideQueryWideValue(expression) || IsDecideQueryWideBound(expression) ||
+		          IsDecideValue(expression, DecideValueKind::BOUND_REDUCER);
 		auto record = FindRecord(expression);
 		if (record != DConstants::INVALID_INDEX) {
 			return Read(owner, Record(record), expression.return_type, expression.GetAlias());
@@ -1134,9 +1134,6 @@ private:
 		node.text = Text(aggregate);
 		node.decision_value = HasDecision(aggregate);
 		node.key = DecideReducerGroupKey(aggregate);
-		if (node.key == DConstants::INVALID_INDEX) {
-			TryParseDecideIndexTag(aggregate.GetAlias(), TREE_REDUCER_KEY_TAG_PREFIX, node.key);
-		}
 		idx_t frame_aggregate = DConstants::INVALID_INDEX;
 		if (TryParseFrameAggregateTag(aggregate.GetAlias(), frame_aggregate) &&
 		    frame_aggregate < op.frame_aggregates.size()) {
@@ -1151,8 +1148,7 @@ private:
 		entry.text = node.text + " operand";
 		Gates(operand, aggregate.filter.get());
 		idx_t qualifier;
-		const bool qualified = TryParseQualifiedReducerTag(aggregate.GetAlias(), qualifier) ||
-		                       TryParseDecideIndexTag(aggregate.GetAlias(), TREE_REDUCER_SCOPE_TAG_PREFIX, qualifier);
+		const bool qualified = DecideReducerPer(aggregate, qualifier) || DecideTreeReducerPer(aggregate, qualifier);
 		if (qualified && qualifier < op.bound.keyed_scopes.size()) {
 			node.qualifier_scope = qualifier;
 			entry.key = op.bound.keyed_scopes[qualifier].key;

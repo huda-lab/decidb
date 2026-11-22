@@ -187,7 +187,7 @@ static string RenderNegation(const Expression &operand, const RenderContext &ctx
 
 static string RenderFunction(const BoundFunctionExpression &func, const RenderContext &ctx, int parent_precedence) {
 	// As the user wrote it: `abs` for `@`, `pow`, `power` and `^` for `**`.
-	auto name = DecideWrittenName(func.GetAlias(), func.function.name);
+	auto name = DecideWrittenName(func);
 	if (func.children.size() == 1 && name == "-") {
 		return RenderNegation(*func.children[0], ctx);
 	}
@@ -227,36 +227,19 @@ static string RenderFunction(const BoundFunctionExpression &func, const RenderCo
 	return result;
 }
 
-//! The order a `norm` marker carries (`1`, `2`, `inf`, `0_auto`, `0_<m>`) as the user
-//! wrote it after the body -- `'inf'` (a string literal: `inf` alone names a column),
-//! `0`, or `0, <m>` -- or empty for a plain reducer.
+//! The order of a norm as the user wrote it after the body (DecideNorm::Written), or empty for a plain reducer.
 static string NormOrder(const BoundAggregateExpression &agg) {
-	string payload;
-	auto marker_pos = agg.GetAlias().find(NORM_MARKER_TAG_PREFIX);
-	if (marker_pos == string::npos) {
-		// Canonicalization replaced the norm with its definition and kept the order as a display tag
-		// (RenderAggregate reads the body back out of the definition).
-		if (!ExtractDecideTagPayload(agg.GetAlias(), WRITTEN_NORM_TAG_PREFIX, payload)) {
-			return string();
-		}
-	} else {
-		auto begin = marker_pos + strlen(NORM_MARKER_TAG_PREFIX);
-		payload = agg.GetAlias().substr(begin, agg.GetAlias().find("__", begin) - begin);
+	DecideNorm norm;
+	if (!IsDecideNormMarker(agg, norm)) {
+		// Canonicalization replaced the norm with its definition, which keeps the order (RenderAggregate reads the
+		// body back out of the definition).
+		norm = DecideWrittenNorm(agg);
 	}
-	if (payload == "0_auto") {
-		return "0";
-	}
-	if (payload.rfind("0_", 0) == 0) {
-		return "0, " + payload.substr(2);
-	}
-	if (payload == "inf") {
-		return "'inf'";
-	}
-	return payload;
+	return norm.Written();
 }
 
 static bool HoldsSkipNullTest(const Expression &expr) {
-	if (HasDecideTag(expr.GetAlias(), SKIP_NULL_TAG)) {
+	if (IsDecideNullTest(expr)) {
 		return true;
 	}
 	if (expr.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
@@ -307,15 +290,13 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 	auto order = NormOrder(agg);
 	if (order.empty() && agg.children.empty()) {
 		// `count(*)` binds as `count_star()`; it takes no scope inside it.
-		idx_t group_key;
-		bool has_by = ctx.keys && TryParseGroupKeyTag(agg.GetAlias(), group_key);
+		const idx_t group_key = DecideReducerGroupKey(agg);
+		bool has_by = ctx.keys && group_key != DConstants::INVALID_INDEX;
 		return "count(*)" + (has_by ? " by (" + ByText(agg, ctx, group_key) + ")" : string());
 	}
-	string result =
-	    (order.empty() ? StringUtil::Lower(DecideWrittenName(agg.GetAlias(), agg.function.name)) : string("norm")) +
-	    "(";
+	string result = (order.empty() ? StringUtil::Lower(DecideWrittenName(agg)) : string("norm")) + "(";
 	idx_t scope_idx;
-	if (ctx.keys && TryParseQualifiedReducerTag(agg.GetAlias(), scope_idx)) {
+	if (ctx.keys && DecideReducerPer(agg, scope_idx)) {
 		// The key as this reducer wrote it, else as the key was first written.
 		string key_text;
 		if (!ctx.text.Cut(agg.GetQueryLocation(), DecideSpanRole::PER, key_text)) {
@@ -324,8 +305,8 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 		scope += (scope.empty() ? "per " : " per ") + key_text;
 	}
 	result += (scope.empty() ? "" : scope + ": ") + body + (order.empty() ? "" : ", " + order) + ")";
-	idx_t group_key;
-	if (ctx.keys && TryParseGroupKeyTag(agg.GetAlias(), group_key)) {
+	const idx_t group_key = DecideReducerGroupKey(agg);
+	if (ctx.keys && group_key != DConstants::INVALID_INDEX) {
 		result += " by (" + ByText(agg, ctx, group_key) + ")";
 	}
 	return result;
@@ -346,13 +327,11 @@ static string RenderAggregate(const BoundAggregateExpression &agg, const RenderC
 }
 
 const Expression *DecideWrittenNormBody(const BoundAggregateExpression &reducer) {
-	string order;
-	ExtractDecideTagPayload(reducer.GetAlias(), WRITTEN_NORM_TAG_PREFIX, order);
-	return DecideNormBody(reducer, order);
+	return DecideNormBody(reducer, DecideWrittenNorm(reducer));
 }
 
-const Expression *DecideNormBody(const BoundAggregateExpression &reducer, const string &order) {
-	if (order.empty()) {
+const Expression *DecideNormBody(const BoundAggregateExpression &reducer, const DecideNorm &norm) {
+	if (!norm) {
 		return nullptr;
 	}
 	// ABS(e) for 1 and 'inf', POWER(e, 2) for 2, ABS(SIGN(e)) for a data-only 0: the body is the first argument of
@@ -360,7 +339,7 @@ const Expression *DecideNormBody(const BoundAggregateExpression &reducer, const 
 	// (`sum` reads ABS(SIGN(e)), a TINYINT, as a BIGINT).
 	D_ASSERT(reducer.children.size() == 1);
 	const Expression *body = reducer.children[0].get();
-	for (idx_t depth = order == "1" || order == "2" || order == "inf" ? 1 : 2; depth > 0; depth--) {
+	for (idx_t depth = norm.IsCount() ? 2 : 1; depth > 0; depth--) {
 		while (body->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
 			body = body->Cast<BoundCastExpression>().child.get();
 		}
@@ -682,7 +661,7 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(vector<BoundDecideCl
 }
 
 static bool ContainsSubquerySource(const Expression &expr) {
-	if (IsQueryWideValueTag(expr.GetAlias()) || IsRowVaryingSubqueryTag(expr.GetAlias())) {
+	if (IsDecideSubqueryValue(expr)) {
 		return true;
 	}
 	bool found = false;
@@ -717,7 +696,7 @@ void FinalizeConstraintSourceInfo(const vector<BoundDecideClause> &clauses, vect
 		info.canonical_rhs = RenderSource(*cmp.right, ctx);
 		info.lhs_location = cmp.left->GetQueryLocation();
 		info.canonical_cmp = DecideComparisonOperator(cmp.type);
-		if (!IsQueryWideBoundTag(cmp.right->GetAlias()) && !ContainsSubquerySource(*cmp.right)) {
+		if (!IsDecideQueryWideBound(*cmp.right) && !ContainsSubquerySource(*cmp.right)) {
 			info.rhs_kind = ConstraintSourceRhsKind::DATA_EXPRESSION;
 		} else {
 			info.rhs_kind = ConstraintSourceRhsKind::NUMERIC_FALLBACK;

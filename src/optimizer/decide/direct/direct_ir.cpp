@@ -226,7 +226,7 @@ private:
 	//! else is left.
 	static unique_ptr<Expression> TakeSkipNullTests(unique_ptr<Expression> filter,
 	                                                vector<unique_ptr<Expression>> &tests) {
-		if (HasDecideTag(filter->GetAlias(), SKIP_NULL_TAG)) {
+		if (IsDecideNullTest(*filter)) {
 			tests.push_back(std::move(filter));
 			return nullptr;
 		}
@@ -307,9 +307,8 @@ private:
 			return;
 		}
 		D_ASSERT(!aggregate.IsDistinct() && !aggregate.order_bys && aggregate.children.size() == 1);
-		string order;
 		auto name = StringUtil::Lower(aggregate.function.name);
-		if (ExtractDecideTagPayload(aggregate.GetAlias(), NORM_MARKER_TAG_PREFIX, order)) {
+		if (IsDecideNormMarker(aggregate)) {
 			// Canonicalization replaced every order but 0 with its definition. Order 0 needs indicator variables, so no
 			// rule models it, and any other tag is not one this reader knows: both decline instead of throwing.
 			MarkNotProved(part.status);
@@ -325,15 +324,15 @@ private:
 			D_ASSERT(name == "max");
 			part.reducer = DirectReducer::MAX;
 		}
-		idx_t group_key;
-		if (TryParseGroupKeyTag(aggregate.GetAlias(), group_key) && !ReadKey(group_key, part.by)) {
+		const idx_t group_key = DecideReducerGroupKey(aggregate);
+		if (group_key != DConstants::INVALID_INDEX && !ReadKey(group_key, part.by)) {
 			MarkNotProved(part.status);
 			return;
 		}
 		if (aggregate.filter) {
 			part.filter = aggregate.filter->Copy();
 		}
-		TryParseQualifiedReducerTag(aggregate.GetAlias(), part.qualifier);
+		DecideReducerPer(aggregate, part.qualifier);
 		splitter.Split(*aggregate.children[0], 1, part.terms);
 		// A SUM skips a row whose data is NULL by reading its terms as 0 there, which every rule reads as it reads any
 		// coefficient; the written `when` stays the reducer's.
@@ -477,8 +476,7 @@ private:
 
 	//! Whether `expr` holds a reducer the canonicalizer tagged for the value rewrite: one holding a reducer (D81).
 	static bool HoldsValueRewrite(const Expression &expr) {
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
-		    HasDecideTag(expr.GetAlias(), VALUE_REWRITE_TAG)) {
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && DecideReducerHoldsReducer(expr)) {
 			return true;
 		}
 		bool holds = false;

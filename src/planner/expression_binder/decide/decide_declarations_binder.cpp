@@ -1,4 +1,5 @@
 #include "duckdb/planner/expression_binder/decide/decide_declarations_binder.hpp"
+#include "duckdb/planner/decide/decide_tree_nodes.hpp"
 
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/function_entry.hpp"
@@ -94,8 +95,8 @@ static void RefuseQualifiedDecisionReferences(const ParsedExpression &expr, Bind
 //! `abs` for `@`; `add`, `subtract` and `multiply` for `+`, `-` and `*`; `mean` for `avg`), each with its primary's
 //! implementation. Every call of the clause's algebra whose name resolves, as the binder resolves it, to such an
 //! alias is renamed to its primary, so every check from here on matches one name per function. The call keeps the
-//! name it was written under as a display tag (WRITTEN_NAME_TAG_PREFIX), which plans and messages read. A `when`
-//! condition and a `by` key are respelled too; a subquery is left as written.
+//! name it was written under (SetDecideWrittenName), which plans and messages read. A `when` condition and a `by` key
+//! are respelled too; a subquery is left as written.
 static void RespellDecideAliases(ClientContext &context, ParsedExpression &expr) {
 	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
 		ParsedExpressionIterator::EnumerateChildren(
@@ -109,7 +110,7 @@ static void RespellDecideAliases(ClientContext &context, ParsedExpression &expr)
 	    (entry->type == CatalogType::SCALAR_FUNCTION_ENTRY || entry->type == CatalogType::AGGREGATE_FUNCTION_ENTRY)) {
 		auto &function = entry->Cast<FunctionEntry>();
 		if (!function.primary_name.empty()) {
-			AddDecideTag(func.alias, string(WRITTEN_NAME_TAG_PREFIX) + function.name + "__");
+			SetDecideWrittenName(func, function.name);
 			func.function_name = function.primary_name;
 		}
 	}

@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
+#include "duckdb/planner/decide/decide_tree_nodes.hpp"
 
 #include "duckdb/common/decide_profile.hpp"
 #include "duckdb/common/decide_source_info.hpp"
@@ -321,7 +322,7 @@ idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t
 //! Mixed data/subquery bounds therefore use the evaluated numeric fallback instead of
 //! leaking an internal placeholder into a diagnostic suggestion.
 static bool ContainsScalarSubqueryProvenance(const Expression &expr) {
-	if (IsQueryWideValueTag(expr.GetAlias()) || IsRowVaryingSubqueryTag(expr.GetAlias())) {
+	if (IsDecideSubqueryValue(expr)) {
 		return true;
 	}
 	bool found = false;
@@ -379,7 +380,7 @@ bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, bool diag
 	// keeps forward/reversed subquery spellings and arithmetic over query-wide
 	// values equivalent without re-deciding shape in the physical layer.
 	evaluated.provenance.shape =
-	    IsQueryWideBoundTag(constraint.rhs_expr->GetAlias()) ? ElasticShape::SHARED_SCALAR : ElasticShape::PER_ROW_DATA;
+	    IsDecideQueryWideBound(*constraint.rhs_expr) ? ElasticShape::SHARED_SCALAR : ElasticShape::PER_ROW_DATA;
 	// Under DIAGNOSE, capture the RHS symbolic name (e.g. the data column `cap_col`) so query-mode
 	// infeasible diagnosis can render `x <= cap_col + delta`. Only meaningful for a
 	// genuine data RHS; a shared-scalar RHS reports the numeric knob instead.

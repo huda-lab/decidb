@@ -9,7 +9,8 @@ add_library_unity(
   decide_source_provenance.cpp
   decide_term_split.cpp
   decide_tree.cpp
-  decide_tree_compile.cpp)
+  decide_tree_compile.cpp
+  decide_tree_nodes.cpp)
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:duckdb_planner_decide>
     PARENT_SCOPE)

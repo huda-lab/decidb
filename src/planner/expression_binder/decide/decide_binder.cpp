@@ -1,4 +1,5 @@
 #include "duckdb/planner/expression_binder/decide/decide_binder.hpp"
+#include "duckdb/planner/decide/decide_tree_nodes.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/parser/expression/comparison_expression.hpp"
@@ -818,14 +819,8 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 			return result;
 		}
 		auto &bound_child = result.expression;
-		// BindExpression, unlike Bind, leaves the parsed call's tags behind: the name it was written under is kept.
-		if (HasDecideTag(child_expr->GetAlias(), WRITTEN_NAME_TAG_PREFIX) &&
-		    !HasDecideTag(bound_child->GetAlias(), WRITTEN_NAME_TAG_PREFIX)) {
-			auto tags = bound_child->GetAlias();
-			AddDecideTag(tags,
-			             string(WRITTEN_NAME_TAG_PREFIX) + DecideWrittenName(child_expr->GetAlias(), string()) + "__");
-			bound_child->SetAlias(std::move(tags));
-		}
+		// BindExpression, unlike Bind, leaves the parsed call's alias behind: the name it was written under is kept.
+		KeepDecideWrittenName(*bound_child, *child_expr);
 		child_types.push_back(bound_child->return_type);
 		children.push_back(std::move(bound_child));
 	}
@@ -889,7 +884,7 @@ BindResult DecideBinder::BindReducer(DecideReducerExpression &reducer, idx_t dep
 		auto scope_idx = FindOrCreateKeyScope(context, binder, scope.key, DecisionNames(variables),
 		                                      DecideKeyToString(scope.key), qualifier_context->source_text,
 		                                      *qualifier_context->keys, *qualifier_context->keyed_scopes);
-		AddDecideTag(aggregate->alias, MakeQualifiedReducerTag(scope_idx));
+		SetDecideReducerPer(*aggregate, scope_idx);
 	}
 	if (reducer.by.empty()) {
 		return result; // no `by`, or `by ()`: every kept row, the default
@@ -923,7 +918,7 @@ BindResult DecideBinder::BindReducer(DecideReducerExpression &reducer, idx_t dep
 	auto group_key = FindOrCreateDecideKey(std::move(key), key_text, *qualifier_context->keys);
 	D_ASSERT(group_key != DConstants::INVALID_INDEX);
 	(*qualifier_context->keys)[group_key].written_as_by = true;
-	AddDecideTag(aggregate->alias, MakeGroupKeyTag(group_key));
+	SetDecideReducerGroupKey(*aggregate, group_key);
 	return result;
 }
 
@@ -1142,7 +1137,7 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
 			                                  DecideWrittenSql(function, text)));
 		}
 		auto &order_value = order_argument.Cast<ConstantExpression>().value;
-		string payload;
+		DecideNorm norm;
 		if (order_value.type().id() == LogicalTypeId::VARCHAR) {
 			auto order = StringUtil::Lower(StringValue::Get(order_value));
 			if (order != "inf" && order != "infinity" && order != "max") {
@@ -1152,21 +1147,20 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
 			if (function.children.size() != 2) {
 				return BindResult(BinderException(*function.children[2], "only norm order 0 takes a bound"));
 			}
-			payload = "inf";
+			norm.order = DecideNorm::Order::INF;
 		} else if (order_value.type().IsNumeric()) {
 			double order = order_value.GetValue<double>();
 			if (order == 1.0) {
 				if (function.children.size() != 2)
 					return BindResult(BinderException(*function.children[2], "only norm order 0 takes a bound"));
-				payload = "1";
+				norm.order = DecideNorm::Order::L1;
 			} else if (order == 2.0) {
 				if (function.children.size() != 2)
 					return BindResult(BinderException(*function.children[2], "only norm order 0 takes a bound"));
-				payload = "2";
+				norm.order = DecideNorm::Order::L2;
 			} else if (order == 0.0) {
-				if (function.children.size() == 2) {
-					payload = "0_auto";
-				} else {
+				norm.order = DecideNorm::Order::L0;
+				if (function.children.size() == 3) {
 					auto &bound_argument = *function.children[2];
 					if (bound_argument.GetExpressionClass() != ExpressionClass::CONSTANT ||
 					    !(bound_argument.Cast<ConstantExpression>().value.GetValue<double>() > 0.0)) {
@@ -1174,8 +1168,7 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
 						                                  "the bound of '%s' is not a positive constant",
 						                                  DecideWrittenSql(function, text)));
 					}
-					auto m = bound_argument.Cast<ConstantExpression>().value.GetValue<double>();
-					payload = "0_" + StringUtil::Format("%.17g", m);
+					norm.bound = bound_argument.Cast<ConstantExpression>().value.GetValue<double>();
 				}
 			} else {
 				return BindResult(NotImplementedException(order_argument, "norm order '%s' is not supported",
@@ -1188,22 +1181,25 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
 		// An L0 norm of a decision stays a marker for the optimizer, which gives it indicators; no row reads it as a
 		// value.
 		const bool stays_a_marker =
-		    StringUtil::StartsWith(payload, "0") && ExpressionContainsDecideVariable(*function.children[0], variables);
+		    norm.IsCount() && ExpressionContainsDecideVariable(*function.children[0], variables);
 		vector<unique_ptr<ParsedExpression>> marker_children;
 		marker_children.push_back(std::move(function.children[0]));
 		// The system's SUM by name: a norm is DECIDE syntax, so a user's `sum` macro does not capture it.
 		auto marker = make_uniq<FunctionExpression>(SYSTEM_CATALOG, DEFAULT_SCHEMA, "sum", std::move(marker_children));
 		marker->alias = function.alias;
 		marker->SetQueryLocation(function.GetQueryLocation());
-		AddDecideTag(marker->alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");
 		expr_ptr = std::move(marker);
 		auto result = BindFunction(expr_ptr, depth);
-		if (!result.HasError() && !stays_a_marker) {
+		if (result.HasError()) {
+			return result;
+		}
+		auto &aggregate = *GetBoundAggregate(*result.expression);
+		SetDecideNormMarker(aggregate, norm);
+		if (!stays_a_marker) {
 			// The marker parses as SUM(e), but the norm's value is its definition's, which what reads it binds to. Its
 			// type needs only the body's: a body holding a subquery cannot be copied until planning has run.
-			auto &aggregate = *GetBoundAggregate(*result.expression);
 			auto body = make_uniq<BoundReferenceExpression>(aggregate.children[0]->return_type, 0U);
-			auto type = DecideNormDefinition(context, std::move(body), payload)->return_type;
+			auto type = DecideNormDefinition(context, std::move(body), norm)->return_type;
 			aggregate.function.return_type = type;
 			aggregate.return_type = std::move(type);
 		}
