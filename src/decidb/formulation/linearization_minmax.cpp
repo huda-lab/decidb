@@ -41,7 +41,8 @@ using namespace decide_linearize; // NOLINT: internal DECIDE linearization helpe
 //! `link` holds member `i`'s `(result - expr)`, so a renaming reads as the single coefficient `-1`. The member's reach
 //! is asked of `members` only once it is known to need a column.
 static int ExtremumArgumentColumn(SolverInput &input, const VarIndexer &indexer, const MinMaxLinkRow &link,
-                                  const ExtremumMemberSource &members, idx_t i, const string &label) {
+                                  const ExtremumMemberSource &members, idx_t i, const string &label,
+                                  idx_t source_clause_id) {
 	int sole_column = -1;
 	double sole_coefficient = 0.0;
 	idx_t surviving = 0;
@@ -61,6 +62,7 @@ static int ExtremumArgumentColumn(SolverInput &input, const VarIndexer &indexer,
 	pin.sense = '=';
 	pin.rhs = link.constant;
 	pin.provenance.kind = ConstraintKind::STRUCTURAL;
+	pin.provenance.origin.source_clause_id = source_clause_id;
 	input.global_constraints.push_back(std::move(pin));
 	return (int)t_idx;
 }
@@ -91,6 +93,7 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
 		rc.sense = '=';
 		rc.rhs = member.constant;
 		rc.provenance.kind = ConstraintKind::STRUCTURAL;
+		rc.provenance.origin.source_clause_id = spec.source_clause_id;
 		input.global_constraints.push_back(std::move(rc));
 		return;
 	}
@@ -107,6 +110,7 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
 			rc.sense = sense;
 			rc.rhs = member.constant;
 			rc.provenance.kind = ConstraintKind::STRUCTURAL;
+			rc.provenance.origin.source_clause_id = spec.source_clause_id;
 			input.global_constraints.push_back(std::move(rc));
 		}
 	}
@@ -122,7 +126,8 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
 		vector<int> args;
 		args.reserve(members.count);
 		for (idx_t i = 0; i < members.count; i++) {
-			args.push_back(ExtremumArgumentColumn(input, indexer, fill_member(i), members, i, spec.label));
+			args.push_back(
+			    ExtremumArgumentColumn(input, indexer, fill_member(i), members, i, spec.label, spec.source_clause_id));
 		}
 		GeneralConstraintSpec gc;
 		gc.kind = spec.is_max ? GeneralConstraintKind::MAX : GeneralConstraintKind::MIN;
@@ -132,10 +137,10 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
 		return;
 	}
 	// A span past a DOUBLE (`MAX(x + c)` over `c` of either sign near the limit) is no Big-M either, and no column is
-	// open: the refusal names the clause. The closing rows carry no clause of their own to name at the hand-off.
+	// open: the refusal names the clause. No closing row is written yet to name it.
 	if (spec.closing_underivable || !std::isfinite(spec.closing_big_m)) {
 		ThrowUnboundedBigMNaming(spec.blame_var != DConstants::INVALID_INDEX, spec.blame_var, var_names, "MIN or MAX",
-		                         spec.written);
+		                         DecideWrittenClause(input, spec.source_clause_id));
 	}
 
 	// One indicator per member, a Big-M row that binds `result` to that member when the
@@ -158,11 +163,13 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
 		rc.sense = sense;
 		rc.rhs = m_coeff + member.constant;
 		rc.provenance.kind = ConstraintKind::STRUCTURAL;
+		rc.provenance.origin.source_clause_id = spec.source_clause_id;
 		input.global_constraints.push_back(std::move(rc));
 	}
 	sum_y.sense = '>';
 	sum_y.rhs = 1.0;
 	sum_y.provenance.kind = ConstraintKind::STRUCTURAL;
+	sum_y.provenance.origin.source_clause_id = spec.source_clause_id;
 	input.global_constraints.push_back(std::move(sum_y));
 }
 

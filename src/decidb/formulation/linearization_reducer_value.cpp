@@ -937,6 +937,7 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 				rc.sense = link.need_envelope && link.need_closing ? '=' : link.need_envelope ? '>' : '<';
 				rc.rhs = constants;
 				rc.provenance.kind = ConstraintKind::STRUCTURAL;
+				rc.provenance.origin.source_clause_id = link.source_clause_id;
 				input.global_constraints.push_back(std::move(rc));
 				RefuseOverflowedReach(input, link, group, indexer.InstanceOf(value_var, group_row));
 				continue;
@@ -965,7 +966,7 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 			if (spec.closing_underivable) {
 				spec.blame_var = FirstUnboundedMemberVariable(members, input.lower_bounds, input.upper_bounds);
 			}
-			spec.written = written;
+			spec.source_clause_id = link.source_clause_id;
 			spec.label = link.label;
 			ExtremumMemberSource source;
 			source.count = span.last - span.first;

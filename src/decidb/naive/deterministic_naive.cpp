@@ -137,7 +137,8 @@ bool ChooseHighsScale(double lo, double hi, double bound, int &exponent) {
 	    Exception::InitializeExtraInfo(clause.place));
 }
 
-//! Refuse a row no power of two places. A row no clause claims is one a rewrite added for the objective
+//! Refuse a row no power of two places. A row a rewrite added for a clause (an ABS, a product, a MIN, MAX or reducer
+//! helper's definition) takes that clause; a row no clause claims is one the objective's rewrites added
 //! (DecideClauseRefOf).
 [[noreturn]] void ThrowUnscalableRow(const SolverModel &model, const ModelConstraint &constr) {
 	ThrowOutsideHighsWindow(

@@ -524,12 +524,14 @@ struct ExtremumLinkSpec {
 	//! the family a link reduces over is not always the family of its own members: an
 	//! outer MIN/MAX over group SUMS spans the per-row reach times a group's row count,
 	//! not the per-row reach. `blame_var` names the variable that left it open, INVALID_INDEX
-	//! when none did: the reach overflowed a DOUBLE, and the refusal names `written`, the
-	//! clause (or objective, or reducer) the link belongs to (ThrowUnboundedBigMNaming).
+	//! when none did: the reach overflowed a DOUBLE, and the refusal names the clause
+	//! `source_clause_id` stands for (ThrowUnboundedBigMNaming).
 	double closing_big_m = 0.0;
 	bool closing_underivable = false;
 	idx_t blame_var = DConstants::INVALID_INDEX;
-	DecideClauseRef written;
+	//! The clause that first reads the helper (INVALID_INDEX: the objective). Every row the link writes takes it as its
+	//! origin, so a refusal of one names that clause.
+	idx_t source_clause_id = DConstants::INVALID_INDEX;
 	//! Names every column and binary this emits, through the global label channel, so a
 	//! diagnosis renders `MAX(x)` rather than an internal column.
 	string label;

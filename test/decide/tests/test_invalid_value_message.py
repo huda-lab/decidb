@@ -549,6 +549,22 @@ def test_a_helper_big_m_past_a_double_names_the_clause_as_written(decidb_cli_hig
     _refused(decidb_cli_highs, _huge_query(decide), mode, TooLarge("MAX(per id: SUM(y + c) BY (id)) >= 0"))
 
 
+# HiGHS only: a row whose numbers are too far apart for its load window. The row defining the MAX helper belongs to the
+# clause that reads the helper, so the refusal points at that clause, not at the objective.
+@pytest.mark.error
+def test_a_helper_row_too_far_apart_names_the_clause_that_reads_it(decidb_cli_highs):
+    rows = "(1, 1e308::DOUBLE), (2, 1e308::DOUBLE)"
+    decide = "x(REAL), y(REAL) SUCH THAT x <= 5 AND y <= 5 AND SUM(x) + MAX(b * y) <= 10 MAXIMIZE SUM(x)"
+    sql = f"SET decide_direct_solve='off'; SELECT id FROM (FROM (VALUES {rows}) t(id, b) DECIDE {decide}) q"
+    decidb_cli_highs.assert_error_at(
+        sql,
+        kind="Not implemented Error",
+        at="SUM(x) + MAX(b * y) <= 10",
+        word="the constraint holds numbers too far apart in size",
+        expect_number_range=True,
+    )
+
+
 # A helper decision (the two-level form's group sum or extremum) is defined where its first reader reads it, and a sum
 # of its members past a DOUBLE names that clause as written, not the reducer as the plan prints it (lowercased, with
 # its `by`). `by (b)` puts both rows in one group, and each of `b`'s 1e308 is finite. A sum read twice costs a column
