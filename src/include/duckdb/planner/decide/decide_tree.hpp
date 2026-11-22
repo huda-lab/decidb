@@ -359,9 +359,9 @@ public:
 	DecideTreeConstruction(ClientContext &context, const LogicalDecide &op);
 	~DecideTreeConstruction();
 	//! The node whose operand entries a reducer the lowering reads ranges over.
-	idx_t ReducerChild(const BoundAggregateExpression &reducer) const;
+	idx_t ReducerChild(const BoundDecideReducerExpression &reducer) const;
 	//! The exact G created for a reducer occurrence, before following nested reducer bodies.
-	idx_t ReducerNode(const BoundAggregateExpression &reducer) const;
+	idx_t ReducerNode(const BoundDecideReducerExpression &reducer) const;
 	//! The records the lowering made of the clause whose comparison is `leaf`, into the root it became; a folded
 	//! bound's, which the repair model alone reads, into its root too.
 	void TakeClause(const Expression &leaf, unique_ptr<DecideConstraint> clause, bool singleton_row);
@@ -396,7 +396,7 @@ idx_t DecideTreeOperand(const DecideTree &tree, idx_t reducer);
 idx_t DecideTreeMembersOf(const DecideTree &tree, idx_t reducer);
 
 //! The semantic name a carrier represents, shared by tree consumers.
-string DecideTreeReducerName(const BoundAggregateExpression &aggregate);
+string DecideTreeReducerName(const BoundDecideReducerExpression &aggregate);
 
 //! Read shape, provenance and bound-admission facts once. Both graph construction
 //! and term lowering use this function; neither infers a second clause shape. `clause` is canonical: a clause of

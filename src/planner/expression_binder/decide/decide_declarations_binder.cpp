@@ -24,7 +24,7 @@
 namespace duckdb {
 
 // ABS, MIN/MAX and `<>` bind here as ordinary expressions -- a BoundFunctionExpression,
-// a BoundAggregateExpression, a BoundComparisonExpression. Choosing a mathematical
+// a BoundDecideReducerExpression, a BoundComparisonExpression. Choosing a mathematical
 // formulation for them is layer 5's job (`src/optimizer/decide/`), which is what lets
 // this layer resolve names and types without also deciding how a construct is encoded.
 

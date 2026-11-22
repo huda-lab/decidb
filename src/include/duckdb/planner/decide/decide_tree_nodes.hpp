@@ -17,6 +17,7 @@
 
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/expression/bound_decide_reducer_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 
 namespace duckdb {
@@ -46,31 +47,31 @@ struct DecideNorm {
 //===--------------------------------------------------------------------===//
 //! The `by` key of `reducer`, an index into LogicalDecide::keys: the rows it reads at a class are the kept rows
 //! sharing the class's key value. INVALID_INDEX for `by ()`, every kept row.
-idx_t DecideReducerGroupKey(const BoundAggregateExpression &reducer);
-void SetDecideReducerGroupKey(BoundAggregateExpression &reducer, idx_t key);
+idx_t DecideReducerGroupKey(const BoundDecideReducerExpression &reducer);
+void SetDecideReducerGroupKey(BoundDecideReducerExpression &reducer, idx_t key);
 
 //! The keyed scope of a reducer's own `per`, `sum(per K: e)`: an index into LogicalDecide::keyed_scopes, whose entry
 //! supplies the classes the reducer takes one value from. False for a reducer with none.
-bool DecideReducerPer(const BoundAggregateExpression &reducer, idx_t &keyed_scope);
-bool DecideReducerHasPer(const BoundAggregateExpression &reducer);
-void SetDecideReducerPer(BoundAggregateExpression &reducer, idx_t keyed_scope);
+bool DecideReducerPer(const BoundDecideReducerExpression &reducer, idx_t &keyed_scope);
+bool DecideReducerHasPer(const BoundDecideReducerExpression &reducer);
+void SetDecideReducerPer(BoundDecideReducerExpression &reducer, idx_t keyed_scope);
 
 //! Whether `expr` is a norm no definition has replaced, and its order. Canonicalization replaces the orders 1, 2 and
 //! 'inf', and an L0 norm of data, by their definitions; DecideOptimizer::RewriteNorm lowers an L0 norm of a decision.
 bool IsDecideNormMarker(const Expression &expr, DecideNorm &norm);
 bool IsDecideNormMarker(const Expression &expr);
-void SetDecideNormMarker(BoundAggregateExpression &reducer, const DecideNorm &norm);
-void ClearDecideNormMarker(BoundAggregateExpression &reducer);
+void SetDecideNormMarker(BoundDecideReducerExpression &reducer, const DecideNorm &norm);
+void ClearDecideNormMarker(BoundDecideReducerExpression &reducer);
 
 //! The norm the definition `reducer` was written as (`SUM(ABS(e))` for 1, `SUM(POWER(e, 2))` for 2, `MAX(ABS(e))`
 //! for 'inf'); no order for any other reducer. The tree means what it says: this lets the canonical text read as
 //! written, until RewriteNorm clears it.
-DecideNorm DecideWrittenNorm(const BoundAggregateExpression &reducer);
-void SetDecideWrittenNorm(BoundAggregateExpression &reducer, const DecideNorm &norm);
+DecideNorm DecideWrittenNorm(const BoundDecideReducerExpression &reducer);
+void SetDecideWrittenNorm(BoundDecideReducerExpression &reducer, const DecideNorm &norm);
 
 //! Whether `reducer` is the SUM an AVG became (DecideOptimizer's AVG rewrite): its terms scale by its row count.
-bool DecideReducerCountScale(const BoundAggregateExpression &reducer);
-void SetDecideReducerCountScale(BoundAggregateExpression &reducer);
+bool DecideReducerCountScale(const BoundDecideReducerExpression &reducer);
+void SetDecideReducerCountScale(BoundDecideReducerExpression &reducer);
 
 //! Whether `reducer` is an objective's reducer over a decision reducer: the canonicalizer sets it once, and
 //! DecideOptimizer::RewriteScopedReducers replaces the reducer by a helper decision.
@@ -83,8 +84,8 @@ bool DecideRetainedExpression(const Expression &expr, idx_t &retained);
 void SetDecideRetainedExpression(Expression &expr, idx_t retained);
 
 //! The keyed scope of a frame aggregate's `per`, which the tree reads and term extraction does not.
-bool DecideTreeReducerPer(const BoundAggregateExpression &reducer, idx_t &keyed_scope);
-void SetDecideTreeReducerPer(BoundAggregateExpression &reducer, idx_t keyed_scope);
+bool DecideTreeReducerPer(const BoundDecideReducerExpression &reducer, idx_t &keyed_scope);
+void SetDecideTreeReducerPer(BoundDecideReducerExpression &reducer, idx_t keyed_scope);
 
 //! Whether two nodes agree on every fact their names hold, the name a call was written under apart. On a
 //! decision-bearing node these are structure (a reducer's `by` and `per`), which Expression::Equals does not compare.
@@ -103,11 +104,11 @@ unique_ptr<Expression> MakeDecideNullTest(unique_ptr<Expression> value);
 //! `avg`), and the binder renames each such call in a DECIDE clause to its primary (RespellDecideAliases), so every
 //! check matches one name. The call keeps the name the user wrote, which a plan and a message print. Display only:
 //! two calls that differ in it are equal.
-void SetDecideWrittenName(BoundAggregateExpression &call, const string &name);
+void SetDecideWrittenName(BoundDecideReducerExpression &call, const string &name);
 inline const string &DecideWrittenName(const BoundFunctionExpression &call) {
 	return call.written_name.empty() ? call.function.name : call.written_name;
 }
-string DecideWrittenName(const BoundAggregateExpression &call);
+string DecideWrittenName(const BoundDecideReducerExpression &call);
 
 //===--------------------------------------------------------------------===//
 // A computed value read whole

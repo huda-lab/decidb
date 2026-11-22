@@ -97,8 +97,8 @@ bool DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, Logic
 	if (TryParseDecideIndexTag(expr->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
 		return false; // AVG syntax inside this body belongs to the tree F node's definition expression
 	}
-	if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-		auto &agg = expr->Cast<BoundAggregateExpression>();
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
+		auto &agg = expr->Cast<BoundDecideReducerExpression>();
 		// The rewrite linearizes an AVG over decisions. One over data is a value execution computes: the bound's is a
 		// placeholder column already (RewriteRhsAggregates), and a frame's marker or a reducer reading a frame stays an
 		// aggregate until the frames are lowered (MakeFrameAggregate).
@@ -115,7 +115,7 @@ bool DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, Logic
 			// Carry the AVG's own tags across — a relation qualifier was stamped by
 			// the binder and still names the relation the SUM de-duplicates by.
 			new_sum->alias = agg.alias;
-			SetDecideReducerCountScale(new_sum->Cast<BoundAggregateExpression>());
+			SetDecideReducerCountScale(new_sum->Cast<BoundDecideReducerExpression>());
 
 			expr = std::move(new_sum);
 			return true;

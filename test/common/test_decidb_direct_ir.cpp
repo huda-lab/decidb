@@ -61,7 +61,7 @@ struct QueryIR {
 				if (IsDecideNormMarker(expression)) {
 					DecideNorm norm;
 					norm.order = order;
-					SetDecideNormMarker(expression.Cast<BoundAggregateExpression>(), norm);
+					SetDecideNormMarker(expression.Cast<BoundDecideReducerExpression>(), norm);
 				}
 			});
 		}

@@ -832,8 +832,9 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 	}
 	auto bound_function = func.functions.GetFunctionByOffset(best_function_idx.GetIndex());
 
-	// 3. Create the BoundAggregateExpression itself.
-	auto bound_aggregate = function_binder.BindAggregateFunction(bound_function, std::move(children));
+	// 3. Create the BoundDecideReducerExpression itself.
+	auto bound_aggregate = make_uniq<BoundDecideReducerExpression>(
+	    function_binder.BindAggregateFunction(bound_function, std::move(children)));
 	// DECIDE uses aggregate aliases for semantic transport tags (qualified
 	// reducers, optimizer markers, provenance). DuckDB's generic binder does not
 	// need them here, but dropping one would make the later DECIDE pass blind.
@@ -843,9 +844,10 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 	return BindResult(std::move(bound_aggregate));
 }
 
-static BoundAggregateExpression *GetBoundAggregate(Expression &expr) {
-	return expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE ? &expr.Cast<BoundAggregateExpression>()
-	                                                                     : nullptr;
+static BoundDecideReducerExpression *GetBoundAggregate(Expression &expr) {
+	return expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER
+	           ? &expr.Cast<BoundDecideReducerExpression>()
+	           : nullptr;
 }
 
 case_insensitive_set_t DecisionNames(const case_insensitive_map_t<idx_t> &variables) {
@@ -962,8 +964,8 @@ unique_ptr<Expression> DecideBinder::BindFrameAggregate(const string &name, uniq
 	}
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(payload));
-	auto result = function_binder.BindAggregateFunction(entry.functions.GetFunctionByOffset(offset.GetIndex()),
-	                                                    std::move(children));
+	auto result = make_uniq<BoundDecideReducerExpression>(function_binder.BindAggregateFunction(
+	    entry.functions.GetFunctionByOffset(offset.GetIndex()), std::move(children)));
 	result->SetAlias(alias);
 	return std::move(result);
 }

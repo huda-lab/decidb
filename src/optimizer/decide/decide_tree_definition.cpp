@@ -74,11 +74,11 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 namespace {
 
 //! A SUM, AVG, MIN or MAX over decisions.
-optional_ptr<const BoundAggregateExpression> AsDecisionReducer(const Expression &expr, idx_t decide_index) {
-	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+optional_ptr<const BoundDecideReducerExpression> AsDecisionReducer(const Expression &expr, idx_t decide_index) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER) {
 		return nullptr;
 	}
-	auto &agg = expr.Cast<BoundAggregateExpression>();
+	auto &agg = expr.Cast<BoundDecideReducerExpression>();
 	auto name = StringUtil::Lower(agg.function.name);
 	if ((name != "sum" && name != "avg" && !IsExtremumName(name)) || agg.children.size() != 1 ||
 	    !BoundExpressionReferencesDecide(*agg.children[0], decide_index)) {
@@ -104,7 +104,7 @@ bool HoldsReducer(const Expression &expr, idx_t decide_index, bool extremum_only
 
 //! A reducer whose body is defined, the way its clause pushes it, and the clause it sits in.
 struct BodySite {
-	BoundAggregateExpression *reducer;
+	BoundDecideReducerExpression *reducer;
 	ExtremumPush push;
 	//! A SUM or AVG term beside a MIN or MAX, rather than one or a reducer inside one: what the refusal says.
 	bool beside_extremum;
@@ -146,7 +146,7 @@ void CollectBodySites(Expression &expr, idx_t decide_index, const DecideTermSpli
 		});
 		return;
 	}
-	auto &reducer = expr.Cast<BoundAggregateExpression>();
+	auto &reducer = expr.Cast<BoundDecideReducerExpression>();
 	const bool is_extremum = IsExtremumName(StringUtil::Lower(reducer.function.name));
 	auto &body = *reducer.children[0];
 	if (HoldsReducer(body, decide_index, false)) {

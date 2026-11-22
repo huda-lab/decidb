@@ -75,7 +75,7 @@ bool TryMatchScaledAggregate(const Expression &expr, idx_t decide_index, ScaledA
 	auto is_reducer = [&](const Expression &child) {
 		auto *node = UnwrapDecideCasts(child, decide_index);
 		idx_t frame;
-		return node->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && !TryGetDecideFrame(*node, frame);
+		return node->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER && !TryGetDecideFrame(*node, frame);
 	};
 	idx_t aggregate_child;
 	if (is_div && is_reducer(*func.children[0])) {
@@ -92,7 +92,7 @@ bool TryMatchScaledAggregate(const Expression &expr, idx_t decide_index, ScaledA
 	}
 
 	result.aggregate =
-	    &UnwrapDecideCasts(*func.children[aggregate_child], decide_index)->Cast<BoundAggregateExpression>();
+	    &UnwrapDecideCasts(*func.children[aggregate_child], decide_index)->Cast<BoundDecideReducerExpression>();
 	result.scale = func.children[1 - aggregate_child].get();
 	result.function = &func;
 	result.divides = is_div;
@@ -251,7 +251,7 @@ static void CollectNullableData(const Expression &expr, idx_t decide_index, vect
 		AddNullTest(expr, out);
 		return;
 	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER &&
 	    BoundExpressionReferencesDecide(expr, decide_index)) {
 		return;
 	}
@@ -284,7 +284,7 @@ static void CollectAbsentDecisionKeys(const Expression &expr, idx_t decide_index
                                       const vector<DecideVarScopeInfo> &variable_scopes,
                                       const vector<KeyedScopeInfo> &scopes, const vector<DecideKey> &keys,
                                       vector<unique_ptr<Expression>> &out) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
 		return;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
@@ -309,11 +309,11 @@ void DecideCanonicalizer::SkipNullData(Expression &expr, const vector<KeyedScope
                                        const vector<DecideKey> &keys) const {
 	ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) { SkipNullData(child, scopes, keys); });
 	idx_t frame;
-	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE || !ReferencesDecideVar(expr) ||
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER || !ReferencesDecideVar(expr) ||
 	    TryGetDecideFrame(expr, frame)) {
 		return;
 	}
-	auto &reducer = expr.Cast<BoundAggregateExpression>();
+	auto &reducer = expr.Cast<BoundDecideReducerExpression>();
 	vector<unique_ptr<Expression>> data;
 	for (auto &child : reducer.children) {
 		CollectNullableData(*child, decide_index, data);
@@ -342,7 +342,7 @@ static bool HoldsReducer(const Expression &expr, COUNTS &&counts) {
 	if (TryGetDecideFrame(expr, frame)) {
 		return false; // a tuple term read at another row, whose payload holds no reducer (D80)
 	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && counts(expr)) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER && counts(expr)) {
 		return true;
 	}
 	bool found = false;
@@ -443,7 +443,7 @@ static bool KeyHolds(const vector<DecideKey> &keys, idx_t key, const Expression 
 	switch (value.GetExpressionClass()) {
 	case ExpressionClass::BOUND_COLUMN_REF:
 	case ExpressionClass::BOUND_SUBQUERY:
-	case ExpressionClass::BOUND_AGGREGATE:
+	case ExpressionClass::BOUND_DECIDE_REDUCER:
 		return false;
 	default:
 		break;
@@ -481,7 +481,7 @@ idx_t DecideCanonicalizer::ScopeKeyOf(const Expression &expr, idx_t data_key) co
 		return DECIDE_ROW_KEY;
 	}
 	// A reducer is one value per group of its own `by`: ClassifyScoped reads it as a reducer term, not here.
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
 		return DECIDE_ROW_KEY;
 	}
 	if (expr.IsFoldable()) {
@@ -500,7 +500,7 @@ bool DecideCanonicalizer::BoundIsQueryWide(const Expression &body) const {
 
 //! The norm `aggregate` was written as, with its body, or nullptr when it was not one: a desugared norm keeps the
 //! order it was written with, and an L0 norm is still the binder's marker.
-static const Expression *WrittenNormBody(const BoundAggregateExpression &aggregate, string &order) {
+static const Expression *WrittenNormBody(const BoundDecideReducerExpression &aggregate, string &order) {
 	DecideNorm norm;
 	const Expression *body;
 	if (IsDecideNormMarker(aggregate, norm)) {
@@ -518,8 +518,8 @@ static const Expression *WrittenNormBody(const BoundAggregateExpression &aggrega
 //! typed, and neither is the `FILTER (WHERE w)` that a reducer's own `when` becomes.
 static string UserFacingName(const Expression &expr) {
 	const Expression *cur = StripCastsForIdentity(expr);
-	if (cur->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-		auto &agg = cur->Cast<BoundAggregateExpression>();
+	if (cur->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
+		auto &agg = cur->Cast<BoundDecideReducerExpression>();
 		string order;
 		if (auto body = WrittenNormBody(agg, order)) {
 			return "NORM(" + UserFacingName(*body) + ", " + order + ")";
@@ -643,7 +643,7 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 			auto positive_factor = WithoutDecisionNegation(*factor, factor_negated);
 			const bool boolean_factor =
 			    !factor_divides && IsBooleanFactor(*positive_factor) &&
-			    UnwrapDecideCasts(*term, decide_index)->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE;
+			    UnwrapDecideCasts(*term, decide_index)->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER;
 			if (!boolean_factor) {
 				throw BinderException(*factor, "%s",
 				                      DecisionScalesReducerMessage(*factor, *positive_factor, factor_divides));
@@ -798,10 +798,10 @@ bool DecideCanonicalizer::DecomposeExtremumAddends(int sign, const Expression &t
 	// `max(x + 0.5)` is `max(x) + 0.5`: each constant addend joins the side under the reducer's factor, so it reaches
 	// the bound and a strict bound steps on `max(x)`.
 	auto &reducer = *UnwrapDecideCasts(term, decide_index);
-	if (reducer.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+	if (reducer.GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER) {
 		return false;
 	}
-	auto &aggregate = reducer.Cast<BoundAggregateExpression>();
+	auto &aggregate = reducer.Cast<BoundDecideReducerExpression>();
 	const auto &name = aggregate.function.name;
 	if (name != "min" && name != "max") {
 		return false;
@@ -838,8 +838,8 @@ static unique_ptr<Expression> BindReducer(ClientContext &context, const string &
 	}
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(child));
-	return function_binder.BindAggregateFunction(entry.functions.GetFunctionByOffset(best.GetIndex()),
-	                                             std::move(children));
+	return make_uniq<BoundDecideReducerExpression>(function_binder.BindAggregateFunction(
+	    entry.functions.GetFunctionByOffset(best.GetIndex()), std::move(children)));
 }
 
 unique_ptr<Expression> DecideNormDefinition(ClientContext &context, unique_ptr<Expression> body,
@@ -900,7 +900,7 @@ void DecideCanonicalizer::DesugarNormsInPlace(unique_ptr<Expression> &expr) cons
 		                                      [&](unique_ptr<Expression> &child) { DesugarNormsInPlace(child); });
 		return;
 	}
-	auto &marker = expr->Cast<BoundAggregateExpression>();
+	auto &marker = expr->Cast<BoundDecideReducerExpression>();
 	if (marker.children.size() != 1) {
 		throw InternalException("DECIDE norm marker must contain one bound expression");
 	}
@@ -908,12 +908,12 @@ void DecideCanonicalizer::DesugarNormsInPlace(unique_ptr<Expression> &expr) cons
 	// The binder gave the marker this type (BindFunction), so what reads it reads this value in place.
 	D_ASSERT(definition->return_type == marker.return_type);
 	if (marker.filter) {
-		definition->Cast<BoundAggregateExpression>().filter = marker.filter->Copy();
+		definition->Cast<BoundDecideReducerExpression>().filter = marker.filter->Copy();
 	}
 	// A norm and its definition are one value: the definition keeps the marker's facts and the order it was written
 	// with, for a display.
 	DecideReplaces(*definition, marker);
-	auto &reducer = definition->Cast<BoundAggregateExpression>();
+	auto &reducer = definition->Cast<BoundDecideReducerExpression>();
 	reducer.SetAlias(marker.GetAlias());
 	ClearDecideNormMarker(reducer);
 	SetDecideWrittenNorm(reducer, norm);
@@ -924,12 +924,12 @@ unique_ptr<Expression> DecideCanonicalizer::BindAggregate(const string &name, un
 	return BindReducer(context, name, std::move(child));
 }
 
-unique_ptr<Expression> DecideCanonicalizer::RebindReducer(const BoundAggregateExpression &from, const string &name,
+unique_ptr<Expression> DecideCanonicalizer::RebindReducer(const BoundDecideReducerExpression &from, const string &name,
                                                           unique_ptr<Expression> child) const {
 	auto result = BindAggregate(name, std::move(child));
 	result->SetAlias(from.GetAlias());
 	if (from.filter) {
-		result->Cast<BoundAggregateExpression>().filter = from.filter->Copy();
+		result->Cast<BoundDecideReducerExpression>().filter = from.filter->Copy();
 	}
 	return result;
 }
@@ -1233,8 +1233,8 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 //! is every reducer inside it (D81). A reducer over data alone is a value per row: it stays in the objective's terms,
 //! as a constraint's does, so a body that squares around it is the objective's own quadratic.
 static void TagNestedObjectiveReducers(const DecideCanonicalizer &canonicalizer, Expression &expr, idx_t decide_index) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-		auto &reducer = expr.Cast<BoundAggregateExpression>();
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
+		auto &reducer = expr.Cast<BoundDecideReducerExpression>();
 		if (!reducer.children.empty() && BoundExpressionReferencesDecide(reducer, decide_index) &&
 		    canonicalizer.ContainsDecisionReducer(*reducer.children[0])) {
 			SetDecideReducerHoldsReducer(reducer, true);
@@ -1357,12 +1357,12 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 			continue;
 		}
 		auto *root = UnwrapDecideCasts(*atom.expr, decide_index);
-		if (root->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		if (root->GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER) {
 			only_plain_avgs = false;
 			value = true; // a reducer inside another expression: `abs(sum(e) by (g) - 40)`
 			continue;
 		}
-		auto &reducer = root->Cast<BoundAggregateExpression>();
+		auto &reducer = root->Cast<BoundDecideReducerExpression>();
 		if (!reducer.children.empty() && ContainsReducer(*reducer.children[0])) {
 			value = true; // a reducer inside it: a helper at every level (language/guide.md §5.5)
 		}
@@ -1708,10 +1708,10 @@ void DecideCanonicalizer::CollectSignatureFields(const Expression &expr, idx_t k
 		add(std::move(field));
 		return;
 	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
 		// A reducer reads a group, not the row: its `by` key is the field, and its body is a scoped expression of its
 		// own.
-		const idx_t by = DecideReducerGroupKey(expr.Cast<BoundAggregateExpression>());
+		const idx_t by = DecideReducerGroupKey(expr.Cast<BoundDecideReducerExpression>());
 		if (by < keys.size()) {
 			DecideSignatureField field;
 			field.kind = DecideSignatureFieldKind::BY_KEY;
@@ -1778,12 +1778,12 @@ static idx_t AddSignature(DecideSignatures &out, const Expression *rows, idx_t k
 
 void DecideCanonicalizer::SignQualifiedReducers(Expression &expr, const DecideReducerPath &path, Clause clause,
                                                 idx_t source_clause_id, DecideSignatures &out) const {
-	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER) {
 		ExpressionIterator::EnumerateChildren(
 		    expr, [&](Expression &child) { SignQualifiedReducers(child, path, clause, source_clause_id, out); });
 		return;
 	}
-	auto &reducer = expr.Cast<BoundAggregateExpression>();
+	auto &reducer = expr.Cast<BoundDecideReducerExpression>();
 	// The reducers in its argument first, along its path (language/guide.md §5.5).
 	auto below = path.Below(reducer);
 	for (auto &child : reducer.children) {
@@ -1864,7 +1864,7 @@ void DecideCanonicalizer::BuildObjectiveSignatures(BoundDecideClause &objective,
 // Frame placement (language/guide.md §5.6)
 //===--------------------------------------------------------------------===//
 
-bool DecideCanonicalizer::ReducerPerKey(const BoundAggregateExpression &reducer,
+bool DecideCanonicalizer::ReducerPerKey(const BoundDecideReducerExpression &reducer,
                                         const vector<KeyedScopeInfo> &keyed_scopes, FramePerKey &out) const {
 	idx_t scope_idx;
 	if (!DecideReducerPer(reducer, scope_idx) || scope_idx >= keyed_scopes.size()) {
@@ -1913,10 +1913,10 @@ void DecideCanonicalizer::PlaceFramesIn(const Expression &expr, const DecideRedu
 		    per->text + " does not determine the timeline " + StringUtil::Join(frame.timeline_names, ", ");
 		return;
 	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
 		// A reducer's argument is a scoped expression of its own: its frames read the rows of the reducer's members,
 		// along its path, under its own `per`.
-		auto &inner = expr.Cast<BoundAggregateExpression>();
+		auto &inner = expr.Cast<BoundDecideReducerExpression>();
 		auto below = path.Below(inner);
 		FramePerKey own;
 		bool has_per = ReducerPerKey(inner, placement.keyed_scopes, own);

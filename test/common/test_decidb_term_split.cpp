@@ -43,8 +43,8 @@ struct CanonicalObjective {
 duckdb::vector<DecideSplitTerm> SplitObjectiveBody(Connection &con, CanonicalObjective &objective) {
 	auto atoms = ReadCanonicalAtoms(*objective.decide->bound.objective.body, objective.decide->decide_index);
 	REQUIRE(atoms.size() == 1);
-	REQUIRE(atoms[0].term->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE);
-	auto &aggregate = atoms[0].term->Cast<BoundAggregateExpression>();
+	REQUIRE(atoms[0].term->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER);
+	auto &aggregate = atoms[0].term->Cast<BoundDecideReducerExpression>();
 	DecideTermSplitter splitter(*con.context, *objective.decide);
 	duckdb::vector<DecideSplitTerm> terms;
 	// The reader binds the products it builds, which reads the catalog, as the optimizer does inside its transaction.
@@ -66,7 +66,7 @@ TEST_CASE("Canonicalization replaces norm with its definition and keeps the writ
 		CanonicalObjective objective(con, test.objective);
 		auto atoms = ReadCanonicalAtoms(*objective.decide->bound.objective.body, objective.decide->decide_index);
 		REQUIRE(atoms.size() == 1);
-		auto &aggregate = atoms[0].term->Cast<BoundAggregateExpression>();
+		auto &aggregate = atoms[0].term->Cast<BoundDecideReducerExpression>();
 		REQUIRE(StringUtil::Lower(aggregate.function.name) == test.reducer);
 		REQUIRE(!IsDecideNormMarker(aggregate));
 		REQUIRE(DecideWrittenNorm(aggregate).order != DecideNorm::Order::NONE);

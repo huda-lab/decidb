@@ -62,9 +62,9 @@ DecideTermDegree DecideDegreeOf(ClientContext &context, const Expression &expr, 
 		result.degree = add ? result.degree + degree.degree : MaxValue(result.degree, degree.degree);
 		result.polynomial = result.polynomial && degree.polynomial;
 	};
-	if (node.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+	if (node.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
 		// A reducer combines rows without multiplying them: the degree of what it reduces.
-		for (auto &child : node.Cast<BoundAggregateExpression>().children) {
+		for (auto &child : node.Cast<BoundDecideReducerExpression>().children) {
 			absorb(*child, false);
 		}
 		return result;
@@ -285,7 +285,7 @@ struct ProductReader {
 			return;
 		}
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
-		    expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		    expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
 			for (auto *seen : form.zero_terms) {
 				if (DecideTermsEqual(*seen, expr, decide_index)) {
 					return;

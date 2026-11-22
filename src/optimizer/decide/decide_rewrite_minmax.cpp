@@ -54,18 +54,18 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 
 //! The aggregate of a left side that is one signed MIN or MAX term, `[-] [factor *] min/max(e)`, else null. Its sign
 //! is `sign` and its factor `match.scale`, if any: the term's direction is the comparison's times both.
-static const BoundAggregateExpression *MatchLoneSignedExtremum(const Expression &lhs, idx_t decide_index, int &sign,
-                                                               ScaledAggregateMatch &match) {
+static const BoundDecideReducerExpression *MatchLoneSignedExtremum(const Expression &lhs, idx_t decide_index, int &sign,
+                                                                   ScaledAggregateMatch &match) {
 	auto atoms = ReadCanonicalAtoms(lhs, decide_index);
 	if (atoms.size() != 1) {
 		return nullptr;
 	}
 	auto &atom = atoms[0];
 	auto *root = UnwrapDecideCasts(*atom.term, decide_index);
-	if (!atom.scaled && root->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+	if (!atom.scaled && root->GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER) {
 		return nullptr;
 	}
-	auto &agg = atom.scaled ? *atom.scale.aggregate : root->Cast<BoundAggregateExpression>();
+	auto &agg = atom.scaled ? *atom.scale.aggregate : root->Cast<BoundDecideReducerExpression>();
 	if (!IsExtremumName(StringUtil::Lower(agg.function.name))) {
 		return nullptr;
 	}

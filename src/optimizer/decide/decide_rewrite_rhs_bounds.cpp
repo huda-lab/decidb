@@ -134,12 +134,12 @@ private:
 		if (TryGetDecideFrame(*expr, frame)) {
 			return;
 		}
-		if (expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		if (expr->GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER) {
 			ExpressionIterator::EnumerateChildren(
 			    *expr, [&](unique_ptr<Expression> &child) { ReplaceDataUnderDecisions(child, path); });
 			return;
 		}
-		auto &reducer = expr->Cast<BoundAggregateExpression>();
+		auto &reducer = expr->Cast<BoundDecideReducerExpression>();
 		if (reducer.children.empty() || !BoundExpressionReferencesDecide(*reducer.children[0], decide.decide_index)) {
 			expr = MakeReducerColumn(reducer, path ? *path : DecideReducerPath());
 			return;
@@ -211,8 +211,8 @@ private:
 	static vector<const Expression *> OwnWhens(const Expression &left) {
 		vector<const Expression *> whens;
 		std::function<void(const Expression &)> walk = [&](const Expression &expr) {
-			if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-				auto &reducer = expr.Cast<BoundAggregateExpression>();
+			if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
+				auto &reducer = expr.Cast<BoundDecideReducerExpression>();
 				if (reducer.filter) {
 					whens.push_back(reducer.filter.get());
 				}
@@ -247,8 +247,8 @@ private:
 		if (TryGetDecideFrame(*expr, frame)) {
 			return; // a row-wise value execution computes, whose payload holds no reducer
 		}
-		if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			expr = MakeReducerColumn(expr->Cast<BoundAggregateExpression>(), path);
+		if (expr->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
+			expr = MakeReducerColumn(expr->Cast<BoundDecideReducerExpression>(), path);
 			return;
 		}
 		ExpressionIterator::EnumerateChildren(*expr,
@@ -260,7 +260,8 @@ private:
 	//! computed: the value is the record's placeholder column. Under other reducers (`path`), its group is one of its
 	//! path key and the rows it reads pass every enclosing `when` too; the reducers in its argument are recorded
 	//! first, and its argument reads their columns.
-	unique_ptr<Expression> MakeReducerColumn(const BoundAggregateExpression &reducer, const DecideReducerPath &path) {
+	unique_ptr<Expression> MakeReducerColumn(const BoundDecideReducerExpression &reducer,
+	                                         const DecideReducerPath &path) {
 		if (!reducer.children.empty() && !FrameText(*reducer.children[0]).empty()) {
 			return MakeFrameAggregate(reducer, path);
 		}
@@ -272,7 +273,7 @@ private:
 		auto reads = Reads(path, reducer.filter.get());
 		AddValueCheck(ArgumentCheck(reducer, arguments.empty() ? nullptr : arguments[0].get(), reads, path));
 		auto function = reducer.Copy();
-		auto &aggregate = function->Cast<BoundAggregateExpression>();
+		auto &aggregate = function->Cast<BoundDecideReducerExpression>();
 		aggregate.children.clear();
 		aggregate.filter = nullptr;
 		DecideBoundAggregate record;
@@ -302,7 +303,8 @@ private:
 	//! entry of LogicalDecide::frame_aggregates -- its path key and its `per` key --, which stage 05 makes a frame
 	//! column execution computes after the frames (DecideFrameColumn::Kind::AGGREGATE). The reducers inside its
 	//! argument are columns first, as for any reducer.
-	unique_ptr<Expression> MakeFrameAggregate(const BoundAggregateExpression &reducer, const DecideReducerPath &path) {
+	unique_ptr<Expression> MakeFrameAggregate(const BoundDecideReducerExpression &reducer,
+	                                          const DecideReducerPath &path) {
 		// A NaN its argument reads makes the reducer's value NaN, which the value's reader refuses; a norm's value can
 		// hide it (an L0 count's SIGN reads it as 0), so its body is checked as a reducer over data's is, at the rows
 		// the reducer reads.
@@ -310,7 +312,7 @@ private:
 			AddValueCheck(ArgumentCheck(reducer, reducer.children[0].get(), Reads(path, reducer.filter.get()), path));
 		}
 		auto marker = reducer.Copy();
-		auto &aggregate = marker->Cast<BoundAggregateExpression>();
+		auto &aggregate = marker->Cast<BoundDecideReducerExpression>();
 		for (auto &child : aggregate.children) {
 			ReplaceReducers(child, path.Below(reducer));
 		}
@@ -357,7 +359,7 @@ private:
 	//! (`read_as`). The check is true on any other row, and null when there is none to make. `argument` is the argument
 	//! with the reducers inside it replaced by their columns, `reads` the rows it reads and `path` the reducers around
 	//! it.
-	unique_ptr<Expression> ArgumentCheck(const BoundAggregateExpression &reducer, const Expression *argument,
+	unique_ptr<Expression> ArgumentCheck(const BoundDecideReducerExpression &reducer, const Expression *argument,
 	                                     const ExprPtr &reads, const DecideReducerPath &path) {
 		auto name = StringUtil::Lower(reducer.function.name);
 		D_ASSERT(name == "count" || name == "count_star" || name == "min" || name == "max" || name == "arg_min" ||
@@ -383,7 +385,8 @@ private:
 	//! The reducer's value on a row, given the column that holds its aggregate: NULL on a row whose written `by` column
 	//! is NULL, which is in no group, so the NULL bound skips the row's instance (deck p. 50). The value carries the
 	//! reducer's written text as its name, so every place that quotes a bound still reads `sum(cap) by (g)`.
-	unique_ptr<Expression> NamedReducerValue(const BoundAggregateExpression &reducer, idx_t key, ExprPtr column) const {
+	unique_ptr<Expression> NamedReducerValue(const BoundDecideReducerExpression &reducer, idx_t key,
+	                                         ExprPtr column) const {
 		auto result = calc.Out(InKey(key, column));
 		NameAsWritten(*result, reducer);
 		auto &computed_values = decide.bound.computed_values;
@@ -428,8 +431,10 @@ private:
 		vector<unique_ptr<Expression>> children;
 		children.push_back(argument.Copy());
 		DecideBoundAggregate record;
-		record.function = optimizer.BindAggregateFunction(function, std::move(children));
-		record.function->Cast<BoundAggregateExpression>().children.clear();
+		auto reducer =
+		    make_uniq<BoundDecideReducerExpression>(optimizer.BindAggregateFunction(function, std::move(children)));
+		reducer->children.clear();
+		record.function = std::move(reducer);
 		record.arguments.push_back(argument.Copy());
 		record.key = key;
 		auto type = record.function->return_type;
@@ -573,13 +578,13 @@ private:
 
 	//! The key a reducer under the reducers of `path` groups by: its `by` key under every enclosing one, an index
 	//! into `keys` (FindOrCreateDecidePathKey); INVALID_INDEX for the whole query.
-	idx_t PathKeyOf(const BoundAggregateExpression &reducer, const DecideReducerPath &path) const {
+	idx_t PathKeyOf(const BoundDecideReducerExpression &reducer, const DecideReducerPath &path) const {
 		const auto own = GroupKeyIndex(reducer);
 		return path.keys.empty() ? own : FindOrCreateDecidePathKey(path.KeysOf(own), decide.bound.keys);
 	}
 
 	//! The key a reducer groups by (an index into `keys`); INVALID_INDEX for the whole query.
-	idx_t GroupKeyIndex(const BoundAggregateExpression &reducer) const {
+	idx_t GroupKeyIndex(const BoundDecideReducerExpression &reducer) const {
 		const idx_t index = DecideReducerGroupKey(reducer);
 		D_ASSERT(index == DConstants::INVALID_INDEX || index < decide.bound.keys.size());
 		return index;

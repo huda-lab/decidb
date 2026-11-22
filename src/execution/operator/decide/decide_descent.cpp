@@ -438,8 +438,8 @@ DecideDescent::~DecideDescent() {
 void DecideDescent::RequireRowReads(const DecideTree &tree, idx_t width) {
 	std::function<void(const Expression &, const string &)> require = [&](const Expression &read, const string &what) {
 		const auto kind = read.GetExpressionClass();
-		if (kind == ExpressionClass::BOUND_AGGREGATE || kind == ExpressionClass::BOUND_WINDOW ||
-		    kind == ExpressionClass::BOUND_SUBQUERY) {
+		if (kind == ExpressionClass::BOUND_DECIDE_REDUCER || kind == ExpressionClass::BOUND_AGGREGATE ||
+		    kind == ExpressionClass::BOUND_WINDOW || kind == ExpressionClass::BOUND_SUBQUERY) {
 			throw InternalException("DECIDE tree: %s computes over rows in the descent (%s)", what,
 			                        ExpressionClassToString(kind));
 		}

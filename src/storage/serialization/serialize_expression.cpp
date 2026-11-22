@@ -51,6 +51,9 @@ unique_ptr<Expression> Expression::Deserialize(Deserializer &deserializer) {
 	case ExpressionClass::BOUND_DECIDE_NULL_TEST:
 		result = BoundDecideNullTestExpression::Deserialize(deserializer);
 		break;
+	case ExpressionClass::BOUND_DECIDE_REDUCER:
+		result = BoundDecideReducerExpression::Deserialize(deserializer);
+		break;
 	case ExpressionClass::BOUND_DEFAULT:
 		result = BoundDefaultExpression::Deserialize(deserializer);
 		break;

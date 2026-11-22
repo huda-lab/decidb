@@ -233,6 +233,7 @@ void LogicalOperatorVisitor::VisitExpression(unique_ptr<Expression> *expression)
 		result = VisitReplace(expr.Cast<BoundUnnestExpression>(), expression);
 		break;
 	case ExpressionClass::BOUND_DECIDE_NULL_TEST:
+	case ExpressionClass::BOUND_DECIDE_REDUCER:
 		break;
 	default:
 		throw InternalException("Unrecognized expression type in logical operator visitor");

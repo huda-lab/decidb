@@ -184,17 +184,18 @@ static unique_ptr<Expression> ReadAsRow(const ExpressionBuilder &calc, const Log
 		// The reducer's `by` key is on the written reducer: the copy above keeps no alias.
 		idx_t key = DConstants::INVALID_INDEX;
 		std::function<void(const Expression &)> find = [&](const Expression &node) {
-			if (node.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-				key = DecideReducerGroupKey(node.Cast<BoundAggregateExpression>());
+			if (node.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
+				key = DecideReducerGroupKey(node.Cast<BoundDecideReducerExpression>());
 				return;
 			}
 			ExpressionIterator::EnumerateChildren(node, find);
 		};
 		find(*comparison.left);
 		ReplaceDecisionTerm(
-		    row, [](const Expression &node) { return node.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE; },
+		    row,
+		    [](const Expression &node) { return node.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER; },
 		    [&](const Expression &node) {
-			    auto &reducer = node.Cast<BoundAggregateExpression>();
+			    auto &reducer = node.Cast<BoundDecideReducerExpression>();
 			    D_ASSERT(reducer.children.size() == 1);
 			    filter = reducer.filter ? reducer.filter->Copy() : nullptr;
 			    by_key_only = !filter;

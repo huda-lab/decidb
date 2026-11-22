@@ -51,8 +51,8 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		    if (!expr)
 			    return;
 		    DecideNorm norm;
-		    if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
-		        (norm = DecideWrittenNorm(expr->Cast<BoundAggregateExpression>()))) {
+		    if (expr->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER &&
+		        (norm = DecideWrittenNorm(expr->Cast<BoundDecideReducerExpression>()))) {
 			    // The canonical text has been rendered; from here the clause is formulated, and every layer after this
 			    // one shows the definition the solver receives rather than the norm it came from. Canonicalization
 			    // replaced the norm by that definition, so its EXPLAIN account (D27) is recorded here, while the
@@ -67,7 +67,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 			            ? Kind::NORM_SUM_ABS
 			            : (norm.order == DecideNorm::Order::L2 ? Kind::NORM_SUM_SQUARES : Kind::NORM_MAX_ABS),
 			        RenderForPlan(*expr, decide));
-			    SetDecideWrittenNorm(expr->Cast<BoundAggregateExpression>(), DecideNorm());
+			    SetDecideWrittenNorm(expr->Cast<BoundDecideReducerExpression>(), DecideNorm());
 		    }
 		    if (!IsDecideNormMarker(*expr, norm)) {
 			    // A marker stands wherever a scalar may stand. Under a comparison, but just
@@ -81,7 +81,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 			        *expr, [&](unique_ptr<Expression> &child) { rewrite(child, origin, when); });
 			    return;
 		    }
-		    auto &aggregate = expr->Cast<BoundAggregateExpression>();
+		    auto &aggregate = expr->Cast<BoundDecideReducerExpression>();
 		    if (aggregate.children.size() != 1) {
 			    throw InternalException("DECIDE NORM marker must contain one bound expression");
 		    }
@@ -130,7 +130,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		             optimizer.BindScalarFunction("*", std::move(tolerance), z->Copy()));
 		    auto count = BindSumOver(optimizer, std::move(z), aggregate.filter.get());
 		    count->alias = aggregate.GetAlias();
-		    ClearDecideNormMarker(count->Cast<BoundAggregateExpression>());
+		    ClearDecideNormMarker(count->Cast<BoundDecideReducerExpression>());
 		    expr = std::move(count);
 		    lowered = true;
 		    decide.l0_indicator_functions.push_back(std::move(indicator));

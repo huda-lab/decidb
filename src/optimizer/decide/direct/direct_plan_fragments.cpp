@@ -447,7 +447,7 @@ unique_ptr<LogicalOperator> DirectHeldRows::Close(unique_ptr<LogicalOperator> de
 
 unique_ptr<Expression> DirectAggregateOf(const Expression &function, vector<unique_ptr<Expression>> arguments,
                                          unique_ptr<Expression> reads) {
-	auto result = function.Copy();
+	auto result = function.Cast<BoundDecideReducerExpression>().ToAggregate();
 	auto &aggregate = result->Cast<BoundAggregateExpression>();
 	D_ASSERT(aggregate.children.empty() && !aggregate.filter);
 	// `function` is a copy of the reducer, whose alias carries its tags; a plan node shows none.

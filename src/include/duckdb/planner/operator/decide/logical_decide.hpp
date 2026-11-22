@@ -226,7 +226,7 @@ struct DecideSignature {
 struct DecideBoundAggregate {
 	//! The placeholder the bound reads: its own table index, and the column after the group key's.
 	ColumnBinding column;
-	//! The BoundAggregateExpression with its function and result type bound; its arguments and filter are the members
+	//! The BoundDecideReducerExpression with its function and result type bound; its arguments and filter are the members
 	//! below.
 	unique_ptr<Expression> function;
 	//! What the function reads, in its order: none for COUNT(*), and for a collated MIN or MAX the value and the key it

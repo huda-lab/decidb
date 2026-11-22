@@ -134,7 +134,7 @@ void DecideShapeCheck::CheckFramePart(const Expression &part) const {
 void DecideShapeCheck::CheckFrames(const Expression &expr) const {
 	idx_t frame;
 	if (TryGetDecideFrame(expr, frame)) {
-		CheckFramePart(*expr.Cast<BoundAggregateExpression>().children[0]);
+		CheckFramePart(*expr.Cast<BoundDecideReducerExpression>().children[0]);
 		if (frames[frame].fallback) {
 			CheckFramePart(*frames[frame].fallback);
 		}
@@ -199,10 +199,10 @@ static bool IsBoundL0NormMarker(const Expression &expr) {
 //! Is this bound node an AVG aggregate? A range frame's marker is a value of the row, which no rewrite multiplies
 //! through.
 static bool IsBoundAvgAggregate(const Expression &expr) {
-	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER) {
 		return false;
 	}
-	auto &agg = expr.Cast<BoundAggregateExpression>();
+	auto &agg = expr.Cast<BoundDecideReducerExpression>();
 	idx_t frame;
 	return StringUtil::CIEquals(agg.function.name, "avg") && !TryParseFrameTag(agg.GetAlias(), frame);
 }
@@ -222,7 +222,7 @@ static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoi
 		return true;
 	}
 	if (allow_avg_hoist && IsBoundAvgAggregate(expr)) {
-		return DecideSideIsWholeNumbered(*expr.Cast<BoundAggregateExpression>().children[0], false, decide_index,
+		return DecideSideIsWholeNumbered(*expr.Cast<BoundDecideReducerExpression>().children[0], false, decide_index,
 		                                 addends_count);
 	}
 	switch (expr.GetExpressionClass()) {
@@ -233,8 +233,8 @@ static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoi
 		return DecideTypeIsWholeNumbered(cast.return_type) ||
 		       DecideSideIsWholeNumbered(*cast.child, allow_avg_hoist, decide_index, addends_count);
 	}
-	case ExpressionClass::BOUND_AGGREGATE: {
-		auto &agg = expr.Cast<BoundAggregateExpression>();
+	case ExpressionClass::BOUND_DECIDE_REDUCER: {
+		auto &agg = expr.Cast<BoundDecideReducerExpression>();
 		const auto &name = agg.function.name;
 		// A frame is a value of the row, every addend and its `else` part of it: whole when the type its payload and
 		// `else` share is, and a range's SUM, MIN or MAX of them; an AVG range divides.
@@ -313,8 +313,8 @@ static bool FindFractionalOperand(const Expression &expr, bool allow_avg_hoist, 
 		return false;
 	}
 	// A norm is named as written, not by the definition canonicalization gave it.
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
-	    DecideWrittenNormBody(expr.Cast<BoundAggregateExpression>())) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER &&
+	    DecideWrittenNormBody(expr.Cast<BoundDecideReducerExpression>())) {
 		out = RenderDecideSource(expr, names);
 		return true;
 	}

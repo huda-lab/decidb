@@ -363,7 +363,7 @@ ExprPtr DirectInclusiveRowsExpr(const ExpressionBuilder &calc, ExpressionType co
 ExprPtr DirectGroupCountLimitRows(const ExpressionBuilder &calc, Optimizer &optimizer, const DirectCountLimit &count,
                                   bool upper, const ExprPtr &value);
 
-//! `function` (a BoundAggregateExpression with no argument) as the aggregate itself, reading `arguments` (each argument
+//! `function` (a BoundDecideReducerExpression with no argument) as the aggregate itself, reading `arguments` (each argument
 //! the reducer binds, a collated MIN or MAX's included; none for COUNT(*)) on the rows where `reads` holds (null for
 //! every row).
 unique_ptr<Expression> DirectAggregateOf(const Expression &function, vector<unique_ptr<Expression>> arguments,

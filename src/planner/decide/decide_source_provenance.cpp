@@ -229,7 +229,7 @@ static string RenderFunction(const BoundFunctionExpression &func, const RenderCo
 }
 
 //! The order of a norm as the user wrote it after the body (DecideNorm::Written), or empty for a plain reducer.
-static string NormOrder(const BoundAggregateExpression &agg) {
+static string NormOrder(const BoundDecideReducerExpression &agg) {
 	DecideNorm norm;
 	if (!IsDecideNormMarker(agg, norm)) {
 		// Canonicalization replaced the norm with its definition, which keeps the order (RenderAggregate reads the
@@ -270,7 +270,7 @@ static string RenderWrittenWhen(const Expression &filter, const RenderContext &c
 }
 
 //! A reducer's `by` key as it wrote it, else as the key it shares was first written.
-static string ByText(const BoundAggregateExpression &agg, const RenderContext &ctx, idx_t group_key) {
+static string ByText(const BoundDecideReducerExpression &agg, const RenderContext &ctx, idx_t group_key) {
 	string written;
 	if (ctx.text.Cut(agg.GetQueryLocation(), DecideSpanRole::BY, written)) {
 		return written;
@@ -280,7 +280,7 @@ static string ByText(const BoundAggregateExpression &agg, const RenderContext &c
 
 //! A reducer reprinted: `sum(when c per K: e) by (g)`, for a reducer with no span and, in a plan layer, for one that
 //! reads a decision (a plan reprints decision structure).
-static string RenderReducer(const BoundAggregateExpression &agg, const string &body, const RenderContext &ctx) {
+static string RenderReducer(const BoundDecideReducerExpression &agg, const string &body, const RenderContext &ctx) {
 	string scope;
 	if (agg.filter) {
 		auto written = RenderWrittenWhen(*agg.filter, ctx);
@@ -313,7 +313,7 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 	return result;
 }
 
-static string RenderAggregate(const BoundAggregateExpression &agg, const RenderContext &ctx) {
+static string RenderAggregate(const BoundDecideReducerExpression &agg, const RenderContext &ctx) {
 	// A frame marker is `first(e)` or the range's reducer, which no one wrote: it prints as the frame.
 	idx_t frame;
 	if (ctx.frames && TryParseFrameTag(agg.GetAlias(), frame) && frame < ctx.frames->size()) {
@@ -327,11 +327,11 @@ static string RenderAggregate(const BoundAggregateExpression &agg, const RenderC
 	return RenderReducer(agg, body, ctx);
 }
 
-const Expression *DecideWrittenNormBody(const BoundAggregateExpression &reducer) {
+const Expression *DecideWrittenNormBody(const BoundDecideReducerExpression &reducer) {
 	return DecideNormBody(reducer, DecideWrittenNorm(reducer));
 }
 
-const Expression *DecideNormBody(const BoundAggregateExpression &reducer, const DecideNorm &norm) {
+const Expression *DecideNormBody(const BoundDecideReducerExpression &reducer, const DecideNorm &norm) {
 	if (!norm) {
 		return nullptr;
 	}
@@ -478,8 +478,8 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 	}
 	case ExpressionClass::BOUND_FUNCTION:
 		return RenderFunction(expr.Cast<BoundFunctionExpression>(), ctx, parent_precedence);
-	case ExpressionClass::BOUND_AGGREGATE:
-		return RenderAggregate(expr.Cast<BoundAggregateExpression>(), ctx);
+	case ExpressionClass::BOUND_DECIDE_REDUCER:
+		return RenderAggregate(expr.Cast<BoundDecideReducerExpression>(), ctx);
 	default:
 		break;
 	}

@@ -127,6 +127,16 @@ void ExpressionIterator::EnumerateChildren(Expression &expr,
 	case ExpressionClass::BOUND_DECIDE_NULL_TEST:
 		callback(expr.Cast<BoundDecideNullTestExpression>().test);
 		break;
+	case ExpressionClass::BOUND_DECIDE_REDUCER: {
+		auto &reducer = expr.Cast<BoundDecideReducerExpression>();
+		for (auto &child : reducer.children) {
+			callback(child);
+		}
+		if (reducer.filter) {
+			callback(reducer.filter);
+		}
+		break;
+	}
 	case ExpressionClass::BOUND_UNNEST: {
 		auto &unnest_expr = expr.Cast<BoundUnnestExpression>();
 		callback(unnest_expr.child);

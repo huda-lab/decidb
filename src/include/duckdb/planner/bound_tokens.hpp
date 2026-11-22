@@ -34,6 +34,7 @@ class BoundConjunctionExpression;
 class BoundConstantExpression;
 class BoundDefaultExpression;
 class BoundDecideNullTestExpression;
+class BoundDecideReducerExpression;
 class BoundFunctionExpression;
 class BoundOperatorExpression;
 class BoundParameterExpression;

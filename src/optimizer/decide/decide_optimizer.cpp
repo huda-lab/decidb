@@ -158,11 +158,11 @@ unique_ptr<Expression> decide_rewrite::BindSumOver(Optimizer &optimizer, unique_
                                                    const Expression *filter) {
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(body));
-	auto sum = optimizer.BindAggregateFunction("sum", std::move(children));
+	auto sum = make_uniq<BoundDecideReducerExpression>(optimizer.BindAggregateFunction("sum", std::move(children)));
 	if (filter) {
-		sum->Cast<BoundAggregateExpression>().filter = filter->Copy();
+		sum->filter = filter->Copy();
 	}
-	return sum;
+	return std::move(sum);
 }
 
 void decide_rewrite::AddValueCheck(LogicalDecide &decide, unique_ptr<Expression> check) {
@@ -232,7 +232,7 @@ DecideVarScopeInfo decide_rewrite::ScopeOf(const LogicalDecide &decide, const De
 			                                                     : DecideVarScopeInfo::Row();
 		}
 	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
 		idx_t frame;
 		if (TryGetDecideFrame(expr, frame)) {
 			// Point frames are anchored at a row. Their value is one per anchor, even when the underlying order
@@ -241,7 +241,7 @@ DecideVarScopeInfo decide_rewrite::ScopeOf(const LogicalDecide &decide, const De
 		}
 		// An ungrouped reducer has one query-wide value. A reducer with a `by` or relation qualifier has multiple
 		// values whose groups are not a declared DECIDE scope, so its ABS helper must retain row identity.
-		auto &reducer = expr.Cast<BoundAggregateExpression>();
+		auto &reducer = expr.Cast<BoundDecideReducerExpression>();
 		if (DecideReducerHasPer(reducer) || DecideReducerGroupKey(reducer) != DConstants::INVALID_INDEX) {
 			return DecideVarScopeInfo::Row();
 		}
@@ -516,10 +516,10 @@ void decide_rewrite::WalkPolarity(ClientContext &context, const BooleanDecisions
 			return;
 		}
 	}
-	if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
 		// SUM, AVG, MIN and MAX never decrease when a member grows, so a member carries the
 		// reducer's sign.
-		for (auto &child : expr->Cast<BoundAggregateExpression>().children) {
+		for (auto &child : expr->Cast<BoundDecideReducerExpression>().children) {
 			walk(child, sign, path);
 		}
 		return;

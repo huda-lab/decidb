@@ -399,8 +399,8 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 
 	// A term of a reducer with its own `when` reads only the rows that `when` keeps.
 	unique_ptr<Expression> reducer_rows;
-	if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-		auto &reducer = expr->Cast<BoundAggregateExpression>();
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
+		auto &reducer = expr->Cast<BoundDecideReducerExpression>();
 		if (reducer.filter) {
 			reducer_rows = DecideRowsKeptByBoth(rows, reducer.filter.get());
 			rows = reducer_rows.get();

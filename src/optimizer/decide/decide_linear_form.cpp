@@ -48,10 +48,17 @@ static void EnumerateChildrenConst(const Expression &expr,
 	throw InternalException("DECIDE term '%s' reached term extraction unopened", term.opaque->ToString());
 }
 
+//! `value` as a frame column holds it, for execution to evaluate: a reducer is the aggregate it names.
+static unique_ptr<Expression> FrameColumnValue(const Expression &value) {
+	return value.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER
+	           ? value.Cast<BoundDecideReducerExpression>().ToAggregate()
+	           : value.Copy();
+}
+
 //! Whether `expr` is a reducer: an aggregate, a frame's marker excepted (a tuple term read at another row).
 static bool IsReducer(const Expression &expr) {
 	idx_t frame;
-	return expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && !TryGetDecideFrame(expr, frame);
+	return expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER && !TryGetDecideFrame(expr, frame);
 }
 
 //===--------------------------------------------------------------------===//
@@ -221,17 +228,17 @@ private:
 	//! also reads the frame's `else`.
 	idx_t FrameColumnSlot(DecideFrameColumn::Kind kind, idx_t frame, const Expression *value) {
 		auto &columns = frame_reads.columns;
+		auto held = value ? FrameColumnValue(*value) : nullptr;
 		for (idx_t i = 0; i < columns.size(); i++) {
 			auto &column = columns[i];
-			if (column.kind == kind && column.frame == frame &&
-			    (column.value ? value && column.value->Equals(*value) : !value)) {
+			if (column.kind == kind && column.frame == frame && Expression::Equals(column.value, held)) {
 				return i;
 			}
 		}
 		DecideFrameColumn column;
 		column.kind = kind;
 		column.frame = frame;
-		column.value = value ? value->Copy() : nullptr;
+		column.value = std::move(held);
 		column.type = value ? value->return_type : LogicalType::BOOLEAN;
 		auto &fallback = op.bound.frames[frame].fallback;
 		const bool reads_fallback = kind == DecideFrameColumn::Kind::VALUE || kind == DecideFrameColumn::Kind::REDUCED;
@@ -239,7 +246,7 @@ private:
 			// The binder gave payload and fallback one type (BindDecideFrame): a point's value, a range's reducer
 			// argument.
 			auto &payload_type = kind == DecideFrameColumn::Kind::REDUCED
-			                         ? value->Cast<BoundAggregateExpression>().children[0]->return_type
+			                         ? value->Cast<BoundDecideReducerExpression>().children[0]->return_type
 			                         : column.type;
 			if (fallback->return_type != payload_type) {
 				throw InternalException("DECIDE: %s reads a payload of type %s and an else of type %s",
@@ -367,11 +374,11 @@ private:
 			return;
 		}
 		idx_t frame, aggregate;
-		if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+		if (expr->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER &&
 		    TryParseFrameAggregateTag(expr->GetAlias(), aggregate)) {
 			// A reducer over data reading a frame (LogicalDecide::frame_aggregates): its frames first; once every
 			// frame has its columns, a column of its own after them (lower_aggregates).
-			auto &reducer = expr->Cast<BoundAggregateExpression>();
+			auto &reducer = expr->Cast<BoundDecideReducerExpression>();
 			for (auto &child : reducer.children) {
 				LowerFrames(child);
 			}
@@ -394,7 +401,7 @@ private:
 				throw InternalException("DECIDE: a frame over decisions reached evaluation unextracted: %s",
 				                        op.bound.frames[frame].text);
 			}
-			auto &marker = expr->Cast<BoundAggregateExpression>();
+			auto &marker = expr->Cast<BoundDecideReducerExpression>();
 			// A point reads its payload at one row; a range reduces its payload's values, its `else` read where a
 			// position is missing.
 			auto value = op.bound.frames[frame].range
@@ -450,7 +457,7 @@ private:
 			auto &record = op.frame_aggregates[index];
 			DecideFrameColumn column;
 			column.kind = DecideFrameColumn::Kind::AGGREGATE;
-			column.value = marker.Copy();
+			column.value = FrameColumnValue(marker);
 			column.type = marker.return_type;
 			column.key = record.key;
 			column.class_key = record.class_key;
@@ -619,7 +626,7 @@ private:
 	//===------------------------------------------------------------------===//
 
 	//! Keyed scope a reducer is qualified by (`sum(per D: ...)`); INVALID_INDEX when the reducer is unqualified.
-	static idx_t QualifierScopeOf(const BoundAggregateExpression &agg) {
+	static idx_t QualifierScopeOf(const BoundDecideReducerExpression &agg) {
 		idx_t scope_idx = DConstants::INVALID_INDEX;
 		DecideReducerPer(agg, scope_idx);
 		return scope_idx;
@@ -628,7 +635,7 @@ private:
 	//! A reducer's count scale, qualifier and reduction on every term or product group extracted from its body since
 	//! `begin`.
 	template <class TERM>
-	static void ApplyAggregateMetadata(vector<TERM> &items, idx_t begin, const BoundAggregateExpression &agg) {
+	static void ApplyAggregateMetadata(vector<TERM> &items, idx_t begin, const BoundDecideReducerExpression &agg) {
 		bool is_avg = DecideReducerCountScale(agg);
 		idx_t qualifier_scope = QualifierScopeOf(agg);
 		for (idx_t i = begin; i < items.size(); i++) {
@@ -641,7 +648,7 @@ private:
 	//! An objective AVG's `by` key on every term or product group extracted from its body since `begin`: it divides
 	//! each row by its group's count, not the objective's (DecideTerm::avg_group_key).
 	template <class TERM>
-	static void ApplyAvgGroupKey(vector<TERM> &items, idx_t begin, const BoundAggregateExpression &agg) {
+	static void ApplyAvgGroupKey(vector<TERM> &items, idx_t begin, const BoundDecideReducerExpression &agg) {
 		const idx_t avg_group_key =
 		    DecideReducerCountScale(agg) ? DecideReducerGroupKey(agg) : DConstants::INVALID_INDEX;
 		for (idx_t i = begin; i < items.size(); i++) {
@@ -747,7 +754,7 @@ private:
 
 	//! Names, on every term and product group `agg`'s body produced since the marks, the tree node it ranges over
 	//! (DecideTerm::child) and the reducer whose `per` qualifies it; a group's forms too.
-	void Stamp(const BoundAggregateExpression &agg, vector<DecideTerm> &terms, vector<DecideProductGroup> &groups,
+	void Stamp(const BoundDecideReducerExpression &agg, vector<DecideTerm> &terms, vector<DecideProductGroup> &groups,
 	           idx_t linear, idx_t group_before) const {
 		const auto node = tree.ReducerChild(agg);
 		const auto qualifier_reducer =
@@ -809,11 +816,12 @@ private:
 				ExtractConstraintTerms(expr, constraint, atom.sign);
 				continue;
 			}
-			ExtractReducerConstraintTerms(expr.Cast<BoundAggregateExpression>(), constraint, atom.sign);
+			ExtractReducerConstraintTerms(expr.Cast<BoundDecideReducerExpression>(), constraint, atom.sign);
 		}
 	}
 
-	void ExtractReducerConstraintTerms(const BoundAggregateExpression &agg, DecideConstraint &constraint, int sign) {
+	void ExtractReducerConstraintTerms(const BoundDecideReducerExpression &agg, DecideConstraint &constraint,
+	                                   int sign) {
 		auto agg_name = StringUtil::Lower(agg.function.name);
 		if (agg_name != "sum") {
 			throw InternalException("DECIDE optimizer did not rewrite aggregate '%s' to SUM before execution",
@@ -832,13 +840,14 @@ private:
 	//! each filtered by `c`, scaled by `s` and signed.
 	void ExtractEasyExtremumTerms(const Expression &lhs, DecideConstraint &constraint) {
 		auto atoms = ReadCanonicalAtoms(lhs, decide_index);
-		const BoundAggregateExpression *agg = nullptr;
+		const BoundDecideReducerExpression *agg = nullptr;
 		if (atoms.size() == 1 && atoms[0].scaled) {
 			agg = atoms[0].scale.aggregate;
 		} else if (atoms.size() == 1) {
 			auto &term = *UnwrapDecideCasts(*atoms[0].term, decide_index);
-			agg = term.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE ? &term.Cast<BoundAggregateExpression>()
-			                                                                    : nullptr;
+			agg = term.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER
+			          ? &term.Cast<BoundDecideReducerExpression>()
+			          : nullptr;
 		}
 		if (!agg || agg->children.size() != 1) {
 			throw InternalException("DECIDE scoped MIN/MAX reached term extraction without its reducer: %s",
@@ -1027,11 +1036,11 @@ private:
 				}
 				continue;
 			}
-			ExtractReducerObjectiveTerms(expr.Cast<BoundAggregateExpression>(), obj, atom.sign);
+			ExtractReducerObjectiveTerms(expr.Cast<BoundDecideReducerExpression>(), obj, atom.sign);
 		}
 	}
 
-	void ExtractReducerObjectiveTerms(const BoundAggregateExpression &agg, DecideObjective &obj, int sign) {
+	void ExtractReducerObjectiveTerms(const BoundDecideReducerExpression &agg, DecideObjective &obj, int sign) {
 		auto agg_name = StringUtil::Lower(agg.function.name);
 		if (agg_name != "sum") {
 			throw InternalException("DECIDE optimizer should rewrite objective aggregate '%s' to SUM before execution",
@@ -1052,7 +1061,7 @@ private:
 		auto when_cond = clause.scope.when ? clause.scope.when->Copy() : nullptr;
 
 		if (IsReducer(*expr)) {
-			auto &agg = expr->Cast<BoundAggregateExpression>();
+			auto &agg = expr->Cast<BoundDecideReducerExpression>();
 
 			lowered_objective = make_uniq<DecideObjective>();
 			auto &objective = lowered_objective;

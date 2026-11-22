@@ -115,7 +115,7 @@
 namespace duckdb {
 
 class ClientContext;
-class BoundAggregateExpression;
+class BoundDecideReducerExpression;
 class BoundComparisonExpression;
 class BoundConjunctionExpression;
 struct DecideSourceNames;
@@ -128,7 +128,7 @@ class BoundFunctionExpression;
 //! re-attaches every peeled factor on the LEFT; objectives go through CanonicalizeObjective, so
 //! `AGG * factor` (an unnormalized clause) never reaches a consumer.
 struct ScaledAggregateMatch {
-	const BoundAggregateExpression *aggregate = nullptr;
+	const BoundDecideReducerExpression *aggregate = nullptr;
 	const Expression *scale = nullptr;
 	const BoundFunctionExpression *function = nullptr;
 	bool divides = false;
@@ -471,7 +471,7 @@ private:
 	void DesugarNormsInPlace(unique_ptr<Expression> &expr) const;
 	unique_ptr<Expression> BindAggregate(const string &name, unique_ptr<Expression> child) const;
 	//! `name(child)` carrying `from`'s alias and `when`: a reducer spelled anew keeps its tags and scope.
-	unique_ptr<Expression> RebindReducer(const BoundAggregateExpression &from, const string &name,
+	unique_ptr<Expression> RebindReducer(const BoundDecideReducerExpression &from, const string &name,
 	                                     unique_ptr<Expression> child) const;
 	unique_ptr<Expression> CanonicalizeComparisonInternal(const Expression &comparison) const;
 	//! `value_shape`: a reducer stands under a Boolean decision, so the value rewrite holds it in a helper decision.
@@ -515,7 +515,7 @@ private:
 	void PlaceFramesIn(const Expression &expr, const DecideReducerPath &path, const FramePerKey *per,
 	                   DecideFramePlacement &placement) const;
 	//! The key of a reducer's own `per`, when it has one.
-	bool ReducerPerKey(const BoundAggregateExpression &reducer, const vector<KeyedScopeInfo> &keyed_scopes,
+	bool ReducerPerKey(const BoundDecideReducerExpression &reducer, const vector<KeyedScopeInfo> &keyed_scopes,
 	                   FramePerKey &out) const;
 
 	//! Rebuild an additive chain from terms.

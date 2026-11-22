@@ -37,7 +37,7 @@ struct DecideReducerPath {
 	vector<idx_t> keys;
 
 	//! The path of the reducers in `reducer`'s argument: its own `when` and `by` added.
-	DecideReducerPath Below(const BoundAggregateExpression &reducer) const;
+	DecideReducerPath Below(const BoundDecideReducerExpression &reducer) const;
 	//! The rows a reducer on this path reads, as one condition; null for every row.
 	unique_ptr<Expression> Rows() const;
 	//! The keys a reducer on this path whose own `by` key is `own` groups by.

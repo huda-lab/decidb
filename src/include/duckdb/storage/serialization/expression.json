@@ -350,6 +350,12 @@
     "custom_implementation": true
   },
   {
+    "class": "BoundDecideReducerExpression",
+    "base": "Expression",
+    "enum": "BOUND_DECIDE_REDUCER",
+    "custom_implementation": true
+  },
+  {
     "class": "BoundWindowExpression",
     "base": "Expression",
     "enum": "BOUND_WINDOW",

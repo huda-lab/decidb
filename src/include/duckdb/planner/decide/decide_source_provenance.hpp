@@ -17,7 +17,7 @@
 namespace duckdb {
 
 class BindContext;
-class BoundAggregateExpression;
+class BoundDecideReducerExpression;
 class BoundConjunctionExpression;
 struct DecideTree;
 
@@ -111,10 +111,10 @@ string RenderDecideSource(const Expression &expr, const DecideSourceNames &names
 //! The body `e` of a reducer canonicalization built from `norm(e, p)` (DecideWrittenNorm), read back out of
 //! its definition (DecideCanonicalizer::DesugarNormsInPlace); null for any other reducer. Every reader of a written
 //! norm's body goes through here, so a new definition changes one function.
-const Expression *DecideWrittenNormBody(const BoundAggregateExpression &reducer);
+const Expression *DecideWrittenNormBody(const BoundDecideReducerExpression &reducer);
 
 //! The body of the definition `reducer` holds of the norm `norm`, or nullptr with no order.
-const Expression *DecideNormBody(const BoundAggregateExpression &reducer, const DecideNorm &norm);
+const Expression *DecideNormBody(const BoundDecideReducerExpression &reducer, const DecideNorm &norm);
 
 //! The key of a clause's `per`, as written (`D.region`, `()`): cut from the query where the `per` stands (`location`),
 //! else the key as it was first written (`keys`).

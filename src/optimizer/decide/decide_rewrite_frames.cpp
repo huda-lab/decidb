@@ -72,10 +72,10 @@ void CollectRangeSigns(ClientContext &context, const LogicalDecide &decide, uniq
 			signs[node.get()] = node_sign;
 			return true;
 		}
-		if (node->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		if (node->GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER) {
 			return false;
 		}
-		auto &reducer = node->Cast<BoundAggregateExpression>();
+		auto &reducer = node->Cast<BoundDecideReducerExpression>();
 		auto name = StringUtil::Lower(reducer.function.name);
 		const bool is_norm = IsDecideNormMarker(reducer);
 		if ((name == "sum" || name == "avg") && !is_norm) {
@@ -131,8 +131,8 @@ public:
 			// A reducer's own `when` holds no decision but the NULL test of a range in its argument
 			// (DecideCanonicalizer::SkipNullData), which stays the frame's: stage 05 reads it as the frame's DEFINED
 			// column.
-			if (slot->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-				for (auto &child : slot->Cast<BoundAggregateExpression>().children) {
+			if (slot->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
+				for (auto &child : slot->Cast<BoundDecideReducerExpression>().children) {
 					Lift(child, outer, source_clause_id, signs);
 				}
 				return;
@@ -159,7 +159,7 @@ public:
 			ReplaceWithDecision(context, decide, link.value_var, slot);
 			return;
 		}
-		auto &marker = slot->Cast<BoundAggregateExpression>();
+		auto &marker = slot->Cast<BoundDecideReducerExpression>();
 		if (marker.children.size() != 1) {
 			throw InternalException("DECIDE: a range frame marker reads no payload: %s", spec.text);
 		}

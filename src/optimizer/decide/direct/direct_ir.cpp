@@ -301,7 +301,7 @@ private:
 		return true;
 	}
 
-	void ReadReducer(const BoundAggregateExpression &aggregate, DirectPart &part) const {
+	void ReadReducer(const BoundDecideReducerExpression &aggregate, DirectPart &part) const {
 		idx_t frame;
 		if (TryGetDecideFrame(aggregate, frame)) {
 			MarkNotProved(part.status); // a frame's marker, no reducer
@@ -364,8 +364,8 @@ private:
 			term = atom.scale.aggregate;
 		}
 		auto root = UnwrapDecideCasts(*term, decide.decide_index);
-		if (root->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			ReadReducer(root->Cast<BoundAggregateExpression>(), part);
+		if (root->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
+			ReadReducer(root->Cast<BoundDecideReducerExpression>(), part);
 		} else {
 			splitter.Split(*root, 1, part.terms);
 		}
@@ -477,7 +477,7 @@ private:
 
 	//! Whether `expr` holds a reducer the canonicalizer tagged for the value rewrite: one holding a reducer (D81).
 	static bool HoldsValueRewrite(const Expression &expr) {
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && DecideReducerHoldsReducer(expr)) {
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER && DecideReducerHoldsReducer(expr)) {
 			return true;
 		}
 		bool holds = false;

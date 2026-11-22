@@ -17,7 +17,8 @@
 namespace duckdb {
 
 bool TryGetDecideFrame(const Expression &expr, idx_t &frame) {
-	return expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && TryParseFrameTag(expr.GetAlias(), frame);
+	return expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER &&
+	       TryParseFrameTag(expr.GetAlias(), frame);
 }
 
 bool ContainsDecideFrame(const Expression &expr) {
@@ -68,7 +69,7 @@ static void AddWrittenConditions(const Expression &filter, vector<const Expressi
 	out.push_back(&filter);
 }
 
-DecideReducerPath DecideReducerPath::Below(const BoundAggregateExpression &reducer) const {
+DecideReducerPath DecideReducerPath::Below(const BoundDecideReducerExpression &reducer) const {
 	auto below = *this;
 	if (reducer.filter) {
 		AddWrittenConditions(*reducer.filter, below.conditions);

@@ -99,13 +99,13 @@ struct ReducerSite {
 	bool under_function;
 
 	bool IsExtremum() const {
-		return IsExtremumName(StringUtil::Lower((*slot)->Cast<BoundAggregateExpression>().function.name));
+		return IsExtremumName(StringUtil::Lower((*slot)->Cast<BoundDecideReducerExpression>().function.name));
 	}
 };
 
 //! Whether a reducer over decisions stands at or below `expr`.
 bool HoldsDecisionReducer(const Expression &expr, idx_t decide_index) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
 		return BoundExpressionReferencesDecide(expr, decide_index);
 	}
 	bool found = false;
@@ -124,7 +124,7 @@ vector<ReducerSite> CollectReducerSites(ClientContext &context, const BooleanDec
 		return HoldsDecisionReducer(node, booleans.decide_index);
 	};
 	PolarityVisit visit = [&](unique_ptr<Expression> &node, int node_sign, const PolarityPath &path) {
-		if (node->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		if (node->GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER) {
 			return false;
 		}
 		idx_t frame;
@@ -162,7 +162,8 @@ struct Helpers {
 	//! ignores aliases, where a reducer's `by` and `per` tags live), that path key, the key scope of its own `per`, the
 	//! rows and the clause's `per` key. Clauses that agree on all five share one helper, however they spell the
 	//! reducer. Other links -- a range frame's (RewriteFrameRanges) -- stand among these.
-	idx_t Find(const BoundAggregateExpression &agg, const Expression *rows, idx_t group_key, idx_t class_key) const {
+	idx_t Find(const BoundDecideReducerExpression &agg, const Expression *rows, idx_t group_key,
+	           idx_t class_key) const {
 		idx_t qualifier = DConstants::INVALID_INDEX;
 		DecideReducerPer(agg, qualifier);
 		for (idx_t i = 0; i < reducers.size(); i++) {
@@ -183,7 +184,7 @@ struct Helpers {
 //! the reducer is summed in place (`sum(x + 0.5) > 4` is `sum(x) > 4 - 0.5 * n`), but a helper holds the whole value.
 //! The message is stage 04's (DecideShapeCheck::CheckIntegerStep), raised at `location`: the comparison's,
 //! which canonicalization may have rebuilt, else the clause's.
-void RefuseFractionalStep(const BoundAggregateExpression &agg, const DecideSourceNames &names, idx_t decide_index,
+void RefuseFractionalStep(const BoundDecideReducerExpression &agg, const DecideSourceNames &names, idx_t decide_index,
                           const BoundComparisonExpression &comparison, optional_idx location) {
 	auto type = comparison.type;
 	if (DecideValueIsWholeNumbered(agg, decide_index) ||
@@ -208,7 +209,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
                     const DecideReducerPath &path, idx_t class_key, ExtremumPush outer, idx_t source_clause_id,
                     const ReducerSite &site) {
 	auto &decide = helpers.decide;
-	auto &agg = (*site.slot)->Cast<BoundAggregateExpression>();
+	auto &agg = (*site.slot)->Cast<BoundDecideReducerExpression>();
 	auto agg_name = StringUtil::Lower(agg.function.name);
 	// F6: a diagnosis, and a plan, name the helper by the reducer it holds, `by` included, as written: read before the
 	// reducers inside it become helpers.
@@ -302,7 +303,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 //! square included, which a helper could not define linearly (D81). Replaces the reducer at `slot` and returns true;
 //! false when it is not that shape.
 bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_ptr<Expression> &slot) {
-	auto &outer = slot->Cast<BoundAggregateExpression>();
+	auto &outer = slot->Cast<BoundDecideReducerExpression>();
 	idx_t qualifier;
 	if (!StringUtil::CIEquals(outer.function.name, "sum") || outer.children.size() != 1 ||
 	    DecideReducerGroupKey(outer) != DConstants::INVALID_INDEX || !DecideReducerPer(outer, qualifier) ||
@@ -310,10 +311,10 @@ bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_
 		return false;
 	}
 	auto *body = UnwrapDecideCasts(*outer.children[0], decide.decide_index);
-	if (body->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+	if (body->GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER) {
 		return false;
 	}
-	auto &inner = body->Cast<BoundAggregateExpression>();
+	auto &inner = body->Cast<BoundDecideReducerExpression>();
 	const bool sum_or_avg =
 	    StringUtil::CIEquals(inner.function.name, "sum") || StringUtil::CIEquals(inner.function.name, "avg");
 	if (!sum_or_avg || inner.children.size() != 1 || DecideCanonicalizer::ContainsReducer(*inner.children[0]) ||
@@ -334,7 +335,7 @@ bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_
 	const auto retained = decide.retained_expressions.size();
 	decide.retained_expressions.push_back(outer.Copy());
 	SetDecideRetainedExpression(*inlined, retained);
-	auto &reducer = inlined->Cast<BoundAggregateExpression>();
+	auto &reducer = inlined->Cast<BoundDecideReducerExpression>();
 	auto add_condition = [&](unique_ptr<Expression> condition) {
 		if (!reducer.filter) {
 			reducer.filter = std::move(condition);
@@ -379,17 +380,17 @@ void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 	// for an AVG, by the group's own members -- and 0 where `inner`'s own `when` drops the row. A square of a linear
 	// form is weighted inside, by the root, since a weight is never negative: the objective stays a sum of squares.
 	auto swap = [&](unique_ptr<Expression> &slot) {
-		auto &outer = slot->Cast<BoundAggregateExpression>();
+		auto &outer = slot->Cast<BoundDecideReducerExpression>();
 		idx_t frame;
 		if (TryGetDecideFrame(outer, frame) || !StringUtil::CIEquals(outer.function.name, "sum") ||
 		    outer.children.size() != 1 || DecideReducerHasPer(outer)) {
 			return;
 		}
 		auto *body = UnwrapDecideCasts(*outer.children[0], decide_index);
-		if (body->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		if (body->GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER) {
 			return;
 		}
-		auto &inner = body->Cast<BoundAggregateExpression>();
+		auto &inner = body->Cast<BoundDecideReducerExpression>();
 		const bool avg = StringUtil::CIEquals(inner.function.name, "avg");
 		if ((!avg && !StringUtil::CIEquals(inner.function.name, "sum")) || inner.children.size() != 1 ||
 		    TryGetDecideFrame(inner, frame) || DecideReducerHasPer(inner) ||
@@ -401,8 +402,9 @@ void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 		auto group_count = [&](unique_ptr<Expression> summand) {
 			vector<unique_ptr<Expression>> children;
 			children.push_back(std::move(summand));
-			auto count = optimizer.BindAggregateFunction("sum", std::move(children));
-			SetDecideReducerGroupKey(count->Cast<BoundAggregateExpression>(), group_key);
+			auto count =
+			    make_uniq<BoundDecideReducerExpression>(optimizer.BindAggregateFunction("sum", std::move(children)));
+			SetDecideReducerGroupKey(*count, group_key);
 			return real(std::move(count));
 		};
 		auto member = [&]() -> unique_ptr<Expression> {
@@ -462,8 +464,9 @@ void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 		};
 		vector<unique_ptr<Expression>> children;
 		children.push_back(weigh(*inner.children[0]));
-		auto swapped = optimizer.BindAggregateFunction("sum", std::move(children));
-		auto &reducer = swapped->Cast<BoundAggregateExpression>();
+		auto swapped =
+		    make_uniq<BoundDecideReducerExpression>(optimizer.BindAggregateFunction("sum", std::move(children)));
+		auto &reducer = *swapped;
 		if (outer.filter) {
 			reducer.filter = outer.filter->Copy();
 		}
@@ -472,7 +475,7 @@ void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 		slot = BoundCastExpression::AddCastToType(optimizer.context, std::move(swapped), outer.return_type);
 	};
 	std::function<void(unique_ptr<Expression> &)> visit = [&](unique_ptr<Expression> &expr) {
-		if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		if (expr->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
 			swap(expr);
 			return;
 		}
@@ -532,21 +535,21 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		// formulation can preserve each path's bounds and scope semantics.
 		auto *direct_outer = UnwrapDecideCasts(*cmp.left, decide.decide_index);
 		vector<ReducerSite> nested_outer_sites;
-		if (direct_outer->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
-		    !direct_outer->Cast<BoundAggregateExpression>().children.empty()) {
+		if (direct_outer->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER &&
+		    !direct_outer->Cast<BoundDecideReducerExpression>().children.empty()) {
 			nested_outer_sites = CollectReducerSites(optimizer.context, booleans,
-			                                         direct_outer->Cast<BoundAggregateExpression>().children[0]);
+			                                         direct_outer->Cast<BoundDecideReducerExpression>().children[0]);
 		}
 		const bool direct_outer_is_sum =
-		    direct_outer->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
-		    StringUtil::CIEquals(direct_outer->Cast<BoundAggregateExpression>().function.name, "sum");
+		    direct_outer->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER &&
+		    StringUtil::CIEquals(direct_outer->Cast<BoundDecideReducerExpression>().function.name, "sum");
 		const bool nested_outer_has_unfiltered_reducers =
 		    !nested_outer_sites.empty() &&
 		    std::all_of(nested_outer_sites.begin(), nested_outer_sites.end(), [](const ReducerSite &site) {
-			    if (site.slot->get()->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+			    if (site.slot->get()->GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER) {
 				    return false;
 			    }
-			    auto &nested = site.slot->get()->Cast<BoundAggregateExpression>();
+			    auto &nested = site.slot->get()->Cast<BoundDecideReducerExpression>();
 			    return !nested.filter && !nested.children.empty() &&
 			           !DecideCanonicalizer::ContainsReducer(*nested.children[0]);
 		    });
@@ -563,14 +566,14 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		const bool bound_is_query_wide = cmp.right->IsFoldable() || clause.query_wide_bound;
 		const bool has_nested_outer =
 		    direct_outer_is_sum && nested_outer_has_unfiltered_reducers && !scope.when && bound_is_query_wide &&
-		    scope.class_key == DecideReducerGroupKey(direct_outer->Cast<BoundAggregateExpression>());
+		    scope.class_key == DecideReducerGroupKey(direct_outer->Cast<BoundDecideReducerExpression>());
 		DecideReducerPath path;
 		if (scope.when) {
 			path.conditions.push_back(scope.when.get());
 		}
 		for (auto &site : sites) {
 			if (has_nested_outer && UnwrapDecideCasts(*site.slot->get(), decide.decide_index) == direct_outer) {
-				auto &outer = direct_outer->Cast<BoundAggregateExpression>();
+				auto &outer = direct_outer->Cast<BoundDecideReducerExpression>();
 				auto below = path.Below(outer);
 				// A decision times a nested reducer (`sum((x - 1) * max(x) by (g))`) stays under the outer sum, whose
 				// term splitter states the product's row.
@@ -580,7 +583,8 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 				}
 				continue;
 			}
-			RefuseFractionalStep(site.slot->get()->Cast<BoundAggregateExpression>(), names, decide.decide_index, cmp,
+			RefuseFractionalStep(site.slot->get()->Cast<BoundDecideReducerExpression>(), names, decide.decide_index,
+			                     cmp,
 			                     cmp.GetQueryLocation().IsValid() || source_clause_id == DConstants::INVALID_INDEX
 			                         ? cmp.GetQueryLocation()
 			                         : decide.bound.constraint_sources[source_clause_id].location);

@@ -96,7 +96,7 @@ string DecideNorm::Written() const {
 
 bool IsDecideNormMarker(const Expression &expr, DecideNorm &norm) {
 	string payload;
-	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE ||
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER ||
 	    !ExtractDecideTagPayload(expr.GetAlias(), NORM_MARKER_TAG_PREFIX, payload)) {
 		return false;
 	}
@@ -109,55 +109,55 @@ bool IsDecideNormMarker(const Expression &expr) {
 	return IsDecideNormMarker(expr, norm);
 }
 
-void SetDecideNormMarker(BoundAggregateExpression &reducer, const DecideNorm &norm) {
+void SetDecideNormMarker(BoundDecideReducerExpression &reducer, const DecideNorm &norm) {
 	SetPayloadTag(reducer, NORM_MARKER_TAG_PREFIX, NormPayload(norm));
 }
 
-void ClearDecideNormMarker(BoundAggregateExpression &reducer) {
+void ClearDecideNormMarker(BoundDecideReducerExpression &reducer) {
 	SetPayloadTag(reducer, NORM_MARKER_TAG_PREFIX, string());
 }
 
-DecideNorm DecideWrittenNorm(const BoundAggregateExpression &reducer) {
+DecideNorm DecideWrittenNorm(const BoundDecideReducerExpression &reducer) {
 	string payload;
 	ExtractDecideTagPayload(reducer.GetAlias(), WRITTEN_NORM_TAG_PREFIX, payload);
 	return NormOf(payload);
 }
 
-void SetDecideWrittenNorm(BoundAggregateExpression &reducer, const DecideNorm &norm) {
+void SetDecideWrittenNorm(BoundDecideReducerExpression &reducer, const DecideNorm &norm) {
 	SetPayloadTag(reducer, WRITTEN_NORM_TAG_PREFIX, NormPayload(norm));
 }
 
 //===--------------------------------------------------------------------===//
 // A reducer
 //===--------------------------------------------------------------------===//
-idx_t DecideReducerGroupKey(const BoundAggregateExpression &reducer) {
+idx_t DecideReducerGroupKey(const BoundDecideReducerExpression &reducer) {
 	idx_t key = DConstants::INVALID_INDEX;
 	TryParseDecideIndexTag(reducer.GetAlias(), GROUP_KEY_TAG_PREFIX, key);
 	return key;
 }
 
-void SetDecideReducerGroupKey(BoundAggregateExpression &reducer, idx_t key) {
+void SetDecideReducerGroupKey(BoundDecideReducerExpression &reducer, idx_t key) {
 	SetIndexTag(reducer, GROUP_KEY_TAG_PREFIX, key);
 }
 
-bool DecideReducerPer(const BoundAggregateExpression &reducer, idx_t &keyed_scope) {
+bool DecideReducerPer(const BoundDecideReducerExpression &reducer, idx_t &keyed_scope) {
 	return TryParseDecideIndexTag(reducer.GetAlias(), QUALIFIED_REDUCER_SCOPE_TAG_PREFIX, keyed_scope);
 }
 
-bool DecideReducerHasPer(const BoundAggregateExpression &reducer) {
+bool DecideReducerHasPer(const BoundDecideReducerExpression &reducer) {
 	idx_t keyed_scope;
 	return DecideReducerPer(reducer, keyed_scope);
 }
 
-void SetDecideReducerPer(BoundAggregateExpression &reducer, idx_t keyed_scope) {
+void SetDecideReducerPer(BoundDecideReducerExpression &reducer, idx_t keyed_scope) {
 	SetIndexTag(reducer, QUALIFIED_REDUCER_SCOPE_TAG_PREFIX, keyed_scope);
 }
 
-bool DecideReducerCountScale(const BoundAggregateExpression &reducer) {
+bool DecideReducerCountScale(const BoundDecideReducerExpression &reducer) {
 	return HasDecideTag(reducer.GetAlias(), AVG_REWRITE_TAG);
 }
 
-void SetDecideReducerCountScale(BoundAggregateExpression &reducer) {
+void SetDecideReducerCountScale(BoundDecideReducerExpression &reducer) {
 	SetTag(reducer, AVG_REWRITE_TAG, true);
 }
 
@@ -177,11 +177,11 @@ void SetDecideRetainedExpression(Expression &expr, idx_t retained) {
 	SetIndexTag(expr, TREE_RETAINED_EXPRESSION_TAG_PREFIX, retained);
 }
 
-bool DecideTreeReducerPer(const BoundAggregateExpression &reducer, idx_t &keyed_scope) {
+bool DecideTreeReducerPer(const BoundDecideReducerExpression &reducer, idx_t &keyed_scope) {
 	return TryParseDecideIndexTag(reducer.GetAlias(), TREE_REDUCER_SCOPE_TAG_PREFIX, keyed_scope);
 }
 
-void SetDecideTreeReducerPer(BoundAggregateExpression &reducer, idx_t keyed_scope) {
+void SetDecideTreeReducerPer(BoundDecideReducerExpression &reducer, idx_t keyed_scope) {
 	SetIndexTag(reducer, TREE_REDUCER_SCOPE_TAG_PREFIX, keyed_scope);
 }
 
@@ -211,11 +211,11 @@ unique_ptr<Expression> MakeDecideNullTest(unique_ptr<Expression> value) {
 //===--------------------------------------------------------------------===//
 // The name a call was written under
 //===--------------------------------------------------------------------===//
-void SetDecideWrittenName(BoundAggregateExpression &call, const string &name) {
+void SetDecideWrittenName(BoundDecideReducerExpression &call, const string &name) {
 	SetPayloadTag(call, WRITTEN_NAME_TAG_PREFIX, name);
 }
 
-string DecideWrittenName(const BoundAggregateExpression &call) {
+string DecideWrittenName(const BoundDecideReducerExpression &call) {
 	string written;
 	return ExtractDecideTagPayload(call.GetAlias(), WRITTEN_NAME_TAG_PREFIX, written) ? written : call.function.name;
 }

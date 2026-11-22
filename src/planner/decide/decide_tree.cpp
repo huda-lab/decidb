@@ -26,7 +26,7 @@
 
 namespace duckdb {
 
-string DecideTreeReducerName(const BoundAggregateExpression &aggregate) {
+string DecideTreeReducerName(const BoundDecideReducerExpression &aggregate) {
 	return DecideReducerCountScale(aggregate) ? "avg" : StringUtil::Lower(aggregate.function.name);
 }
 
@@ -556,7 +556,7 @@ public:
 	}
 
 	//! The exact G created for this reducer occurrence, before following nested reducer bodies.
-	idx_t ReducerNode(const BoundAggregateExpression &reducer) const {
+	idx_t ReducerNode(const BoundDecideReducerExpression &reducer) const {
 		auto found = sources.reducer_nodes.find(&reducer);
 		if (found != sources.reducer_nodes.end()) {
 			return found->second;
@@ -567,7 +567,7 @@ public:
 	}
 
 	//! The G a reducer stage 05 lowers ranges over (DecideTreeConstruction::ReducerChild).
-	idx_t ReducerChild(const BoundAggregateExpression &reducer) const {
+	idx_t ReducerChild(const BoundDecideReducerExpression &reducer) const {
 		return DecideTreeMembersOf(*tree, ReducerNode(reducer));
 	}
 
@@ -1028,7 +1028,7 @@ private:
 			}
 			auto lowered = Lower(owner, *op.retained_expressions[retained], carried);
 			// Stage 05 lowers the inlined reducer that names it; it ranges over the nest the copy became.
-			if (expression.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+			if (expression.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER &&
 			    lowered->GetExpressionClass() == ExpressionClass::BOUND_REF &&
 			    lowered->Cast<BoundReferenceExpression>().index >= tree->input_column_count) {
 				sources.reducer_nodes[&expression] =
@@ -1046,8 +1046,8 @@ private:
 		if (TryGetDecideFrame(expression, frame)) {
 			return Read(owner, Frame(frame, &expression), expression.return_type, expression.GetAlias());
 		}
-		if (expression.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			auto reducer = Aggregate(expression.Cast<BoundAggregateExpression>());
+		if (expression.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
+			auto reducer = Aggregate(expression.Cast<BoundDecideReducerExpression>());
 			sources.reducer_nodes[&expression] = reducer;
 			return Read(owner, reducer, expression.return_type, expression.GetAlias());
 		}
@@ -1129,7 +1129,7 @@ private:
 	}
 
 	//! The G of a reducer.
-	idx_t Aggregate(const BoundAggregateExpression &aggregate) {
+	idx_t Aggregate(const BoundDecideReducerExpression &aggregate) {
 		auto index = NewNode(DecideNodeKind::REDUCER);
 		auto &node = *tree->nodes[index];
 		node.aggregate = DecideTreeReducerName(aggregate);
@@ -1143,7 +1143,7 @@ private:
 			node.text = op.frame_aggregates[frame_aggregate].text;
 			tree->frame_aggregate_nodes[frame_aggregate] = index;
 		}
-		node.function = unique_ptr_cast<Expression, BoundAggregateExpression>(aggregate.Copy());
+		node.function = unique_ptr_cast<Expression, BoundAggregateExpression>(aggregate.ToAggregate());
 		auto operand = NewNode(DecideNodeKind::SCOPE);
 		Edge(index, operand);
 		auto &entry = *tree->nodes[operand];
@@ -1251,13 +1251,16 @@ private:
 		auto index = NewNode(DecideNodeKind::REDUCER);
 		record_nodes[record_index] = index;
 		auto &node = *tree->nodes[index];
-		node.function = unique_ptr_cast<Expression, BoundAggregateExpression>(record.function->Copy());
-		node.aggregate = DecideTreeReducerName(*node.function);
-		node.key = record.key;
+		// The record's reducer over its arguments.
+		auto read = record.function->Copy();
+		auto &reducer = read->Cast<BoundDecideReducerExpression>();
 		for (auto &argument : record.arguments) {
-			node.function->children.push_back(argument->Copy());
+			reducer.children.push_back(argument->Copy());
 		}
-		node.text = Text(*node.function);
+		node.function = unique_ptr_cast<Expression, BoundAggregateExpression>(reducer.ToAggregate());
+		node.aggregate = DecideTreeReducerName(reducer);
+		node.key = record.key;
+		node.text = Text(reducer);
 		auto operand = NewNode(DecideNodeKind::SCOPE);
 		Edge(index, operand);
 		auto &entry = *tree->nodes[operand];
@@ -1273,7 +1276,7 @@ private:
 		if (!entry.arguments.empty()) {
 			entry.body = entry.arguments[0]->Copy();
 		}
-		if (auto norm_body = DecideWrittenNormBody(*node.function)) {
+		if (auto norm_body = DecideWrittenNormBody(reducer)) {
 			node.body = Lower(operand, *norm_body);
 		}
 		return index;
@@ -1301,9 +1304,9 @@ private:
 		if (frame.order) {
 			node.over = Resolve(*frame.order);
 		}
-		if (marker && marker->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			auto &aggregate = marker->Cast<BoundAggregateExpression>();
-			node.function = unique_ptr_cast<Expression, BoundAggregateExpression>(aggregate.Copy());
+		if (marker && marker->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
+			auto &aggregate = marker->Cast<BoundDecideReducerExpression>();
+			node.function = unique_ptr_cast<Expression, BoundAggregateExpression>(aggregate.ToAggregate());
 			for (auto &argument : aggregate.children) {
 				node.arguments.push_back(Lower(index, *argument));
 			}
@@ -1475,11 +1478,11 @@ DecideTreeConstruction::DecideTreeConstruction(ClientContext &context, const Log
 DecideTreeConstruction::~DecideTreeConstruction() {
 }
 
-idx_t DecideTreeConstruction::ReducerChild(const BoundAggregateExpression &reducer) const {
+idx_t DecideTreeConstruction::ReducerChild(const BoundDecideReducerExpression &reducer) const {
 	return builder->ReducerChild(reducer);
 }
 
-idx_t DecideTreeConstruction::ReducerNode(const BoundAggregateExpression &reducer) const {
+idx_t DecideTreeConstruction::ReducerNode(const BoundDecideReducerExpression &reducer) const {
 	return builder->ReducerNode(reducer);
 }
 
