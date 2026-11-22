@@ -169,12 +169,12 @@ def test_an_abs_over_a_reducer_in_the_objective_solves(decidb_cli, objective, va
         ),
     ],
 )
-def test_a_power_outside_a_reducer_in_the_objective_solves(decidb_cli, decide, objective, value, domains):
+def test_a_power_outside_a_reducer_in_the_objective_solves(decidb_cli_gurobi, decide, objective, value, domains):
     """A square outside a reducer in the objective is read once when it squares query-wide decisions: a reducer is a
     helper decision (the value route), and `y` is declared for the whole query."""
     clauses = "x >= 1 AND x <= 3" + (" AND y <= 5" if domains else "")
     _judged(
-        decidb_cli,
+        decidb_cli_gurobi,
         clauses,
         objective,
         lambda a: all(1 <= v <= 3 for v in _xs(a)),

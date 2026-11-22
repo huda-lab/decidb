@@ -433,15 +433,10 @@ def _huge_query(decide):
 
 # (name, DECIDE clauses, the clause the message names). Each derives a number past a DOUBLE from finite ones, at a
 # different place: a reach or a Big-M a rewrite derives, or a literal coefficient, factor or reciprocal, which has no
-# column in it. Each names its clause on both backends, with direct solve off and on.
+# column in it. Each names its clause on both backends with direct solve off. A span past a DOUBLE (EmitExtremumLink's
+# Big-M, HiGHS only) is pinned apart, by test_a_helper_big_m_past_a_double_names_the_clause_as_written.
 DERIVED_TOO_LARGE = [
-    # A MIN/MAX auxiliary's box reaches past a DOUBLE: the column check at the hand-off names the clause that reads it.
-    (
-        "reach_of_an_extremum_member",
-        "x(REAL), y(REAL) SUCH THAT x <= 5 AND y <= 5 AND SUM(x) + MAX(b * y) <= 10 MAXIMIZE SUM(x)",
-        "SUM(x) + MAX(b * y) <= 10",
-    ),
-    # The same reach on the objective's MIN/MAX: the one signed walk sizes it as it sizes a composed term.
+    # A MIN/MAX in the objective reaches past a DOUBLE: the one signed walk sizes it as it sizes a composed term.
     (
         "reach_of_an_extremum_in_the_objective",
         "y(REAL) SUCH THAT y <= 5 MINIMIZE MAX(b * y)",
@@ -459,8 +454,6 @@ DERIVED_TOO_LARGE = [
         "y(REAL) SUCH THAT y >= -5 AND y <= 0 MINIMIZE MAX(per id: SUM(b * y) BY (id))",
         "MAX(per id: SUM(b * y) BY (id))",
     ),
-    # Members of either sign near the limit: the span of the MIN/MAX link is no Big-M (EmitExtremumLink).
-    ("span_of_an_extremum", "y(REAL) SUCH THAT y <= 5 AND MAX(y + c) >= 0 MAXIMIZE SUM(y)", "MAX(y + c) >= 0"),
     # A MIN/MAX bounded from its far side: the Big-M on HiGHS, the native auxiliary's box on Gurobi.
     ("extremum_bounded_below", "y(REAL) SUCH THAT y <= 5 AND MAX(b * y) >= 1 MINIMIZE SUM(y)", "MAX(b * y) >= 1"),
     # ABS the objective pushes up: the Big-M on HiGHS, the native auxiliary's box on Gurobi.

@@ -159,7 +159,7 @@ def test_a_keyed_decision_with_one_instance_counts_once(decidb_cli, scope_solver
         ),
     ],
 )
-def test_a_square_outside_a_reducer_is_read_once_in_the_objective(decidb_cli, objective, value, maximize):
+def test_a_square_outside_a_reducer_is_read_once_in_the_objective(decidb_cli_gurobi, objective, value, maximize):
     """The square of `s`, which is for the whole query, or of a reducer's helper decision, is one term of the objective
     beside the reducers. The shipments are bounded by 2 so every assignment can be tried."""
     sql = f"""
@@ -169,7 +169,7 @@ def test_a_square_outside_a_reducer_is_read_once_in_the_objective(decidb_cli, ob
         {objective}
         ORDER BY shipmentID"""
     domains = {**{f"ship{i}": range(3) for i in range(5)}, "s": range(6)}
-    judge_rows(answer(decidb_cli, sql), domains, lambda a: True, value, maximize)
+    judge_rows(answer(decidb_cli_gurobi, sql), domains, lambda a: True, value, maximize)
 
 
 @pytest.mark.error

@@ -840,7 +840,7 @@ def test_a_reducer_over_decisions_multiplied_inside_a_nest_is_refused_at_the_inn
 
 @pytest.mark.correctness
 @pytest.mark.min_max
-def test_a_maximum_of_group_sums_of_products_is_bounded_like_every_assignment(decidb_cli):
+def test_a_maximum_of_group_sums_of_products_is_bounded_like_every_assignment(decidb_cli_gurobi):
     """`max(sum(x * y) by (t.g)) <= 6` bounds each group's sum of products. It is judged against every assignment."""
     from ._brute_force import judge_rows
 
@@ -851,7 +851,7 @@ def test_a_maximum_of_group_sums_of_products_is_bounded_like_every_assignment(de
         return [sum(a[f"x{i}"] * a[f"y{i}"] for i in group) for group in groups]
 
     rows = answer(
-        decidb_cli,
+        decidb_cli_gurobi,
         f"""SELECT id, x, y {table('t', BOUND_COLUMNS, BOUND_ROWS)}
         DECIDE x(INT), y(INT)
         SUCH THAT x <= 2 AND y <= 2 AND max(sum(x * y) by (t.g)) <= 6
