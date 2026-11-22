@@ -59,9 +59,7 @@ struct QueryIR {
 		for (auto &clause : decide->bound.clauses) {
 			ExpressionIterator::EnumerateExpression(clause.body, [&](Expression &expression) {
 				if (IsDecideNormMarker(expression)) {
-					DecideNorm norm;
-					norm.order = order;
-					SetDecideNormMarker(expression.Cast<BoundDecideReducerExpression>(), norm);
+					expression.Cast<BoundDecideReducerExpression>().norm.order = order;
 				}
 			});
 		}

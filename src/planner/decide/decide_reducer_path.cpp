@@ -74,7 +74,7 @@ DecideReducerPath DecideReducerPath::Below(const BoundDecideReducerExpression &r
 	if (reducer.filter) {
 		AddWrittenConditions(*reducer.filter, below.conditions);
 	}
-	below.keys.push_back(DecideReducerGroupKey(reducer));
+	below.keys.push_back(reducer.by);
 	return below;
 }
 

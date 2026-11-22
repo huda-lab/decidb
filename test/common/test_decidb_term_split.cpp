@@ -67,9 +67,9 @@ TEST_CASE("Canonicalization replaces norm with its definition and keeps the writ
 		auto atoms = ReadCanonicalAtoms(*objective.decide->bound.objective.body, objective.decide->decide_index);
 		REQUIRE(atoms.size() == 1);
 		auto &aggregate = atoms[0].term->Cast<BoundDecideReducerExpression>();
-		REQUIRE(StringUtil::Lower(aggregate.function.name) == test.reducer);
+		REQUIRE(StringUtil::Lower(aggregate.function->name) == test.reducer);
 		REQUIRE(!IsDecideNormMarker(aggregate));
-		REQUIRE(DecideWrittenNorm(aggregate).order != DecideNorm::Order::NONE);
+		REQUIRE(aggregate.norm.order != DecideNorm::Order::NONE);
 	}
 	// L0 needs indicator variables, so its marker stays for the optimizer.
 	CanonicalObjective l0(con, "norm(x, 0)");

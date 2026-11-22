@@ -66,7 +66,7 @@ static const BoundDecideReducerExpression *MatchLoneSignedExtremum(const Express
 		return nullptr;
 	}
 	auto &agg = atom.scaled ? *atom.scale.aggregate : root->Cast<BoundDecideReducerExpression>();
-	if (!IsExtremumName(StringUtil::Lower(agg.function.name))) {
+	if (!IsExtremumName(StringUtil::Lower(agg.function->name))) {
 		return nullptr;
 	}
 	sign = atom.sign;
@@ -100,7 +100,7 @@ void DecideOptimizer::RewriteMinMaxInClause(BoundDecideClause &clause, LogicalDe
 		return;
 	}
 	auto &agg = *found;
-	const bool is_max = StringUtil::CIEquals(agg.function.name, "max");
+	const bool is_max = StringUtil::CIEquals(agg.function->name, "max");
 	// A negative sign or factor reverses the relation the aggregate faces: `-2 * MAX(e) >= -8` and `-MAX(e) >= -8` are
 	// `MAX(e) <= 4` and `MAX(e) <= 8`, the cheap direction, not the expensive one. A factor whose sign is not known
 	// has no direction.

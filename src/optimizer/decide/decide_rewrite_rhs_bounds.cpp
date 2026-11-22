@@ -280,13 +280,12 @@ private:
 		record.function = std::move(function);
 		record.arguments = std::move(arguments);
 		record.key = PathKeyOf(reducer, path);
-		idx_t scope_idx;
-		if (DecideReducerPer(reducer, scope_idx)) {
-			D_ASSERT(scope_idx < decide.keyed_scopes.size());
+		if (reducer.per != DConstants::INVALID_INDEX) {
+			D_ASSERT(reducer.per < decide.keyed_scopes.size());
 			// Only the optimizer's helper decisions have scopes over a link, and they are made after this pass.
-			D_ASSERT(decide.keyed_scopes[scope_idx].value_link == DConstants::INVALID_INDEX);
+			D_ASSERT(decide.keyed_scopes[reducer.per].value_link == DConstants::INVALID_INDEX);
 			record.counts_classes = true;
-			record.class_key = decide.bound.keyed_scopes[scope_idx].key;
+			record.class_key = decide.bound.keyed_scopes[reducer.per].key;
 		}
 		vector<const Expression *> keys;
 		for (auto &element : DecideKeyElements(decide.bound.keys, record.key)) {
@@ -311,8 +310,9 @@ private:
 		if (DecideWrittenNormBody(reducer)) {
 			AddValueCheck(ArgumentCheck(reducer, reducer.children[0].get(), Reads(path, reducer.filter.get()), path));
 		}
-		auto marker = reducer.Copy();
-		auto &aggregate = marker->Cast<BoundDecideReducerExpression>();
+		// The reducer's function over its arguments alone: its key and its `per` are the record's.
+		auto marker = make_uniq<BoundDecideReducerExpression>(reducer.ToAggregate());
+		auto &aggregate = *marker;
 		for (auto &child : aggregate.children) {
 			ReplaceReducers(child, path.Below(reducer));
 		}
@@ -320,18 +320,14 @@ private:
 		aggregate.filter = reads ? calc.Out(reads) : nullptr;
 		LogicalDecide::FrameAggregate record;
 		record.key = PathKeyOf(reducer, path);
-		idx_t scope_idx;
-		const bool has_per = DecideReducerPer(reducer, scope_idx);
-		if (has_per) {
-			record.class_key = decide.bound.keyed_scopes[scope_idx].key;
+		record.per = reducer.per;
+		if (record.per != DConstants::INVALID_INDEX) {
+			record.class_key = decide.bound.keyed_scopes[record.per].key;
 		}
 		record.text = Written(reducer);
 		aggregate.SetAlias(MakeFrameAggregateTag(decide.frame_aggregates.size()));
-		if (has_per) {
-			SetDecideTreeReducerPer(aggregate, scope_idx);
-		}
 		decide.frame_aggregates.push_back(std::move(record));
-		return marker;
+		return std::move(marker);
 	}
 
 	//! Adds `record` to the node's bound aggregates, reading the rows `reads` (null for every row) of the clause being
@@ -361,13 +357,12 @@ private:
 	//! it.
 	unique_ptr<Expression> ArgumentCheck(const BoundDecideReducerExpression &reducer, const Expression *argument,
 	                                     const ExprPtr &reads, const DecideReducerPath &path) {
-		auto name = StringUtil::Lower(reducer.function.name);
+		auto name = StringUtil::Lower(reducer.function->name);
 		D_ASSERT(name == "count" || name == "count_star" || name == "min" || name == "max" || name == "arg_min" ||
 		         name == "arg_max" || name == "sum" || name == "avg");
 		// The binder rejects DISTINCT and drops an ORDER BY these functions ignore, canonicalization gave every norm of
 		// data its definition, and the AVG rewrite of `<>` runs after this pass.
-		D_ASSERT(!reducer.IsDistinct() && !reducer.order_bys && !DecideReducerCountScale(reducer) &&
-		         !IsDecideNormMarker(reducer));
+		D_ASSERT(!reducer.IsDistinct() && !reducer.order_bys && !reducer.count_scale);
 		if (!argument || name == "count") {
 			return nullptr;
 		}
@@ -585,7 +580,7 @@ private:
 
 	//! The key a reducer groups by (an index into `keys`); INVALID_INDEX for the whole query.
 	idx_t GroupKeyIndex(const BoundDecideReducerExpression &reducer) const {
-		const idx_t index = DecideReducerGroupKey(reducer);
+		const idx_t index = reducer.by;
 		D_ASSERT(index == DConstants::INVALID_INDEX || index < decide.bound.keys.size());
 		return index;
 	}

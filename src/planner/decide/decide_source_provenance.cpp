@@ -228,14 +228,11 @@ static string RenderFunction(const BoundFunctionExpression &func, const RenderCo
 	return result;
 }
 
-//! The order of a norm as the user wrote it after the body (DecideNorm::Written), or empty for a plain reducer.
+//! The order of a norm as the user wrote it after the body (DecideNorm::Written), or empty for a plain reducer. A
+//! norm canonicalization replaced with its definition keeps the order (RenderAggregate reads the body back out of the
+//! definition).
 static string NormOrder(const BoundDecideReducerExpression &agg) {
-	DecideNorm norm;
-	if (!IsDecideNormMarker(agg, norm)) {
-		// Canonicalization replaced the norm with its definition, which keeps the order (RenderAggregate reads the
-		// body back out of the definition).
-		norm = DecideWrittenNorm(agg);
-	}
+	auto &norm = agg.norm;
 	return norm.Written();
 }
 
@@ -291,22 +288,21 @@ static string RenderReducer(const BoundDecideReducerExpression &agg, const strin
 	auto order = NormOrder(agg);
 	if (order.empty() && agg.children.empty()) {
 		// `count(*)` binds as `count_star()`; it takes no scope inside it.
-		const idx_t group_key = DecideReducerGroupKey(agg);
+		const idx_t group_key = agg.by;
 		bool has_by = ctx.keys && group_key != DConstants::INVALID_INDEX;
 		return "count(*)" + (has_by ? " by (" + ByText(agg, ctx, group_key) + ")" : string());
 	}
-	string result = (order.empty() ? StringUtil::Lower(DecideWrittenName(agg)) : string("norm")) + "(";
-	idx_t scope_idx;
-	if (ctx.keys && DecideReducerPer(agg, scope_idx)) {
+	string result = (order.empty() ? StringUtil::Lower(agg.WrittenName()) : string("norm")) + "(";
+	if (ctx.keys && agg.per != DConstants::INVALID_INDEX) {
 		// The key as this reducer wrote it, else as the key was first written.
 		string key_text;
 		if (!ctx.text.Cut(agg.GetQueryLocation(), DecideSpanRole::PER, key_text)) {
-			key_text = DecideKeyText(*ctx.keys, ctx.keyed_scopes[scope_idx].key);
+			key_text = DecideKeyText(*ctx.keys, ctx.keyed_scopes[agg.per].key);
 		}
 		scope += (scope.empty() ? "per " : " per ") + key_text;
 	}
 	result += (scope.empty() ? "" : scope + ": ") + body + (order.empty() ? "" : ", " + order) + ")";
-	const idx_t group_key = DecideReducerGroupKey(agg);
+	const idx_t group_key = agg.by;
 	if (ctx.keys && group_key != DConstants::INVALID_INDEX) {
 		result += " by (" + ByText(agg, ctx, group_key) + ")";
 	}
@@ -328,7 +324,7 @@ static string RenderAggregate(const BoundDecideReducerExpression &agg, const Ren
 }
 
 const Expression *DecideWrittenNormBody(const BoundDecideReducerExpression &reducer) {
-	return DecideNormBody(reducer, DecideWrittenNorm(reducer));
+	return reducer.function ? DecideNormBody(reducer, reducer.norm) : nullptr;
 }
 
 const Expression *DecideNormBody(const BoundDecideReducerExpression &reducer, const DecideNorm &norm) {

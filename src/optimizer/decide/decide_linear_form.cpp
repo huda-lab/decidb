@@ -625,19 +625,12 @@ private:
 	// Reducer metadata and peeled scales
 	//===------------------------------------------------------------------===//
 
-	//! Keyed scope a reducer is qualified by (`sum(per D: ...)`); INVALID_INDEX when the reducer is unqualified.
-	static idx_t QualifierScopeOf(const BoundDecideReducerExpression &agg) {
-		idx_t scope_idx = DConstants::INVALID_INDEX;
-		DecideReducerPer(agg, scope_idx);
-		return scope_idx;
-	}
-
 	//! A reducer's count scale, qualifier and reduction on every term or product group extracted from its body since
 	//! `begin`.
 	template <class TERM>
 	static void ApplyAggregateMetadata(vector<TERM> &items, idx_t begin, const BoundDecideReducerExpression &agg) {
-		bool is_avg = DecideReducerCountScale(agg);
-		idx_t qualifier_scope = QualifierScopeOf(agg);
+		bool is_avg = agg.count_scale;
+		idx_t qualifier_scope = agg.per;
 		for (idx_t i = begin; i < items.size(); i++) {
 			items[i].avg_scale = is_avg;
 			items[i].qualifier_scope_idx = qualifier_scope;
@@ -649,8 +642,7 @@ private:
 	//! each row by its group's count, not the objective's (DecideTerm::avg_group_key).
 	template <class TERM>
 	static void ApplyAvgGroupKey(vector<TERM> &items, idx_t begin, const BoundDecideReducerExpression &agg) {
-		const idx_t avg_group_key =
-		    DecideReducerCountScale(agg) ? DecideReducerGroupKey(agg) : DConstants::INVALID_INDEX;
+		const idx_t avg_group_key = agg.count_scale ? agg.by : DConstants::INVALID_INDEX;
 		for (idx_t i = begin; i < items.size(); i++) {
 			items[i].avg_group_key = avg_group_key;
 		}
@@ -758,7 +750,7 @@ private:
 	           idx_t linear, idx_t group_before) const {
 		const auto node = tree.ReducerChild(agg);
 		const auto qualifier_reducer =
-		    QualifierScopeOf(agg) == DConstants::INVALID_INDEX ? DConstants::INVALID_INDEX : tree.ReducerNode(agg);
+		    agg.per == DConstants::INVALID_INDEX ? DConstants::INVALID_INDEX : tree.ReducerNode(agg);
 		auto stamp = [&](DecideTerm &term) {
 			term.child = node;
 			if (qualifier_reducer != DConstants::INVALID_INDEX) {
@@ -822,10 +814,10 @@ private:
 
 	void ExtractReducerConstraintTerms(const BoundDecideReducerExpression &agg, DecideConstraint &constraint,
 	                                   int sign) {
-		auto agg_name = StringUtil::Lower(agg.function.name);
+		auto agg_name = StringUtil::Lower(agg.function->name);
 		if (agg_name != "sum") {
 			throw InternalException("DECIDE optimizer did not rewrite aggregate '%s' to SUM before execution",
-			                        agg.function.name);
+			                        agg.function->name);
 		}
 		idx_t linear_before = constraint.lhs_terms.size();
 		idx_t group_before = constraint.product_groups.size();
@@ -1041,10 +1033,10 @@ private:
 	}
 
 	void ExtractReducerObjectiveTerms(const BoundDecideReducerExpression &agg, DecideObjective &obj, int sign) {
-		auto agg_name = StringUtil::Lower(agg.function.name);
+		auto agg_name = StringUtil::Lower(agg.function->name);
 		if (agg_name != "sum") {
 			throw InternalException("DECIDE optimizer should rewrite objective aggregate '%s' to SUM before execution",
-			                        agg.function.name);
+			                        agg.function->name);
 		}
 		idx_t before = obj.terms.size();
 		idx_t group_before = obj.product_groups.size();

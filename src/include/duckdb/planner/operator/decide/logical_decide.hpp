@@ -226,8 +226,8 @@ struct DecideSignature {
 struct DecideBoundAggregate {
 	//! The placeholder the bound reads: its own table index, and the column after the group key's.
 	ColumnBinding column;
-	//! The BoundDecideReducerExpression with its function and result type bound; its arguments and filter are the members
-	//! below.
+	//! The BoundDecideReducerExpression with its function and result type bound; its arguments and filter are the
+	//! members below.
 	unique_ptr<Expression> function;
 	//! What the function reads, in its order: none for COUNT(*), and for a collated MIN or MAX the value and the key it
 	//! compares (BindMinMax).
@@ -645,7 +645,9 @@ public:
 	struct FrameAggregate {
 		//! Its path key: it has one value per group (FindOrCreateDecidePathKey); INVALID_INDEX for the whole query.
 		idx_t key = DConstants::INVALID_INDEX;
-		//! Its own `per` key, whose classes it counts once per signature; INVALID_INDEX for `per row`.
+		//! The keyed scope of its own `per` (an index into BoundDecide::keyed_scopes) and that scope's key, whose
+		//! classes it counts once per signature; INVALID_INDEX for `per row`.
+		idx_t per = DConstants::INVALID_INDEX;
 		idx_t class_key = DConstants::INVALID_INDEX;
 		//! The reducer as written.
 		string text;

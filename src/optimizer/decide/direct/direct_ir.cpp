@@ -308,13 +308,14 @@ private:
 			return;
 		}
 		D_ASSERT(!aggregate.IsDistinct() && !aggregate.order_bys && aggregate.children.size() == 1);
-		auto name = StringUtil::Lower(aggregate.function.name);
-		if (IsDecideNormMarker(aggregate)) {
+		if (!aggregate.function) {
 			// Canonicalization replaced every order but 0 with its definition. Order 0 needs indicator variables, so no
-			// rule models it, and any other tag is not one this reader knows: both decline instead of throwing.
+			// rule models it.
 			MarkNotProved(part.status);
 			return;
-		} else if (name == "sum") {
+		}
+		auto name = StringUtil::Lower(aggregate.function->name);
+		if (name == "sum") {
 			part.reducer = DirectReducer::SUM;
 		} else if (name == "avg") {
 			part.reducer = DirectReducer::AVG;
@@ -325,7 +326,7 @@ private:
 			D_ASSERT(name == "max");
 			part.reducer = DirectReducer::MAX;
 		}
-		const idx_t group_key = DecideReducerGroupKey(aggregate);
+		const idx_t group_key = aggregate.by;
 		if (group_key != DConstants::INVALID_INDEX && !ReadKey(group_key, part.by)) {
 			MarkNotProved(part.status);
 			return;
@@ -333,7 +334,7 @@ private:
 		if (aggregate.filter) {
 			part.filter = aggregate.filter->Copy();
 		}
-		DecideReducerPer(aggregate, part.qualifier);
+		part.qualifier = aggregate.per;
 		splitter.Split(*aggregate.children[0], 1, part.terms);
 		// A SUM skips a row whose data is NULL by reading its terms as 0 there, which every rule reads as it reads any
 		// coefficient; the written `when` stays the reducer's.
@@ -477,7 +478,8 @@ private:
 
 	//! Whether `expr` holds a reducer the canonicalizer tagged for the value rewrite: one holding a reducer (D81).
 	static bool HoldsValueRewrite(const Expression &expr) {
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER && DecideReducerHoldsReducer(expr)) {
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER &&
+		    expr.Cast<BoundDecideReducerExpression>().holds_reducer) {
 			return true;
 		}
 		bool holds = false;

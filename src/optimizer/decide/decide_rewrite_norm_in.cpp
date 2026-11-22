@@ -50,9 +50,11 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 	    [&](unique_ptr<Expression> &expr, const DecideRowOrigin &origin, const Expression *when) {
 		    if (!expr)
 			    return;
-		    DecideNorm norm;
-		    if (expr->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER &&
-		        (norm = DecideWrittenNorm(expr->Cast<BoundDecideReducerExpression>()))) {
+		    auto *definition = expr->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER
+		                           ? &expr->Cast<BoundDecideReducerExpression>()
+		                           : nullptr;
+		    if (definition && definition->function && definition->norm) {
+			    auto &norm = definition->norm;
 			    // The canonical text has been rendered; from here the clause is formulated, and every layer after this
 			    // one shows the definition the solver receives rather than the norm it came from. Canonicalization
 			    // replaced the norm by that definition, so its EXPLAIN account (D27) is recorded here, while the
@@ -67,8 +69,9 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 			            ? Kind::NORM_SUM_ABS
 			            : (norm.order == DecideNorm::Order::L2 ? Kind::NORM_SUM_SQUARES : Kind::NORM_MAX_ABS),
 			        RenderForPlan(*expr, decide));
-			    SetDecideWrittenNorm(expr->Cast<BoundDecideReducerExpression>(), DecideNorm());
+			    norm = DecideNorm();
 		    }
+		    DecideNorm norm;
 		    if (!IsDecideNormMarker(*expr, norm)) {
 			    // A marker stands wherever a scalar may stand. Under a comparison, but just
 			    // as much under `+`, `*` or a cast -- which is how a regularizer is normally
@@ -130,7 +133,8 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		             optimizer.BindScalarFunction("*", std::move(tolerance), z->Copy()));
 		    auto count = BindSumOver(optimizer, std::move(z), aggregate.filter.get());
 		    count->alias = aggregate.GetAlias();
-		    ClearDecideNormMarker(count->Cast<BoundDecideReducerExpression>());
+		    count->Cast<BoundDecideReducerExpression>().CopyFacts(aggregate);
+		    count->Cast<BoundDecideReducerExpression>().norm = DecideNorm();
 		    expr = std::move(count);
 		    lowered = true;
 		    decide.l0_indicator_functions.push_back(std::move(indicator));

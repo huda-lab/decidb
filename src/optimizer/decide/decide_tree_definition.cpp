@@ -79,7 +79,7 @@ optional_ptr<const BoundDecideReducerExpression> AsDecisionReducer(const Express
 		return nullptr;
 	}
 	auto &agg = expr.Cast<BoundDecideReducerExpression>();
-	auto name = StringUtil::Lower(agg.function.name);
+	auto name = StringUtil::Lower(agg.function->name);
 	if ((name != "sum" && name != "avg" && !IsExtremumName(name)) || agg.children.size() != 1 ||
 	    !BoundExpressionReferencesDecide(*agg.children[0], decide_index)) {
 		return nullptr;
@@ -90,7 +90,7 @@ optional_ptr<const BoundDecideReducerExpression> AsDecisionReducer(const Express
 //! Does `expr` hold a reducer over decisions (with `extremum_only`, a MIN or MAX) at or below it?
 bool HoldsReducer(const Expression &expr, idx_t decide_index, bool extremum_only) {
 	auto reducer = AsDecisionReducer(expr, decide_index);
-	if (reducer && (!extremum_only || IsExtremumName(StringUtil::Lower(reducer->function.name)))) {
+	if (reducer && (!extremum_only || IsExtremumName(StringUtil::Lower(reducer->function->name)))) {
 		return true;
 	}
 	bool found = false;
@@ -147,7 +147,7 @@ void CollectBodySites(Expression &expr, idx_t decide_index, const DecideTermSpli
 		return;
 	}
 	auto &reducer = expr.Cast<BoundDecideReducerExpression>();
-	const bool is_extremum = IsExtremumName(StringUtil::Lower(reducer.function.name));
+	const bool is_extremum = IsExtremumName(StringUtil::Lower(reducer.function->name));
 	auto &body = *reducer.children[0];
 	if (HoldsReducer(body, decide_index, false)) {
 		CollectBodySites(body, decide_index, splitter, sums, extremum_clause, is_extremum, outer, signs, origin, when,

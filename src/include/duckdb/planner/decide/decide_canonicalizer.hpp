@@ -33,7 +33,7 @@
 // binder as a SUM(e) aggregate whose alias names the order -- an aggregate whose
 // meaning is not what it says -- and leaves as its definition: `SUM(ABS(e))` for
 // p = 1, `SUM(POWER(e, 2))` for p = 2, `MAX(ABS(e))` for 'inf', each keeping the
-// order it was written with (DecideWrittenNorm) so its text still reads as written. This
+// order it was written with (BoundDecideReducerExpression::norm) so its text still reads as written. This
 // replaces one atom with another and opens nothing. The L0 order needs indicator
 // variables, which are formulation rather than meaning, so its marker stays for
 // DecideOptimizer::RewriteNorm.

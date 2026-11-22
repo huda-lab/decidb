@@ -242,7 +242,7 @@ DecideVarScopeInfo decide_rewrite::ScopeOf(const LogicalDecide &decide, const De
 		// An ungrouped reducer has one query-wide value. A reducer with a `by` or relation qualifier has multiple
 		// values whose groups are not a declared DECIDE scope, so its ABS helper must retain row identity.
 		auto &reducer = expr.Cast<BoundDecideReducerExpression>();
-		if (DecideReducerHasPer(reducer) || DecideReducerGroupKey(reducer) != DConstants::INVALID_INDEX) {
+		if (reducer.per != DConstants::INVALID_INDEX || reducer.by != DConstants::INVALID_INDEX) {
 			return DecideVarScopeInfo::Row();
 		}
 		return DecideVarScopeInfo::Global();

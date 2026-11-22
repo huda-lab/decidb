@@ -108,9 +108,9 @@ DecideSourceNames DecidePlanNames(const DecideSourceText &text, const vector<Key
 //! parenthesized.
 string RenderDecideSource(const Expression &expr, const DecideSourceNames &names, int parent_precedence = 0);
 
-//! The body `e` of a reducer canonicalization built from `norm(e, p)` (DecideWrittenNorm), read back out of
-//! its definition (DecideCanonicalizer::DesugarNormsInPlace); null for any other reducer. Every reader of a written
-//! norm's body goes through here, so a new definition changes one function.
+//! The body `e` of a reducer canonicalization built from `norm(e, p)` (BoundDecideReducerExpression::norm), read back
+//! out of its definition (DecideCanonicalizer::DesugarNormsInPlace); null for any other reducer. Every reader of a
+//! written norm's body goes through here, so a new definition changes one function.
 const Expression *DecideWrittenNormBody(const BoundDecideReducerExpression &reducer);
 
 //! The body of the definition `reducer` holds of the norm `norm`, or nullptr with no order.

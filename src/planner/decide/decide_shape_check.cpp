@@ -204,7 +204,7 @@ static bool IsBoundAvgAggregate(const Expression &expr) {
 	}
 	auto &agg = expr.Cast<BoundDecideReducerExpression>();
 	idx_t frame;
-	return StringUtil::CIEquals(agg.function.name, "avg") && !TryParseFrameTag(agg.GetAlias(), frame);
+	return agg.function && StringUtil::CIEquals(agg.function->name, "avg") && !TryParseFrameTag(agg.GetAlias(), frame);
 }
 
 //! Is `expr` provably whole-numbered from declared types alone?
@@ -235,7 +235,11 @@ static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoi
 	}
 	case ExpressionClass::BOUND_DECIDE_REDUCER: {
 		auto &agg = expr.Cast<BoundDecideReducerExpression>();
-		const auto &name = agg.function.name;
+		if (!agg.function) {
+			// A norm is whole when its body is: a count, a sum or a largest of whole values.
+			return DecideSideIsWholeNumbered(*agg.children[0], false, decide_index, true);
+		}
+		const auto &name = agg.function->name;
 		// A frame is a value of the row, every addend and its `else` part of it: whole when the type its payload and
 		// `else` share is, and a range's SUM, MIN or MAX of them; an AVG range divides.
 		idx_t frame;
@@ -248,8 +252,7 @@ static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoi
 			return DecideSideIsWholeNumbered(*agg.children[0], false, decide_index, true);
 		}
 		if (StringUtil::CIEquals(name, "sum")) {
-			return DecideSideIsWholeNumbered(*agg.children[0], false, decide_index,
-			                                 addends_count || IsDecideNormMarker(agg));
+			return DecideSideIsWholeNumbered(*agg.children[0], false, decide_index, addends_count);
 		}
 		return DecideTypeIsWholeNumbered(expr.return_type);
 	}

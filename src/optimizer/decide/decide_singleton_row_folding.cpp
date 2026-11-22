@@ -181,16 +181,6 @@ static unique_ptr<Expression> ReadAsRow(const ExpressionBuilder &calc, const Log
 	splitter.ReplaceTaggedFunctions(source_row);
 	auto row = calc.Out(calc.Of(*source_row));
 	if (minmax_easy) {
-		// The reducer's `by` key is on the written reducer: the copy above keeps no alias.
-		idx_t key = DConstants::INVALID_INDEX;
-		std::function<void(const Expression &)> find = [&](const Expression &node) {
-			if (node.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
-				key = DecideReducerGroupKey(node.Cast<BoundDecideReducerExpression>());
-				return;
-			}
-			ExpressionIterator::EnumerateChildren(node, find);
-		};
-		find(*comparison.left);
 		ReplaceDecisionTerm(
 		    row,
 		    [](const Expression &node) { return node.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER; },
@@ -201,7 +191,7 @@ static unique_ptr<Expression> ReadAsRow(const ExpressionBuilder &calc, const Log
 			    by_key_only = !filter;
 			    // A row in no group of the reducer's `by` key, a NULL in a column the user wrote (language/guide.md
 			    // §5.2), is no member, as a row its filter leaves out is none.
-			    for (auto &element : DecideKeyElements(decide.bound.keys, key)) {
+			    for (auto &element : DecideKeyElements(decide.bound.keys, reducer.by)) {
 				    if (element.null_mode == DecideKeyNullMode::NO_GROUP) {
 					    auto member = filter ? calc.Of(*filter) : calc.Bool(true);
 					    filter = calc.Out(calc.If(calc.IsNull(calc.Of(element.Grouping())), calc.Bool(false), member));

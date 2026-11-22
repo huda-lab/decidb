@@ -102,20 +102,20 @@ bool DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, Logic
 		// The rewrite linearizes an AVG over decisions. One over data is a value execution computes: the bound's is a
 		// placeholder column already (RewriteRhsAggregates), and a frame's marker or a reducer reading a frame stays an
 		// aggregate until the frames are lowered (MakeFrameAggregate).
-		if (StringUtil::CIEquals(agg.function.name, "avg") &&
+		if (StringUtil::CIEquals(agg.function->name, "avg") &&
 		    BoundExpressionReferencesDecide(agg, decide.decide_index)) {
 			AddRewriteAccount(decide, origin.source_clause_id, LogicalDecide::RewriteAccount::Kind::AVG_SUM,
 			                  RenderForPlan(agg, decide));
 			auto new_sum = BindSumOver(optimizer, agg.children[0]->Copy(), agg.filter.get());
 
-			// Tag so execution layer knows to apply AVG's row-count denominator.
+			// The count scale tells the execution layer to apply AVG's row-count denominator.
 			// For a single objective AVG this is optimization-equivalent to SUM,
 			// but additive objective expressions can mix AVG with SUM or filtered
 			// aggregates, so preserving the scale is required for correct semantics.
-			// Carry the AVG's own tags across — a relation qualifier was stamped by
-			// the binder and still names the relation the SUM de-duplicates by.
+			// The SUM keeps the AVG's name and facts: its `per` still names the classes the SUM reads one row of.
 			new_sum->alias = agg.alias;
-			SetDecideReducerCountScale(new_sum->Cast<BoundDecideReducerExpression>());
+			new_sum->Cast<BoundDecideReducerExpression>().CopyFacts(agg);
+			new_sum->Cast<BoundDecideReducerExpression>().count_scale = true;
 
 			expr = std::move(new_sum);
 			return true;

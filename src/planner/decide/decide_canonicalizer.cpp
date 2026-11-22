@@ -501,16 +501,8 @@ bool DecideCanonicalizer::BoundIsQueryWide(const Expression &body) const {
 //! The norm `aggregate` was written as, with its body, or nullptr when it was not one: a desugared norm keeps the
 //! order it was written with, and an L0 norm is still the binder's marker.
 static const Expression *WrittenNormBody(const BoundDecideReducerExpression &aggregate, string &order) {
-	DecideNorm norm;
-	const Expression *body;
-	if (IsDecideNormMarker(aggregate, norm)) {
-		body = aggregate.children[0].get();
-	} else {
-		norm = DecideWrittenNorm(aggregate);
-		body = DecideWrittenNormBody(aggregate);
-	}
-	order = norm.order == DecideNorm::Order::INF ? "inf" : norm.Written();
-	return body;
+	order = aggregate.norm.order == DecideNorm::Order::INF ? "inf" : aggregate.norm.Written();
+	return aggregate.function ? DecideWrittenNormBody(aggregate) : aggregate.children[0].get();
 }
 
 //! Name an expression the way the user wrote it, for an error message. Everything the
@@ -524,7 +516,7 @@ static string UserFacingName(const Expression &expr) {
 		if (auto body = WrittenNormBody(agg, order)) {
 			return "NORM(" + UserFacingName(*body) + ", " + order + ")";
 		}
-		return StringUtil::Upper(DecideWrittenName(agg)) + "(" + UserFacingName(*agg.children[0]) + ")";
+		return StringUtil::Upper(agg.WrittenName()) + "(" + UserFacingName(*agg.children[0]) + ")";
 	}
 	auto name = StripDecideTags(cur->GetName());
 	return name.empty() ? cur->ToString() : name;
@@ -802,7 +794,10 @@ bool DecideCanonicalizer::DecomposeExtremumAddends(int sign, const Expression &t
 		return false;
 	}
 	auto &aggregate = reducer.Cast<BoundDecideReducerExpression>();
-	const auto &name = aggregate.function.name;
+	if (!aggregate.function) {
+		return false;
+	}
+	const auto &name = aggregate.function->name;
 	if (name != "min" && name != "max") {
 		return false;
 	}
@@ -910,13 +905,12 @@ void DecideCanonicalizer::DesugarNormsInPlace(unique_ptr<Expression> &expr) cons
 	if (marker.filter) {
 		definition->Cast<BoundDecideReducerExpression>().filter = marker.filter->Copy();
 	}
-	// A norm and its definition are one value: the definition keeps the marker's facts and the order it was written
-	// with, for a display.
+	// A norm and its definition are one value: the definition keeps the marker's facts, the order it was written with
+	// among them, for a display.
 	DecideReplaces(*definition, marker);
 	auto &reducer = definition->Cast<BoundDecideReducerExpression>();
 	reducer.SetAlias(marker.GetAlias());
-	ClearDecideNormMarker(reducer);
-	SetDecideWrittenNorm(reducer, norm);
+	reducer.CopyFacts(marker);
 	expr = std::move(definition);
 }
 
@@ -927,9 +921,11 @@ unique_ptr<Expression> DecideCanonicalizer::BindAggregate(const string &name, un
 unique_ptr<Expression> DecideCanonicalizer::RebindReducer(const BoundDecideReducerExpression &from, const string &name,
                                                           unique_ptr<Expression> child) const {
 	auto result = BindAggregate(name, std::move(child));
-	result->SetAlias(from.GetAlias());
+	auto &reducer = result->Cast<BoundDecideReducerExpression>();
+	reducer.SetAlias(from.GetAlias());
+	reducer.CopyFacts(from);
 	if (from.filter) {
-		result->Cast<BoundDecideReducerExpression>().filter = from.filter->Copy();
+		reducer.filter = from.filter->Copy();
 	}
 	return result;
 }
@@ -1237,7 +1233,7 @@ static void TagNestedObjectiveReducers(const DecideCanonicalizer &canonicalizer,
 		auto &reducer = expr.Cast<BoundDecideReducerExpression>();
 		if (!reducer.children.empty() && BoundExpressionReferencesDecide(reducer, decide_index) &&
 		    canonicalizer.ContainsDecisionReducer(*reducer.children[0])) {
-			SetDecideReducerHoldsReducer(reducer, true);
+			reducer.holds_reducer = true;
 		}
 		return;
 	}
@@ -1366,13 +1362,13 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 		if (!reducer.children.empty() && ContainsReducer(*reducer.children[0])) {
 			value = true; // a reducer inside it: a helper at every level (language/guide.md §5.5)
 		}
-		bool is_avg = StringUtil::CIEquals(reducer.function.name, "avg") || DecideReducerCountScale(reducer);
+		bool is_avg = (reducer.function && StringUtil::CIEquals(reducer.function->name, "avg")) || reducer.count_scale;
 		has_avg = has_avg || is_avg;
-		only_plain_avgs = only_plain_avgs && is_avg && !reducer.filter && !DecideReducerHasPer(reducer);
+		only_plain_avgs = only_plain_avgs && is_avg && !reducer.filter && reducer.per == DConstants::INVALID_INDEX;
 		if (atom.scale && !IsQueryWideConstant(*atom.scale)) {
 			value = true; // a factor that varies by row: a tuple term of the row's constraint
 		}
-		const idx_t key = DecideReducerGroupKey(reducer);
+		const idx_t key = reducer.by;
 		if (first_reducer) {
 			group_key = key;
 			first_reducer = false;
@@ -1711,7 +1707,7 @@ void DecideCanonicalizer::CollectSignatureFields(const Expression &expr, idx_t k
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
 		// A reducer reads a group, not the row: its `by` key is the field, and its body is a scoped expression of its
 		// own.
-		const idx_t by = DecideReducerGroupKey(expr.Cast<BoundDecideReducerExpression>());
+		const idx_t by = expr.Cast<BoundDecideReducerExpression>().by;
 		if (by < keys.size()) {
 			DecideSignatureField field;
 			field.kind = DecideSignatureFieldKind::BY_KEY;
@@ -1789,11 +1785,10 @@ void DecideCanonicalizer::SignQualifiedReducers(Expression &expr, const DecideRe
 	for (auto &child : reducer.children) {
 		SignQualifiedReducers(*child, below, clause, source_clause_id, out);
 	}
-	idx_t scope_idx;
+	const idx_t scope_idx = reducer.per;
 	// A reducer over data reads one value per class and value of its body: its table groups on both
 	// (DirectAddBoundTables), so it needs no scope of its own.
-	if (!DecideReducerPer(reducer, scope_idx) || scope_idx >= out.keyed_scopes.size() || reducer.children.empty() ||
-	    !ReferencesDecideVar(reducer)) {
+	if (scope_idx >= out.keyed_scopes.size() || reducer.children.empty() || !ReferencesDecideVar(reducer)) {
 		return;
 	}
 	// The reducer's own `per K'` hands it one value per class and signature
@@ -1814,7 +1809,7 @@ void DecideCanonicalizer::SignQualifiedReducers(Expression &expr, const DecideRe
 	variant_scope.key = key;
 	variant_scope.signature = signature;
 	out.keyed_scopes.push_back(std::move(variant_scope));
-	SetDecideReducerPer(reducer, out.keyed_scopes.size() - 1);
+	reducer.per = out.keyed_scopes.size() - 1;
 }
 
 void DecideCanonicalizer::BuildConstraintSignatures(vector<BoundDecideClause> &clauses, DecideSignatures &out) const {
@@ -1866,8 +1861,8 @@ void DecideCanonicalizer::BuildObjectiveSignatures(BoundDecideClause &objective,
 
 bool DecideCanonicalizer::ReducerPerKey(const BoundDecideReducerExpression &reducer,
                                         const vector<KeyedScopeInfo> &keyed_scopes, FramePerKey &out) const {
-	idx_t scope_idx;
-	if (!DecideReducerPer(reducer, scope_idx) || scope_idx >= keyed_scopes.size()) {
+	const idx_t scope_idx = reducer.per;
+	if (scope_idx >= keyed_scopes.size()) {
 		return false;
 	}
 	out.key = keyed_scopes[scope_idx].key;

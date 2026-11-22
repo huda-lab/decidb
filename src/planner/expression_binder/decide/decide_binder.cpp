@@ -835,11 +835,8 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 	// 3. Create the BoundDecideReducerExpression itself.
 	auto bound_aggregate = make_uniq<BoundDecideReducerExpression>(
 	    function_binder.BindAggregateFunction(bound_function, std::move(children)));
-	// DECIDE uses aggregate aliases for semantic transport tags (qualified
-	// reducers, optimizer markers, provenance). DuckDB's generic binder does not
-	// need them here, but dropping one would make the later DECIDE pass blind.
 	bound_aggregate->alias = aggr.alias;
-	SetDecideWrittenName(*bound_aggregate, aggr.written_name);
+	bound_aggregate->written_name = aggr.written_name;
 	// Note: We are NOT storing this aggregate in a BoundSelectNode. We are returning it directly.
 	return BindResult(std::move(bound_aggregate));
 }
@@ -885,7 +882,7 @@ BindResult DecideBinder::BindReducer(DecideReducerExpression &reducer, idx_t dep
 		auto scope_idx = FindOrCreateKeyScope(context, binder, scope.key, DecisionNames(variables),
 		                                      DecideKeyToString(scope.key), qualifier_context->source_text,
 		                                      *qualifier_context->keys, *qualifier_context->keyed_scopes);
-		SetDecideReducerPer(*aggregate, scope_idx);
+		aggregate->per = scope_idx;
 	}
 	if (reducer.by.empty()) {
 		return result; // no `by`, or `by ()`: every kept row, the default
@@ -919,7 +916,7 @@ BindResult DecideBinder::BindReducer(DecideReducerExpression &reducer, idx_t dep
 	auto group_key = FindOrCreateDecideKey(std::move(key), key_text, *qualifier_context->keys);
 	D_ASSERT(group_key != DConstants::INVALID_INDEX);
 	(*qualifier_context->keys)[group_key].written_as_by = true;
-	SetDecideReducerGroupKey(*aggregate, group_key);
+	aggregate->by = group_key;
 	return result;
 }
 
@@ -953,7 +950,8 @@ ErrorData DecideBinder::BindFrameFallback(DecideFrameExpression &frame, const st
 }
 
 unique_ptr<Expression> DecideBinder::BindFrameAggregate(const string &name, unique_ptr<Expression> payload,
-                                                        const DecideFrameExpression &frame, const string &alias,
+                                                        const DecideFrameExpression &frame,
+                                                        optional_ptr<const BoundDecideReducerExpression> from,
                                                         ErrorData &error) {
 	auto &entry = Catalog::GetEntry<AggregateFunctionCatalogEntry>(context, SYSTEM_CATALOG, DEFAULT_SCHEMA, name);
 	FunctionBinder function_binder(binder);
@@ -966,7 +964,10 @@ unique_ptr<Expression> DecideBinder::BindFrameAggregate(const string &name, uniq
 	children.push_back(std::move(payload));
 	auto result = make_uniq<BoundDecideReducerExpression>(function_binder.BindAggregateFunction(
 	    entry.functions.GetFunctionByOffset(offset.GetIndex()), std::move(children)));
-	result->SetAlias(alias);
+	if (from) {
+		result->SetAlias(from->GetAlias());
+		result->CopyFacts(*from);
+	}
 	return std::move(result);
 }
 
@@ -1039,7 +1040,7 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 			if (payload_type != common) {
 				auto payload = BoundCastExpression::AddCastToType(context, std::move(reducer->children[0]), common);
 				ErrorData reducer_error;
-				result = BindFrameAggregate(name, std::move(payload), frame, reducer->GetAlias(), reducer_error);
+				result = BindFrameAggregate(name, std::move(payload), frame, reducer, reducer_error);
 				if (!result) {
 					return BindResult(std::move(reducer_error));
 				}
@@ -1075,7 +1076,7 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 			spec.fallback = BoundCastExpression::AddCastToType(context, std::move(fallback), common);
 		}
 		ErrorData first_error;
-		result = BindFrameAggregate("first", std::move(children[0]), frame, string(), first_error);
+		result = BindFrameAggregate("first", std::move(children[0]), frame, nullptr, first_error);
 		if (!result) {
 			return BindResult(std::move(first_error));
 		}
@@ -1121,11 +1122,9 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
 	auto &expr = *expr_ptr;
 	auto &function = expr.Cast<FunctionExpression>();
-	// NORM is DECIDE syntax, not a catalog function. Bind it as a deliberately
-	// inert SUM aggregate marker; DecideOptimizer owns the mathematical rewrite
-	// and replaces this marker before it can reach physical planning. Keeping an
-	// aggregate-shaped marker is important: a `by (G)` after it uses the same
-	// bound-tree contract as on any other reducer.
+	// NORM is DECIDE syntax, not a catalog function: it binds to a reducer with no function, which canonicalization
+	// or DecideOptimizer replaces before physical planning. Its body binds as a SUM's does, so it is checked and
+	// typed as any reducer's, and a `by (G)` after it reads as on any other reducer.
 	if (!function.is_operator && StringUtil::CIEquals(function.function_name, "norm")) {
 		auto text = qualifier_context->source_text;
 		if (function.children.size() < 2 || function.children.size() > 3) {
@@ -1186,23 +1185,23 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
 		vector<unique_ptr<ParsedExpression>> marker_children;
 		marker_children.push_back(std::move(function.children[0]));
 		// The system's SUM by name: a norm is DECIDE syntax, so a user's `sum` macro does not capture it.
-		auto marker = make_uniq<FunctionExpression>(SYSTEM_CATALOG, DEFAULT_SCHEMA, "sum", std::move(marker_children));
-		marker->alias = function.alias;
-		marker->SetQueryLocation(function.GetQueryLocation());
-		expr_ptr = std::move(marker);
+		auto sum = make_uniq<FunctionExpression>(SYSTEM_CATALOG, DEFAULT_SCHEMA, "sum", std::move(marker_children));
+		sum->alias = function.alias;
+		sum->SetQueryLocation(function.GetQueryLocation());
+		expr_ptr = std::move(sum);
 		auto result = BindFunction(expr_ptr, depth);
 		if (result.HasError()) {
 			return result;
 		}
-		auto &aggregate = *GetBoundAggregate(*result.expression);
-		SetDecideNormMarker(aggregate, norm);
+		auto &marker = *GetBoundAggregate(*result.expression);
+		marker.function.reset();
+		marker.bind_info.reset();
+		marker.norm = norm;
 		if (!stays_a_marker) {
-			// The marker parses as SUM(e), but the norm's value is its definition's, which what reads it binds to. Its
-			// type needs only the body's: a body holding a subquery cannot be copied until planning has run.
-			auto body = make_uniq<BoundReferenceExpression>(aggregate.children[0]->return_type, 0U);
-			auto type = DecideNormDefinition(context, std::move(body), norm)->return_type;
-			aggregate.function.return_type = type;
-			aggregate.return_type = std::move(type);
+			// The norm's value is its definition's, which what reads it binds to. Its type needs only the body's: a
+			// body holding a subquery cannot be copied until planning has run.
+			auto body = make_uniq<BoundReferenceExpression>(marker.children[0]->return_type, 0U);
+			marker.return_type = DecideNormDefinition(context, std::move(body), norm)->return_type;
 		}
 		return result;
 	}

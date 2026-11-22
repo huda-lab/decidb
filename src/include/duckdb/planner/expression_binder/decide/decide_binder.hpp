@@ -77,7 +77,7 @@ struct DecideQualifierContext {
 	//! Table index the decision-variable column refs bind to.
 	idx_t decide_index = DConstants::INVALID_INDEX;
 	vector<KeyedScopeInfo> *keyed_scopes = nullptr;
-	//! Every key bound so far; a reducer names its `by` key by its index (DecideReducerGroupKey).
+	//! Every key bound so far; a reducer names its `by` key by its index (BoundDecideReducerExpression::by).
 	vector<DecideKey> *keys = nullptr;
 	//! Every frame selector bound so far; a frame's FRAME_TAG_PREFIX tag indexes it.
 	vector<DecideFrameSpec> *frames = nullptr;
@@ -178,7 +178,7 @@ protected:
 	BindResult BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) override;
 	//! Binds `agg([when c] [per K]: e) [BY (key)]`: `agg(e)` with `c` as the aggregate's filter and `K` as the key it
 	//! keeps one row of each class by (an exact key scope, tagged like a qualifier; `per ()` is the empty key), then
-	//! the `by` key into LogicalDecide::keys, named on the aggregate by SetDecideReducerGroupKey (none for `BY ()`).
+	//! the `by` key into LogicalDecide::keys, named on the reducer by its `by` (none for `BY ()`).
 	BindResult BindReducer(DecideReducerExpression &reducer, idx_t depth);
 	//! Binds a frame selector (language/guide.md §5.6) to an aggregate over its payload
 	//! -- `first(e)` for a point frame, its reducer for a range -- tagged by
@@ -189,11 +189,11 @@ protected:
 	//! query runs (D86).
 	ErrorData BindFrameFallback(DecideFrameExpression &frame, const string &fallback_text, idx_t depth,
 	                            unique_ptr<Expression> &out);
-	//! The catalog aggregate `name` (a range's reducer, or a point's `first`) over a bound payload, aliased `alias`;
-	//! null, with `error` set, when none takes its type.
+	//! The catalog aggregate `name` (a range's reducer, or a point's `first`) over a bound payload, named and with the
+	//! facts of the reducer `from` it is bound again in place of; null, with `error` set, when none takes its type.
 	unique_ptr<Expression> BindFrameAggregate(const string &name, unique_ptr<Expression> payload,
-	                                          const DecideFrameExpression &frame, const string &alias,
-	                                          ErrorData &error);
+	                                          const DecideFrameExpression &frame,
+	                                          optional_ptr<const BoundDecideReducerExpression> from, ErrorData &error);
 	BindResult BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
 	BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
 	                          bool root_expression = false) override;

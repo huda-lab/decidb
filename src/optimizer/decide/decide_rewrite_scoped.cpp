@@ -99,7 +99,7 @@ struct ReducerSite {
 	bool under_function;
 
 	bool IsExtremum() const {
-		return IsExtremumName(StringUtil::Lower((*slot)->Cast<BoundDecideReducerExpression>().function.name));
+		return IsExtremumName(StringUtil::Lower((*slot)->Cast<BoundDecideReducerExpression>().function->name));
 	}
 };
 
@@ -164,8 +164,7 @@ struct Helpers {
 	//! reducer. Other links -- a range frame's (RewriteFrameRanges) -- stand among these.
 	idx_t Find(const BoundDecideReducerExpression &agg, const Expression *rows, idx_t group_key,
 	           idx_t class_key) const {
-		idx_t qualifier = DConstants::INVALID_INDEX;
-		DecideReducerPer(agg, qualifier);
+		const idx_t qualifier = agg.per;
 		for (idx_t i = 0; i < reducers.size(); i++) {
 			auto &link = decide.reducer_value_links[links[i]];
 			// A clause's rows carry copies of its `when`: the same condition.
@@ -210,7 +209,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
                     const ReducerSite &site) {
 	auto &decide = helpers.decide;
 	auto &agg = (*site.slot)->Cast<BoundDecideReducerExpression>();
-	auto agg_name = StringUtil::Lower(agg.function.name);
+	auto agg_name = StringUtil::Lower(agg.function->name);
 	// F6: a diagnosis, and a plan, name the helper by the reducer it holds, `by` included, as written: read before the
 	// reducers inside it become helpers.
 	auto plan_label = RenderDecideSource(agg, names);
@@ -251,7 +250,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	// It reads the rows its path keeps, grouped by its path key: for a reducer at the top, the clause's kept rows by
 	// its own `by` key.
 	auto rows = path.Rows();
-	const idx_t group_key = FindOrCreateDecidePathKey(path.KeysOf(DecideReducerGroupKey(agg)), decide.bound.keys);
+	const idx_t group_key = FindOrCreateDecidePathKey(path.KeysOf(agg.by), decide.bound.keys);
 	auto account_kind = group_key == DConstants::INVALID_INDEX ? LogicalDecide::RewriteAccount::Kind::HELPER
 	                                                           : LogicalDecide::RewriteAccount::Kind::HELPER_PER_GROUP;
 	idx_t link_idx = helpers.Find(agg, rows.get(), group_key, class_key);
@@ -277,7 +276,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	// Its columns are named by the reducer it holds, `by` included: a refusal's remedy bounds that (F6).
 	link.label = plan_label;
 	link.group_key = group_key;
-	DecideReducerPer(agg, link.qualifier_scope_idx);
+	link.qualifier_scope_idx = agg.per;
 	link.inner_expr = agg.children[0]->Copy();
 	if (agg.filter) {
 		link.filter = agg.filter->Copy();
@@ -304,10 +303,9 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 //! false when it is not that shape.
 bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_ptr<Expression> &slot) {
 	auto &outer = slot->Cast<BoundDecideReducerExpression>();
-	idx_t qualifier;
-	if (!StringUtil::CIEquals(outer.function.name, "sum") || outer.children.size() != 1 ||
-	    DecideReducerGroupKey(outer) != DConstants::INVALID_INDEX || !DecideReducerPer(outer, qualifier) ||
-	    qualifier >= decide.bound.keyed_scopes.size()) {
+	const idx_t qualifier = outer.per;
+	if (!StringUtil::CIEquals(outer.function->name, "sum") || outer.children.size() != 1 ||
+	    outer.by != DConstants::INVALID_INDEX || qualifier >= decide.bound.keyed_scopes.size()) {
 		return false;
 	}
 	auto *body = UnwrapDecideCasts(*outer.children[0], decide.decide_index);
@@ -316,12 +314,12 @@ bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_
 	}
 	auto &inner = body->Cast<BoundDecideReducerExpression>();
 	const bool sum_or_avg =
-	    StringUtil::CIEquals(inner.function.name, "sum") || StringUtil::CIEquals(inner.function.name, "avg");
+	    StringUtil::CIEquals(inner.function->name, "sum") || StringUtil::CIEquals(inner.function->name, "avg");
 	if (!sum_or_avg || inner.children.size() != 1 || DecideCanonicalizer::ContainsReducer(*inner.children[0]) ||
-	    DecideReducerHasPer(inner)) {
+	    inner.per != DConstants::INVALID_INDEX) {
 		return false;
 	}
-	auto &by = DecideKeyElements(decide.bound.keys, DecideReducerGroupKey(inner));
+	auto &by = DecideKeyElements(decide.bound.keys, inner.by);
 	for (auto &element : DecideKeyElements(decide.bound.keys, decide.bound.keyed_scopes[qualifier].key)) {
 		bool in_by = false;
 		for (auto &part : by) {
@@ -332,10 +330,9 @@ bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_
 		}
 	}
 	auto inlined = inner.Copy();
-	const auto retained = decide.retained_expressions.size();
-	decide.retained_expressions.push_back(outer.Copy());
-	SetDecideRetainedExpression(*inlined, retained);
 	auto &reducer = inlined->Cast<BoundDecideReducerExpression>();
+	reducer.retained = decide.retained_expressions.size();
+	decide.retained_expressions.push_back(outer.Copy());
 	auto add_condition = [&](unique_ptr<Expression> condition) {
 		if (!reducer.filter) {
 			reducer.filter = std::move(condition);
@@ -382,8 +379,8 @@ void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 	auto swap = [&](unique_ptr<Expression> &slot) {
 		auto &outer = slot->Cast<BoundDecideReducerExpression>();
 		idx_t frame;
-		if (TryGetDecideFrame(outer, frame) || !StringUtil::CIEquals(outer.function.name, "sum") ||
-		    outer.children.size() != 1 || DecideReducerHasPer(outer)) {
+		if (TryGetDecideFrame(outer, frame) || !outer.function || !StringUtil::CIEquals(outer.function->name, "sum") ||
+		    outer.children.size() != 1 || outer.per != DConstants::INVALID_INDEX) {
 			return;
 		}
 		auto *body = UnwrapDecideCasts(*outer.children[0], decide_index);
@@ -391,20 +388,20 @@ void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 			return;
 		}
 		auto &inner = body->Cast<BoundDecideReducerExpression>();
-		const bool avg = StringUtil::CIEquals(inner.function.name, "avg");
-		if ((!avg && !StringUtil::CIEquals(inner.function.name, "sum")) || inner.children.size() != 1 ||
-		    TryGetDecideFrame(inner, frame) || DecideReducerHasPer(inner) ||
+		const bool avg = StringUtil::CIEquals(inner.function->name, "avg");
+		if ((!avg && !StringUtil::CIEquals(inner.function->name, "sum")) || inner.children.size() != 1 ||
+		    TryGetDecideFrame(inner, frame) || inner.per != DConstants::INVALID_INDEX ||
 		    DecideCanonicalizer::ContainsReducer(*inner.children[0]) || ContainsDecideFrame(*inner.children[0]) ||
 		    (inner.filter && ContainsDecideFrame(*inner.filter)) || splitter.IsLinear(*inner.children[0])) {
 			return; // a linear nest is read through helpers, which the model writes in (D89)
 		}
-		const idx_t group_key = DecideReducerGroupKey(inner);
+		const idx_t group_key = inner.by;
 		auto group_count = [&](unique_ptr<Expression> summand) {
 			vector<unique_ptr<Expression>> children;
 			children.push_back(std::move(summand));
 			auto count =
 			    make_uniq<BoundDecideReducerExpression>(optimizer.BindAggregateFunction("sum", std::move(children)));
-			SetDecideReducerGroupKey(*count, group_key);
+			count->by = group_key;
 			return real(std::move(count));
 		};
 		auto member = [&]() -> unique_ptr<Expression> {
@@ -471,7 +468,8 @@ void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 			reducer.filter = outer.filter->Copy();
 		}
 		reducer.SetAlias(outer.GetAlias());
-		SetDecideReducerHoldsReducer(reducer, false); // it holds no reducer over decisions now
+		reducer.CopyFacts(outer);
+		reducer.holds_reducer = false; // it holds no reducer over decisions
 		slot = BoundCastExpression::AddCastToType(optimizer.context, std::move(swapped), outer.return_type);
 	};
 	std::function<void(unique_ptr<Expression> &)> visit = [&](unique_ptr<Expression> &expr) {
@@ -542,7 +540,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		}
 		const bool direct_outer_is_sum =
 		    direct_outer->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER &&
-		    StringUtil::CIEquals(direct_outer->Cast<BoundDecideReducerExpression>().function.name, "sum");
+		    StringUtil::CIEquals(direct_outer->Cast<BoundDecideReducerExpression>().function->name, "sum");
 		const bool nested_outer_has_unfiltered_reducers =
 		    !nested_outer_sites.empty() &&
 		    std::all_of(nested_outer_sites.begin(), nested_outer_sites.end(), [](const ReducerSite &site) {
@@ -564,9 +562,9 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		// clause under no `per` then states the same row, and no class shows a second value. A bound that reads the
 		// rows keeps the value-link path, where each row and each variant holds its own.
 		const bool bound_is_query_wide = cmp.right->IsFoldable() || clause.query_wide_bound;
-		const bool has_nested_outer =
-		    direct_outer_is_sum && nested_outer_has_unfiltered_reducers && !scope.when && bound_is_query_wide &&
-		    scope.class_key == DecideReducerGroupKey(direct_outer->Cast<BoundDecideReducerExpression>());
+		const bool has_nested_outer = direct_outer_is_sum && nested_outer_has_unfiltered_reducers && !scope.when &&
+		                              bound_is_query_wide &&
+		                              scope.class_key == direct_outer->Cast<BoundDecideReducerExpression>().by;
 		DecideReducerPath path;
 		if (scope.when) {
 			path.conditions.push_back(scope.when.get());
@@ -622,7 +620,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 			path.conditions.push_back(body.rows);
 		}
 		for (auto &site : sites) {
-			const bool nest = DecideReducerHoldsReducer(**site.slot);
+			const bool nest = (*site.slot)->Cast<BoundDecideReducerExpression>().holds_reducer;
 			if (nest && !site.under_decision && !site.under_function &&
 			    InlineSumOfGroupSums(decide, optimizer.context, *site.slot)) {
 				continue;

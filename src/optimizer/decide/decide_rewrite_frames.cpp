@@ -76,12 +76,12 @@ void CollectRangeSigns(ClientContext &context, const LogicalDecide &decide, uniq
 			return false;
 		}
 		auto &reducer = node->Cast<BoundDecideReducerExpression>();
-		auto name = StringUtil::Lower(reducer.function.name);
-		const bool is_norm = IsDecideNormMarker(reducer);
-		if ((name == "sum" || name == "avg") && !is_norm) {
+		// A norm has no function: it is no sum to look through and no extremum.
+		auto name = reducer.function ? StringUtil::Lower(reducer.function->name) : string();
+		if (name == "sum" || name == "avg") {
 			return false;
 		}
-		const int member_sign = !is_norm && (name == "min" || name == "max") ? node_sign : 0;
+		const int member_sign = name == "min" || name == "max" ? node_sign : 0;
 		for (auto &child : reducer.children) {
 			WalkPolarity(context, booleans, child, member_sign, holds, visit);
 		}

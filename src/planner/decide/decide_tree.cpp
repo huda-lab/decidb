@@ -27,7 +27,7 @@
 namespace duckdb {
 
 string DecideTreeReducerName(const BoundDecideReducerExpression &aggregate) {
-	return DecideReducerCountScale(aggregate) ? "avg" : StringUtil::Lower(aggregate.function.name);
+	return aggregate.count_scale ? "avg" : StringUtil::Lower(aggregate.function->name);
 }
 
 unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const LogicalDecide &op,
@@ -1021,15 +1021,16 @@ private:
 			}
 			return Lower(owner, *op.bilinear_function_groups[product_group].expansion, carried);
 		}
-		idx_t retained;
-		if (DecideRetainedExpression(expression, retained)) {
+		const idx_t retained = expression.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER
+		                           ? expression.Cast<BoundDecideReducerExpression>().retained
+		                           : DConstants::INVALID_INDEX;
+		if (retained != DConstants::INVALID_INDEX) {
 			if (retained >= op.retained_expressions.size()) {
 				throw InternalException("DECIDE tree: a retained expression is missing");
 			}
 			auto lowered = Lower(owner, *op.retained_expressions[retained], carried);
 			// Stage 05 lowers the inlined reducer that names it; it ranges over the nest the copy became.
-			if (expression.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER &&
-			    lowered->GetExpressionClass() == ExpressionClass::BOUND_REF &&
+			if (lowered->GetExpressionClass() == ExpressionClass::BOUND_REF &&
 			    lowered->Cast<BoundReferenceExpression>().index >= tree->input_column_count) {
 				sources.reducer_nodes[&expression] =
 				    lowered->Cast<BoundReferenceExpression>().index - tree->input_column_count;
@@ -1135,11 +1136,13 @@ private:
 		node.aggregate = DecideTreeReducerName(aggregate);
 		node.text = Text(aggregate);
 		node.decision_value = HasDecision(aggregate);
-		node.key = DecideReducerGroupKey(aggregate);
+		node.key = aggregate.by;
+		idx_t qualifier = aggregate.per;
 		idx_t frame_aggregate = DConstants::INVALID_INDEX;
 		if (TryParseFrameAggregateTag(aggregate.GetAlias(), frame_aggregate) &&
 		    frame_aggregate < op.frame_aggregates.size()) {
 			node.key = op.frame_aggregates[frame_aggregate].key;
+			qualifier = op.frame_aggregates[frame_aggregate].per;
 			node.text = op.frame_aggregates[frame_aggregate].text;
 			tree->frame_aggregate_nodes[frame_aggregate] = index;
 		}
@@ -1149,9 +1152,7 @@ private:
 		auto &entry = *tree->nodes[operand];
 		entry.text = node.text + " operand";
 		Gates(operand, aggregate.filter.get());
-		idx_t qualifier;
-		const bool qualified = DecideReducerPer(aggregate, qualifier) || DecideTreeReducerPer(aggregate, qualifier);
-		if (qualified && qualifier < op.bound.keyed_scopes.size()) {
+		if (qualifier < op.bound.keyed_scopes.size()) {
 			node.qualifier_scope = qualifier;
 			entry.key = op.bound.keyed_scopes[qualifier].key;
 			entry.per = entry.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
@@ -1171,7 +1172,7 @@ private:
 			// bound definition (SIGN for L0 can hide a NaN).
 			node.body = Lower(operand, *norm_body);
 		}
-		if (qualified && qualifier < op.bound.keyed_scopes.size()) {
+		if (qualifier < op.bound.keyed_scopes.size()) {
 			Qualified(operand, qualifier);
 		}
 		return index;
