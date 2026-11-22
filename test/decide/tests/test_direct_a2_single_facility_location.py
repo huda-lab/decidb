@@ -511,10 +511,10 @@ def test_a2_keyed_every_row_with_no_class_has_no_instance(decidb_cli):
             f"SELECT id, c FROM (FROM (VALUES {_values(rows)}) t({', '.join(_names(rows))}) "
             f"DECIDE per k: c(REAL) SUCH THAT {bounds} MINIMIZE SUM(POWER(c - v, 2))) q ORDER BY id"
         )
-        # The solver path warns that each of the two bounds the clause folds into the box constrains nothing (a
-        # BETWEEN is two, each saying the written clause), and that the objective, with no row in a class, has no
-        # term. The direct path warns of nothing.
-        warnings = {"off": 3, "require": ()}
+        # The solver path warns once for each clause written that constrains nothing (a BETWEEN is one, the two
+        # bounds written apart are two), and that the objective, with no row in a class, has no term. The direct path
+        # warns of nothing.
+        warnings = {"off": 2 if "BETWEEN" in bounds else 3, "require": ()}
         for mode in ("off", "require"):
             shown = _run(decidb_cli, sql, mode, expect_warnings=warnings[mode])[0]
             assert shown == [(1, None), (2, None), (3, None)], mode

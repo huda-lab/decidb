@@ -380,9 +380,7 @@ void DecideOptimizer::TagAtomicRemovalGroups(LogicalDecide &decide) {
 	// The clause a leaf belongs to, named by its first source id: a BETWEEN is one clause of two leaves, which
 	// diagnosis removes together or not at all.
 	auto clause_of = [&](const Expression &node) {
-		auto source_id = SourceClauseOf(node, decide);
-		auto &source = decide.constraint_sources[source_id];
-		return source.between_upper ? source.between_partner : source_id;
+		return WrittenClauseId(decide.constraint_sources, SourceClauseOf(node, decide));
 	};
 	std::set<idx_t> removable_clauses;
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {

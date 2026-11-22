@@ -53,6 +53,11 @@ bool DecideSourceText::CutEntry(optional_idx location, DecideSpanRole role, stri
 	return true;
 }
 
+idx_t WrittenClauseId(const vector<ConstraintSourceInfo> &sources, idx_t source_clause_id) {
+	auto &source = sources[source_clause_id];
+	return source.between_upper ? source.between_partner : source_clause_id;
+}
+
 string QuoteWrittenClause(const vector<ConstraintSourceInfo> &sources, idx_t source_clause_id,
                           const DecideSourceText &text) {
 	auto &source = sources[source_clause_id];

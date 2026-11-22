@@ -172,6 +172,49 @@ def test_a_folded_bound_counts_its_skipped_instances_as_any_clause_does(decidb_c
     assert not line(sql("c(REAL)", "c <= 5", rows[:2]))
 
 
+BETWEEN_ROWS = ((1, None, 1.0), (2, None, 2.0))
+
+
+def _between_query(clause_sql):
+    return (
+        f"SELECT id {table('t', ('id', 'k', 'v'), BETWEEN_ROWS)} DECIDE per t.k: c(REAL), per t.k: d(REAL) "
+        f"SUCH THAT {clause_sql} MINIMIZE sum(power(c - t.v, 2) + power(d - t.v, 2))"
+    )
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("mode", ["off", "auto"])
+@pytest.mark.parametrize(
+    "clause_sql, written",
+    [
+        # A bound on one decision is folded into the box, a bound on two is a row: both are two comparisons by stage 05.
+        pytest.param("c BETWEEN 0 AND 10", ["'c BETWEEN 0 AND 10'"], id="one-decision"),
+        pytest.param("c + d BETWEEN 0 AND 10", ["'c + d BETWEEN 0 AND 10'"], id="two-decisions"),
+        # Two clauses written apart, each a BETWEEN, are two clauses: WrittenClauseId keeps them apart.
+        pytest.param(
+            "c BETWEEN 0 AND 10 AND d BETWEEN 0 AND 10",
+            ["'c BETWEEN 0 AND 10'", "'d BETWEEN 0 AND 10'"],
+            id="two-clauses",
+        ),
+        # The two bounds of a range written apart are two clauses, as the user wrote them.
+        pytest.param("c >= 0 AND c <= 10", ["'c >= 0'", "'c <= 10'"], id="bounds-written-apart"),
+    ],
+)
+def test_a_between_that_constrains_nothing_warns_once(decidb_cli, mode, clause_sql, written):
+    """With no row in a class, a BETWEEN holds no instance: it warns once, and EXPLAIN ANALYZE says so once under it,
+    whatever the mode. The report is one entry per clause the user wrote, not one per comparison."""
+    sql = f"SET decide_direct_solve='{mode}'; " + _between_query(clause_sql)
+    result = decidb_cli.execute_raw(sql)
+    assert result.returncode == 0, result.stderr
+    warnings, _ = decidb_cli.warnings(result.stderr)
+    nothing = [w for w in warnings if "constrains nothing" in w]
+    assert [w.split(" constrains nothing")[0] for w in nothing] == written, result.stderr
+    out = decidb_cli.execute_raw(f"SET decide_direct_solve='{mode}'; EXPLAIN ANALYZE " + _between_query(clause_sql))
+    assert out.returncode == 0, out.stderr
+    profile = "".join(line.strip().strip("│").strip() for line in out.stdout.splitlines()).replace(" ", "")
+    assert profile.count("↳itsoneinstancehasnovalueandisskipped") == len(written), profile
+
+
 @pytest.mark.correctness
 def test_an_objective_that_is_zero_warns(decidb_cli):
     """Every term of the objective has no value, so it is 0 whatever the decisions: any

@@ -145,6 +145,11 @@ struct ConstraintSourceInfo {
 	static ConstraintSourceInfo Deserialize(Deserializer &deserializer);
 };
 
+//! The clause the user wrote that `source_clause_id` is a part of, named by its first source id: a BETWEEN is one
+//! clause of two halves, and its lower half names it. Any other clause names itself. `source_clause_id` is one a clause
+//! owns.
+idx_t WrittenClauseId(const vector<ConstraintSourceInfo> &sources, idx_t source_clause_id);
+
 //! The clause `source_clause_id` as the user wrote it, `when c per K:` qualifier in front. Every message that quotes a
 //! clause goes through this or QuoteEditedClause, so none can quote one without its qualifier (Information Expert: the
 //! source holds the qualifier). A clause the query text holds no span for (a statement built without it) quotes its

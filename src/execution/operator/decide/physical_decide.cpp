@@ -644,7 +644,15 @@ void PhysicalDecide::RecordVariants(const DecideSignature &signature, const char
 }
 
 void PhysicalDecide::ReportSkippedInstances(const DecideGlobalSinkState &gstate) const {
-	for (auto &entry : gstate.clause_instances) {
+	// A BETWEEN is two comparisons by now, each counted under its own id; the report is one per clause the user wrote,
+	// with the most any of its comparisons holds, as the rows of one comparison are counted.
+	map<idx_t, DecideGlobalSinkState::ClauseInstances> written;
+	for (auto &half : gstate.clause_instances) {
+		auto &counts = written[WrittenClauseId(constraint_sources, half.first)];
+		counts.grouped = MaxValue(counts.grouped, half.second.grouped);
+		counts.kept = MaxValue(counts.kept, half.second.kept);
+	}
+	for (auto &entry : written) {
 		auto &counts = entry.second;
 		if (counts.kept >= counts.grouped) {
 			continue;
