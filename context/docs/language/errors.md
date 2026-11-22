@@ -31,8 +31,8 @@ These are the rules for every error DECIDE raises. Code and tests follow them; n
    (`../testing/oracle.md` §3.6), never the full text. A test that compares two runs compares their kind or first
    line. A change to error paths alone runs only the error tests it touches.
 
-**Ruling (owner, 2026-11-19).** Name the kind of error and give details when possible; no hoops to throw verbose
-errors. The two paths need not print the same text.
+A message names the kind of error and gives details when they are at hand; nothing is built only to make an error
+verbose. The two paths need not print the same text.
 
 **Raised** is the stage that throws: **parse** (the grammar and the transformer), **bind** (the binder, while
 expressions are bound), **plan** (the canonicalizer, the shape check, the rewrites, the solver choice and the physical
@@ -248,34 +248,32 @@ applies only where DeciDB accumulates across rows (`x*1e308 + x*1e308`), since a
 A clause that comes from a table macro's body has a position relative to the body, and a clause with no text of its
 own prints no caret.
 
-**Ruling (owner, 2026-11-18).** A message states the kind of error and where it is in the query, and stops (R12,
-R19). A removed spelling is an ordinary syntax error (R13). A NaN or infinite value says so and names where it stands
-(R14). An `=` bound that takes two values names its `by` group (R15).
+A message states the kind of error and where it is in the query, and stops (R12, R19). A removed spelling is an ordinary
+syntax error (R13). A NaN or infinite value says so and names where it stands (R14). An `=` bound that takes two values
+names its `by` group (R15).
 
-**Ruling (owner, 2026-11-19).** Every message of the tables above carries the raise call's own position
-(`query_location`), as DuckDB's casts do. A direct-solve rule raises where the value is found, so a direct plan and
-the solver path print the same text and the same caret.
+Every message of the tables above carries the raise call's own position (`query_location`), as DuckDB's casts do. A
+direct-solve rule raises where the value is found, so a direct plan and the solver path print the same text and the same
+caret.
 
-**Ruling (owner, 2026-11-19).** A `too large for a DOUBLE` message has its caret on the clause and never quotes the
-clause: `the constraint computes a number too large for a DOUBLE`, `the objective …`.
+A `too large for a DOUBLE` message has its caret on the clause and never quotes the clause: `the constraint computes a
+number too large for a DOUBLE`, `the objective …`.
 
-**Ruling (owner, 2026-11-19).** A constraint that is none of the comparisons the rows above name is `'q' is not
-supported` (Not implemented Error) at its node.
+A constraint that is none of the comparisons the rows above name is `'q' is not supported` (Not implemented Error) at
+its node.
 
-**Ruling (owner, 2026-11-19).** A comparison that reads no decision is `'q' reads no decision` (Binder Error), quoting
-the whole comparison. A side that reads a decision in a shape the model does not take is named by its own row of §3: a
-`CASE WHEN c > 1 THEN x ELSE 0 END` compared with a bound is `CASE over a decision is not supported`.
+A comparison that reads no decision is `'q' reads no decision` (Binder Error), quoting the whole comparison. A side that
+reads a decision in a shape the model does not take is named by its own row of §3: a `CASE WHEN c > 1 THEN x ELSE 0 END`
+compared with a bound is `CASE over a decision is not supported`.
 
-**Ruling (owner, 2026-11-19).** `else ''a'' is not a number` keeps the doubled quote: the fallback text carries its own
-quotes and the sentence adds its own.
+`else ''a'' is not a number` keeps the doubled quote: the fallback text carries its own quotes and the sentence adds its
+own.
 
-**Ruling (owner, 2026-11-19).** The decision-as-factor message names the decision's type (`'s' is an INT decision, which
-cannot scale a reducer`; `a REAL`, `a BOOL`; `divide`; `a reducer inside another expression`), and a compound factor
-reads `'b - c' reads a decision, which cannot scale a reducer`. Minimizing a negated square is its own cause
-(`minimizing a negated squared decision`). An objective that takes two instances of a decision has its caret on the
-declaration.
+The decision-as-factor message names the decision's type (`'s' is an INT decision, which cannot scale a reducer`; `a
+REAL`, `a BOOL`; `divide`; `a reducer inside another expression`), and a compound factor reads `'b - c' reads a
+decision, which cannot scale a reducer`. Minimizing a negated square is its own cause (`minimizing a negated squared
+decision`). An objective that takes two instances of a decision has its caret on the declaration.
 
-**Ruling (owner, 2026-11-19).** `the DECIDE query could not be solved: <status>` names the solver's own status text where
-there is one. `the constraint holds numbers too far apart in size` has one text for every cause. The number-range
-warning does not tell the user what to change. The settings in §5 and the `DIAGNOSE` form of `decide_direct_solve =
-'require'` read as the tables give them.
+`the DECIDE query could not be solved: <status>` names the solver's own status text where there is one. `the constraint
+holds numbers too far apart in size` has one text for every cause. The number-range warning does not tell the user what
+to change. The settings in §5 and the `DIAGNOSE` form of `decide_direct_solve = 'require'` read as the tables give them.

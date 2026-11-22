@@ -138,9 +138,9 @@ its best end. No BOOLEAN column stands in the key.
 5. The answer: the source rows join their group's numbers, and one projection gives one answer per decision, held to
    its box, and the verdict column, which the adapter keeps so a parent that reads no answer still raises.
 
-**Ruling (owner, 2026-11-19).** An `=` limit read from the data raises the bound's NaN message, `the bound 'b' is NaN on
-some rows`, with the caret on the bound, when its group holds only NaN, on both paths: `test_invalid_value_message.py`
-holds the case `r1_equality_limit`.
+An `=` limit read from the data raises the bound's NaN message, `the bound 'b' is NaN on some rows`, with the caret on
+the bound, when its group holds only NaN, on both paths: `test_invalid_value_message.py` holds the case
+`r1_equality_limit`.
 
 With several decisions, each read computes every decision's item values in columns of their own (`t_0`, `t_1`, ...).
 Stages 2 and 4 sum over the decisions of a row inside one aggregate input, and the extreme open prices combine with

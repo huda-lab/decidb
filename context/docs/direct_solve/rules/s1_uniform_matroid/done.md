@@ -74,7 +74,7 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
 It raises an error wherever the solver does: NaN bounds on a row that reads them, NaN or infinite scores, infeasible
 counts. Every input row is checked before the first row leaves, so a late bad value or an infeasible later group raises
 under `LIMIT 1` or `COUNT(*)`. When a query has several errors, direct may report a different one than the solver: error
-order is not owed (owner's ruling), and the plan raises the first check it meets. When scores tie it may pick different
+order is not owed, and the plan raises the first check it meets. When scores tie it may pick different
 rows than the solver, with the same objective. Without an objective every feasible assignment is optimal, so which rows
 it picks is not specified; Gurobi and HiGHS pick different ones as well. A group's feasibility is a flat list of
 independent checks (a valid interval, enough rows, a fixed count within the upper limit, an unrepresentable limit), each

@@ -238,7 +238,7 @@ function, scalar or aggregate, to its primary. A subquery is left as written.
 
 The respelling runs here, not in the canonicalizer, because the binder's own checks read names (a reducer's kind, a
 norm) before stage 04 runs. A plan reads the written name from the tag, since cutting it from the source text fails
-for an infix `^` (owner's rulings, 2026-11-10).
+for an infix `^`.
 
 ---
 
@@ -254,7 +254,7 @@ position, a constraint side, beside another term, under a `by` or in the objecti
   decision or a subquery that names no per-row decision, `ReadsRowDecision`) is refused: *"'cap' is a query-wide
   decision, so 'sum(cap)' has no rows to reduce"*. Once and once per row are different problems, and neither reading is
   chosen silently. `sum(x + cap)` and `sum(cost * cap)` are not refused. The same rule holds for a `norm` and for a
-  range frame's reducer, with no exemption (owner ruling, 2026-11-21): once and once per row are different problems for
+  range frame's reducer, with no exemption: once and once per row are different problems for
   them too. `norm(e, p)` binds as an inert `SUM` marker tagged with its order (`NORM_MARKER_TAG_PREFIX`), which stage
   05 lowers; the marker takes the location of the `norm(...)` call, so an error at the marker points at it. `COUNT`
   binds as data only: `COUNT(x)` over a decision is refused (*"COUNT over a decision is not supported"*).
@@ -423,16 +423,13 @@ caret stands on it. A constraint that is no comparison is `'q' is not a comparis
 no span (a statement built without the parser's text) is printed from a copy stripped of the binders' tags, since a call
 prints its arguments' aliases.
 
-**Ruling (owner, 2026-11-19).** A comparison, `BETWEEN` or conjunction a constraint cannot use as a number is `'q' is a
-comparison used as a number`; a constraint that is none of the comparisons is `'q' is not supported` (Not implemented
-Error), at its node.
+A comparison, `BETWEEN` or conjunction a constraint cannot use as a number is `'q' is a comparison used as a number`; a
+constraint that is none of the comparisons is `'q' is not supported` (Not implemented Error), at its node.
 
-**Ruling (owner, 2026-11-19).** `CorrelatedColumnInfo` carries an optional query location, so the refusal of a
-correlated column left after binding points at the column (a core edit, `../architecture.md` § Edits to existing DuckDB
-code).
+`CorrelatedColumnInfo` carries an optional query location, so the refusal of a correlated column left after binding
+points at the column (a core edit, `../architecture.md` § Edits to existing DuckDB code).
 
-**Ruling (owner, 2026-11-19).** A frame's `else` whose text carries its own quotes keeps the doubled quote in
-`else ''a'' is not a number`.
+A frame's `else` whose text carries its own quotes keeps the doubled quote in `else ''a'' is not a number`.
 
 Arms kept as guards (BLOAT-26): the null check after `GetBoundAggregate` in `BindScopedReducer` and `BindReducerBy`
 (a nullable pointer read on the next line), and the error check after the scope lambda binds a scoped constraint's

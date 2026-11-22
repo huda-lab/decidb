@@ -461,7 +461,7 @@ envelope holds no product), so a product there needs a route of its own. The dir
 an ABS as it guards a part's terms (`GuardCoefficients` recurses into `term.inner`); a term of degree 2 there has no
 coefficient of its own and the front end declines it (`HasUnknownTerm`), so the solver path refuses it here.
 
-**Ruling (owner, 2026-11-21).** Keep the product where it fits the one constraint path, else refuse.
+A product is kept where it fits the one constraint path and refused elsewhere.
 
 **A NaN or infinite value is named where it stands.** Its message says the value is NaN or infinite and quotes it as
 the user wrote it, with the caret on it (`DecideInvalidValueError`, `common/decide_value_messages.hpp`); it names no
@@ -473,18 +473,17 @@ no caret. A coefficient has one message for NaN and infinity. A number
 past a DOUBLE (`TOO_LARGE`) is raised only where DeciDB accumulates across rows. An `=` bound that takes two values
 raises through `__internal_decide_bound_disagreement` on a direct plan, from the same builder.
 
-**Ruling (owner, 2026-11-19).** The nodes the canonicalizer and the other rewrites build keep the location of the
-user text they replace (`context/opa_rewrite/design.md` § 3, contract 5).
+The nodes the canonicalizer and the other rewrites build keep the location of the user text they replace
+(`context/opa_rewrite/design.md` § 3, contract 5).
 
-**Ruling (owner, 2026-11-19, the narrower version).** The value-equality location rule stays
-(`decide_source_provenance.hpp`, `DecideReplaces`): every replacement equal in value takes the replaced node's location,
-`ReadQuotient`'s `(1/0) * x` and the like-term merge included. The structural proxy (the sum, difference and quotient
-decomposition, the zero-divisor rule that names the value) goes, with `parts` and `WrittenParts`. A coefficient has no
+One location rule holds (`decide_source_provenance.hpp`, `DecideReplaces`): every replacement equal in value takes the
+replaced node's location, `ReadQuotient`'s `(1/0) * x` and the like-term merge included. No structural proxy (a sum,
+difference or quotient decomposition, a zero-divisor rule that names the value) picks a location. A coefficient has no
 split between a NaN message and an infinity message, and `TOO_LARGE` is raised only where DeciDB accumulates across
 rows.
 
-**Ruling (owner, 2026-11-18).** An `=` bound that takes two values names its `by` group, not its class: one check per
-group, on a bound of a row-wise clause and a frame bound alike (R15).
+An `=` bound that takes two values names its `by` group, not its class: one check per group, on a bound of a row-wise
+clause and a frame bound alike (R15).
 
 The data of an ABS argument is checked where the ABS is read, before the envelope turns
 it into a bound on the auxiliary (`AddAbsValueCheck`): the sum of the argument's terms

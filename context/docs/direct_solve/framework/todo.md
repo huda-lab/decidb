@@ -60,4 +60,4 @@ solver path answers those queries, so none of them is wrong, only slower.
   projection stages and leaves pruning to DuckDB. A gated read carries the gate's own column, so the chain must forward
   the columns the rule names: a second forwarding helper, not the end of forwarding. It fits A1, A2 and N1 of the nine
   rules; measured, the helper adds 97 lines and A1's conversion removes 32, and the projection over the rules it fits
-  is about 40 lines removed. The owner's ruling for it (2026-11-21) came before the measurement.
+  is about 40 lines removed.

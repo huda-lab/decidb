@@ -429,8 +429,8 @@ id travels to formulation: `source_clause_id` gives a clause-level message its c
 `DecideClauseErrorInfo`). The objective's `written_objective` is the text cut from the parser's `OBJECTIVE` span; its
 `objective_canonical_differs` still compares two renderings.
 
-**Ruling (owner, 2026-11-19).** `source_lhs` and `source_rhs` stay for a clause with a decision on both sides, and
-`DIAGNOSE`'s echo (D32) of those sides is DeciDB's rendering, not the query text.
+A clause with a decision on both sides carries `source_lhs` and `source_rhs`, and `DIAGNOSE`'s echo (D32) of those sides
+is DeciDB's rendering, not the query text.
 
 See [`../../language/explain.md`](../../language/explain.md)
 for the output itself.

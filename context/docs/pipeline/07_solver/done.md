@@ -344,8 +344,7 @@ the model is provably the one the rewrites were selected against. In order:
       default). HiGHS keeps its tighter default for optimality, so the warning comes no later
    than HiGHS's own limit.
 
-   **Ruling (owner, 2026-11-19).** The warning states what may happen and does not tell the user what to change: the
-   sentence "Scale its data toward 1." is not part of it. The `DECIDE:` prefix of the one line stays.
+   The warning states what may happen and does not tell the user what to change. Its one line starts with `DECIDE:`.
 
    - A coefficient (constraint, quadratic, indicator, objective) warns from
      `DECIDE_LARGE_COEFFICIENT` = 1 / integrality tolerance = 1e6: an integer column

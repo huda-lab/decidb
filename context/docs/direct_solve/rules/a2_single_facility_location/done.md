@@ -32,7 +32,7 @@ One `REAL` decision shared by many rows, query-wide (`per ():`) or keyed (`per k
     applied.
 
 **The answer.** Each loss gives a target per class; the plan clamps it into the class's interval and repeats it on
-every row of the class. When several points are optimal, A2 returns the one nearest 0 (the owner's ruling). The clamp
+every row of the class. When several points are optimal, A2 returns the one nearest 0. The clamp
 of 0 gives that point with no branch of its own, and it stays finite when an end is open.
 
 | Loss | Target |

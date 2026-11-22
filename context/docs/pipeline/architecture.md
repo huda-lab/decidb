@@ -136,9 +136,8 @@ schedules a batch of tasks calls to help run them and wait for the rest. It runs
 every task has finished, polling again after an empty poll. The vendored queue's dequeue returns false when the queue
 only appeared empty: a consumer that loses a claim hides one queued item until it backs its count out. A waiter that
 took one empty poll as the end of the queue spun on the completed count while the hidden task stayed queued and the
-workers slept, which hung the descent's parallel merge (`DecideDescent::CopyMergedParts`) about once in fifty runs of
-the C++ suite. DuckDB's `main` drains until the count is reached as well, through a rewritten scheduler. No test forces
-the race; a stress run is clean before and after.
+workers slept, so the batch never finished. DuckDB's `main` drains until the count is reached as well, through a
+rewritten scheduler. No test forces the race; a stress run is clean before and after.
 
 Four edits let an error point at the place in the query it is about, as DuckDB's `BinderException` does. Each helps
 any query that raises through them, and a standard query returns the same rows:

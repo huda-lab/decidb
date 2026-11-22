@@ -62,9 +62,8 @@ transformer refuses the NULL type once the whole query has parsed, at the name: 
 'x' has no type` (`../../language/errors.md`). `scalar` is an ordinary name, so it names
 a column or a decision (`DECIDE scalar(INT)`).
 
-**Ruling (owner, 2026-11-19).** A declaration with no type builds the declaration node with a NULL type, as DuckDB's
-`CREATE TABLE` does for a column with no type; the transformer refuses a node whose `rexpr` is null. The message and its
-caret are unchanged.
+A declaration with no type builds the declaration node with a NULL type, as DuckDB's `CREATE TABLE` does for a column
+with no type; the transformer refuses a node whose `rexpr` is null.
 
 The type in the parentheses is a `ColId`, which `makeDecideVariableType` (`grammar.cpp`)
 reads as `INT`, `REAL` or `BOOL` in any case; any other name is a syntax error at it.

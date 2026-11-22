@@ -97,25 +97,25 @@ Every message states its kind and the place in the query it is about: a raise ca
 (`Exception::InitializeExtraInfo`), so DuckDB prints the caret ([`language/errors.md`](../../language/errors.md)). An
 interrupt, an out-of-memory error and a fatal error stop the evaluation where they arise.
 
-**Ruling (owner, 2026-11-19).** A raise call carries its own `query_location`, as DuckDB's casts do. A direct rule
-raises where the value is found: the too-large message is a raise call at the clause, a check is a raising filter, and
-no message is built as a column or taken as a minimum.
+A raise call carries its own `query_location`, as DuckDB's casts do. A direct rule raises where the value is found: the
+too-large message is a raise call at the clause, a check is a raising filter, and no message is built as a column or
+taken as a minimum.
 
-**Ruling (owner, 2026-11-19).** A row in no class of its `per` key raises nothing anywhere below the `per`, a reducer,
-a frame or a helper included (R11, D81). The objective's G has no exception of its own. A node that holds rows in no
-class (`DecideNode::holds_rows_in_no_class`, §5.3, D75) keeps holding them.
+A row in no class of its `per` key raises nothing anywhere below the `per`, a reducer, a frame or a helper included
+(R11, D81). The objective's G has no exception of its own. A node that holds rows in no class
+(`DecideNode::holds_rows_in_no_class`, §5.3, D75) keeps holding them.
 
 Each row is read once. `Sink` buffers each thread's rows, `Combine` places each thread's buffer after those placed
 before (`ColumnDataCollection::Combine`), and `EvaluateTree` routes the whole buffer through one descent, a chunk at a
 time, each chunk's rows numbered by the rows before it, as a hash join builds its table once its build side is complete
 (`execution.descent_rows`, `DECIDB_PROFILE`, counts the rows read). The evaluation fetches its first chunk alone, for a
 value the whole query shares, and never scans the buffer again. A descent per thread, merged in `Finalize`, would route
-on several threads at the cost of a merge of several hundred lines, so the rows are routed once (**Ruling (owner,
-2026-11-22)**). Against that merge, over a stored table so the scan runs on several threads
-(`context/opa_rewrite/tools/ab_bench.py`), the two lightest workloads spend more outside the solver: `flat-sum` 23 ms at
-1 million rows (12%) and 53 ms at 2 million (14%, 3% of the whole query), `variants-10` 35 ms at 1 million (14%); the
-others move by at most 6%, and peak memory falls by 3 to 8%. The unbounded diagnosis's column groupings (§7b) explain
-the solved model after the evaluation, and read the named input columns in a scan of their own.
+on several threads at the cost of a merge of several hundred lines, so the rows are routed once. Against that merge,
+over a stored table so the scan runs on several threads (`context/opa_rewrite/tools/ab_bench.py`), the two lightest
+workloads spend more outside the solver: `flat-sum` 23 ms at 1 million rows (12%) and 53 ms at 2 million (14%, 3% of the
+whole query), `variants-10` 35 ms at 1 million (14%); the others move by at most 6%, and peak memory falls by 3 to 8%.
+The unbounded diagnosis's column groupings (§7b) explain the solved model after the evaluation, and read the named input
+columns in a scan of their own.
 
 ---
 

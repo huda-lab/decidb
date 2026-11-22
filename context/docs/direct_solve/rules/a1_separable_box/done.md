@@ -92,7 +92,7 @@ A query A1 does not apply to keeps its answer: it runs on the solver, and `requi
   0.33333333331 (HiGHS). With no square the answer reads only the sign of `b`, so A1 is silent there.
 - **Ties.** Between two whole numbers around the turning point, the smaller value, which matches the solver in every
   case checked, but nothing promises it. Between two equally good ends, and on a flat objective, the point of the box
-  nearest 0 (owner's ruling, as A2): the end nearer 0, the lower one when both are as near.
+  nearest 0 (as A2): the end nearer 0, the lower one when both are as near.
 - **A decision that appears in no objective term** has a flat objective and takes the point of its box nearest 0.
 
 ## How it works

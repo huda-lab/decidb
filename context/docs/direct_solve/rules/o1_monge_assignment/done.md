@@ -40,7 +40,7 @@ MINIMIZE SUM(POWER(l.position - r.position, 2) * x);
 
 A table's keys are its UNIQUE constraints, the PRIMARY KEY included, whose columns the scan reads and the table
 declares all `NOT NULL`. UNIQUE lets NULLs repeat, and DuckDB declares a PRIMARY KEY's columns `NOT NULL`, so the
-`NOT NULL` test covers both (owner's ruling, 2026-11-10). A key is a fact of the catalog, which a direct-solve rule may
+`NOT NULL` test covers both. A key is a fact of the catalog, which a direct-solve rule may
 read and the canonicalizer may not (`../../../pipeline/04_canonicalizer/done.md` § What a rule must be). DuckDB's
 index and `GROUP BY` agree on a DOUBLE key (-0.0 and 0.0 are one value, and so are NaNs); the index ignores a column's
 collation where `GROUP BY` applies it, and a collated key is no bare column, so it declines.
@@ -95,8 +95,7 @@ on these shapes is in [todo.md](todo.md).
 ## Where it differs from the solver
 
 - **Ties.** Several matchings can be optimal (tied positions, duplicate rows); O1 may return a different one.
-- **No number-range warning.** O1 only ranks and compares positions, so no step of its plan divides or loses precision
-  (owner's ruling, 2026-11-10).
+- **No number-range warning.** O1 only ranks and compares positions, so no step of its plan divides or loses precision.
 
 ## Tests
 

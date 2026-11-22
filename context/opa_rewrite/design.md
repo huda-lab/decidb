@@ -24,14 +24,14 @@ a set of distinct signatures for `per K` and `per ()`; an O is a map from `withi
 | Step | On the branch |
 |---|---|
 | 1 | The tree exists, with a fourth node kind, F (ABS, Boolean product, L0, definition). It is built at physical planning, after every rewrite, so the operator nodes are gone and a node's body is stage 05's lowered terms |
-| 2 | Built. Each thread routes its rows in `Sink`; the routes are merged in `Finalize` |
+| 2 | Built. `Sink` buffers each thread's rows; `Finalize` routes the whole buffer through one descent |
 | 3 | Built for data values. A G over decisions holds a helper variable made at planning, not an expression |
 | 4 | Built |
 | 5 | Not built. Every nested decision reducer becomes a helper variable at planning (`AddValueHelper`); stage 06 removes the ones it can (`InlineReducerValueLinks`). The models still match the deck's on its example |
 
 One clause exists in eight forms between planning and the solver: the bound expression with its marker strings and
 side tables on `LogicalDecide`; the tree's nodes; the linear-form records inside the nodes; compiled programs;
-per-thread containers; program value columns; the emitter's output; `SolverInput`. The deck has one, the tree.
+the descent's containers; program value columns; the emitter's output; `SolverInput`. The deck has one, the tree.
 
 ## 3. Phase 5: the tree is the representation
 

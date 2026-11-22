@@ -401,8 +401,8 @@ What may be a factor (`PeelScale`, the single place that judges it):
   An `INT` or `REAL` decision times a reducer is not convex, and a `BOOL`
   times anything but a bare reducer (`b * (sum(x) - 1)`) is not held by a helper.
 
-**Ruling (owner, 2026-11-19).** The message names the decision's type (`INT`, `REAL`, `BOOL`), whether it divides or
-scales, and a compound factor by what it reads.
+The message names the decision's type (`INT`, `REAL`, `BOOL`), whether it divides or scales, and a compound factor by
+what it reads.
 
 The canonicalizer takes the `BOOL` decisions at construction (`is_boolean`, after `variable_scopes`, required by both
 constructors), since the factor's type is not in the bound tree.
@@ -528,7 +528,7 @@ The flip is the last step so that like terms merge and a factor distributes in t
 direction. `EXPLAIN` renders the canonical layer in the written sense (`RenderWrittenSense`
 reverses each term's sign and keeps its factor), so the flip alone adds no `≡` line, and
 `MAXIMIZE SUM(x) + SUM(x)` shows `≡ 2 * sum(x)`. Merged after the flip, the same objective
-would render as `-(-2 * sum(x))` (owner's rulings, 2026-11-10).
+would render as `-(-2 * sum(x))`.
 
 Two consequences:
 
@@ -684,7 +684,7 @@ of a clause only; an L0 norm counts its body's nonzeros rather than summing it. 
 machinery, and a body the split leaves whole answers wrongly once the helper's refusal is gone. The shape it would admit
 (a strict bound on a reducer with a data addend, beside another term) is rare and refused with a clear message.
 
-**Ruling (owner, 2026-11-22).** The split is not made: the value route keeps its refusal (`RefuseFractionalStep`).
+The split is not made: the value route refuses the shape (`RefuseFractionalStep`).
 
 ---
 

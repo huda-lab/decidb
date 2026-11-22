@@ -1,11 +1,10 @@
 # Shared engine — what exists today
 
-Latest full run, 2026-11-19 (the Phase 1 gate): `test/decide/run_direct_matrix.sh`, 8,452 tests in each suite; auto
-and serializer 8,450 passed, off and highs 8,448. The failures are FW-9 tests that ran only in auto: R4's coefficient
-fixture and two zero-divisor cases, which now assert the kind alone (the two paths name different places), both since
-fixed. The Gurobi golden is identical; the HiGHS golden took the three Phase 1 error texts. C++
-`build/release/test/unittest "[decidb]"` 11,559 assertions in 115 cases. A debug build, 2026-11-18: `make decide-test-debug` 8,835 passed, its C++ suite 11,549 assertions in 115 cases, no assertion,
-ASan or UBSan report. It is the baseline for every direct-solve task and rule. Design: `../architecture/`.
+Latest full run, 2026-11-22: `test/decide/run_direct_matrix.sh`, 8,514 tests in each suite (auto, off, serializer,
+highs), all passed; the Gurobi and HiGHS goldens are identical. C++ `build/release/test/unittest "[decidb]"` 11,510
+assertions in 114 cases. A debug build, 2026-11-22: `make decide-test-debug` 8,514 passed (8,500 in the full run, the
+other 14 by name once two debug-only checks matched the code), its C++ suite 11,510 assertions in 114 cases, no
+assertion, ASan or UBSan report. It is the baseline for every direct-solve task and rule. Design: `../architecture/`.
 
 ## What it does
 
@@ -68,7 +67,7 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
     (the smaller one on a tie), with its precision flag (Number-range warning, below). `DirectMinimizeOnInterval`
     (A1, A2) returns the least of `a*c^2 + b*c` over `[lower, upper]`: the turning point clamped into the interval for
     `a > 0`, otherwise an end, the upper one when `a*(lower + upper) + b` (`b` alone when `a = 0`) is below 0 and the
-    lower one when above. A tie takes the point of the interval nearest 0 (owner's ruling): two equal ends take the
+    lower one when above. A tie takes the point of the interval nearest 0: two equal ends take the
     end nearer 0, the lower when both are as near, and a flat objective (`a = b = 0`) the clamp of 0, with no fallback
     for an open end. A NaN factor comes from two infinite ends and counts as a tie.
   - **An aggregate from a reducer.** `DirectAggregateOf` builds the aggregate a recorded reducer names over its
@@ -478,7 +477,7 @@ ASan or UBSan report. It is the baseline for every direct-solve task and rule. D
 - **`EXPLAIN` annotation** ([policy.md](../architecture/policy.md)). `test_serializer_explain_and_model_dump` checks
   the rule and the condition line in the logical, physical and profiled plans.
 - **What a direct plan leaves to DuckDB.** A query direct solve answers prints no "the objective is 0" warning: guide
-  § 7.4 holds that warning to the solver path, as with the number-range warning above (owner, 2026-11-17). EXPLAIN
+  § 7.4 holds that warning to the solver path, as with the number-range warning above. EXPLAIN
   ANALYZE prints the DECIDE node with no internal name (guide § 9); the operators the rule plans below it are DuckDB's
   and print in DuckDB's notation, `#n` for a column and the `error('DECIDE: ...')` CASE a check compiles to.
 - **The solver's domain check, once.** The solver raises, before it reads any row, for a decision whose box contradicts
