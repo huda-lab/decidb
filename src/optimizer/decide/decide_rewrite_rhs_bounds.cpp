@@ -161,7 +161,7 @@ private:
 		// Canonicalization put every decision on the left, so the right is data.
 		bool aggregate_data_bound =
 		    !comparison.right->IsFoldable() && clause.shape == CanonicalConstraintClass::AGGREGATE;
-		bool query_wide = IsDecideQueryWideBound(*comparison.right);
+		bool query_wide = clause.query_wide_bound;
 		if (!comparison.right->IsFoldable() && !query_wide) {
 			clause.bound_read_shape = clause.shape;
 			clause.bound_read_type = comparison.type;

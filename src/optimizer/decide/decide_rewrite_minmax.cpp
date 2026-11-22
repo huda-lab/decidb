@@ -137,6 +137,7 @@ void DecideOptimizer::RewriteMinMaxInClause(BoundDecideClause &clause, LogicalDe
 		easy.structural = clause.structural;
 		easy.defines = clause.defines;
 		easy.minmax_easy = true;
+		easy.query_wide_bound = clause.query_wide_bound;
 		// Under the clause's own `per K:`, the easy half stands for the same classes (D28) and prints in front as
 		// written.
 		ScopeRowPerClause(optimizer.context, decide, easy, clause);

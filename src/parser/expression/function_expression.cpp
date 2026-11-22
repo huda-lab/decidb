@@ -87,6 +87,7 @@ unique_ptr<ParsedExpression> FunctionExpression::Copy() const {
 	auto copy =
 	    make_uniq<FunctionExpression>(catalog, schema, function_name, std::move(copy_children), std::move(filter_copy),
 	                                  std::move(order_copy), distinct, is_operator, export_state);
+	copy->written_name = written_name;
 	copy->CopyProperties(*this);
 	return std::move(copy);
 }

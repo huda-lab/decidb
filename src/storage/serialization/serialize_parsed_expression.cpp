@@ -267,6 +267,7 @@ void FunctionExpression::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<bool>(206, "is_operator", is_operator);
 	serializer.WritePropertyWithDefault<bool>(207, "export_state", export_state);
 	serializer.WritePropertyWithDefault<string>(208, "catalog", catalog);
+	serializer.WritePropertyWithDefault<string>(209, "written_name", written_name);
 }
 
 unique_ptr<ParsedExpression> FunctionExpression::Deserialize(Deserializer &deserializer) {
@@ -281,6 +282,7 @@ unique_ptr<ParsedExpression> FunctionExpression::Deserialize(Deserializer &deser
 	deserializer.ReadPropertyWithDefault<bool>(206, "is_operator", result->is_operator);
 	deserializer.ReadPropertyWithDefault<bool>(207, "export_state", result->export_state);
 	deserializer.ReadPropertyWithDefault<string>(208, "catalog", result->catalog);
+	deserializer.ReadPropertyWithDefault<string>(209, "written_name", result->written_name);
 	return std::move(result);
 }
 

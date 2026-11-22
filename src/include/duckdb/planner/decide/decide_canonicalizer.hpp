@@ -464,10 +464,10 @@ private:
 	//! values in a class (D70); and a value known for the whole query the empty key.
 	idx_t ScopeKeyOf(const Expression &expr, idx_t data_key) const;
 
-	//! Recompute semantic provenance for the complete canonical bound. A stale root
-	//! classification is removed before inspecting the rebuilt tree; only an RHS whose
-	//! every component is query-wide is marked so (SetDecideQueryWideBound).
-	unique_ptr<Expression> FinalizeBoundProvenance(unique_ptr<BoundComparisonExpression> comparison) const;
+	//! Whether `body` is a comparison whose bound is one value for the whole query: every component of the complete
+	//! canonical bound is query-wide (BoundDecideClause::query_wide_bound). Read from the bound each time a clause
+	//! is canonicalized, since a rewrite may have replaced its children.
+	bool BoundIsQueryWide(const Expression &body) const;
 
 	//! The refusal of a decision-bearing `factor` on a reducer: the decision's type when `positive` (the factor without
 	//! its minus signs) is one decision, else that it reads one. `divides` says it divides the reducer.

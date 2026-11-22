@@ -661,19 +661,6 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(vector<BoundDecideCl
 	return result;
 }
 
-static bool ContainsSubquerySource(const Expression &expr) {
-	if (IsDecideSubqueryValue(expr)) {
-		return true;
-	}
-	bool found = false;
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		if (!found) {
-			found = ContainsSubquerySource(child);
-		}
-	});
-	return found;
-}
-
 void FinalizeConstraintSourceInfo(const vector<BoundDecideClause> &clauses, vector<ConstraintSourceInfo> &sources,
                                   const DecideSourceText &text, const vector<KeyedScopeInfo> &keyed_scopes,
                                   idx_t decide_index, const vector<DecideKey> *keys,
@@ -697,7 +684,7 @@ void FinalizeConstraintSourceInfo(const vector<BoundDecideClause> &clauses, vect
 		info.canonical_rhs = RenderSource(*cmp.right, ctx);
 		info.lhs_location = cmp.left->GetQueryLocation();
 		info.canonical_cmp = DecideComparisonOperator(cmp.type);
-		if (!IsDecideQueryWideBound(*cmp.right) && !ContainsSubquerySource(*cmp.right)) {
+		if (!clause.query_wide_bound && !DecideHoldsSubqueryValue(*cmp.right)) {
 			info.rhs_kind = ConstraintSourceRhsKind::DATA_EXPRESSION;
 		} else {
 			info.rhs_kind = ConstraintSourceRhsKind::NUMERIC_FALLBACK;

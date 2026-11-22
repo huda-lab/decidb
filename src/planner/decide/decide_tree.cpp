@@ -36,6 +36,8 @@ unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const
 	auto facts = make_uniq<DecideConstraint>();
 	facts->comparison_type = comparison.type;
 	facts->rhs_expr = comparison.right->Copy();
+	facts->query_wide_bound = clause.query_wide_bound;
+	facts->bound_holds_subquery = DecideHoldsSubqueryValue(*comparison.right);
 	facts->tightest_frame_bound = HasDecideTag(comparison.alias, FRAME_TIGHTEST_BOUND_TAG);
 	facts->origin = clause.origin;
 	if (comparison.type == ExpressionType::COMPARE_NOTEQUAL) {
@@ -869,7 +871,7 @@ private:
 			Gates(index, scope.when.get());
 		}
 		node.body = Lower(index, *row->left);
-		node.rhs = Lower(index, *row->right);
+		node.rhs = Lower(index, *row->right, canonical->query_wide_bound);
 		node.facts->rhs_expr = node.rhs->Copy();
 		idx_t abs_function = DConstants::INVALID_INDEX;
 		if (is_abs_envelope) {
@@ -1033,8 +1035,8 @@ private:
 			}
 			return lowered;
 		}
-		carried = carried || IsDecideQueryWideValue(expression) || IsDecideQueryWideBound(expression) ||
-		          IsDecideValue(expression, DecideValueKind::BOUND_REDUCER);
+		carried =
+		    carried || IsDecideQueryWideValue(expression) || IsDecideValue(expression, DecideValueKind::BOUND_REDUCER);
 		auto record = FindRecord(expression);
 		if (record != DConstants::INVALID_INDEX) {
 			return Read(owner, Record(record), expression.return_type, expression.GetAlias());

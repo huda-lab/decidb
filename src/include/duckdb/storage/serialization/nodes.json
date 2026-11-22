@@ -1475,6 +1475,12 @@
         "name": "group_key",
         "type": "idx_t",
         "default": "DConstants::INVALID_INDEX"
+      },
+      {
+        "id": 117,
+        "name": "query_wide_bound",
+        "type": "bool",
+        "default": "false"
       }
     ],
     "pointer_type": "none"

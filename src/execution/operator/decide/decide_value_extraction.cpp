@@ -317,23 +317,6 @@ idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t
 	return count;
 }
 
-//! True when a bound contains a flattened scalar-subquery value. Its bound alias is
-//! internal planning metadata (`SUBQUERY` plus a DECIDE tag), not SQL the user can edit.
-//! Mixed data/subquery bounds therefore use the evaluated numeric fallback instead of
-//! leaking an internal placeholder into a diagnostic suggestion.
-static bool ContainsScalarSubqueryProvenance(const Expression &expr) {
-	if (IsDecideSubqueryValue(expr)) {
-		return true;
-	}
-	bool found = false;
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		if (!found) {
-			found = ContainsScalarSubqueryProvenance(child);
-		}
-	});
-	return found;
-}
-
 EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constraint, idx_t repair_group_id,
                                                   const std::function<idx_t(const DecideTerm &)> &read_variable) {
 	EvaluatedConstraint evaluated;
@@ -379,13 +362,11 @@ bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, bool diag
 	// Canonicalization classifies the complete rebuilt bound. This is what
 	// keeps forward/reversed subquery spellings and arithmetic over query-wide
 	// values equivalent without re-deciding shape in the physical layer.
-	evaluated.provenance.shape =
-	    IsDecideQueryWideBound(*constraint.rhs_expr) ? ElasticShape::SHARED_SCALAR : ElasticShape::PER_ROW_DATA;
+	evaluated.provenance.shape = constraint.query_wide_bound ? ElasticShape::SHARED_SCALAR : ElasticShape::PER_ROW_DATA;
 	// Under DIAGNOSE, capture the RHS symbolic name (e.g. the data column `cap_col`) so query-mode
 	// infeasible diagnosis can render `x <= cap_col + delta`. Only meaningful for a
 	// genuine data RHS; a shared-scalar RHS reports the numeric knob instead.
-	if (diagnose && evaluated.provenance.shape != ElasticShape::SHARED_SCALAR &&
-	    !ContainsScalarSubqueryProvenance(*constraint.rhs_expr)) {
+	if (diagnose && evaluated.provenance.shape != ElasticShape::SHARED_SCALAR && !constraint.bound_holds_subquery) {
 		evaluated.provenance.rhs_label = RenderDecideSource(*constraint.rhs_expr, source_text, keyed_scopes, &keys);
 	}
 	evaluated.rhs_values.Reserve(num_rows);

@@ -37,6 +37,9 @@ public:
 	string function_name;
 	//! Whether or not the function is an operator, only used for rendering
 	bool is_operator;
+	//! DeciDB: the name the call was written under, when a DECIDE clause's binder renamed it to its primary
+	//! (BoundFunctionExpression::written_name); empty otherwise
+	string written_name;
 	//! List of arguments to the function
 	vector<unique_ptr<ParsedExpression>> children;
 	//! Whether or not the aggregate function is distinct, only used for aggregates

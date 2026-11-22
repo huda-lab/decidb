@@ -819,8 +819,6 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 			return result;
 		}
 		auto &bound_child = result.expression;
-		// BindExpression, unlike Bind, leaves the parsed call's alias behind: the name it was written under is kept.
-		KeepDecideWrittenName(*bound_child, *child_expr);
 		child_types.push_back(bound_child->return_type);
 		children.push_back(std::move(bound_child));
 	}
@@ -840,6 +838,7 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 	// reducers, optimizer markers, provenance). DuckDB's generic binder does not
 	// need them here, but dropping one would make the later DECIDE pass blind.
 	bound_aggregate->alias = aggr.alias;
+	SetDecideWrittenName(*bound_aggregate, aggr.written_name);
 	// Note: We are NOT storing this aggregate in a BoundSelectNode. We are returning it directly.
 	return BindResult(std::move(bound_aggregate));
 }

@@ -560,7 +560,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		// The two shapes are the same clause only where the bound is one value for the whole query: every row of a
 		// clause under no `per` then states the same row, and no class shows a second value. A bound that reads the
 		// rows keeps the value-link path, where each row and each variant holds its own.
-		const bool bound_is_query_wide = cmp.right->IsFoldable() || IsDecideQueryWideBound(*cmp.right);
+		const bool bound_is_query_wide = cmp.right->IsFoldable() || clause.query_wide_bound;
 		const bool has_nested_outer =
 		    direct_outer_is_sum && nested_outer_has_unfiltered_reducers && !scope.when && bound_is_query_wide &&
 		    scope.class_key == DecideReducerGroupKey(direct_outer->Cast<BoundAggregateExpression>());

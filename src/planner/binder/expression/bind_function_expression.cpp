@@ -133,6 +133,7 @@ BindResult ExpressionBinder::BindFunction(FunctionExpression &function, ScalarFu
 	}
 	if (result->GetExpressionType() == ExpressionType::BOUND_FUNCTION) {
 		auto &bound_function = result->Cast<BoundFunctionExpression>();
+		bound_function.written_name = function.written_name;
 		if (bound_function.function.stability == FunctionStability::CONSISTENT_WITHIN_QUERY) {
 			binder.SetAlwaysRequireRebind();
 		}

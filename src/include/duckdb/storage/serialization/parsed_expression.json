@@ -340,6 +340,11 @@
         "id": 208,
         "name": "catalog",
         "type": "string"
+      },
+      {
+        "id": 209,
+        "name": "written_name",
+        "type": "string"
       }
     ]
   },

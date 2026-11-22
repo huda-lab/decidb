@@ -108,15 +108,13 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 
 	SECTION("missing query-wide bound provenance breaks the fixed point") {
 		auto canonical = canonical_of(bound_on_x());
-		auto &comparison = canonical.body->Cast<BoundComparisonExpression>();
-		SetDecideQueryWideBound(*comparison.right, false);
+		canonical.query_wide_bound = false;
 		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(canonical));
 	}
 
 	SECTION("stale query-wide provenance on row data breaks the fixed point") {
 		auto invalid = Clause(Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO, DecideRef(0), DataRef()));
-		auto &comparison = invalid.body->Cast<BoundComparisonExpression>();
-		SetDecideQueryWideBound(*comparison.right, true);
+		invalid.query_wide_bound = true;
 		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(invalid));
 	}
 

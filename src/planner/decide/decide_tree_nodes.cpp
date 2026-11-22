@@ -12,6 +12,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/planner/expression/bound_decide_null_test_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 
 namespace duckdb {
 
@@ -210,29 +211,13 @@ unique_ptr<Expression> MakeDecideNullTest(unique_ptr<Expression> value) {
 //===--------------------------------------------------------------------===//
 // The name a call was written under
 //===--------------------------------------------------------------------===//
-void SetDecideWrittenName(BaseExpression &call, const string &name) {
+void SetDecideWrittenName(BoundAggregateExpression &call, const string &name) {
 	SetPayloadTag(call, WRITTEN_NAME_TAG_PREFIX, name);
 }
 
-void KeepDecideWrittenName(BaseExpression &to, const BaseExpression &from) {
-	string name;
-	if (ExtractDecideTagPayload(from.GetAlias(), WRITTEN_NAME_TAG_PREFIX, name) &&
-	    !HasDecideTag(to.GetAlias(), WRITTEN_NAME_TAG_PREFIX)) {
-		SetDecideWrittenName(to, name);
-	}
-}
-
-static string WrittenName(const Expression &call, const string &name) {
-	string written;
-	return ExtractDecideTagPayload(call.GetAlias(), WRITTEN_NAME_TAG_PREFIX, written) ? written : name;
-}
-
-string DecideWrittenName(const BoundFunctionExpression &call) {
-	return WrittenName(call, call.function.name);
-}
-
 string DecideWrittenName(const BoundAggregateExpression &call) {
-	return WrittenName(call, call.function.name);
+	string written;
+	return ExtractDecideTagPayload(call.GetAlias(), WRITTEN_NAME_TAG_PREFIX, written) ? written : call.function.name;
 }
 
 //===--------------------------------------------------------------------===//
@@ -270,12 +255,14 @@ bool IsDecideQueryWideValue(const Expression &expr) {
 	return HasDecideTag(expr.GetAlias(), QUERY_WIDE_VALUE_TAG);
 }
 
-bool IsDecideQueryWideBound(const Expression &bound) {
-	return HasDecideTag(bound.GetAlias(), QUERY_WIDE_BOUND_TAG);
-}
-
-void SetDecideQueryWideBound(Expression &bound, bool query_wide) {
-	SetTag(bound, QUERY_WIDE_BOUND_TAG, query_wide);
+bool DecideHoldsSubqueryValue(const Expression &expr) {
+	if (IsDecideSubqueryValue(expr)) {
+		return true;
+	}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](const Expression &child) { found = found || DecideHoldsSubqueryValue(child); });
+	return found;
 }
 
 } // namespace duckdb

@@ -509,14 +509,9 @@ idx_t DecideCanonicalizer::ScopeKeyOf(const Expression &expr, idx_t data_key) co
 	return key;
 }
 
-unique_ptr<Expression>
-DecideCanonicalizer::FinalizeBoundProvenance(unique_ptr<BoundComparisonExpression> comparison) const {
-	// Root classification describes the complete canonical bound, so never trust a
-	// copied value blindly: optimizer rewrites may have replaced children since the
-	// previous canonicalization. Each query-wide value inside it (IsDecideQueryWideValue) remains and is a semantic
-	// leaf from which the classification is recomputed.
-	SetDecideQueryWideBound(*comparison->right, IsQueryWideConstant(*comparison->right));
-	return std::move(comparison);
+bool DecideCanonicalizer::BoundIsQueryWide(const Expression &body) const {
+	return body.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON &&
+	       IsQueryWideConstant(*body.Cast<BoundComparisonExpression>().right);
 }
 
 //! The norm `aggregate` was written as, with its body, or nullptr when it was not one: a desugared norm keeps the
@@ -1126,6 +1121,7 @@ BoundDecideClause DecideCanonicalizer::CanonicalizeFunctionRow(const BoundDecide
 	auto desugared = DesugarNorms(*row.body);
 	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : *row.body);
 	result.body = CanonicalizeComparisonInternal(*written);
+	result.query_wide_bound = BoundIsQueryWide(*result.body);
 	result.shape = ContainsDecisionReducer(*result.body->Cast<BoundComparisonExpression>().left)
 	                   ? CanonicalConstraintClass::AGGREGATE
 	                   : CanonicalConstraintClass::PER_ROW;
@@ -1180,8 +1176,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 	// spelling. Rebuilding an already-canonical `2 * SUM(x)` reproduces it.
 	if (left_has_decision && !right_has_decision && !Has(left_atoms, Placement::RIGHT) && !HasScale(left_atoms) &&
 	    !IsSignedSpine(*cmp.left, left_atoms)) {
-		auto copy = cmp.Copy();
-		return FinalizeBoundProvenance(unique_ptr_cast<Expression, BoundComparisonExpression>(std::move(copy)));
+		return cmp.Copy();
 	}
 
 	// No decision content anywhere. Not a shape this pass owns; leave it exactly as
@@ -1243,12 +1238,10 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 	}
 
 	// K5: comparison tags are an out-of-band channel and must survive rebuilding.
-	// Bound provenance is recomputed semantically from the complete canonical RHS;
-	// it is never copied from whichever side happened to be the original RHS.
 	auto result = make_uniq<BoundComparisonExpression>(cmp.type, std::move(new_lhs), std::move(new_rhs));
 	result->SetAlias(cmp.GetAlias());
 	DecideReplaces(*result, cmp);
-	return FinalizeBoundProvenance(std::move(result));
+	return std::move(result);
 }
 
 //! Tags every reducer over decisions in `expr` that holds another reducer over decisions -- the outermost
@@ -1518,6 +1511,9 @@ void DecideCanonicalizer::VerifyCanonical(const BoundDecideClause &clause) const
 			                          "canonicalizing the clause again changes its structure, reducer scale, or tags",
 			                          *clause.body);
 		}
+		if (clause.query_wide_bound != BoundIsQueryWide(*clause.body)) {
+			CanonicalInvariantFailure("C6", "the clause's bound is not recorded as the value it is", *clause.body);
+		}
 		auto classified = clause.Copy();
 		ClassifyClause(classified);
 		if (classified.shape == CanonicalConstraintClass::VALUE && clause.shape != CanonicalConstraintClass::VALUE) {
@@ -1611,6 +1607,7 @@ void DecideCanonicalizer::CanonicalizeClauses(vector<BoundDecideClause> &clauses
 	for (auto &clause : canonical) {
 		const bool classified = clause.shape != CanonicalConstraintClass::INVALID;
 		clause.body = CanonicalizeClauseBody(*clause.body);
+		clause.query_wide_bound = BoundIsQueryWide(*clause.body);
 		if (!classified) {
 			ClassifyClause(clause);
 		}

@@ -32,6 +32,10 @@ public:
 	unique_ptr<FunctionData> bind_info;
 	//! Whether or not the function is an operator, only used for rendering
 	bool is_operator;
+	//! DeciDB: the name the call was written under, only used for rendering. DuckDB registers some functions under
+	//! several names (`abs` for `@`; `pow`, `power` and `^` for `**`), and the binder renames each such call in a
+	//! DECIDE clause to its primary, so every check matches one name. Empty for a call written under `function.name`.
+	string written_name;
 
 public:
 	bool IsVolatile() const override;

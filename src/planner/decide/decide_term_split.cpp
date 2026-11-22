@@ -39,7 +39,7 @@ unique_ptr<Expression> DecideRebindOperator(ClientContext &context, const string
 		throw InternalException("DECIDE failed to bind '%s': %s", name, error.Message());
 	}
 	if (!written_name.empty()) {
-		SetDecideWrittenName(*result, written_name);
+		result->Cast<BoundFunctionExpression>().written_name = written_name;
 	}
 	return result;
 }

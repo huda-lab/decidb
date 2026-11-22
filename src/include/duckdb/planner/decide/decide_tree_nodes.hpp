@@ -103,10 +103,10 @@ unique_ptr<Expression> MakeDecideNullTest(unique_ptr<Expression> value);
 //! `avg`), and the binder renames each such call in a DECIDE clause to its primary (RespellDecideAliases), so every
 //! check matches one name. The call keeps the name the user wrote, which a plan and a message print. Display only:
 //! two calls that differ in it are equal.
-void SetDecideWrittenName(BaseExpression &call, const string &name);
-//! Gives `to` the name `from` was written under, when `from` has one and `to` has none.
-void KeepDecideWrittenName(BaseExpression &to, const BaseExpression &from);
-string DecideWrittenName(const BoundFunctionExpression &call);
+void SetDecideWrittenName(BoundAggregateExpression &call, const string &name);
+inline const string &DecideWrittenName(const BoundFunctionExpression &call) {
+	return call.written_name.empty() ? call.function.name : call.written_name;
+}
 string DecideWrittenName(const BoundAggregateExpression &call);
 
 //===--------------------------------------------------------------------===//
@@ -128,14 +128,12 @@ void MarkDecideValue(Expression &value, DecideValueKind kind);
 bool IsDecideValue(const Expression &expr, DecideValueKind kind);
 //! Whether `expr` is a flattened scalar subquery, correlated or not.
 bool IsDecideSubqueryValue(const Expression &expr);
+//! Whether `expr` reads one anywhere. Its column is the planner's placeholder, not SQL the user can edit, so a
+//! message about a bound holding one states the evaluated number.
+bool DecideHoldsSubqueryValue(const Expression &expr);
 //! A computed value that is one value for the whole query: an uncorrelated subquery, and an objective's reducer over
 //! data with no `by`.
 void MarkDecideQueryWideValue(Expression &value);
 bool IsDecideQueryWideValue(const Expression &expr);
-
-//! Whether every component of a canonical comparison's bound is query-wide, as DecideCanonicalizer classified the
-//! complete bound. Physical evaluation reads the fact and does not decide the bound's shape again.
-bool IsDecideQueryWideBound(const Expression &bound);
-void SetDecideQueryWideBound(Expression &bound, bool query_wide);
 
 } // namespace duckdb

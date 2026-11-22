@@ -1678,6 +1678,7 @@ const StringUtil::EnumStringLiteral *GetExpressionClassValues() {
 		{ static_cast<uint32_t>(ExpressionClass::BETWEEN), "BETWEEN" },
 		{ static_cast<uint32_t>(ExpressionClass::LAMBDA_REF), "LAMBDA_REF" },
 		{ static_cast<uint32_t>(ExpressionClass::DECIDE_FRAME), "DECIDE_FRAME" },
+		{ static_cast<uint32_t>(ExpressionClass::DECIDE_REDUCER), "DECIDE_REDUCER" },
 		{ static_cast<uint32_t>(ExpressionClass::BOUND_AGGREGATE), "BOUND_AGGREGATE" },
 		{ static_cast<uint32_t>(ExpressionClass::BOUND_CASE), "BOUND_CASE" },
 		{ static_cast<uint32_t>(ExpressionClass::BOUND_CAST), "BOUND_CAST" },
@@ -1705,12 +1706,12 @@ const StringUtil::EnumStringLiteral *GetExpressionClassValues() {
 
 template<>
 const char* EnumUtil::ToChars<ExpressionClass>(ExpressionClass value) {
-	return StringUtil::EnumToString(GetExpressionClassValues(), 42, "ExpressionClass", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetExpressionClassValues(), 43, "ExpressionClass", static_cast<uint32_t>(value));
 }
 
 template<>
 ExpressionClass EnumUtil::FromString<ExpressionClass>(const char *value) {
-	return static_cast<ExpressionClass>(StringUtil::StringToEnum(GetExpressionClassValues(), 42, "ExpressionClass", value));
+	return static_cast<ExpressionClass>(StringUtil::StringToEnum(GetExpressionClassValues(), 43, "ExpressionClass", value));
 }
 
 const StringUtil::EnumStringLiteral *GetExpressionTypeValues() {
@@ -1776,6 +1777,7 @@ const StringUtil::EnumStringLiteral *GetExpressionTypeValues() {
 		{ static_cast<uint32_t>(ExpressionType::TABLE_REF), "TABLE_REF" },
 		{ static_cast<uint32_t>(ExpressionType::LAMBDA_REF), "LAMBDA_REF" },
 		{ static_cast<uint32_t>(ExpressionType::DECIDE_FRAME), "DECIDE_FRAME" },
+		{ static_cast<uint32_t>(ExpressionType::DECIDE_REDUCER), "DECIDE_REDUCER" },
 		{ static_cast<uint32_t>(ExpressionType::CAST), "CAST" },
 		{ static_cast<uint32_t>(ExpressionType::BOUND_REF), "BOUND_REF" },
 		{ static_cast<uint32_t>(ExpressionType::BOUND_COLUMN_REF), "BOUND_COLUMN_REF" },
@@ -1792,12 +1794,12 @@ const StringUtil::EnumStringLiteral *GetExpressionTypeValues() {
 
 template<>
 const char* EnumUtil::ToChars<ExpressionType>(ExpressionType value) {
-	return StringUtil::EnumToString(GetExpressionTypeValues(), 71, "ExpressionType", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetExpressionTypeValues(), 72, "ExpressionType", static_cast<uint32_t>(value));
 }
 
 template<>
 ExpressionType EnumUtil::FromString<ExpressionType>(const char *value) {
-	return static_cast<ExpressionType>(StringUtil::StringToEnum(GetExpressionTypeValues(), 71, "ExpressionType", value));
+	return static_cast<ExpressionType>(StringUtil::StringToEnum(GetExpressionTypeValues(), 72, "ExpressionType", value));
 }
 
 const StringUtil::EnumStringLiteral *GetExtensionABITypeValues() {

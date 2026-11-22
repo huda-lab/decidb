@@ -1,5 +1,4 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
-#include "duckdb/planner/decide/decide_tree_nodes.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/catalog/catalog_entry/scalar_function_catalog_entry.hpp"
 #include "duckdb/common/types/hash.hpp"
@@ -51,9 +50,8 @@ bool BoundFunctionExpression::CanThrow() const {
 }
 
 string BoundFunctionExpression::ToString() const {
-	// A DECIDE clause's call under its primary's name prints as the user wrote it.
-	return FunctionExpression::ToString<BoundFunctionExpression, Expression>(*this, string(), string(),
-	                                                                         DecideWrittenName(*this), is_operator);
+	return FunctionExpression::ToString<BoundFunctionExpression, Expression>(
+	    *this, string(), string(), written_name.empty() ? function.name : written_name, is_operator);
 }
 bool BoundFunctionExpression::PropagatesNullValues() const {
 	return function.null_handling == FunctionNullHandling::SPECIAL_HANDLING ? false
@@ -92,6 +90,7 @@ unique_ptr<Expression> BoundFunctionExpression::Copy() const {
 
 	auto copy = make_uniq<BoundFunctionExpression>(return_type, function, std::move(new_children),
 	                                               std::move(new_bind_info), is_operator);
+	copy->written_name = written_name;
 	copy->CopyProperties(*this);
 	return std::move(copy);
 }
@@ -106,6 +105,7 @@ void BoundFunctionExpression::Serialize(Serializer &serializer) const {
 	serializer.WriteProperty(201, "children", children);
 	FunctionSerializer::Serialize(serializer, function, bind_info.get());
 	serializer.WriteProperty(202, "is_operator", is_operator);
+	serializer.WritePropertyWithDefault(203, "written_name", written_name);
 }
 
 unique_ptr<Expression> BoundFunctionExpression::Deserialize(Deserializer &deserializer) {
@@ -117,6 +117,7 @@ unique_ptr<Expression> BoundFunctionExpression::Deserialize(Deserializer &deseri
 	auto function_return_type = entry.first.return_type;
 
 	auto is_operator = deserializer.ReadProperty<bool>(202, "is_operator");
+	auto written_name = deserializer.ReadPropertyWithDefault<string>(203, "written_name");
 
 	if (entry.first.bind_expression) {
 		// bind the function expression
@@ -133,6 +134,7 @@ unique_ptr<Expression> BoundFunctionExpression::Deserialize(Deserializer &deseri
 	auto result = make_uniq<BoundFunctionExpression>(std::move(function_return_type), std::move(entry.first),
 	                                                 std::move(children), std::move(entry.second));
 	result->is_operator = is_operator;
+	result->written_name = std::move(written_name);
 	if (result->return_type != return_type) {
 		// return type mismatch - push a cast
 		auto &context = deserializer.Get<ClientContext &>();

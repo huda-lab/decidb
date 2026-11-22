@@ -414,6 +414,13 @@ static unique_ptr<Expression> RewriteProduct(ClientContext &context, idx_t decid
 		alias = std::move(name);
 	}
 	rebuilt->SetAlias(std::move(alias));
+	if (node.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
+	    spelled->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &call = spelled->Cast<BoundFunctionExpression>();
+		if (call.written_name.empty()) {
+			call.written_name = node.Cast<BoundFunctionExpression>().written_name;
+		}
+	}
 	// The product is the written term respelled, equal to it for every input, so it points where the term was
 	// written, as the cast back does.
 	DecideReplaces(*spelled, node);

@@ -204,6 +204,10 @@ struct BoundDecideClause {
 	//! The aggregate shape: the `by` key the clause's decision reducers share (index into LogicalDecide::keys), which
 	//! groups its rows; INVALID_INDEX for the whole query and for every other shape.
 	idx_t group_key = DConstants::INVALID_INDEX;
+	//! Whether every component of the comparison's bound is one value for the whole query, as the canonicalizer
+	//! classifies the complete bound each time it canonicalizes the clause. Physical evaluation reads the fact and
+	//! does not decide the bound's shape again.
+	bool query_wide_bound = false;
 	//! What bound reduction (RewriteRhsAggregates) relied on for a bound that may differ between the rows of a group:
 	//! the clause's shape, since only the aggregate shape takes the group's tightest value, and the comparison's
 	//! direction, which says which value is the tightest. INVALID for any other bound. A rewrite may run after it, so
@@ -225,6 +229,7 @@ struct BoundDecideClause {
 		result.folded_clause_rows = folded_clause_rows;
 		result.shape = shape;
 		result.group_key = group_key;
+		result.query_wide_bound = query_wide_bound;
 		result.bound_read_shape = bound_read_shape;
 		result.bound_read_type = bound_read_type;
 		return result;
@@ -250,6 +255,10 @@ struct BoundDecideClause {
 struct DecideConstraint {
 	vector<DecideTerm> lhs_terms;    // All additive terms from LHS
 	unique_ptr<Expression> rhs_expr; // RHS expression (may contain aggregates)
+	//! The bound is one value for the whole query (BoundDecideClause::query_wide_bound).
+	bool query_wide_bound = false;
+	//! The bound reads a flattened scalar subquery, whose column no message quotes as SQL the user can edit.
+	bool bound_holds_subquery = false;
 	//! The bound reads a frame and may differ within a group, so each group's instance takes its tightest value (D85).
 	//! The comparison carries FRAME_TIGHTEST_BOUND_TAG; a rewrite rebuilds its bound, and lowering replaces a bare
 	//! frame.
