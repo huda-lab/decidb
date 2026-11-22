@@ -5,6 +5,7 @@
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
@@ -149,5 +150,25 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 	SECTION("optimizer Boolean placeholder is an allowed non-comparison leaf") {
 		auto placeholder = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
 		REQUIRE_NOTHROW(canonicalizer.VerifyCanonical(*placeholder));
+	}
+
+	auto sum_of = [&](duckdb::unique_ptr<Expression> left, duckdb::unique_ptr<Expression> right) {
+		duckdb::vector<duckdb::unique_ptr<Expression>> children;
+		children.push_back(std::move(left));
+		children.push_back(std::move(right));
+		return DecideRebindOperator(*con.context, "+", std::move(children));
+	};
+
+	SECTION("a data term beside the decisions stays in a canonical objective (D72)") {
+		// Binding `+` reads the catalog.
+		con.BeginTransaction();
+		double offset = 0;
+		auto canonical = canonicalizer.CanonicalizeObjective(*sum_of(DecideRef(0), DataRef()), offset);
+		REQUIRE_NOTHROW(canonicalizer.VerifyCanonicalObjective(*canonical));
+	}
+
+	SECTION("a constant left beside the decisions violates O2") {
+		con.BeginTransaction();
+		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonicalObjective(*sum_of(DecideRef(0), DoubleConstant(5))));
 	}
 }

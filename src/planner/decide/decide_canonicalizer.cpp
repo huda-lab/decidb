@@ -1580,17 +1580,6 @@ void DecideCanonicalizer::VerifyCanonicalObjectiveBody(const Expression &objecti
 			return;
 		}
 	}
-	// A decision-free objective has nothing to verify: the binder refuses it.
-	if (!ReferencesDecideVar(objective)) {
-		return;
-	}
-	vector<Atom> atoms;
-	Decompose(objective, 1, atoms, Clause::OBJECTIVE);
-	for (auto &atom : atoms) {
-		if (atom.placement != Placement::LEFT) {
-			CanonicalInvariantFailure("O2", "canonical objective retains a decision-free additive term", *atom.expr);
-		}
-	}
 }
 
 void DecideCanonicalizer::VerifyCanonicalObjective(const Expression &objective) const {
@@ -1606,7 +1595,8 @@ void DecideCanonicalizer::VerifyCanonicalObjective(const Expression &objective) 
 		}
 		// Re-canonicalizing a canonical objective must peel nothing: every additive
 		// constant was already folded into objective_constant_offset, so a nonzero
-		// residual means an offset would be counted twice.
+		// residual means an offset would be counted twice. A decision-free term that
+		// does not fold (a column, a data reducer, a subquery) stays a term (D72).
 		double residual_offset = 0.0;
 		auto fixed_point = CanonicalizeObjective(objective, residual_offset);
 		if (residual_offset != 0.0) {
