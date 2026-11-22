@@ -36,10 +36,11 @@ the clause the user wrote.
   the key table and one `KeyedScopeInfo`. `DecideVarScope` records `ROW`, `KEYED` or `GLOBAL` (query-wide); a keyed
   declaration's `DecideVarScopeInfo` also keeps the key as written (`declared_key`) for messages. It is one struct
   rather than parallel arrays so an auxiliary appended by the optimizer cannot desync a scope from its key.
-- **Constraints.** `DecideConstraintsBinder::BindClause` binds the body, then wraps it: `when` as a
-  conjunction tagged `WHEN_FILTER_TAG` (child 0 the constraint, child 1 the condition), `per` as one tagged
-  `PER_CLASS_TAG` (child 0 the constraint), tagged with its key's entry (`MakePerKeyTag`; no tag for `per ()`). The
-  wrapper takes the location of the `per`, where the parser kept the key's text, so a message quotes the key as written.
+- **Constraints.** `DecideConstraintsBinder::BindClause` binds the body into one record per row (`BoundDecideClause`)
+  and the scope into each record's `DecideClauseScope`: `when` as `scope.when`, `per` as `scope.per` with its key's
+  entry in `scope.class_key` (`INVALID_INDEX` for `per ()`). A scoped clause may hold a parenthesized `AND` of
+  comparisons, each of which takes the scope. The
+  record takes the location of the `per` (`per_location`), where the parser kept the key's text, so a message quotes the key as written.
 - **Reducers.** `DecideBinder::BindReducer` puts the inner `when` on `BoundAggregateExpression::filter` and tags
   an inner `per` with its key scope (`MakeQualifiedReducerTag`). It registers the `by` key in
   `LogicalDecide::keys` (one entry per key; keys compare as sets, a key holding a subquery by its text,
@@ -93,9 +94,9 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
   the clause as written.
 - **Variant signatures** (D70). `BuildConstraintSignatures` and `BuildObjectiveSignatures`
   (`decide_canonicalizer.cpp`) record, right after canonicalization, the signature of every scoped expression with a
-  field (`LogicalDecide::signatures`): each `per K:` clause, tagged on its wrapper (`__signature_<i>__`), each
+  field (`LogicalDecide::signatures`): each `per K:` clause, in its record (`scope.signature`), each
   relation-qualified reducer over decisions, given a keyed scope of its own (`KeyedScopeInfo::signature`), and the
-  objective (`objective_signature`). A field is a data value (the data terms of one additive context summed into one,
+  objective (its record's `scope.signature`). A field is a data value (the data terms of one additive context summed into one,
   D83), a decision by instance, or a reducer's `by` key; one the key holds by construction (`KeyHoldsField`) is none.
   Execution numbers the rows by key and fields (a set E's instances in the descent), so a class splits only where the
   data differs.
@@ -141,8 +142,8 @@ In `src/execution/operator/decide/` (the tree: `decide_descent.cpp`, `decide_tre
 
 ## Rendering
 
-`CollectDecideExpressionStrings` (`decide_source_provenance.cpp`) walks the wrappers, building the front qualifier
-from `WhenQualifier` and `PerClassQualifier` (`FrontQualifier`), which read the cut text. `RenderReducer` prints a
+`CollectDecideClauseLayers` (`decide_source_provenance.cpp`) loops over the clause records, building the front
+qualifier from each record's scope (`FrontQualifier`, `RenderDecidePerKey`), which read the cut text. `RenderReducer` prints a
 reducer's own scope and `by`, at every level of a nest. See [explain.md](explain.md).
 
 ## Scale

@@ -15,9 +15,30 @@ It contains no solver-specific structures and no execution mechanics.
 - `src/include/duckdb/planner/operator/decide/logical_decide.hpp` — the metadata contract
 
 **`BoundDecide`** (`logical_decide.hpp`) is the bound DECIDE part of a query: the decisions (`variables`,
-`is_boolean_var`, `variable_scopes`), `keys`, `keyed_scopes`, `frames`, `constraints` with their
-`constraint_sources`, `objective`, `sense`, `objective_constant_offset`, `source_text`, `signatures` and
-`objective_signature`. The binder fills `BoundSelectNode::decide`, `Binder::PlanDecide` canonicalizes it in place and
+`is_boolean_var`, `variable_scopes`), `keys`, `keyed_scopes`, `frames`, `clauses` with their
+`constraint_sources`, `objective`, `sense`, `objective_constant_offset`, `source_text` and `signatures`.
+
+`clauses` is a `vector<BoundDecideClause>` (`decide_tree_terms.hpp`), one record per row of SUCH THAT, in written
+order with the rows a rewrite adds after them; `objective` is one more record, with a null `body` when the query
+writes none. No expression joins the records: a pass loops over the list, and a rewrite touches the record it
+changes. A record holds
+
+| Field | What it is | Written by |
+|---|---|---|
+| `body` | the comparison, the bound `IN`, or the TRUE placeholder a rewrite leaves where a lifted clause stood; for the objective, the minimized expression | binder, canonicalizer, rewrites |
+| `scope` (`DecideClauseScope`) | `when`: the rows the row keeps; `per` and `class_key`: its `per K:`; `signature`: its variant signature (D70) | binder; `signature` by the canonicalizer |
+| `per_location` | where a written `per` stands in the query, from which its key is quoted | binder |
+| `origin` (`DecideRowOrigin`) | the source clause (an index into `constraint_sources`), the removal group, and whether a rewrite made the row for the objective | `InitializeConstraintSourceInfo`, `TagAtomicRemovalGroups`, rewrites |
+| `between` | which comparison of a `BETWEEN` the row is | binder |
+| `shape`, `group_key` | the row shape (`CanonicalConstraintClass`) and, in the aggregate shape, the `by` key its decision reducers share | canonicalizer, once (`ClassifyClause`); `RewriteScopedReducers` for the clause it leaves |
+| `structural`, `defines` | a row a rewrite added to define an auxiliary, and the auxiliary | rewrites |
+| `minmax_easy` | an easy-direction MIN or MAX that keeps its reducer | `RewriteMinMax` |
+| `folded_bound`, `folded_clause_rows` | a bound folded into the column's box, and whether a repair loosens it through the clause's rows | `FoldSingletonRows` |
+| `bound_read_shape`, `bound_read_type` | what bound reduction relied on (`../05_optimizer/done.md`) | `RewriteRhsAggregates` |
+
+A fact of a row is a field of its record, so no alias tag carries one and a copy of a comparison's alias copies none.
+The rows a function owns (an L0 indicator's links, an ABS's envelope rows, a body helper's definition) are records
+too, held by their function. The binder fills `BoundSelectNode::decide`, `Binder::PlanDecide` canonicalizes it in place and
 moves it whole into `LogicalDecide::bound`. The operator keeps what is its own beside it: `decide_index`, the
 objective's texts, `source_columns`, `optimized`, the solver choice and the tables the rewrites fill.
 `BoundDecide::EnumerateExpressions` is the one list of its expressions; subquery planning (`PlanSubqueries`) and
@@ -84,7 +105,7 @@ the outer subquery has been peeled. Ordinary clauses tolerate that because nothi
 reads their expressions in between.
 
 A DECIDE clause does not. Step 5 runs in this same `CreatePlan`, and
-canonicalization copies the constraint tree — and `BoundSubqueryExpression::Copy()`
+canonicalization copies the clauses — and `BoundSubqueryExpression::Copy()`
 throws by design. So the DECIDE block saves `is_outside_flattened`, forces it true
 across the two `PlanSubqueries` calls, and restores it. Layer 4's input contract is
 a subquery-free bound tree, so the flattening is not optional at this point.
@@ -100,26 +121,27 @@ because it is not itself inside a flattening. Pinned by
 
 ## 3. The two post-planning entry points
 
-After planning, `decide_constraints` and `decide_objective` may be modified only
-through these two methods. Assigning either field directly bypasses
+After planning, `bound.clauses` and `bound.objective` change only
+through these three methods. Appending a record or assigning the objective directly bypasses
 canonicalization and verification.
 
 ```cpp
-void LogicalDecide::AddConstraint(ClientContext &, unique_ptr<Expression>);
-void LogicalDecide::SetObjective(ClientContext &, unique_ptr<Expression>);
+void LogicalDecide::AddClause(ClientContext &, BoundDecideClause);
+void LogicalDecide::CanonicalizeClause(ClientContext &, BoundDecideClause &);
+void LogicalDecide::SetObjective(ClientContext &, BoundDecideClause);
 ```
 
-`AddConstraint` canonicalizes and verifies the incoming subtree, then ANDs it onto
-the existing tree. It verifies only the fresh subtree, not the accumulated tree,
-so repeated appends stay linear rather than quadratic.
+`AddClause` canonicalizes and verifies the incoming record, then appends it. `CanonicalizeClause` does the same for
+one record of the list a pass rewrote where it sits. Each reads one record, so a rewrite costs the clause it changes
+and never the list.
 
 `SetObjective` canonicalizes and verifies the replacement. Its peeled constant is
 **added** to `objective_constant_offset` rather than assigned, so the constant the
 user wrote survives every later optimizer rewrite. A null objective clears the
 field.
 
-Together with the call in `Binder::PlanDecide`, these are the only three places
-`DecideCanonicalizer` runs.
+Together with the call in `Binder::PlanDecide`, these are the only places
+`DecideCanonicalizer` canonicalizes a clause or the objective.
 
 ---
 
@@ -127,8 +149,8 @@ Together with the call in `Binder::PlanDecide`, these are the only three places
 
 Grouped by who writes it:
 
-**From the binder** — `decide_index`, `decide_variables`, `decide_constraints`,
-`written_sense`, `decide_objective`, `is_boolean_var`,
+**From the binder** — `decide_index`, `bound.variables`, `bound.clauses`,
+`written_sense`, `bound.objective`, `is_boolean_var`,
 `variable_scopes`, `keys`, `keyed_scopes`, `constraint_sources`. `keys` is the one
 key table (`DecideKey`): every key the clauses write -- a declaration's `per K:`, a
 reducer's own `per K'`, a reducer's `by (G)`, a
@@ -140,10 +162,9 @@ compares elements as a set). An entry holds the key as first written and its ele
 for one written on its own, which the written one keeps when both name it), sorted (columns
 by binding, then other expressions by text), and `written_as_by` when a `by` names it. The
 empty key (`per ()`, `by ()`) has no entry: it is `INVALID_INDEX`. A key holding
-a subquery is recognised by its text instead, since bound subqueries do not compare. Tags
-name entries: a reducer's `__group_key_<i>__` its `by` key, and a `PER_CLASS_TAG`
-wrapper's `__per_key_<i>__` its `per` key (`PerWrapperKey`; no tag is
-`per ()`). The two tags differ so a walker that reads `by` keys never reads a `per` key.
+a subquery is recognised by its text instead, since bound subqueries do not compare. A reducer's
+`__group_key_<i>__` tag names its `by` key, and a clause's `scope.class_key` its `per` key (`INVALID_INDEX` is
+`per ()`).
 `keyed_scopes` holds the key scopes, one per key that keys decisions or a reducer's own
 `per` (`KeyedScopeInfo`: the key, the decisions it keys). `variable_scopes` points each
 keyed decision at one, with its key as written (`declared_key`). A scope the optimizer
@@ -155,10 +176,10 @@ rows the link's clause keeps, so it shares no scope with a binder scope on the s
 **From the canonicalizer** — `objective_constant_offset`, and the variant signatures
 (D70): `signatures`, one `DecideSignature` per scoped expression with a field (the rows
 it reads, its `per` key as an index into `keys`, its fields, the text a plan names it by,
-its clause), indexed by a `per K:` wrapper's `__signature_<i>__` tag and by a reducer's
+its clause), indexed by a `per K:` clause's `scope.signature`, by a reducer's
 own scope (`KeyedScopeInfo::signature`, a scope the canonicalizer appends for a
-relation-qualified reducer over decisions whose body has a field), and
-`objective_signature`, the objective's or `INVALID_INDEX`. A `DecideSignatureField` is a
+relation-qualified reducer over decisions whose body has a field), and by the objective's
+`scope.signature`, `INVALID_INDEX` when it has no field. A `DecideSignatureField` is a
 data `value`, a `decision` (an index into `decide_variables`), a `by` key (an index
 into `keys`) or a `frame` (an index into `frames`, D82), with its text. `frames` holds one
 `DecideFrameSpec` per frame selector (`../../language/guide.md` §5.6, property 223),
@@ -337,8 +358,9 @@ exactly — which is why they are generated from one list, and why an id may be
 renumbered freely: a serialized logical plan lives for microseconds inside one
 process and is never persisted, so there is no older layout to stay readable for. A
 retired field stays in the list as a `"deleted": true` entry, for which the generated
-serializer writes nothing and the deserializer reads past (`ReadDeletedProperty`). `LogicalDecide` writes `signatures`
-at 223, `objective_signature` at 224 and `frames` at 225, `KeyedScopeInfo` its `signature` at 108.
+serializer writes nothing and the deserializer reads past (`ReadDeletedProperty`). `LogicalDecide` writes `clauses` at 202, `objective` at 204, `signatures`
+at 223 and `frames` at 225, `KeyedScopeInfo` its `signature` at 108; a `BoundDecideClause` (`nodes.json`) writes
+every field the binder and the canonicalizer fill.
 
 ### What exercises it
 
@@ -365,11 +387,11 @@ assertions select one complete build when verifier paths append equivalent copie
 ## 6. EXPLAIN
 
 `GetName()` returns `"DECIDE"`. `ParamsToString()` builds the structured plan
-output, using `CollectDecideExpressionStrings` to print every clause in one style
-(D32): each clause as typed, the `when` and `per` wrappers as one qualifier in front (`when c per K:`), and the
+output from the clause records (`CollectDecideClauseLayers`), printing every clause in one style
+(D32): each clause as typed, its `when` and `per` as one qualifier in front (`when c per K:`), and the
 defaults `per row:` and `by ()` not printed (`../../language/explain.md`, Rendering). A nested reducer prints as written,
 `outer(per k: inner(e) by (k))`, a `when` in front of it, each key as written: `RenderDecidePerKey` cuts the key from
-`DecideSourceText` at the `per` wrapper's location. A row the solver receives is left out where it reads as
+`DecideSourceText` at the record's `per_location`. A row the solver receives is left out where it reads as
 the clause above it. The renderers read the clause
 registries and the auxiliary labels (`aux_var_expressions`, with `decide_index`), so a decision
 column that stands for an expression -- an ABS auxiliary `abs(e)`, a product `(b * x)`,
@@ -377,8 +399,8 @@ an indicator `(x = v)`, a helper `sum(e) by (g)` -- prints that expression where
 appears, a later rewrite's label included. Each
 rewrite's account (`rewrite_accounts`, worded once by `RenderDecideRewriteAccount`:
 "`abs(e)` becomes a helper decision"; it names what the expression became, never the
-solver's construction) is printed under its clause before the rows it left; the objective's accounts, and the rows a rewrite added for the objective (tagged
-`OBJECTIVE_ROW_TAG`, returned by `CollectDecideClauseLayers` in `objective_rows`), print
+solver's construction) is printed under its clause before the rows it left; the objective's accounts, and the rows a rewrite added for the objective
+(`origin.objective`, returned by `CollectDecideClauseLayers` in `objective_rows`), print
 under the objective. A MIN or MAX prints as written in a clause and in the objective, its account under it; an AVG
 objective prints its sum under its account; an
 L0 link's constants print by the names the user writes or sets them with: an automatic bound
@@ -388,8 +410,7 @@ tolerance (`L0_TOLERANCE_TAG`) as `decide_l0_tolerance`. A rewrite's row prints 
 rows), drops a zero the rewrite wrote (`IsRewriteZero`: a numeric constant with no query location, so `0 + v`
 prints `v`), and prints a DOUBLE constant the rewrite wrote as a plain number (`RewriteNumberText`: `>= 0`).
 An `IN` under
-a scope keeps the qualifier of the wrappers above it in its source info
-(`ScopedInQualifier`), so a suggested edit pastes back with its scope; an infinity norm
+a scope keeps its clause's qualifier in its source info, so a suggested edit pastes back with its scope; an infinity norm
 echoes its order quoted (`norm(e, 'inf')`). The diagnosis label of a MIN/MAX helper
 (`ReducerValueLink::label`) is spelled as the plan prints the clause (`max(ship)`), and a `<>`'s binary is labelled by
 its clause as written (`QuoteWrittenClause`). A quoted span is parenthesized by how
@@ -429,7 +450,7 @@ location true is Clang's TreeTransform one (`../architecture.md` §3, `DecideRep
 alongside the `constraint_sources` registry that shares the same renderer. A registry entry (`ConstraintSourceInfo`)
 stores a clause once: its span (`location`, the query location of its comparison, a BETWEEN's shared by its two halves),
 the span of its canonical left side (`lhs_location`), the canonical text a plan shows (`canonical_lhs`, `canonical_cmp`,
-`canonical_rhs`) and `canonical_differs`, which the canonicalizer reports (`DecideCanonicalizer::CanonicalizeTree`). The
+`canonical_rhs`) and `canonical_differs`, which the canonicalizer reports (`DecideCanonicalizer::CanonicalizeClauses`). The
 clause as written is cut from `DecideSourceText` by `location` where a plan or a message needs it. A clause whose two
 sides both read a decision (`ship <= capacity * open`) keeps `source_lhs` and `source_rhs`, DeciDB's own rendering of
 the two sides before canonicalization merged them, because the clause a repair edits is no text of the query. The span

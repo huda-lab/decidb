@@ -182,7 +182,7 @@ The binder keeps no definition of degree. `DecideDegreeOf` (`decide_product_form
 the one place that refuses on it.
 
 **Volatile functions are refused** (`RefuseVolatile`, `decide_declarations_binder.cpp`),
-over the whole bound constraint tree, the objective and every `by` key: *"a volatile function is not
+over every bound clause, the objective and every `by` key: *"a volatile function is not
 allowed in a DECIDE clause"*, at the call. The check reads each function's own
 stability, since `IsVolatile()` is also true for every expression above a volatile one.
 Every later stage reads a clause more than once (the signatures, the rows, the
@@ -297,7 +297,7 @@ share one scope and one `KeyedMapping`.
 ## 4. Constraints
 
 `DecideConstraintsBinder` dispatches on the shape of each parsed constraint **without moving anything**.
-`IsSupportedComparison` gates the operator set (`=`, `<`, `<=`, `>`, `>=`, `<>`, plus `BETWEEN` via `BindBetween`). It
+`IsSupportedComparison` gates the operator set (`=`, `<`, `<=`, `>`, `>=`, `<>`; a `BETWEEN` is its two comparisons). It
 classifies no side: whether a side reads a decision, what it is made of, and which side holds the decisions are judged
 on the bound tree, after canonicalization, by the shape check (`../04_canonicalizer/done.md` §3.11). It does not flip
 `5 >= x` into `x <= 5` — the canonicalizer does that on the bound tree.
@@ -305,16 +305,18 @@ on the bound tree, after canonicalization, by the shape check (`../04_canonicali
 A constraint that is no comparison is refused at its node: a bare decision or frame as *"'x' is not a comparison"*, any
 other shape (`x IS NULL`, `x + 1`) as *"'x IS NULL' is not supported"* (Not implemented Error).
 
-Dedicated binding methods: `BindComparison`, `BindOperator`, `BindBetween`,
-`BindConjunction`, `BindClause` (§4a).
+Dedicated binding methods: `BindComparison`, `BindOperator`, `BindClause` (§4a).
 
-`BindConstraints` takes the constraints as a `vector<DecideClause>`, binds each with `BindClause` and joins the bound
-clauses with `AND`. `BindConjunction` refuses any other conjunction in a
-constraint position (`x <= cap OR x <= 1`, also under a scope): every later walk reads a
-conjunction as `AND`, and no layer builds the indicator an `OR` needs. Only a constraint
-list reaches `BindConjunction`: a conjunction inside an operand is data or refused (Data
-operands, below), and an `OR` in a `when` condition, a reducer's `when` or a subquery is
-data.
+`BindConstraints` takes the constraints as a `vector<DecideClause>` and returns a `vector<BoundDecideClause>`
+(`decide_tree_terms.hpp`), one record per row: the bound clauses are a list, and no expression joins them. A record
+holds the row's body (a comparison or a bound `IN`), its scope (`DecideClauseScope`: the bound `when`, the `per` and
+its key), where the `per` stands in the query, and which half of a `BETWEEN` the row is (`DecideBetweenHalf`). One
+written clause gives several records where its body holds several rows: `BindClause` reads the body's `AND`s, also
+parenthesized under a scope (`when c: (a AND b)`), and a `BETWEEN`'s two comparisons, and each row takes the clause's
+whole scope. An `OR` in a constraint position (`x <= cap OR x <= 1`, also under a scope) is refused: no layer builds
+the indicator it needs. A conjunction inside an operand is data or refused (Data operands, below), and an `OR` in a
+`when` condition, a reducer's `when` or a subquery is data. The objective is one more record
+(`DecideObjectiveBinder::BindObjective`), its origin marked as the objective's.
 
 Both clause binders bind a reducer through `DecideBinder::BindAggregate`, the base class both derive from, so the
 reducer rules of §3 are the same in a constraint and in the objective. A reducer's body is bound as it stands and
@@ -465,14 +467,14 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 
 | Written | Bound |
 |---|---|
-| `when c: C` | a WHEN wrapper (`WHEN_FILTER_TAG`) `[C, c]` |
-| `per K: C` | a `PER_CLASS_TAG` wrapper `[C]` tagged `__per_key_<i>__` with K's entry of the key table (no tag for `per ()`, which has no entry), its location the `per`'s, where the parser kept the key as written |
-| `when c per K: C` | a `PER_CLASS_TAG` wrapper around the `WHEN_FILTER_TAG` one `[C, c]`, tagged with K |
+| `when c: C` | the record of C with `scope.when` = c |
+| `per K: C` | the record of C with `scope.per` set and `scope.class_key` K's entry of the key table (`INVALID_INDEX` for `per ()`, which has no entry); `per_location` is the `per`'s, where the parser kept the key as written |
+| `when c per K: C` | the record of C with both |
 | `per row: C`, `agg(per row: e)`, `per row: x(TYPE)` | nothing: the default written out (`DecidePer::ROW`); a `per row:` clause binds to its body, which keeps its own query location |
 | `agg(...) by (G)` | the aggregate tagged `__group_key_<i>__`, naming `BoundSelectNode::decide.keys[i]`, whose `written_as_by` is set; `by ()` adds nothing |
 | `agg(when c: e)` | the aggregate's `filter` (§3) |
 | `agg(per K': e)` | a `__qualified_by_<i>__` tag on an exact key scope (§3) |
-| `MAXIMIZE when c: E` | a WHEN wrapper over the objective |
+| `MAXIMIZE when c: E` | the objective's record with `scope.when` = c |
 | `outer(per k: inner(e) by (k))` | a nested reducer like any other (D81): `outer` qualified by k, `inner` tagged with its `by` |
 
 - `BindClause` binds the body, the condition as data, the key through
@@ -480,8 +482,9 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
   its written name for messages). A `BETWEEN` binds to two comparisons, each under the whole scope;
   the second binds the condition again from its parsed text, since a bound subquery
   cannot be copied.
-- The key's text is not a tag: the `PER` wrapper takes the location of the scope (its `per`) and a message cuts the
-  key from the query there. The key table keeps the key as it was first written for a wrapper with no location.
+- The key's text is not stored: the record takes the location of the scope (its `per`, `per_location`) and a message
+  cuts the key from the query there. The key table keeps the key as it was first written for a row with no location,
+  one a rewrite made.
 - A reducer's `by` (`BindReducer`): a relation element stands for its stored columns (a column of that
   name wins); any other element binds as data. Equal key sets share one entry of the key
   table, with every other key of those elements: equal as bound expressions, or, for a key

@@ -22,27 +22,6 @@ order, one at a time. Rules for every one of them:
   `ExpressionIterator::EnumerateChildren`, a case in `LogicalOperatorVisitor::VisitExpression`, `IsFoldable()`
   false, and copy, equality, hash and generated serialization.
 
-## TREE-3 — Clause records
-
-- **Problem.** The constraints are one AND expression. A clause's scope is a tagged wrapper above it
-  (`decide_constraints_binder.cpp:216`), its origin a `__source_clause_<i>__` tag beside `constraint_sources`, and
-  its shape, easy MIN/MAX and folded bound are tags on the comparison. A rewrite adds a row by wrapping the whole
-  tree in a new AND (`logical_decide.cpp:271`). The canonicalizer walks the conjunction at 12 sites and the
-  rewrites reach clauses through `EnumerateBodies` (19 calls) and `decide_constraint_walk.hpp`.
-- **Change.** `vector<BoundDecideClause>` on `BoundDecide`, the objective one more clause (R22). A clause holds its
-  scope (`DecideClauseScope`), body, origin (`DecideRowOrigin`, the `BETWEEN` half, the role of a row a rewrite
-  adds and the helper it defines) and its facts: shape, grouping key and variant signature, set once by the
-  canonicalizer (R26; `RewriteScopedReducers` keeps its one write to the shape until TREE-6), easy MIN/MAX, folded
-  bound. `AddConstraint` appends a record. The norm pass and the AVG pass canonicalize the clauses they change and
-  stop sending every constraint through the canonicalizer again (`decide_rewrite_norm_in.cpp:147`,
-  `decide_rewrite_notequal_avg.cpp:84`); if a golden moves because a later pass relied on that second
-  canonicalization, stop and report which fact it relied on. Bound reduction records the direction and shape it
-  relied on, and a debug build checks that record in `RunPass` (`decide_optimizer.cpp:66`). `EXPLAIN` and
-  `DIAGNOSE` print from the records. `DecideEnclosingScope` goes.
-- **Done when.** Goldens identical, `EXPLAIN` text included; the DIAGNOSE tests, the serializer mode and the direct
-  matrix pass; the 14 tags design.md § 3.5 lists for TREE-3 are named nowhere; no `BoundConjunctionExpression`
-  joins clauses.
-
 ## TREE-4 — Reducer node and value node
 
 - **Problem.** A reducer is a `BoundAggregateExpression` whose alias carries its `by` key, its own `per`, a norm's
@@ -55,7 +34,6 @@ order, one at a time. Rules for every one of them:
   aggregate (as `DecideBoundAggregate` does, `logical_decide.hpp:226`), its written name, the count scale of a
   rewritten AVG, and its NULL tests apart from the written `when`. The binder builds it
   (`decide_binder.cpp:848`); `DecideReducerGroupKey` and its neighbours read fields.
-- **Needs.** TREE-3.
 - **Done when.** Goldens identical; the serializer mode passes; `make decide-test-debug` and the debug C++ tests
   report nothing; a C++ test of copy and equality for each class; the 15 tags design.md § 3.5 lists for TREE-4 are
   named nowhere.

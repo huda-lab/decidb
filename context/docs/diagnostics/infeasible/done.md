@@ -133,8 +133,8 @@ stage 1E:  E* = min Σ αᵢ s_edit    subject to D ≤ D*, fixed G
   and becomes no row of the solved model, so on its own the row-based engine could not
   see it. The pass records each folded bound as a `UserBoundSpec {decide_var_idx, sense,
   k, origin}` (a comparison → one spec, a
-  `BETWEEN` → two) and tags its comparison `SINGLETON_ROW_CLAUSE_ROWS_TAG` beside
-  `SINGLETON_ROW_BOUND_TAG`. Stage 05's linear form flattens such a clause aside
+  `BETWEEN` → two) and marks its clause `folded_clause_rows` beside
+  `folded_bound` (`BoundDecideClause`). Stage 05's linear form flattens such a clause aside
   (into its folded root, `DecideNode::folded`, one per recorded bound, which it
   asserts); execution evaluates those clauses under `DIAGNOSE` only, numbered after the
   lowered clauses, and only the repair model carries their rows: one per kept row, or one

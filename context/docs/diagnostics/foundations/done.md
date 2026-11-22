@@ -201,8 +201,8 @@ user-clause level instead of raw rows.
   a clause's `when c per K:` qualifier lives in the source registry alone (`ConstraintSourceInfo::qualifier`, built by
   `InitializeConstraintSourceInfo` in `decide_source_provenance.cpp`), and the
   diagnosis renderer reads it there through `FindConstraintSource`.
-- **Rigid rewrite rows are stamped at the source.** The optimizer tags structural
-  rewrites that re-enter constraint parsing with `STRUCTURAL_CONSTRAINT_TAG`, and
+- **Rigid rewrite rows are stamped at the source.** The optimizer marks the rows a
+  rewrite adds as structural (`BoundDecideClause::structural`), and
   `PhysicalDecide` stamps generated McCormick / ABS envelope rows as `STRUCTURAL`;
   generated `<>` mechanism rows as `USER_MECHANISM`; and every MIN/MAX link row as
   `STRUCTURAL`. The clause that reads a MIN/MAX helper is an ordinary user row.

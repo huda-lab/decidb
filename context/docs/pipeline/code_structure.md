@@ -27,7 +27,6 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `planner/decide/decide_product_form.hpp` | 04 | The one spelling of a product of decisions: `NormalizeProducts`, `ReadDecideProduct`, `BuildDecideProduct`, `DecideDegreeOf` — the one definition of polynomial degree |
 | `planner/decide/decide_shape_check.hpp` | 04 | `DecideShapeCheck` — the one place the algebra of a clause is judged |
 | `planner/decide/decide_term_split.hpp` | 04/05 | `DecideTermSplitter` — reads one atom's body in the one spelling as terms; never refuses |
-| `planner/decide/decide_constraint_walk.hpp` | 04 | Which children of a node are constraints: the predicates for the `when` and `per K:` wrappers, and the constraint-position walk every stage shares |
 | `planner/decide/decide_reducer_path.hpp` | 04 | `DecideReducerPath` — the path rule: the rows and key a nested reducer reads, shared by the canonicalizer, the bound-side rewrite and the value rewrite |
 | `planner/decide/decide_source_provenance.hpp` | 03 | Source capture and rendering |
 | `planner/decide/decide_cast_policy.hpp` | 04 | `UnwrapDecideCasts`, `StripCastsForIdentity`, `GetBareDecideColumnRef` |
@@ -67,7 +66,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `planner/expression_binder/decide/decide_declarations_binder.cpp` | 02 | DECIDE declarations and their scopes, the parsed-tree validators (`RefuseQualifiedDecisionReferences` among them), and the `SUCH THAT` / objective binds |
 | `planner/binder/query_node/bind_select_node.cpp` | 02 | Generic SELECT binding. Its DECIDE branch is one `DecideDeclarationsBinder::BindDeclarations()` call |
 | `planner/binder/query_node/plan_decide.cpp` | 03/04 | `Binder::PlanDecide`, which `CreatePlan(BoundSelectNode &)` calls after the `WHERE`: subquery flattening, correlation provenance, the user canonicalization call and the shape check |
-| `planner/operator/decide/logical_decide.cpp` | 03 | `AddConstraint`, `SetObjective`, EXPLAIN strings |
+| `planner/operator/decide/logical_decide.cpp` | 03 | `AddClause`, `CanonicalizeClause`, `SetObjective`, EXPLAIN strings |
 | `planner/operator/decide/logical_decide_diagnose.cpp` | 03 | The DIAGNOSE node: EXPLAIN strings and serialization |
 | `planner/decide/decide_canonicalizer.cpp` | 04 | The one shape boundary |
 | `planner/decide/decide_product_form.cpp` | 04 | `NormalizeProducts` and the readers of the product spelling, `DecideDegreeOf` |
@@ -144,9 +143,7 @@ classDiagram
     }
     class DecideConstraintsBinder {
         +BindComparison()
-        +BindBetween()
         +BindOperator()
-        +BindConjunction()
         +BindConstraints()
         +BindClause()
     }
@@ -170,17 +167,18 @@ methods.
 classDiagram
     class LogicalOperator
     class LogicalDecide {
-        +decide_constraints
-        +decide_objective
-        +AddConstraint()
+        +bound.clauses
+        +bound.objective
+        +AddClause()
+        +CanonicalizeClause()
         +SetObjective()
         +Serialize()
     }
     class DecideCanonicalizer {
-        +CanonicalizeTree()
+        +CanonicalizeClauses()
         +CanonicalizeObjective()
         +VerifyCanonical()
-        +ClassifyCanonicalComparison()
+        +ClassifyClause()
     }
     class DecideOptimizer {
         +Optimize()
@@ -208,7 +206,7 @@ classDiagram
 
     LogicalOperator <|-- LogicalDecide
     PhysicalOperator <|-- PhysicalDecide
-    LogicalDecide ..> DecideCanonicalizer : AddConstraint / SetObjective
+    LogicalDecide ..> DecideCanonicalizer : AddClause / SetObjective
     DecideOptimizer ..> LogicalDecide : rewrites
     LogicalDecide ..> PhysicalDecide : plan_decide.cpp
     PhysicalDecide ..> SolverInput : Finalize
@@ -230,9 +228,9 @@ classDiagram
 - **`BindReducer()`** — a reducer's own `when`, `per` and `by`.
 
 ### `src/planner/decide/decide_canonicalizer.cpp` — stage 04
-- **`CanonicalizeTree()` / `CanonicalizeObjective()`** — pure; a comparison is canonicalized inside the tree.
+- **`CanonicalizeClauses()` / `CanonicalizeObjective()`** — each clause record is canonicalized by itself.
 - **`Decompose()` / `PeelScale()` / `BuildAdditive()`** — shared by both clauses.
-- **`ClassifyScoped()` / `ClassifyCanonicalComparison()`** — `PER_ROW` / `AGGREGATE` / `VALUE` / `INVALID`.
+- **`ClassifyScoped()` / `ClassifyClause()`** — `PER_ROW` / `AGGREGATE` / `VALUE`, stored on the clause once.
 - **`VerifyCanonical()` / `VerifyCanonicalObjective()`** — non-mutating, throwing.
 
 ### `src/planner/decide/decide_product_form.cpp` — stage 04
@@ -246,28 +244,13 @@ classDiagram
   objective's body, judged once on the canonical spelling by `CheckClause()`; every refusal carries the node's
   location.
 
-### `src/include/duckdb/planner/decide/decide_constraint_walk.hpp` — stage 04
-Header-only, and the one place that answers "which children of this node are
-constraints". A bound constraint tree is AND-conjunctions plus wrappers — `when c:` and
-`per K:` — and a wrapper's trailing children are
-metadata — the `when` condition, the key columns — so descending into them would read
-a condition as another constraint.
-- **`IsWhenFilterWrapper()` / `IsPerClassWrapper()` / `IsConstraintWrapper()` /
-  `IsConstraintChild()`** — the predicates. Every site that walks a bound constraint tree
-  asks these, including the few that deliberately act differently on the answer:
-  singleton-row folding refuses to descend into a `when`. They bring their own descent,
-  not their own definition of a wrapper, so a
-  new wrapper kind is a one-line change here.
-- **`VisitConstraintTree()`** — parents before children, skipping metadata, with a
-  visitor that can stop the walk. Const and mutating overloads. Neither hands out
-  the owning `unique_ptr`: a pass that reseats a node is deciding tree shape and
-  belongs at stage 04's boundary, not inside a traversal.
-- **`ForEachConstraintLeaf()`** — one call per model row (a comparison, a bound
-  `IN`, a bare boolean decision, a placeholder from an earlier rewrite). The shape
-  most consumers want.
+### `src/include/duckdb/planner/decide/decide_tree_terms.hpp` — stages 02 to 05
+- **`BoundDecideClause`** — one row of SUCH THAT, or the objective: its body, its scope (`DecideClauseScope`), its
+  origin and the facts the canonicalizer and the rewrites record about it. The bound clauses are a
+  `vector<BoundDecideClause>`, so every stage that reads them loops over the list and reads fields.
 
 ### `src/planner/operator/decide/logical_decide.cpp` — stage 03
-- **`AddConstraint()` / `SetObjective()`** — the only post-planning entry points.
+- **`AddClause()` / `CanonicalizeClause()` / `SetObjective()`** — the only post-planning entry points.
 - Serialization is not here: `LogicalDecide::Serialize()` / `Deserialize()` are generated
   into `src/storage/serialization/serialize_logical_operator.cpp` from
   `storage/serialization/logical_operator.json`.
@@ -278,7 +261,7 @@ a condition as another constraint.
 - **`RenderDecideSource()`** — the one user-facing expression renderer, used by
   both EXPLAIN paths and by the diagnosis labels. It cuts a located node's span from
   `DecideSourceText` and reprints only a node with no location.
-- **`CollectDecideExpressionStrings()`** — the EXPLAIN walker, shared by the
+- **`CollectDecideClauseLayers()`** — the EXPLAIN printer of the clause records, shared by the
   logical and physical operators.
 - **`InitializeConstraintSourceInfo()` / `FinalizeConstraintSourceInfo()`** — the
   per-clause display registry, indexed by `source_clause_id`.

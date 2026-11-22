@@ -444,9 +444,9 @@ built (`decide_tree.cpp`). Three consumers read them:
 - `BuildSolverInput` re-opens each `UserBoundSpec`'s direction in the rigid box, which
   `OpenElasticColumnBox` then widens for a diagnosis (below).
 
-Flattening skips any comparison tagged `SINGLETON_ROW_BOUND_TAG`, so a
+Flattening skips any clause marked `folded_bound` (`BoundDecideClause`), so a
 singleton-row bound does not also produce `num_rows` redundant per-row model rows. The
-comparison itself stays in the tree, which is why `EXPLAIN` still renders the bound
+clause itself stays in the list, which is why `EXPLAIN` still renders the bound
 the user wrote. A recorded one is lowered into its
 root too, a folded one (`DecideNode::folded`): under DIAGNOSE the model emitter
 writes it after every other lowered clause (its repair group numbered after them) into
@@ -656,8 +656,8 @@ of whose reducers reads no row (p. 56, before the group's bound is read) and an 
 Everything that reads absence asks it. `DecideAbsence::At` answers whether the
 instance a row reads of a decision has a value. A keyed decision has none on a row in no class of its scope (its
 mapping's absent class), and so has a helper's group with no member. An auxiliary -- an ABS's, a body helper, an L0
-indicator, a product -- has none where the rows defining it (`DecideConstraint::defined_var`, the `DEFINES_TAG_PREFIX`
-stage 05 reads; a product's factors) read an instance with none (`DecideGlobalSinkState::absent_reads`). The model
+indicator, a product -- has none where the rows defining it (`DecideConstraint::defined_var`, from `BoundDecideClause::defines`;
+a product's factors) read an instance with none (`DecideGlobalSinkState::absent_reads`). The model
 emitter (`ReadAbsence`) resolves both in the order the definitions read each other -- a helper's members may read an
 auxiliary whose definition reads a helper made after it -- whatever order the rewrites numbered them in. Every reader
 reads that one mark: a comparison skips the instance, a helper drops the member, the objective drops the term. A term's
@@ -1331,8 +1331,8 @@ Each is a guard the type system or a stage boundary needs, or a path only a nond
   names by string (`PlannedSolverBackend`); a bound side that must be foldable (the optimizer asserts it); the solution
   index read from a backend (`GetData`); the sink state's `written_bound` fallback and its
   `bound.origin.source_clause_id < constraint_sources.size()` test (a recorded singleton-row bound indexes
-  `constraint_sources` through the source-clause tag the binder stamps on every written comparison and rewrites copy,
-  `CopyClauseProvenanceTags`; a bound with no source names the variable and its value).
+  `constraint_sources` through the source clause in its clause's origin, which the binder writes on every written row and rewrites
+  copy; a bound with no source names the variable and its value).
 - **Loops.** The settling loop's pass bound, and the fixed-point comparison that must read every value it writes.
 - **The OS.** `getrusage` failing, a process past 1 GiB, and Windows' zero peak memory.
 - **Nondeterministic runs.** A Ctrl-C after the solver's last check; the "Keep searching?" prompt and its

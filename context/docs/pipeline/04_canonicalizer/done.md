@@ -34,10 +34,10 @@ One boundary, three call sites, and there must not be a fourth:
 | Entry point | Covers |
 |---|---|
 | `Binder::CreatePlan`, after `PlanSubqueries` | Constraints **and the objective** as written by the user |
-| `LogicalDecide::AddConstraint` | Constraints synthesized by `DecideOptimizer` |
+| `LogicalDecide::AddClause` | Constraints synthesized by `DecideOptimizer` |
 | `LogicalDecide::SetObjective` | Objectives rewritten by `DecideOptimizer` |
 
-Assigning `decide_constraints` or `decide_objective` directly bypasses both
+Assigning `bound.clauses` or `bound.objective` directly bypasses both
 canonicalization and verification. The shape check runs only at the first entry point, on what the user wrote.
 
 ### The contract
@@ -113,7 +113,7 @@ DecideShapeCheck: the algebra, judged once on the canonical spelling
 LogicalDecide  ---> VerifyCanonical
         |
         v
-optimizer rewrites; generated rows return through AddConstraint / SetObjective
+optimizer rewrites; generated rows return through AddClause / SetObjective
         |
         v
 VerifyCanonical at physical-plan entry
@@ -128,8 +128,8 @@ physical extraction and runtime RHS/group evaluation
 | Binder | Resolve names, types, scopes, reducers, subquery correlation. Determines *whether* a comparison is a DECIDE constraint; does not flip or repartition it. Refuses binding errors and what only it can see; judges no algebra. |
 | Canonicalizer | Put every accepted bound comparison into §3 and reject unsupported mixtures once. |
 | Shape check | Judge the algebra of the canonical spelling: the vocabulary, exponents, divisors, `CASE` and degree (§3.11). Every refusal quotes the clause as written. |
-| Logical plan | Store canonical constraints. New ones enter only through `AddConstraint`. |
-| Optimizer | Assume canonical input; lower NORM/IN and select other formulations. Generated rows return through `AddConstraint`. |
+| Logical plan | Store canonical constraints. New ones enter only through `AddClause`. |
+| Optimizer | Assume canonical input; lower NORM/IN and select other formulations. Generated rows return through `AddClause`. |
 | Physical extraction | Read model terms from the left and the bound from the right. May assert the invariant; must not repair it. |
 | Runtime evaluation | Evaluate coefficients, `when` conditions, `per` classes, `by` groups, a reducer's own key, data reducers, row-varying bounds. Value operations, not shape decisions. |
 | Model builder | Accumulate coefficients and build solver-neutral rows. No SQL-expression canonicalization. |
@@ -155,7 +155,7 @@ a rendering job rather than a re-plumbing job.
 
 | ID | Rule |
 |---|---|
-| **C0** | Ordinary `AND` conjunctions recurse into every child. A `when` wrapper or a `per K:` wrapper (`PER_CLASS_TAG`) recurses into child 0 only; a `when` condition is copied unchanged. A wrapper holds one clause: a plain `AND` or a `when` inside a `when` under a wrapper is an `InternalException` in every build, since nothing builds either shape and each walker would read it differently. Non-comparison leaves are copied unchanged. The predicates and the walk live in `planner/decide/decide_constraint_walk.hpp` and are shared with every other stage that reads a bound constraint tree, so a new wrapper kind is defined once. |
+| **C0** | The clauses are a list of records (`BoundDecideClause`), each canonicalized by itself: its comparison is rebuilt, and its `when` is copied unchanged but for a norm of data, which is replaced by its definition. A body that is no comparison (a bound `IN`, a `TRUE` placeholder) is copied unchanged. |
 | **C1** | Each DECIDE comparison has at least one decision-bearing term. |
 | **C2** | The right side contains no decision-variable reference. |
 | **C3** | Every top-level decision-bearing additive term is on the left; every top-level decision-free additive term is on the right. Data inside a reducer body stays inside that reducer. |
@@ -227,7 +227,7 @@ times decision-bearing factors, each a linear form or an opaque term raised to a
 
 `NormalizeProducts` (`decide_product_form.cpp`) is a bottom-up rewrite rule over every decision-bearing `*` and
 whole-exponent `POWER` node, as DuckDB's `ArithmeticSimplificationRule` is over constant arithmetic. It runs after
-`DesugarNorms`, at the head of `CanonicalizeTree` and `CanonicalizeObjective`, so the
+`DesugarNorms`, at the head of `CanonicalizeClauses` and `CanonicalizeObjective`, so the
 additive pass below reads one spelling. The rule:
 
 - flattens `*`, the binder's casts over decisions, unary minus and `POWER(b, k)` for a whole `k`;
@@ -388,7 +388,7 @@ What may be a factor (`PeelScale`, the single place that judges it):
   `-b * SUM(x)` is the term `-(b * SUM(x))` (`PeelScale` takes the minus off, `WithoutDecisionNegation`). A minus over
   data stays in the factor, since DuckDB evaluates it and can raise where moving the sign would not. The comparison
   takes the VALUE shape; the value rewrite holds the reducer in a helper decision and the product `b * helper` is
-  linearized as every Boolean product is (stage 05). The objective is stamped `VALUE_REWRITE_TAG` when a reducer sits
+  linearized as every Boolean product is (stage 05). The objective's record takes the VALUE shape (`shape`) when a reducer sits
   under such a factor. A `BOOL` is never negative, so it keeps the push of the term it scales (`PlanTimeSignOf` reads it
   POSITIVE through `BooleanDecisions`);
 - an expression that holds a reducer (`sum(x) + 1` in `(sum(x) + 1) * max(x)`) — nowhere: `TryMatchScaledAggregate`
@@ -487,7 +487,7 @@ it. `UserFacingName` (this file) and `ScaleUserName`
 user wrote it, for an error message" helpers this boundary and stage 5 rely on;
 both call `StripDecideTags` before falling back to `ToString()`. This matters on
 a re-entry path: a constraint the optimizer rewrote (e.g. an AVG→SUM rewrite
-carrying `AVG_REWRITE_TAG`) returns through `AddConstraint` and is
+carrying `AVG_REWRITE_TAG`) returns through `AddClause` and is
 re-canonicalized, so a shape-violation error raised on that second pass could
 otherwise quote the internal tag instead of the column the user typed.
 `test/common/test_decidb_canonical_verifier.cpp` pins this by tagging a rejected
@@ -508,7 +508,7 @@ reason objectives get a boundary instead of their own normalizer.
 
 | ID | Rule | Shared with |
 |---|---|---|
-| **O0** | A `when` wrapper recurses into child 0 only. | C0, same predicate |
+| **O0** | The objective's `when` is its record's `scope.when`, copied as a clause's is. | C0 |
 | **O1** | The body reads a decision as a whole (the shape check refuses one that reads none, §3.11); a term of the spine may read none. | — |
 | **O2** | A decision-free additive term whose value is known before the query runs is folded into `objective_constant_offset`. It shifts the objective without moving `argmax`/`argmin`. Any other (a column, a data reducer, a subquery) stays a term: it is one value over the kept rows, which the model adds once, and one that differs between kept rows is a second objective (D72), which execution refuses. | — |
 | **O3** | The spine contains only `+`, binary `-`, unary `-`, and binder casts over decision algebra. Data casts are atoms. | C4, verbatim |
@@ -573,10 +573,10 @@ runs, does not change the shape: the clause is AGGREGATE or VALUE by the rows ab
 decision in either (stage 05). `PeelScale` lets a row-varying factor, or a `BOOL` decision, stay on a reducer as its
 scale (the comparison is then VALUE); any other decision is refused (§3.7). Refusals quote the query through
 `QuoteMessagesWith`: every column as written, a reducer with its
-scopes and `by`. `ClassifyCanonicalComparison` maps the shape onto
-`CanonicalConstraintClass` (`ROWS` is `PER_ROW`; `UNSUPPORTED`, or a decision on the
-bound side, is `INVALID`), so the linear form, the validation in `AddConstraint` and the
-debug verifier all read one classification; a VALUE comparison reaching the linear form
+scopes and `by`. `ClassifyClause` writes the shape on the clause as a
+`CanonicalConstraintClass` (`ROWS` is `PER_ROW`; `UNSUPPORTED` is refused; a body that is no comparison keeps
+`INVALID`, no shape), so the linear form, direct solve and the bound-side rewrite all read one
+classification; a VALUE comparison reaching the linear form
 is an internal error (the rewrite did not run).
 
 A term beside the reducers is one value per group when its scope, the join of its
@@ -588,26 +588,29 @@ hold may take several values in a class, each a variant (D70). So `per D: sum(sh
 (D) <= D.cap * open`, with `open` declared `per D:`, is AGGREGATE: one row per depot with
 that depot's `open` column. Under `per D.depotID`, `D.cap` is not one of the key's
 elements, so the same link takes a helper per group and one row per variant. Execution counts the term once in each group's row (`CountOnce`, stage
-08). Only `CanonicalizeTree` sees the enclosing scope, so it decides the shape once and
-stamps it; the linear form, direct solve and the window rewrite read the stamp
-(`VALUE_REWRITE_TAG`, else AGGREGATE for a reducer on the decision side and PER_ROW for
-none) instead of classifying the bare comparison again.
+08). The shape is a fact of the written clause, decided with its scope: `CanonicalizeClauses` calls `ClassifyClause`
+once for a clause and stores the result (`BoundDecideClause::shape`), and a clause that goes through the
+canonicalizer again keeps it. The rewrites replace reducers by helpers, so classifying the comparison again after
+them gives another answer; the one pass that does replace a clause's reducers (`RewriteScopedReducers`, stage 05)
+calls `ClassifyClause` for the clause it leaves. Every reader reads the field.
 
-`CanonicalizeTree` stamps an aggregate-shape comparison with its `by` key
-(`__group_key_<i>__`) — the one grouping carrier after this stage, since later rewrites
-rebuild the reducers. A `per K:` wrapper over it stays, as over every shape
-(`IsPerClassWrapper`, a wrapper for every walker): one row per `by` group already stands
+An aggregate-shape clause stores the `by` key its decision reducers share (`BoundDecideClause::group_key`), the
+one grouping carrier after this stage, since later rewrites rebuild the reducers. Its `per K:` stays, as on
+every shape: one row per `by` group already stands
 for every class and variant, whose constraints differ only in their bound, which the
-group's tightest bound covers (`=` refuses two), so the wrapper adds no row; it names the classes each group's row stands for, which the linear
-form reads as the clause's class key and a diagnosis reports one by one (D28). A
-VALUE comparison is stamped `VALUE_REWRITE_TAG`, which the rewrite reads and removes.
+group's tightest bound covers (`=` refuses two), so the `per` adds no row; it names the classes each group's row stands for, which the linear
+form reads as the clause's class key and a diagnosis reports one by one (D28).
+
+A row a function owns (an ABS envelope, an L0 link, a body definition) is canonicalized when the tree reads it
+(`CanonicalizeFunctionRow`): no scope decides its shape and no value rewrite follows, so its shape is read off the
+row, aggregate where a decision reducer stands on its decision side.
 
 ### 3.11 The shape check
 
 `DecideShapeCheck` (`decide_shape_check.cpp`) is the one place the algebra of a clause is judged. It is the
 semantic-analysis pass of a compiler front end: the parser has refused syntax and the binder has refused what only it
 sees (`../02_binder/done.md` §2), and what remains is whether the model has a reading for each term. It runs in
-`Binder::CreatePlan` right after canonicalization, the constraints' after `CanonicalizeTree` and the objective's after
+`Binder::CreatePlan` right after canonicalization, the constraints' after `CanonicalizeClauses` and the objective's after
 `CanonicalizeObjective`, and before frame placement, the signatures and `VerifyCanonical`. It reads the one spelling of
 §3.3b, so a shape has one reading whichever way the user wrote it, and it runs only on what the user wrote. A
 comparison the canonicalizer rebuilds (a side swap, a moved term) keeps the location of the one it replaces, so a
@@ -690,8 +693,8 @@ The split is not made: the value route refuses the shape (`RefuseFractionalStep`
 
 ## 4. Classification and verification
 
-`ClassifyCanonicalComparison` returns `PER_ROW`, `AGGREGATE`, `VALUE` (a comparison
-the value rewrite turns into `PER_ROW`, §3.10) or `INVALID`, from `ClassifyScoped`.
+A clause's `shape` is `PER_ROW`, `AGGREGATE` or `VALUE` (a comparison
+the value rewrite turns into `PER_ROW`, §3.10), from `ClassifyScoped`; `INVALID` is a body with no shape.
 Aggregate rows admit only reducer-rooted decision terms and query-wide top-level terms:
 a term one value per group may sit beside the reducers (§3.10), while one finer than the
 `by` key makes the comparison VALUE. Physical extraction consumes this
@@ -704,30 +707,29 @@ Foldable decision-free bounds that evaluate to NULL are rejected here, with
 `COALESCE(...)` guidance, including rebuilt and reversed forms.
 
 `VerifyCanonical` / `VerifyCanonicalObjective` check the observable invariant
-without mutating the tree. They perform explicit wrapper, decision-side,
-additive-placement and homogeneity checks, then canonicalize a copy and compare
+without mutating the clause. They perform explicit decision-side and
+additive-placement checks, then canonicalize a copy and compare
 with an ordered, **alias-aware** comparison — required because DuckDB's ordinary
 `Expression::Equals` ignores the field carrying DECIDE structural and provenance
-tags.
+tags. A clause that classifies as VALUE and is not recorded in that shape fails too.
 
-They throw `InternalException`: past this boundary a non-canonical tree is an
+They throw `InternalException`: past this boundary a non-canonical clause is an
 engine bug, not user input. Unsupported user syntax has already failed earlier,
 through binder/planning validation, or fails in the shape check (§3.11), which runs before verification.
 Non-comparison leaves stay legal so the optimizer's `TRUE` placeholders for the clauses it lifts out (an `IN`
 clause) and for a helper's definition row satisfy C0.
 
 Verification runs at three points: immediately after user canonicalization, on
-each freshly canonicalized subtree entering `AddConstraint` / `SetObjective`, and
-on the complete tree at `PhysicalPlanGenerator::CreatePlan(LogicalDecide &)` after
+each freshly canonicalized record entering `AddClause`, `CanonicalizeClause` or `SetObjective`, and
+on every clause at `PhysicalPlanGenerator::CreatePlan(LogicalDecide &)` after
 all optimizer rewriting.
 
 `VerifyCanonical` / `VerifyCanonicalObjective` are **debug-only**, the same idiom
 as `LogicalOperator::Verify`: the body — including the re-canonicalize-and-compare
-fixed-point check — is wrapped in `#ifdef DEBUG`, so in release only the one-scope-per-clause
-test of C0 (`VerifyOneScopePerClause`) remains. Call sites at all three points above call it unconditionally
+fixed-point check — is wrapped in `#ifdef DEBUG`, so in release it does nothing. Call sites at all three points above call it unconditionally
 regardless of build type. This exists because the check re-canonicalizes the
-whole tree a second time purely to assert idempotency, which is too expensive to
-pay on every DECIDE query once release is the target; `ValidateCanonicalTree`'s
+clause a second time purely to assert idempotency, which is too expensive to
+pay on every DECIDE query once release is the target; `ValidateCanonicalComparison`'s
 user-facing `BinderException`s (the shape refusal, a NULL bound) are a separate
 function and are **not** gated — those stay in release. Build `debug` or
 `relassert` to exercise the invariant check; `test/common/test_decidb_canonical_verifier.cpp`
@@ -736,11 +738,11 @@ pins both the debug-mode throwing behavior and the release-mode no-op via a
 
 ### Variant signatures
 
-`BuildConstraintSignatures` and `BuildObjectiveSignatures` read the canonical tree, called
-once by `Binder::CreatePlan` right after `CanonicalizeTree` and `CanonicalizeObjective` (a
-rewrite's clause entering through `AddConstraint` builds none). They record what each
+`BuildConstraintSignatures` and `BuildObjectiveSignatures` read the canonical clauses, called
+once by `Binder::CreatePlan` right after `CanonicalizeClauses` and `CanonicalizeObjective` (a
+rewrite's clause entering through `AddClause` builds none). They record what each
 scoped expression reads once per class (D70, [`../../language/guide.md`](../../language/guide.md)
-§7.1): a `per K:` clause (its wrapper tagged `__signature_<i>__`), a relation-qualified
+§7.1): a `per K:` clause (its `scope.signature`), a relation-qualified
 reducer over decisions (given a keyed scope of its own on the same key, its tag retargeted
 to it, `KeyedScopeInfo::signature`), and the objective. `CollectSignatureFields` walks the
 expression: a reducer is its `by` key (`BY_KEY`) and its body a scoped expression of its
@@ -830,7 +832,7 @@ reinterprets a parsed expression tree.
 - A pass that builds a product of decisions uses `BuildDecideProduct`, so what it builds is already in the
   one spelling.
 - Any new optimizer pass that mutates a constraint in place must go through
-  `AddConstraint` rather than editing the tree. C2 is enforced by a throwing check
+  `AddClause` rather than editing the tree. C2 is enforced by a throwing check
   at physical extraction, so a rewrite that breaks it fails loudly — but it does
   fail.
 
@@ -848,7 +850,7 @@ The focused files below, then `./test/decide/golden/check.sh` (diffs `baseline.g
 | `test_canonicalize_sign.py` | A term that crosses the relation is classified by its sign: a negated ABS needs Big-M; a negated MIN/MAX reducer, a leading negative one and a subtracted objective reducer answer as the oracle's model |
 | `test_canonicalize_side_agnostic.py` | Correlated bounds on both sides |
 | `test_canonicalize_homogeneity.py` | A query-wide decision beside a reducer (aggregate shape, under `per` too); a per-row or keyed decision, or a row-varying coefficient on a query-wide one, beside a reducer answered per row |
-| `test_canonicalize_idempotence.py` | Byte-identical emitted models for non-canonical and fixed-point spellings — side swaps, exact casts, scales, `when` and `per` wrappers |
+| `test_canonicalize_idempotence.py` | Byte-identical emitted models for non-canonical and fixed-point spellings — side swaps, exact casts, scales, `when` and `per` scopes |
 | `test_query_diagnostics_relation.py` | Forward and reversed uncorrelated subquery bounds emit the same editable SQL suggestion |
 | `test_product_normal_form.py` | Each spelling of a square answers as the oracle's model of the polynomial it denotes, on Gurobi and (for a constant coefficient) HiGHS; `POWER(x, 0)` and `POWER(x, 1)`; a product of `BOOL` decisions; each shape-check refusal quotes the clause and points at the term; a data weight on a square is refused on HiGHS by the gate |
 | `test_bilinear.py` (`TestFactoredProductDegree`) | `SUM((x + y) * z)` is accepted in both clauses |

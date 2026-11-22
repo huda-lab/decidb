@@ -21,9 +21,16 @@ decides shape, parses SQL, executes relations, or calls a solver.
 - `src/include/duckdb/optimizer/decide/decide_linear_form.hpp`
 - `src/include/duckdb/planner/decide/decide_tree_terms.hpp` — the term records, held in the tree's nodes
 
-Every constraint it emits re-enters through `LogicalDecide::AddConstraint` and every objective through
-`LogicalDecide::SetObjective`, both of which re-canonicalize and re-verify. A pass that only adds tags no
-canonicalization reads (the bilinear rewrite, `RewriteAbs`) reinstalls nothing.
+**A pass canonicalizes the clauses and the objective it changes, and no other.** A clause it adds enters through
+`LogicalDecide::AddClause`, one it rewrote where it sits goes back through `LogicalDecide::CanonicalizeClause`, and
+an objective it rewrote through `LogicalDecide::SetObjective`; each re-canonicalizes and re-verifies that one record.
+The canonicalizer's refusals are raised there, at the pass that made the shape: `RewriteRhsAggregates` replaces a
+data reducer by a column of its value, so the objective it changed is canonicalized at once, and a factor that
+varies per row on an objective reducer is refused then. `RewriteNorm` and `RewriteAvgToSum` canonicalize the clauses
+they lowered a marker or an AVG in; `RewriteScopedReducers` each clause it put a helper in. A pass whose output is
+canonical as it writes it (a range's helper, a product's tag, the relation of an easy extremum's other half, an ABS's
+tag, a folded bound's mark) reinstalls nothing. A debug build verifies every clause when the plan is made
+(`VerifyCanonical`).
 
 ---
 
@@ -198,6 +205,12 @@ in a bound of a clause over groups it stays only where it has one value per grou
 that needs its group's tightest value (D85) has its comparison tagged `FRAME_TIGHTEST_BOUND_TAG`, which survives the
 rebuilds that give a bound a new node, and execution takes that value from the rows it reads (stage 08), in the groups
 that hold an instance. A column's tightest value is the group's MIN or MAX in a side table.
+Bound reduction relies on two facts a later pass can change: the clause's shape, since only the aggregate shape takes
+the group's tightest value, and the comparison's direction, which says which value is the tightest. For a bound that
+may differ within a group it records both on the clause (`bound_read_shape`, `bound_read_type`), and a debug build
+checks them after every pass, in the one place every pass runs (`RunPass`, `DecideOptimizer::VerifyBoundReads`): a
+clause read in another shape is not in the aggregate shape, and a clause read in the aggregate shape keeps its
+relation unless that was `=`, whose bound is the tightest of both directions. Nothing else is verified this way.
 An `=` bound's checks are scope checks made before any rule runs: its NaN check, then its `=` check (two values in
 one group, `AddDisagreementCheck`): one check per `by` group, whose message names the group and points at the bound
 (R15), made before any rule can; the NaN check stands with it, so every path raises the same error of the two. Every other data bound's NaN check is a scope check too. A check copies the value it reads with its tags (`NanMessage`,
@@ -241,13 +254,13 @@ The `optimizer.decide` span of `DECIDB_PROFILE=1` times the whole block.
 **Every pass that reads bodies reaches them through one enumerator** (`LogicalDecide::EnumerateBodies`, the Visitor
 pattern, as DuckDB's `LogicalOperatorVisitor::EnumerateExpressions` enumerates a node's expressions). It has one fixed
 case per container, in the order objective, clauses, definitions, value links, L0 links, and hands the callback a body
-(`DecideOwnedBody`) with its expression, its owner, the push its owner gives it, the rows it is read on, the alias of
-its source clause and its enclosing scope. A pass filters by owner in its callback and loops over no container. A new
+(`DecideOwnedBody`) with its expression, its owner, the push its owner gives it, the rows it is read on and, for a
+clause, an L0 link or the objective, its record (`BoundDecideClause`), which holds its origin and scope. A pass filters by owner in its callback and loops over no container. A new
 container of bodies is added in the enumerator and nowhere else. The order is the order the columns a pass adds stand
 in, which the model dumps pin. Four walks stay outside it, each for its own reason: `FindBoxedHelpers` walks the helper
 graph by binding, not by body; folding looks a link up by its helper; the tree-side loops of the linear form and the
-solver gate read the tree, not the containers; and `RewriteInDomain` recurses on its own, because it rewrites a `when
-c:` wrapper into TRUE, which a walk over leaf bodies cannot.
+solver gate read the tree, not the containers; and `RewriteInDomain`, `RewriteMinMax` and folding loop over the clause records, because they read or write a
+record's fields and not only its body.
 
 A later stage-05 lowering, `LowerDecideTree`, belongs to this stage but is
 **triggered during physical planning** — see §1a. It lowers each `ReducerValueLink`'s body
@@ -285,29 +298,27 @@ binder it would mean reconstructing bound nodes by hand from another node's
 `FunctionData`, which does not fail on a type mismatch — it reinterprets the
 children's physical representation and returns a plausible wrong number.
 
-**A clause's scope** (stage 04 §3.10). Every walk over a constraint tree reads the wrappers
-the binder nests around a comparison through one borrowed view, `DecideEnclosingScope`, and
-one step, `EnterDecideScope` (`decide_constraint_walk.hpp`); a clause that leaves the tree
-owns its scope as a `DecideClauseScope` built from the view. A `when c:` wrapper
-(`WHEN_FILTER_TAG`) gives `scope.when`. A `per K:` wrapper (`PER_CLASS_TAG`, kept over every
-shape) gives `class_key`, the wrapper's key (`PerWrapperKey`; no elements for `per ()`), and `scope.per`: `ONE_ROW_PER_CLASS` over the
-per-row shape, `NAMES_CLASSES` over the aggregate shape and an easy MIN/MAX, whose rows are
+**A clause's scope** (stage 04 §3.10). A clause's record owns its scope as a `DecideClauseScope`, which the
+lowered clause (`DecideConstraint`) copies (`ReadDecideClauseFacts`). `scope.when` is its `when c:`. A `per K:`
+(kept on every shape) gives `class_key`, its key (`INVALID_INDEX` for `per ()`), and `scope.per`: the record holds
+`NAMES_CLASSES`, and the tree makes it `ONE_ROW_PER_CLASS` over the
+per-row shape, leaving `NAMES_CLASSES` over the aggregate shape and an easy MIN/MAX, whose rows are
 their `by` groups and their members and only stand for the classes (D28). The
-comparison's `by` stamp gives `group_key`, an index into `LogicalDecide::keys`. An
-easy MIN/MAX (`MINMAX_EASY_REWRITE_TAG` on the comparison, its reducer kept:
+record's `group_key` is an index into `LogicalDecide::keys`. An
+easy MIN/MAX (`minmax_easy` on the record, its reducer kept:
 `was_minmax_easy`) extracts its body's terms with the reducer's `when` as their filter,
 one row per member (`ExtractEasyExtremumTerms`). The filter is attached once, after
 extraction, to every term the body produced — linear terms and product groups alike
 (`AttachReducerFilter`, shared with the aggregate shape) — rather than threaded through
 the extraction branches, where a branch that forgets it leaves one term unfiltered: stage
 08 then reads every kept row as a member, the rows the reducer's own `when` drops reach
-the model as `constant >= K`, and a feasible query is called infeasible. A comparison classified `INVALID`, or still in the VALUE shape, is
-an `InternalException`: stage 04 refuses the first and the value rewrite replaces the
+the model as `constant >= K`, and a feasible query is called infeasible. A comparison with no shape (`INVALID`), or still in the VALUE shape, is
+an `InternalException`: stage 04 classifies every clause and the value rewrite replaces the
 second. So is a term that holds a decision under anything but a bare reference
 (term extraction, `DecideLinearFormBuilder`): no rewrite lowered it, and reading it as its decision would drop the
 construct without a word.
 
-The objective's `when` wrapper gives `DecideObjective::when_condition`. An AVG term with a `by` key -- a
+The objective's `scope.when` gives `DecideObjective::when_condition`. An AVG term with a `by` key -- a
 `sum(per K: avg(e) by (G))` the value rewrite read in place -- carries it as `avg_group_key`, so execution divides each
 row by its `G` group's count; like terms merge only with the same one (`TermsAreLike`). A decision outside the
 objective's reducers — query-wide or not — is a `NONE` term, counted once at execution, and so is a product or a square
@@ -552,7 +563,7 @@ bodies (`FindBoxedHelpers`), count as boxed, and an ABS in any of those bodies t
 the helper itself; the exact encoding is what boxes it. A MIN or MAX pushed its cheap way (`MINIMIZE max(abs(e))`)
 states the envelope side alone, which bounds every member, so the plain envelope stands.
 
-The two envelope rows keep the clause's `when` (`ScopeHelperRow`), so they read only the
+The two envelope rows keep the clause's `when` (`MakeAbsRow`), so they read only the
 rows the clause keeps; the objective's keep the objective's `when`. The rows an ABS is read on are stored on its record,
 and `MakeAbsRow` applies them.
 
@@ -587,7 +598,7 @@ receives. L0 needs indicator variables, so it reaches this pass as a marker and 
 its Boolean indicator and exact forward/reverse links. Lowering swaps the marker for a
 `SUM` of indicators under any factor the canonicalizer peeled (`2 * norm(e, 0) <= 6`), so
 the pass detaches the objective and the constraints, lowers them, and reinstalls them
-through `SetObjective` and `AddConstraint`; an edit left where it sits would not be
+through `SetObjective` and `AddClause`; an edit left where it sits would not be
 canonical (C4/C6/C7). A desugarable marker reaching this pass is an internal error.
 
 **A marker is lowered wherever it stands.** `RewriteNorm` descends through every
@@ -612,8 +623,7 @@ and the `x >= min(domain)` tightening on the general encoding — evaluate each
 value with the cast policy's folder, so a written-out expression such as
 `x IN (1-3, 2)` qualifies exactly like the literal `x IN (-2, 2)` does. Neither
 affects correctness: the indicator encoding is exact with or without them. Every row
-the IN generates keeps the clause's `when`, as an L0 norm's links do (`EnterDecideScope` /
-`ScopeHelperRow` in `decide_optimizer.cpp`), and its `per K:` (`ScopeRowPerClause`), so a row the `when` drops,
+the IN generates keeps the clause's `when`, as an L0 norm's links do, and its `per K:` (`ScopeRowPerClause`, which copies both onto the row's record), so a row the `when` drops,
 or whose key is NULL and so in no class (guide §6.2), is never read. Such a row takes the signature of the fields
 it reads itself (D70), not the written clause's: over a data domain it reads per-row indicators, so it stays one
 per row, as its indicators are. The
@@ -623,10 +633,10 @@ scope, a query-wide value is query-wide, any other column is row data), and thei
 emitted once per instance of it (`ScopeRowPerInstance`: under `per K:` for a scope keyed by
 `K`, `per ()` for a query-wide one). `per g: x IN (1, 2)` over a keyed `x` and three rows in
 two classes is four indicators, not six; a data domain stays per row. They are
-structural (`MarkFormulationConstraint`): a repair never loosens one on its own, and a
+structural (`MakeFormulationRow`): a repair never loosens one on its own, and a
 DROP removes them with their clause, whose removal group (`origin.removal_group_id`) they carry. A row that defines
 an auxiliary standing for a value -- an ABS's envelope, a body helper's definition, an L0
-indicator's links -- also names it (`DEFINES_TAG_PREFIX`, read into
+indicator's links -- also names it (`BoundDecideClause::defines`, read into
 `DecideConstraint::defined_var`), so stage 08 gives the auxiliary no value where the row reads
 an instance with none (D88).
 
@@ -718,12 +728,12 @@ native MIN/MAX: its rows are quadratic, which the model-class gate refuses on Hi
 nested under a MIN or MAX (`max(per g: sum(power(x - t, 2)) by (g))`), which the value rewrite then holds in a
 helper over the defined members; a SUM beside a MIN or MAX stays on the
 objective's own quadratic path. A clause `RewriteMinMax` tagged
-easy (`max(power(x, 2)) <= 16`, `MINMAX_EASY_REWRITE_TAG`) is left alone: it bounds each member, which is one
+easy (`max(power(x, 2)) <= 16`, `BoundDecideClause::minmax_easy`) is left alone: it bounds each member, which is one
 quadratic row per member with no helper.
 
 The row holds on the rows the reducer reads: the clause's `when` and the reducer's own
-filter (`max(when g = 'A': power(x, 2))`), through `ScopeHelperRow`. It is a structural
-row (`MarkFormulationConstraint` with no clause), rigid under DIAGNOSE. A row whose body reads a NULL is
+filter (`max(when g = 'A': power(x, 2))`), in its record's `scope.when`. It is a structural
+row (`MakeFormulationRow` with no clause), rigid under DIAGNOSE. A row whose body reads a NULL is
 skipped by the reducer as before; its helper row is skipped too and leaves `t` free on a
 row nothing reads.
 
@@ -744,12 +754,12 @@ EXPLAIN says how the helper holds the body: `power(x, 2) becomes a helper decisi
 at least its value` (`BODY_AT_LEAST`; `at most`, `equal to` for `BODY_AT_MOST`,
 `BODY_EQUAL`). The defining row itself is left out (`BODY_DEFINITION_TAG` on the row): it
 restates the body the reducer already prints. The row carries the source clause of the
-first clause that reads the helper (`CopySourceClauseTag`), so a refusal can quote it, and
+first clause that reads the helper (`DefinitionFunction::source_clause_id`), so a refusal can quote it, and
 no removal group (§ The value rewrite).
 
 **Exit contract.** `VerifyExtremumBodiesLinear` runs after the value rewrite and raises an
 internal error when a member of a MIN/MAX value link is not linear. The easy identity
-(`MINMAX_EASY_REWRITE_TAG`) bounds each member in its own quadratic row, holds no link, and is
+(`BoundDecideClause::minmax_easy`) bounds each member in its own quadratic row, holds no link, and is
 exempt. A body tree preparation misses fails there by name instead of losing its square. Tests:
 `test_minmax_body_definition.py`.
 
@@ -762,8 +772,8 @@ different `by` keys, a reducer inside another expression, a reducer holding a re
 Only a reducer over decisions counts (`ContainsDecisionReducer`): a reducer over data alone is a coefficient
 (guide §5.5), so `abs(x - max(t.id) by (t.g)) <= 2` is per-row, as it is without `abs`.
 Stage 04 decides the shape once
-(`CanonicalConstraintClass::VALUE`, `VALUE_REWRITE_TAG`, stage 04 §3.10); this pass reads
-the tag and turns the clause into an ordinary per-row one, so stage 06 needs no new
+(`CanonicalConstraintClass::VALUE` in `BoundDecideClause::shape`, stage 04 §3.10); this pass reads
+it and turns the clause into an ordinary per-row one, whose shape it writes (`ClassifyClause`), so stage 06 needs no new
 constraint path. It runs after the bilinear rewrite, whose auxiliaries may stand in a reducer's body, and after
 `RewriteMinMax`, which leaves the clauses of the easy identity with their reducer. A clause in any other shape takes
 the same pass for its MIN and MAX only (§ MIN/MAX).
@@ -857,7 +867,7 @@ once the reducer is replaced. The pass hands it to `FindAndReplaceBilinear`, so 
 order stays: one linearizer for every Boolean product. A decision's sign is not otherwise
 known, so only the `BOOL` factor keeps the push.
 
-**The objective** is walked the same way when stage 04 stamped it `VALUE_REWRITE_TAG`
+**The objective** is walked the same way when stage 04 gave its record the VALUE shape
 (a reducer under a `BOOL` factor): `MAXIMIZE b * sum(x)` replaces `sum(x)` by a helper
 pushed by the term's sign in the minimization, and the product is one auxiliary the objective reads
 once. A reducer stage 04 tagged for holding a reducer (D81) becomes a helper the same way,
@@ -896,8 +906,8 @@ product (AND rows or McCormick), the `IN` and L0 indicators, the value helper (p
 or query-wide, a MIN/MAX's among them), a MIN/MAX in its cheap direction (a bound on each member), and the `<>`
 disjunction. The renderer words them in one place
 (`RenderDecideRewriteAccount`, `../03_logical_plan/done.md`). The passes start the
-objective's walk with `OBJECTIVE_ROW_TAG` as its source alias, which
-`CopyClauseProvenanceTags` carries onto every row they add for it, so EXPLAIN can print
+objective's walk with the objective's origin (`DecideRowOrigin::OfObjective`), which
+every row they add for it takes, so EXPLAIN can print
 those rows under the objective.
 
 ### MIN/MAX — one route
@@ -927,7 +937,7 @@ side any of its readers needs.
 
 **The easy identity — `RewriteMinMax`.** One identity holds before any helper is made, because it is a rewrite to other
 clauses and no formulation: `max(e) <= K` holds when every member does, and `min(e) >= K` the mirror, so neither needs a
-helper or a Big-M. The comparison keeps its reducer and is tagged `MINMAX_EASY_REWRITE_TAG`, and the linear form emits
+helper or a Big-M. The comparison keeps its reducer and its clause is marked `minmax_easy`, and the linear form emits
 one row per member. The reducer's `when` picks the members, while a bound-side reducer is reduced over every kept row of
 the `by` group; hoisting the `when` onto the clause would reduce the bound over the members only. A `max(x) <= K` over
 one decision with no `when` and no reducer filter is then a column bound, which bound absorption folds into the box
@@ -1001,9 +1011,8 @@ group: the kept rows of its `by` group, less those its own `when` drops, one per
 under its own `per`. A **decision-free** `AVG` is
 skipped: there is nothing to linearize, and rebinding it as `SUM` would redeclare
 it with `SUM`'s integral type while its value stays fractional. The swap happens under
-any factor the canonicalizer peeled (`2 * avg(x) >= 4`), so the constraints and the
-objective are each detached, rewritten and reinstalled through `AddConstraint` and
-`SetObjective`, which canonicalize them again. Keeping the tag on
+any factor the canonicalizer peeled (`2 * avg(x) >= 4`), so a clause an AVG was rewritten in goes back through `CanonicalizeClause`, and the
+objective through `SetObjective`, which canonicalize it again. Keeping the tag on
 objective terms is what makes a mixed `AVG(a) + SUM(b)` preserve true AVG
 semantics.
 
@@ -1031,7 +1040,7 @@ in `num_rows` identical model rows. A box is also strictly better for the solver
 smaller model, tighter presolve. The pass folds every bound on one decision that is known
 before the query runs (a `BETWEEN` arrives as its two comparisons, split by the binder)
 into one `DecideBoundBox` per decision (`singleton_row_boxes` on `LogicalDecide`), and
-tags the comparison `SINGLETON_ROW_BOUND_TAG` so physical extraction skips it.
+marks the clause `folded_bound` so physical extraction skips it.
 
 A clause that skips rows does not fold: a `when` holds on some rows only, and a `per` whose key holds a written
 column skips each row whose key is NULL (`language/guide.md` §6.2), which no box over the whole column says. Each
@@ -1055,7 +1064,7 @@ integer variable's bound is rounded inward. A comparison is a bound on one decis
 the term splitter reads its decision side as `a * x + b`: linear terms of one decision over
 decision-free coefficients (`x`, `2 * x`, `cap * x + w * x`, `0.1 * x`), whose coefficients
 add up to `a`, and constant terms, which add up to `b` and move to the right side. An easy
-`max(m) <= K` / `min(m) >= K` (`MINMAX_EASY_REWRITE_TAG`) is read as its row: the extremum
+`max(m) <= K` / `min(m) >= K` (`BoundDecideClause::minmax_easy`) is read as its row: the extremum
 of one member is that member, so the reducer is replaced by its member (`2 * max(c * x)`
 reads as `2 * (c * x)`). The canonicalizer has already moved a clause's shifts across and
 merged like terms, so `x - 1 >= -3`, `2 * x >= -4`, `-x <= 2`, `2 * (x - 1) >= -6`,
@@ -1082,16 +1091,13 @@ it into the column box there. On the side the clause binds, an interval end of `
 below or `-inf` above admits no value (`x >= 'inf'`): the clause stays a row, and the
 model is answered infeasible before any solve (`SolverModel::ProvesInfeasible`). A right
 side of magnitude 1e20 or more in the open direction (`x <= 1e30`) binds nothing.
-Recursion goes through `AND` and a `per K:` wrapper, whose key children hold no
-comparison, so `per row: x >= -5` is folded like `x >= -5`. A `per K:` whose `K` holds a column the user wrote
+The pass reads each clause record, so `per row: x >= -5` is folded like `x >= -5`. A `per K:` whose `K` holds a column the user wrote
 (null mode `NO_GROUP`) is not: a row whose column is NULL there is in no class and takes no instance of the clause
-(`language/guide.md` §6.2), which a box on the whole column would give it, so the pass stops at the wrapper and the
+(`language/guide.md` §6.2), which a box on the whole column would give it, so the
 clause stays a row. The model emitter checks such a clause's rows against the decision's domain instead
 (`../08_execution/done.md`, "Domain contradictions are a static error"). A relation element, which
 groups NULL as a value, folds. **A `when`-guarded
-comparison is never folded**: `when c: x <= 0` is conditional per row, not a domain,
-so the pass stops at the wrapper. This is why it keeps its own descent rather than
-`ForEachConstraintLeaf`.
+comparison is never folded**: `when c: x <= 0` is conditional per row, not a domain.
 
 An easy `max(m) <= K` / `min(m) >= K` bounds every row its reducer reads, and with no
 `when` and no filter on the reducer that is every row: it is a column bound and is folded
@@ -1129,7 +1135,7 @@ predicate.
 makes a decision signed, so every form of a bound reaches it. But a clause is one knob
 per kept row or class in an expanded diagnosis (D28), which one column bound cannot say.
 So the comparison of every recorded bound (not a BOOLEAN restatement, below) is also
-tagged `SINGLETON_ROW_CLAUSE_ROWS_TAG`, and the linear form lowers it into
+tagged `folded_clause_rows`, and the linear form lowers it into
 its root, a folded one (`DecideNode::folded`), instead of skipping it, throwing an
 `InternalException` if their count differs from `user_singleton_row_bounds` (the repair model
 would open the column with nothing enforcing it). Stage 08 evaluates those under DIAGNOSE
@@ -1179,10 +1185,10 @@ solver formulation, which bound-versus-row is. Stage 05 already chooses formulat
 with types in scope and is forbidden only from evaluating *data* — a foldable literal
 is not data.
 
-**Why the comparison is tagged rather than replaced.** `RewriteNorm` and `RewriteInDomain`
-replace a lifted clause with a `TRUE` placeholder, but that is the wrong
-precedent here: `EXPLAIN` renders the constraint list from this tree, and the user
-wrote this bound. Tagging moves the decision upstream without changing what the user
+**Why the clause is marked rather than replaced.** `RewriteInDomain`
+replaces a lifted clause's body with a `TRUE` placeholder, but that is the wrong
+precedent here: `EXPLAIN` renders the constraint list from the records, and the user
+wrote this bound. The mark (`folded_bound`) moves the decision upstream without changing what the user
 sees.
 
 ---
@@ -1257,9 +1263,9 @@ stage 07.
 Each is a precondition on an earlier stage's promise ([`../architecture.md`](../architecture.md) § 3) or a typed read:
 
 - **The binder.** One scope per declared decision, and every rewrite adds a scope with its decision
-  (`AddAuxiliaryDecision`); only a `when` stands under the two-level `per`
-  wrapper; a reducer's marker covers one expression (`RewriteNorm`); a comparison of a clause carries its
-  source-clause tag, which `TagAtomicRemovalGroups` reads (`SourceClauseOf`) to find its clause.
+  (`AddAuxiliaryDecision`); a
+  reducer's marker covers one expression (`RewriteNorm`); a clause's record holds its
+  source clause (`origin.source_clause_id`), which `TagAtomicRemovalGroups` reads (`SourceClauseOf`) to find its clause.
 - **The shape check.** A side of a degree-2 product is affine and no divisor holds a decision
   (`DecideTermSplitter::Split`); a factor's form is linear (`AppendLinearTerms`); a data factor has power 1
   (`FindAndReplaceBilinear`).

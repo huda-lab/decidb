@@ -180,7 +180,7 @@ Each stage is a folder with `done.md` (how it works) and, when work is open, `to
 stage that owns the behavior, not the one that calls it first. Two things to read off the diagram:
 
 - **Canonicalization sits between planning and optimization, not inside either.** The optimizer assumes canonical
-  input and returns canonical output; it never decides shape. Every row it emits re-enters through `AddConstraint` /
+  input and returns canonical output; it never decides shape. Every row it emits re-enters through `AddClause` /
   `SetObjective`, which re-canonicalize and re-verify, and `VerifyCanonical` runs once more at physical-plan entry.
 - **Stages 06 and 07 run inside stage 08's `Finalize`.** They are separate stages because they own separate
   contracts (a solver-neutral model, and a backend translation), not because they run at separate times.

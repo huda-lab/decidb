@@ -32,7 +32,7 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D44 | A NULL class in DIAGNOSE's `group` column prints bare `NULL`; a relation key's values print as SQL literals, so the string `'NULL'` is quoted |
 | D45 | Every column prints as the user wrote it (`S.cap`, `cap`), at every stage: the binder cuts its spelling and tags the bound reference |
 | D46 | The scope enum is `ROW / KEYED / GLOBAL` with its values kept, DIAGNOSE's label is `keyed`, and a tag is named for its job: a parser marker for the spelling it marks, a bound wrapper for what it means |
-| D47 | A clause's scope is one `DecideClauseScope`, read through one walker step (`EnterDecideScope`) |
+| D47 | A clause's scope is one `DecideClauseScope`, held by its record (`BoundDecideClause::scope`) |
 | D50 | `DECIDE scalar cap` and `DECIDE lineitem.x` (no type) are syntax errors; a declaration with no type, `per (): cap` included, is *"decision 'cap' has no type"* |
 | D51 | `scalar` is an ordinary identifier |
 | D52 | The paper's Figure 1 query runs (`test_reduced_bound_data_column.py`) |
