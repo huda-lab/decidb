@@ -10,6 +10,7 @@ add_library_unity(
   plan_recursive_cte_node.cpp
   plan_cte_node.cpp
   plan_select_node.cpp
+  plan_decide.cpp
   plan_setop.cpp
   plan_subquery.cpp)
 set(ALL_OBJECT_FILES
