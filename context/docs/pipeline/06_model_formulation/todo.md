@@ -12,12 +12,9 @@ files.
   helper. Over the rows `(1, 1e308)` and `(2, 1e308)` as `t(id, b)`, on HiGHS with direct solve off,
   `x(REAL), y(REAL) SUCH THAT x <= 5 AND y <= 5 AND SUM(x) + MAX(b * y) <= 10 MAXIMIZE SUM(x)` gives `the objective
   holds numbers too far apart in size`, with the caret at `MAXIMIZE`.
-- **Decision needed.** The helper link already holds the clause that first reads the helper
-  (`ReducerValueLinkSpec::source_clause_id`); the too-large refusal names it. Copying it into the rows' origin is the
-  one-line fix, but DIAGNOSE reads a row's origin: removal groups (`decide_diagnostic_engines.cpp`) and row labels
-  (`decide_diagnostic_render.cpp`). Check whether a structural row with a clause joins that clause's removal group or
-  takes its label. If it does not, copy the clause. If it does, the refusal reads the clause of the first row that
-  reads the helper's column, as the hand-off check in `ilp_model_builder.cpp` does. Recommendation: the copy, if the
-  check allows it, since every reader then reads one field.
+- **Change.** The helper's rows take the link's clause (`ReducerValueLinkSpec::source_clause_id`) as their origin,
+  so every reader of a row's clause reads one field. DIAGNOSE shows nothing new: its removal groups key on
+  `removal_group_id`, which a helper row never sets; its labels skip `STRUCTURAL` rows; its elastic blocks take only
+  `USER_PARAMETER` rows. `ThrowUnscalableRow`'s comment then states that a row with no clause is the objective's.
 - **Done when.** The query above names `SUM(x) + MAX(b * y) <= 10` on HiGHS;
   `./test/decide/run_tests.sh -k "past_a_double or too_far_apart or diagnose"` passes.

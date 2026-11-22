@@ -19,21 +19,21 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
 
 ## EXEC-20 — SolverInput is the whole contract of model building
 
-- **Problem.** `physical_decide.cpp` is 2,132 lines, about 425 of them the operator. `FormulateModel`, a second
+- **Problem.** `physical_decide.cpp` is 1,940 lines, about 425 of them the operator. `FormulateModel`, a second
   hand-ordered pass list, reads operator fields beside `SolverInput`.
 - **Change.** The emitter writes everything model building reads into `SolverInput`; `FormulateModel(input, box)`
   moves to `src/decidb/formulation` and stays a pure function, so the diagnosis re-runs it against a widened box.
-- **Done when.** `FormulateModel` reads no operator field; `./test/decide/run_tests.sh -n 2 -k "diagnose or
+- **Done when.** `FormulateModel` reads no operator field; `./test/decide/run_tests.sh -k "diagnose or
   formulation"` passes.
 
 ## EXEC-21 — Solve and route live beside the solver
 
-- **Problem.** `FinalizeSolveResult` is 479 lines in the operator file. `SolverModel::Build` is one function of 555
-  lines, complexity 119.
+- **Problem.** `FinalizeSolveResult` is 460 lines in the operator file. `SolverModel::Build` is one function of 688
+  lines, complexity 103.
 - **Change.** Solving, status handling and routing to readback move beside the solver facade; the operator calls
   them. `Build` is split into columns, objective, clause rows and raw rows.
 - **Needs.** EXEC-20.
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "status or time_limit or infeasible"` passes.
+- **Done when.** `./test/decide/run_tests.sh -k "status or time_limit or infeasible"` passes.
 
 ## EXEC-22 — A plan fact has one home
 
@@ -43,15 +43,14 @@ named-column scan also bypass or revisit parts of the normal tree execution; the
 - **Change.** The tree owns each fact; the operator keeps the child, the tree, the debug options and one display
   payload; the name harvest uses the tree's own enumeration of row expressions.
 - **Needs.** EXEC-20.
-- **Done when.** `DECIDB_VERIFY_SERIALIZER=1 ./test/decide/run_tests.sh -n 2 -k "frame or per or explain"` passes.
+- **Done when.** `DECIDB_VERIFY_SERIALIZER=1 ./test/decide/run_tests.sh -k "frame or per or explain"` passes.
 
-## EXEC-23 — The thread model of the descent
+## EXEC-23 — The descent routes the buffered rows once
 
-- **Decision needed.** Each thread routes its rows as they arrive and the routes are merged: `DecideDescent::Merge`
-  is 316 lines, complexity 69, with two run-time guards for shapes that cannot merge. It buys about 0.1 s of 1.3 s
-  on 2 million rows.
-- **Options.** 1. One route over the buffered rows in `Finalize` ("one scan of the buffer"); the merge goes.
-  2. Keep routing per thread ("reads each row as it arrives").
-- **Recommendation.** 1: the merge costs more code than its time saves.
-- **Done when.** `./test/decide/run_tests.sh -n 2 -k "descent or merge or thread"` passes; `tools/ab_bench.py`
-  shows no workload moving beyond about 10%.
+- **Problem.** Each thread routes its rows as they arrive and the routes are merged: `DecideDescent::Merge` is 333
+  lines, complexity 70, with two run-time guards for shapes that cannot merge. It buys about 0.1 s of 1.3 s on 2
+  million rows.
+- **Ruling (owner, 2026-11-22).** One route over the buffered rows in `Finalize` ("one scan of the buffer"); the merge
+  goes, since it costs more code than its time saves.
+- **Done when.** `./test/decide/run_tests.sh -k "descent or merge or thread"` passes;
+  `context/opa_rewrite/tools/ab_bench.py` shows no workload moving beyond about 10%.

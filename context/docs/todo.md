@@ -13,13 +13,13 @@ the owner rules first.
 # Phase 4 — Model building has one contract
 
 ## 4.0 Filed at the Phase 3 gate (one lane)
-- [ ] FORM-11 A helper's rows name their clause (decision) — pipeline/06_model_formulation/todo.md § FORM-11
+- [ ] FORM-11 A helper's rows name their clause — pipeline/06_model_formulation/todo.md § FORM-11
 
 ## 4.1 Operator and contract (parallel: EXEC-20, EXEC-21, EXEC-22 | EXEC-23 | PLAN-7)
 - [ ] EXEC-20 SolverInput is the whole contract — pipeline/08_execution/todo.md § EXEC-20
 - [ ] EXEC-21 Solve and route beside the solver — pipeline/08_execution/todo.md § EXEC-21 (needs: EXEC-20)
 - [ ] EXEC-22 A plan fact has one home — pipeline/08_execution/todo.md § EXEC-22 (needs: EXEC-20)
-- [ ] EXEC-23 The thread model of the descent (decision) — pipeline/08_execution/todo.md § EXEC-23
+- [ ] EXEC-23 The descent routes the buffered rows once — pipeline/08_execution/todo.md § EXEC-23
 - [ ] PLAN-7 Stages 03 and 04 run from one PlanDecide — pipeline/03_logical_plan/todo.md § PLAN-7
 
 # Phase 5 — The parser builds the tree
