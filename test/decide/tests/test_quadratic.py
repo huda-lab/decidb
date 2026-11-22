@@ -962,7 +962,7 @@ class TestQuadraticMaximize:
             decidb_time = time.perf_counter() - t0
         except DeciDBCliError as e:
             assert re.search(
-                r"not REAL is not supported on this installation",
+                r"a squared objective beside a whole-number value is not supported on this installation",
                 e.message,
                 re.IGNORECASE,
             )
@@ -2113,7 +2113,7 @@ class TestHighsRejection:
             sql,
             kind="Not implemented Error",
             at="SUM(POWER(x - target, 2))",
-            word="squaring a decision that is not REAL is not supported on this installation",
+            word="a squared objective beside a whole-number value is not supported on this installation",
         )
 
     def test_highs_refuses_a_square_beside_an_exact_abs_as_beside_an_int_decision(self, decidb_cli_highs):
@@ -2134,6 +2134,32 @@ class TestHighsRejection:
 
         beside_abs, stderr = refusal("x(REAL)", "ABS(x - 1) >= 0.5")
         assert beside_abs == refusal("x(REAL), z(INT)", "z <= 2")[0], stderr
+
+    _MIQP_TEXT = "a squared objective beside a whole-number value is not supported on this installation"
+    _WHOLE_NUMBER_CASES = [
+        ("a declared INT decision", "x(INT)", "x <= 5"),
+        ("a REAL square beside an INT decision", "x(REAL), z(INT)", "x <= 5 AND z <= 2"),
+        ("a REAL square beside an exact ABS's indicator", "x(REAL)", "x <= 5 AND ABS(x - 1) >= 0.5"),
+    ]
+
+    @pytest.mark.parametrize("name,decisions,clause", _WHOLE_NUMBER_CASES, ids=[c[0] for c in _WHOLE_NUMBER_CASES])
+    def test_highs_refuses_a_square_beside_a_whole_number_in_one_text(self, decidb_cli_highs, name, decisions, clause):
+        """The MIQP refusal says what the query holds, not what is squared: the squared decision is REAL in two of
+        these, and the whole number is a declared INT decision or the indicator an exact ABS adds. The caret is on the
+        objective."""
+        cli = decidb_cli_highs.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
+        sql = f"""
+            SELECT id, x FROM (VALUES (1), (2)) t(id)
+            DECIDE {decisions}
+            SUCH THAT {clause}
+            MINIMIZE SUM(POWER(x - 1.2, 2))
+        """
+        cli.assert_error_at(
+            sql,
+            kind="Not implemented Error",
+            at="SUM(POWER(x - 1.2, 2))",
+            word=self._MIQP_TEXT,
+        )
 
     def test_highs_quadratic_constraint_rejected(self, decidb_cli_highs):
         """A squared term in SUCH THAT is a quadratic constraint (QCQP), HiGHS-rejected."""
@@ -2370,7 +2396,7 @@ class TestHighsRejection:
             sql,
             kind="Not implemented Error",
             at="SUM(POWER(y - q, 2))",
-            word="squaring a decision that is not REAL is not supported on this installation",
+            word="a squared objective beside a whole-number value is not supported on this installation",
         )
 
     def test_highs_solves_a_qp_beside_a_continuous_helper(self, decidb_cli_highs, oracle_solver):
@@ -2620,7 +2646,7 @@ def test_highs_square_of_opposite_forms_over_integers_is_a_miqp_refusal(decidb_c
         sql,
         kind="Not implemented Error",
         at=f"SUM({_OPPOSITE_FORMS})",
-        word="squaring a decision that is not REAL is not supported on this installation",
+        word="a squared objective beside a whole-number value is not supported on this installation",
     )
 
 

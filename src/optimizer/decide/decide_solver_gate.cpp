@@ -153,7 +153,7 @@ RefusalText DescribeGap(const LogicalDecide &op, const DecideTree &tree, SolverM
 		        objective};
 	}
 	case SolverModelClassGap::MIQP:
-		return {"squaring a decision that is not REAL", objective};
+		return {"a squared objective beside a whole-number value", objective};
 	case SolverModelClassGap::SINGULAR_QUADRATIC:
 		return {"squaring an expression of more than one decision", objective};
 	default:
