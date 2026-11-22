@@ -579,7 +579,13 @@ void DecideModelEmitter::Constraints() {
 	for (idx_t c = num_evaluated; c < roots.size() && !tree.diagnose; c++) {
 		auto &clause = *tree.nodes[roots[c]]->compiled.clause;
 		const DecideAbsentReads absent_reads(columns.Absence(), clause.lhs_terms);
-		if (!clause.lhs_is_aggregate && absent_reads.Any()) {
+		if (clause.lhs_is_aggregate || !absent_reads.Any()) {
+			continue;
+		}
+		// An easy MIN's or MAX's term stands on its members, which Groups reads, as for the clauses below.
+		if (clause.was_minmax_easy) {
+			Groups(roots[c], true);
+		} else {
 			Rows(roots[c], true);
 		}
 	}
