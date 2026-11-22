@@ -26,6 +26,40 @@ class DecideDescent;
 //! The model input kept under `DIAGNOSE` for the infeasible terminal (decide_diagnostic_terminals.hpp).
 struct ElasticFormulation;
 
+//! What the plan prints of a DECIDE query: the clauses as the optimizer left them and as the user wrote them. Written
+//! once where the plan is made, read after by EXPLAIN, a message and DIAGNOSE; each field keeps the name and type it
+//! has on LogicalDecide.
+struct DecideDisplay {
+	//! The table index of the decisions' columns.
+	idx_t decide_index = DConstants::INVALID_INDEX;
+	//! The bound constraints expression and the bound objective function expression, minimized.
+	unique_ptr<Expression> decide_constraints;
+	unique_ptr<Expression> decide_objective;
+	//! Stable source display registry.
+	vector<ConstraintSourceInfo> constraint_sources;
+	//! The objective as written and as canonicalized, so the physical plan renders the same layers the logical one
+	//! does.
+	string written_objective;
+	string canonical_objective;
+	bool objective_canonical_differs = false;
+	//! The DECIDE tail as the user wrote it.
+	DecideSourceText source_text;
+	//! Auxiliary variable index -> the user's original source expression string (ABS(...) / MIN/MAX(...) / product /
+	//! <>), for naming an escaping aux column in the unbounded diagnosis. Sparse; only auxiliary variables appear.
+	vector<pair<idx_t, string>> aux_var_expressions;
+	//! What each rewrite made of a clause, for EXPLAIN (LogicalDecide::rewrite_accounts).
+	vector<LogicalDecide::RewriteAccount> rewrite_accounts;
+	//! Source column name per physical child-output column (positionally aligned with gstate.data columns), resolved
+	//! post-pruning in plan_decide.cpp. Each name is SQL, quoted where it needs it, so a remedy that prints one can be
+	//! pasted back. Used by the unbounded diagnosis to label escaping categorical groups (affected_rows).
+	vector<string> input_column_names;
+	//! Positionally aligned with `input_column_names`: true when the DECIDE clause itself references the column (a
+	//! `when`, a key, a constraint, the objective), false when it only rides along in the outer SELECT. The unbounded
+	//! characterization uses it to pick a representative when several columns describe the same escaping rows: a column
+	//! the user put in the clause explains the escape, one that merely correlates with it is a coincidence.
+	vector<bool> input_column_in_clause;
+};
+
 //===--------------------------------------------------------------------===//
 // PhysicalDecide Operator
 //===--------------------------------------------------------------------===//
@@ -43,123 +77,17 @@ public:
 	friend class DecideModelEmitter;
 
 public:
-	PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardinality, unique_ptr<PhysicalOperator> child,
-	               idx_t decide_index, vector<unique_ptr<Expression>> decide_variables,
-	               unique_ptr<Expression> decide_constraints, DecideSense written_sense,
-	               unique_ptr<Expression> decide_objective);
+	PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardinality, unique_ptr<PhysicalOperator> child);
 
-	// The table index for the new columns
-	idx_t decide_index;
+	//! What EXPLAIN, a message and DIAGNOSE print of the query: written once at plan time (plan_decide.cpp), read only
+	//! after. Every other fact of the plan is the tree's.
+	DecideDisplay display;
 
-	// The variables to be decided (e.g., x, y)
-	vector<unique_ptr<Expression>> decide_variables;
-
-	// The bound constraints expression
-	unique_ptr<Expression> decide_constraints;
-
-	//! Stable source display registry copied from LogicalDecide.
-	vector<ConstraintSourceInfo> constraint_sources;
-
-	//! The objective as written and as canonicalized, copied from LogicalDecide so the
-	//! physical plan renders the same layers the logical one does.
-	string written_objective;
-	string canonical_objective;
-	bool objective_canonical_differs = false;
-
-	//! The DECIDE tail as the user wrote it, copied from LogicalDecide.
-	DecideSourceText source_text;
-
-	//! The direction the objective was written in, copied from LogicalDecide. Only a message, EXPLAIN and a shown value
-	//! read it: `decide_objective` is a minimization.
-	DecideSense written_sense;
-
-	//! The bound objective function expression, minimized.
-	unique_ptr<Expression> decide_objective;
-
-	//! The constant canonicalization peeled off the objective (LogicalDecide::objective_constant_offset), so the
-	//! objective value a solve reports is the minimized objective's (the negation of a MAXIMIZE query's).
-	double objective_constant_offset = 0.0;
-
-	// Number of auxiliary variables (e.g. from ABS linearization) at the end of decide_variables
-	idx_t num_auxiliary_vars = 0;
-
-	// Per-variable flag: true if the variable was declared IS BOOLEAN (copied from
-	// LogicalDecide). A BOOLEAN variable is lowered to an INTEGER with a 0/1 domain
-	// (synthesized `x >= 0` / `x <= 1` constraints), so its runtime type is INTEGER;
-	// this flag is the only surviving signal that the 0/1 box is the variable's
-	// intrinsic domain, not a user-editable bound. Indexed by decide_variables position.
-	vector<bool> is_boolean_var;
-
-	// F6: auxiliary variable index -> user's original source expression string
-	// (ABS(...) / MIN/MAX(...) / product / <>), for naming an escaping aux column
-	// in the unbounded diagnosis. Sparse; only auxiliary variables appear.
-	vector<pair<idx_t, string>> aux_var_expressions;
-
-	//! What each rewrite made of a clause, for EXPLAIN (LogicalDecide::rewrite_accounts).
-	vector<LogicalDecide::RewriteAccount> rewrite_accounts;
 	//! What the data made of each clause (Kind::RUN_TIME): the variants of its classes (D70, D71), the instances it
 	//! skipped for having no value (deck pp. 50, 56). Written by Finalize, read by ParamsToString, which the profiler
 	//! calls again once the result is read -- so EXPLAIN ANALYZE prints it, and a plain EXPLAIN, which runs nothing,
 	//! does not. Run-time facts of the one execution, hence mutable.
 	mutable vector<LogicalDecide::RewriteAccount> run_time_accounts;
-
-	// --- Singleton-row variable bounds (decided by DecideOptimizer::FoldSingletonRows) ---
-	//
-	// The decision column box, already resolved upstream. Finalize copies these into
-	// SolverInput; comparisons folded into them carry SINGLETON_ROW_BOUND_TAG so term
-	// extraction skips them. Execution consumes this, it does not re-derive it.
-	vector<DecideBoundBox> singleton_row_boxes;
-	// Every folded user bound, kept so the infeasible diagnosis can open its column box and
-	// quote it as written; its clause reaches the repair model through
-	// its folded root's clause (DecideNode::folded). A BETWEEN contributes two entries.
-	vector<LogicalDecide::UserBoundSpec> user_singleton_row_bounds;
-	vector<LogicalDecide::UserBoundSpec> member_singleton_row_bounds;
-
-	// --- Key scopes ---
-
-	//! Every key scope: of a `per K:` decision, a reducer's `per K:` or colon-form
-	//! qualifier, and the value rewrite's helper decisions
-	vector<KeyedScopeInfo> keyed_scopes;
-
-	//! Per-variable scope assignment (row / keyed / query-wide);
-	//! keyed_scope_idx indexes keyed_scopes
-	vector<DecideVarScopeInfo> variable_scopes;
-
-	//! Every key of the clause (LogicalDecide::keys), its expressions resolved against the
-	//! input chunk.
-	vector<DecideKey> keys;
-
-	//! The frame selectors (LogicalDecide::frames), their expressions resolved against the
-	//! input chunk.
-	vector<DecideFrameSpec> frames;
-
-	//! The variant signatures (LogicalDecide::signatures), their expressions resolved against the input chunk, and the
-	//! objective's, INVALID_INDEX for none.
-	vector<DecideSignature> signatures;
-	idx_t objective_signature = DConstants::INVALID_INDEX;
-
-	//! Source column name per physical child-output column (positionally aligned
-	//! with gstate.data columns), resolved post-pruning in plan_decide.cpp. Each name
-	//! is SQL, quoted where it needs it, so a remedy that prints one can be pasted
-	//! back. Used by the unbounded diagnosis to label escaping categorical groups
-	//! (affected_rows).
-	vector<string> input_column_names;
-
-	//! Positionally aligned with `input_column_names`: true when the DECIDE clause
-	//! itself references the column (a `when`, a key, a constraint, the objective), false when
-	//! it only rides along in the outer SELECT. The unbounded characterization uses it
-	//! to pick a representative when several columns describe the same escaping rows:
-	//! a column the user put in the clause explains the escape, one that merely
-	//! correlates with it is a coincidence.
-	vector<bool> input_column_in_clause;
-
-	//! The `DIAGNOSE` prefix the user wrote, carried down from LogicalDecide::diagnose.
-	//! It is the ONLY thing that arms the diagnosis engines. When true a failed solve
-	//! stashes its findings for the DIAGNOSE operator above to return as rows instead of
-	//! raising; when false — every unprefixed query — a failed solve reports its status
-	//! and stops, and none of the diagnostic prep (unbounded-ray extraction, model
-	//! retention, the elastic re-solves) is done or paid for.
-	bool diagnose = false;
 
 	//! The registered NAME of the backend this query was planned for, chosen once by
 	//! stage 05 (LogicalDecide::solver_backend_name) and copied here at physical
@@ -188,24 +116,11 @@ public:
 	//! a fact only it can see, the same way the `<>` range collapse does.
 	bool force_native_constructs = false;
 
-	//! What the domain check reads of a decision: the box of the bounds written on it as constants, whose floor holds
-	//! the floors a `when` or `per` lowers (conservatively: the lowest), and how its message names the decision.
-	//! `checked` is false for a decision no bound contradicts a type of (a helper, an auxiliary that may read no
-	//! value).
-	struct DecisionDomain {
-		bool checked = false;
-		DecideBoundBox box;
-		bool is_bool = false;
-		string name;
-	};
-	//! One per decision, filled by CheckDecisionDomains. The run-time check of a per-row bound reads it
-	//! (DecideModelEmitter::CheckDomain).
-	vector<DecisionDomain> domains;
-
 	//! The refusal of a bound a decision's type cannot hold (`x(INT) ... x <= -1`): it reads only the plan, so it is
 	//! raised where the plan is made, once the operator holds its tree and its bounds -- for an `EXPLAIN` or a
-	//! `PREPARE` as for a run, and over an empty input. Fills `domains`.
-	void CheckDecisionDomains();
+	//! `PREPARE` as for a run, and over an empty input. Fills `tree->domains`. `member_singleton_row_bounds` are the
+	//! bounds folded into a member of a group, which only this check reads.
+	void CheckDecisionDomains(const vector<LogicalDecide::UserBoundSpec> &member_singleton_row_bounds);
 
 public:
 	// Source interface

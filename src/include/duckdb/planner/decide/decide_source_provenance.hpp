@@ -216,31 +216,34 @@ string RenderDecideObjectiveLayers(const string &sense_prefix, const string &wri
 //! The EXPLAIN parameters of a DECIDE operator, without the cardinality line: the variables, the objective and the
 //! constraints through the clause walker, so `when`/`per` wrappers print as written rather than as a generic
 //! conjunction. LogicalDecide::ParamsToString and PhysicalDecide::ParamsToString both call it and add their own
-//! cardinality. Extract Method as a function template: the two operators carry these fields under the same names, so it
-//! moves no field. Two facts each operator knows its own way are its parameters: the rewrite `accounts` (the physical
-//! operator's add what the data made of each clause, which EXPLAIN ANALYZE prints) and the `tree` itself, whose F nodes
-//! own the rows its rewrites added (the logical operator has none). It lives here, beside the renderers
+//! cardinality. Extract Method as a function template over the two objects that hold what it reads: `facts` (the
+//! decisions, their scopes, keys and frames, the direction the objective was written in) and `display` (the clauses,
+//! their text and their sources), which LogicalDecide is both of and PhysicalDecide holds as its tree and its display.
+//! It moves no field. Two facts each operator knows its own way are its parameters: the rewrite `accounts` (the
+//! physical operator's add what the data made of each clause, which EXPLAIN ANALYZE prints) and the `tree` itself,
+//! whose F nodes own the rows its rewrites added (the logical operator has none). It lives here, beside the renderers
 //! it calls, because this header is already included by both operators and the body adds no include.
-template <class OP>
-InsertionOrderPreservingMap<string>
-RenderDecideParams(const OP &op, const vector<LogicalDecide::RewriteAccount> &accounts, const DecideTree *tree) {
+template <class FACTS, class DISPLAY>
+InsertionOrderPreservingMap<string> RenderDecideParams(const FACTS &facts, const DISPLAY &display,
+                                                       const vector<LogicalDecide::RewriteAccount> &accounts,
+                                                       const DecideTree *tree) {
 	InsertionOrderPreservingMap<string> result;
 
 	// Variables (exclude auxiliary variables)
 	string vars_info;
-	idx_t user_var_count = op.decide_variables.size() - op.num_auxiliary_vars;
+	idx_t user_var_count = facts.decide_variables.size() - facts.num_auxiliary_vars;
 	for (idx_t i = 0; i < user_var_count; i++) {
 		if (i > 0) {
 			vars_info += "\n";
 		}
-		vars_info += op.decide_variables[i]->GetName();
+		vars_info += facts.decide_variables[i]->GetName();
 	}
 	result["Variables"] = vars_info;
 
 	// What the optimizer made of the clauses: a column that stands for an expression prints it, and each rewrite's
 	// account follows its clause, the objective's its own.
-	auto names =
-	    DecidePlanNames(op.source_text, op.keyed_scopes, op.keys, op.decide_index, op.aux_var_expressions, op.frames);
+	auto names = DecidePlanNames(display.source_text, facts.keyed_scopes, facts.keys, display.decide_index,
+	                             display.aux_var_expressions, facts.frames);
 	vector<string> objective_accounts;
 	for (auto &account : accounts) {
 		if (account.source_clause_id == DConstants::INVALID_INDEX) {
@@ -252,22 +255,22 @@ RenderDecideParams(const OP &op, const vector<LogicalDecide::RewriteAccount> &ac
 	vector<string> objective_rows;
 	vector<DecideFunctionRow> function_rows;
 	if (tree) {
-		function_rows = CollectDecideFunctionRows(*tree, names, op.decide_variables);
+		function_rows = CollectDecideFunctionRows(*tree, names, facts.decide_variables);
 	}
 	// The parser requires a SUCH THAT clause, so a plan always has constraints (transform_select_node.cpp).
 	const string objective_qualifier =
-	    op.decide_objective ? DecideObjectiveQualifier(*op.decide_objective, names) : string();
-	auto layers = CollectDecideClauseLayers(*op.decide_constraints, names, op.constraint_sources, unattributed,
-	                                        objective_rows, accounts, function_rows, objective_qualifier);
+	    display.decide_objective ? DecideObjectiveQualifier(*display.decide_objective, names) : string();
+	auto layers = CollectDecideClauseLayers(*display.decide_constraints, names, display.constraint_sources,
+	                                        unattributed, objective_rows, accounts, function_rows, objective_qualifier);
 	string constraints_text = RenderDecideClauseLayers(layers, unattributed);
-	if (op.decide_objective) {
-		const bool maximize = op.written_sense == DecideSense::MAXIMIZE;
+	if (display.decide_objective) {
+		const bool maximize = facts.written_sense == DecideSense::MAXIMIZE;
 		string sense_prefix = maximize ? "MAXIMIZE " : "MINIMIZE ";
 		vector<string> objective_strs;
-		CollectDecideExpressionStrings(*op.decide_objective, names, objective_strs, nullptr, maximize);
-		result["Objective"] = RenderDecideObjectiveLayers(sense_prefix, op.written_objective, op.canonical_objective,
-		                                                  op.objective_canonical_differs, objective_strs,
-		                                                  objective_accounts, objective_rows);
+		CollectDecideExpressionStrings(*display.decide_objective, names, objective_strs, nullptr, maximize);
+		result["Objective"] = RenderDecideObjectiveLayers(
+		    sense_prefix, display.written_objective, display.canonical_objective, display.objective_canonical_differs,
+		    objective_strs, objective_accounts, objective_rows);
 	} else {
 		result["Objective"] = "FEASIBILITY";
 	}

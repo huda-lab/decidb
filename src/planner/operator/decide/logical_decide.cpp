@@ -502,7 +502,7 @@ vector<ColumnBinding> LogicalDecide::SourceBindings() {
 }
 
 InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
-	auto result = RenderDecideParams(*this, rewrite_accounts, nullptr);
+	auto result = RenderDecideParams(*this, *this, rewrite_accounts, nullptr);
 	SetParamsEstimatedCardinality(result);
 	return result;
 }

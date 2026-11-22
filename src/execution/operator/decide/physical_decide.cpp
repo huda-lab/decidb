@@ -69,25 +69,20 @@ namespace duckdb {
 //===--------------------------------------------------------------------===//
 
 PhysicalDecide::PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardinality,
-                               unique_ptr<PhysicalOperator> child, idx_t decide_index,
-                               vector<unique_ptr<Expression>> decide_variables,
-                               unique_ptr<Expression> decide_constraints, DecideSense written_sense,
-                               unique_ptr<Expression> decide_objective)
-    : PhysicalOperator(PhysicalOperatorType::DECIDE, std::move(types), estimated_cardinality),
-      decide_index(decide_index), decide_variables(std::move(decide_variables)),
-      decide_constraints(std::move(decide_constraints)), written_sense(written_sense),
-      decide_objective(std::move(decide_objective)) {
+                               unique_ptr<PhysicalOperator> child)
+    : PhysicalOperator(PhysicalOperatorType::DECIDE, std::move(types), estimated_cardinality) {
 	children.push_back(std::move(child));
 }
 
 DecideSourceNames PhysicalDecide::Names() const {
-	return DecidePlanNames(source_text, keyed_scopes, keys, decide_index, aux_var_expressions, frames);
+	return DecidePlanNames(display.source_text, tree->keyed_scopes, tree->keys, display.decide_index,
+	                       display.aux_var_expressions, tree->frames);
 }
 
 string PhysicalDecide::WrittenClause(idx_t source_clause_id) const {
-	return source_clause_id < constraint_sources.size()
-	           ? QuoteWrittenClause(constraint_sources, source_clause_id, source_text)
-	           : DecideWrittenObjective(written_sense, written_objective);
+	return source_clause_id < display.constraint_sources.size()
+	           ? QuoteWrittenClause(display.constraint_sources, source_clause_id, display.source_text)
+	           : DecideWrittenObjective(tree->written_sense, display.written_objective);
 }
 
 SolverBackend PhysicalDecide::PlannedSolverBackend() const {
@@ -113,7 +108,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 	// The run-time accounts follow the plan's, so EXPLAIN ANALYZE prints them under their clause. A helper the run
 	// wrote where it is read holds no column, so its line replaces the plan's, which says it becomes one.
 	vector<LogicalDecide::RewriteAccount> accounts;
-	for (auto &account : rewrite_accounts) {
+	for (auto &account : display.rewrite_accounts) {
 		const bool replaced = std::any_of(
 		    run_time_accounts.begin(), run_time_accounts.end(), [&](const LogicalDecide::RewriteAccount &run) {
 			    return run.kind == LogicalDecide::RewriteAccount::Kind::VALUE_HELPER_INLINED &&
@@ -124,7 +119,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 		}
 	}
 	accounts.insert(accounts.end(), run_time_accounts.begin(), run_time_accounts.end());
-	auto result = RenderDecideParams(*this, accounts, tree.get());
+	auto result = RenderDecideParams(*tree, display, accounts, tree.get());
 	SetEstimatedCardinality(result, estimated_cardinality);
 	return result;
 }
@@ -260,7 +255,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 	// also emits the scoped bounds the column box enforces, which the solved model has no
 	// row for. The copy is paid for only when the user asked for a diagnosis.
 	unique_ptr<ElasticFormulation> elastic;
-	if (diagnose) {
+	if (tree->diagnose) {
 		elastic = make_uniq<ElasticFormulation>();
 		elastic->input = solver_input;
 		for (auto &folded : gstate.evaluated_singleton_row_constraints) {
@@ -304,7 +299,7 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	const auto names = Names();
 	DecideTreeColumns columns(*tree, *descent, context, names, debug);
 	// The frames' timelines and the columns they read, before any program reads one (language/guide.md §5.6).
-	columns.ReadFrames(frames, num_rows, gstate.frame_maps);
+	columns.ReadFrames(tree->frames, num_rows, gstate.frame_maps);
 	// What the data checks and the data reducers no clause reads raise, before any clause is read.
 	columns.CheckData();
 	DecideModelEmitter emitter(*this, context, *tree, *descent, columns, gstate, key_values, names, num_rows);
@@ -347,7 +342,7 @@ void PhysicalDecide::ReportSkippedInstances(const DecideGlobalSinkState &gstate)
 	// with the most any of its comparisons holds, as the rows of one comparison are counted.
 	map<idx_t, DecideGlobalSinkState::ClauseInstances> written;
 	for (auto &half : gstate.clause_instances) {
-		auto &counts = written[WrittenClauseId(constraint_sources, half.first)];
+		auto &counts = written[WrittenClauseId(display.constraint_sources, half.first)];
 		counts.grouped = MaxValue(counts.grouped, half.second.grouped);
 		counts.kept = MaxValue(counts.kept, half.second.kept);
 	}
@@ -373,7 +368,7 @@ void PhysicalDecide::ReportSkippedInstances(const DecideGlobalSinkState &gstate)
 }
 
 void PhysicalDecide::ReportAnEmptyObjective(const SolverInput &input) const {
-	if (written_sense == DecideSense::FEASIBILITY) {
+	if (tree->written_sense == DecideSense::FEASIBILITY) {
 		return;
 	}
 	auto reads = [&](const CoefficientColumn &column) {
@@ -426,7 +421,7 @@ void PhysicalDecide::ReportInlinedHelpers(const SolverInput &input) const {
 			continue;
 		}
 		// Each clause whose plan names the helper: an account of it is one of the helper (AddValueHelper).
-		for (auto &account : rewrite_accounts) {
+		for (auto &account : display.rewrite_accounts) {
 			if (account.subject == node.value_link_label) {
 				RecordRunTimeAccount(account.source_clause_id, line, kind);
 			}
@@ -480,16 +475,16 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
                                              vector<SolverInput::KeyValues> key_values, EvaluatedClauses &evaluated,
                                              VarIndexer &out_var_indexer) const {
 	DecideProfileScope phase("assembly.var_indexer");
-	idx_t num_decide_vars = decide_variables.size();
+	idx_t num_decide_vars = tree->decide_variables.size();
 
 	// Construct SolverInput
 	SolverInput solver_input;
-	solver_input.diagnose = diagnose;
+	solver_input.diagnose = tree->diagnose;
 	solver_input.num_rows = num_rows;
 	solver_input.num_decide_vars = num_decide_vars;
 	solver_input.keyed_mappings = std::move(keyed_mappings);
 	solver_input.absent_reads = gstate.absent_reads;
-	solver_input.variable_scopes = variable_scopes;
+	solver_input.variable_scopes = tree->variable_scopes;
 	// The decisions frames read at another row (SolverInput::frame_reads), after the plan's
 	// own: each its base read, at each row, at the row its frame selects -- or the row
 	// itself where it selects none, where every term reading it has no value or 0.
@@ -529,7 +524,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// Variable types and bounds
 	solver_input.variable_types.resize(num_decide_vars);
 	for (idx_t var = 0; var < num_decide_vars; var++) {
-		auto &decide_var = decide_variables[var]->Cast<BoundColumnRefExpression>();
+		auto &decide_var = tree->decide_variables[var]->Cast<BoundColumnRefExpression>();
 		// A BOOLEAN-domain variable (declared `x(BOOL)`, or a boolean-valued
 		// auxiliary such as an IN-domain/L0 indicator) is bound with an INTEGER
 		// DuckDB type so it can appear in arithmetic (`M * z`, `x - v1*z1 - ...`),
@@ -539,11 +534,11 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 		// and mark the column binary directly from the type — the same path
 		// optimizer-created BOOLEAN auxiliaries (MIN/MAX, NE indicators) already
 		// use — with no constraint-tree representation of the domain at all.
-		solver_input.variable_types[var] = is_boolean_var[var] ? LogicalType::BOOLEAN : decide_var.return_type;
+		solver_input.variable_types[var] = tree->is_boolean_var[var] ? LogicalType::BOOLEAN : decide_var.return_type;
 	}
 	solver_input.variable_types.resize(solver_input.num_decide_vars);
 	solver_input.variable_names.reserve(num_decide_vars);
-	for (auto &decide_var : decide_variables) {
+	for (auto &decide_var : tree->decide_variables) {
 		solver_input.variable_names.push_back(decide_var->alias);
 	}
 	solver_input.use_native_constructs = use_native_constructs;
@@ -552,19 +547,20 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// Bounds were folded in the gstate constructor from simple
 	// `x OP const` / BETWEEN constraints; those comparisons were skipped in
 	// AnalyzeConstraint so we don't re-emit them as per-row model rows.
-	solver_input.constraint_sources = constraint_sources;
-	solver_input.source_text = source_text;
-	solver_input.objective_written = DecideClauseRefOf(constraint_sources, source_text, DConstants::INVALID_INDEX);
+	solver_input.constraint_sources = display.constraint_sources;
+	solver_input.source_text = display.source_text;
+	solver_input.objective_written =
+	    DecideClauseRefOf(display.constraint_sources, display.source_text, DConstants::INVALID_INDEX);
 	// A variable the query never explicitly lowered gets the default lower bound 0 and
 	// stays non-negative. A variable with an explicit (possibly negative) lower bound
 	// keeps it, and a written bound of -1e30 or below is no bound, as -1e29 is. Must
 	// run before any consumer of lower_bounds (implied-bound propagation, Big-M,
 	// McCormick, model builder).
-	solver_input.lower_bounds.resize(gstate.singleton_row_boxes.size());
-	solver_input.upper_bounds.resize(gstate.singleton_row_boxes.size());
-	for (idx_t var = 0; var < gstate.singleton_row_boxes.size(); var++) {
-		solver_input.lower_bounds[var] = gstate.singleton_row_boxes[var].EffectiveLower();
-		solver_input.upper_bounds[var] = gstate.singleton_row_boxes[var].upper;
+	solver_input.lower_bounds.resize(tree->singleton_row_boxes.size());
+	solver_input.upper_bounds.resize(tree->singleton_row_boxes.size());
+	for (idx_t var = 0; var < tree->singleton_row_boxes.size(); var++) {
+		solver_input.lower_bounds[var] = tree->singleton_row_boxes[var].EffectiveLower();
+		solver_input.upper_bounds[var] = tree->singleton_row_boxes[var].upper;
 	}
 	if (!solver_input.frame_reads.empty()) {
 		solver_input.lower_bounds.resize(solver_input.num_decide_vars);
@@ -600,9 +596,9 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// directions for the same reason.
 	solver_input.rigid_lower_bounds = solver_input.lower_bounds;
 	solver_input.rigid_upper_bounds = solver_input.upper_bounds;
-	for (const auto &b : gstate.user_singleton_row_bounds) {
+	for (const auto &b : tree->user_singleton_row_bounds) {
 		idx_t v = b.decide_var_idx;
-		bool bound_is_bool = is_boolean_var[v];
+		bool bound_is_bool = tree->is_boolean_var[v];
 		if (b.sense == '<' || b.sense == '=') {
 			solver_input.rigid_upper_bounds[v] = bound_is_bool ? 1.0 : NumericLimits<double>::Maximum();
 		}
@@ -614,7 +610,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// A constant lower bound under a `when` replaces the default floor of 0 on the instances its rows reach. After the
 	// rigid box is captured, which it re-opens for the decisions it lowers, and before any pass reads the box.
 	phase.Next("assembly.lifted_floors");
-	ResolveLiftedFloors(solver_input, out_var_indexer, gstate.singleton_row_boxes);
+	ResolveLiftedFloors(solver_input, out_var_indexer, tree->singleton_row_boxes);
 	SyncFrameReadBoxes(solver_input);
 	phase.Next("assembly.implied_bounds");
 
@@ -636,7 +632,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// Objective (linear part)
 	solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
 	solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
-	solver_input.objective_constant = objective_constant_offset;
+	solver_input.objective_constant = tree->objective_constant_offset;
 
 	solver_input.objective_product_groups = std::move(gstate.evaluated_objective_groups);
 
@@ -647,7 +643,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// What reads a decision's column outside the rows and the objective assembled here: a bound folded into its
 	// column's box.
 	vector<idx_t> held;
-	for (auto &bound : gstate.user_singleton_row_bounds) {
+	for (auto &bound : tree->user_singleton_row_bounds) {
 		held.push_back(bound.decide_var_idx);
 	}
 	vector<idx_t> minmax_values;
@@ -702,9 +698,9 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 	// retain the built model so the INFEASIBLE terminal can hand it to the elastic
 	// engine. An unprefixed query pays for neither, and both failure terminals are
 	// prefix-only anyway (RouteSolveResult).
-	bool diagnosis_armed = diagnose;
+	bool diagnosis_armed = tree->diagnose;
 	DecideSolveOutcome solved = SolveDecide(context, solver_input, var_indexer, backend,
-	                                        written_sense == DecideSense::MAXIMIZE, diagnosis_armed, can_prompt);
+	                                        tree->written_sense == DecideSense::MAXIMIZE, diagnosis_armed, can_prompt);
 	SolverResult &solve_result = solved.result;
 
 	// Under DIAGNOSE, a failure is the ANSWER, not an error: hand off the findings to the
@@ -746,7 +742,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 		vector<bool> var_is_aux;
 		BuildVarLabels(solver_input, var_labels, var_is_aux);
 		report(UnboundedTerminal(context, solve_result, solved.model, var_indexer, var_labels, var_is_aux, gstate.data,
-		                         input_column_names, input_column_in_clause));
+		                         display.input_column_names, display.input_column_in_clause));
 		break;
 	}
 	case DiagnosisTerminal::INFEASIBLE: {
@@ -756,7 +752,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 		// `Finalize` retains `elastic` whenever `diagnose` is set, and this terminal is prefix-only.
 		D_ASSERT(elastic);
 		report(InfeasibleTerminal(context, solve_result, *elastic, var_labels, var_is_aux, backend,
-		                          solved.diagnostic_options, written_sense == DecideSense::MAXIMIZE));
+		                          solved.diagnostic_options, tree->written_sense == DecideSense::MAXIMIZE));
 		break;
 	}
 	case DiagnosisTerminal::UNDIAGNOSED:
@@ -802,16 +798,16 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 //! them into the elastic engine); built only inside a failing arm so the SOLVED path pays nothing.
 void PhysicalDecide::BuildVarLabels(const SolverInput &solver_input, vector<string> &var_labels,
                                     vector<bool> &var_is_aux) const {
-	idx_t nvars = decide_variables.size();
+	idx_t nvars = tree->decide_variables.size();
 	var_labels.assign(nvars, string());
 	var_is_aux.assign(nvars, false);
-	for (auto &ae : aux_var_expressions) {
+	for (auto &ae : display.aux_var_expressions) {
 		var_labels[ae.first] = ae.second;
 		var_is_aux[ae.first] = true;
 	}
 	for (idx_t i = 0; i < nvars; i++) {
 		if (!var_is_aux[i]) {
-			var_labels[i] = decide_variables[i]->GetName();
+			var_labels[i] = tree->decide_variables[i]->GetName();
 		}
 	}
 	// A frame read is labelled as its base is.
@@ -906,14 +902,14 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 	// Reference the input's columns into the leading columns of the wide output chunk. The
 	// collection may hold more after them -- the values frame selectors read
 	// -- which are no output.
-	const idx_t input_columns = types.size() - decide_variables.size();
+	const idx_t input_columns = types.size() - tree->decide_variables.size();
 	for (idx_t col = 0; col < input_columns; col++) {
 		chunk.data[col].Reference(source_state.scan_chunk.data[col]);
 	}
 	chunk.SetCardinality(source_state.scan_chunk.size());
 
 	// All DECIDE vars (user + auxiliary) are in the output; projection above prunes aux vars
-	idx_t total_decide_vars = decide_variables.size();
+	idx_t total_decide_vars = tree->decide_variables.size();
 	idx_t chunk_size = chunk.size();
 
 	// Fill in ALL DECIDE variable columns with solution values from ILP solver
@@ -926,7 +922,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 		// An auxiliary's column only carries it to the projection that drops it: nobody
 		// reads its value, so none is converted -- nor refused, which would name an
 		// internal column for a value the user never asked for.
-		if (decide_var_idx >= total_decide_vars - num_auxiliary_vars) {
+		if (decide_var_idx >= total_decide_vars - tree->num_auxiliary_vars) {
 			output_vector.SetVectorType(VectorType::CONSTANT_VECTOR);
 			ConstantVector::SetNull(output_vector, true);
 			continue;
@@ -936,7 +932,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 		output_vector.SetVectorType(VectorType::FLAT_VECTOR);
 
 		// Get the logical type for this DECIDE variable
-		auto &decide_var = decide_variables[decide_var_idx]->Cast<BoundColumnRefExpression>();
+		auto &decide_var = tree->decide_variables[decide_var_idx]->Cast<BoundColumnRefExpression>();
 		auto var_type = decide_var.return_type;
 
 		// The solver's value for each row of this chunk: 0 where it returned none, or where the row's instance has no
@@ -951,14 +947,14 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 			for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
 				output_data[row_in_chunk] = static_cast<int32_t>(
 				    DecideSolutionToInteger(solution_at(row_in_chunk), var_type, decide_var.GetName(),
-				                            variable_scopes[decide_var_idx].declaration));
+				                            tree->variable_scopes[decide_var_idx].declaration));
 			}
 		} else if (var_type == LogicalType::BIGINT) {
 			auto output_data = FlatVector::GetData<int64_t>(output_vector);
 			for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
 				output_data[row_in_chunk] =
 				    DecideSolutionToInteger(solution_at(row_in_chunk), var_type, decide_var.GetName(),
-				                            variable_scopes[decide_var_idx].declaration);
+				                            tree->variable_scopes[decide_var_idx].declaration);
 			}
 		} else {
 			// A user decision is INTEGER (BOOL), BIGINT (INT) or DOUBLE (REAL) (DecideDeclarationsBinder).

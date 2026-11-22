@@ -8,8 +8,8 @@
 
 namespace duckdb {
 
-void PhysicalDecide::CheckDecisionDomains() {
-	idx_t num_decide_vars = decide_variables.size();
+void PhysicalDecide::CheckDecisionDomains(const vector<LogicalDecide::UserBoundSpec> &member_singleton_row_bounds) {
+	idx_t num_decide_vars = tree->decide_variables.size();
 	// A user bound that contradicts the variable's INTRINSIC domain (a non-negative
 	// REAL/INTEGER's `>= 0` floor, or a BOOLEAN's `0/1` box) is a deterministic semantic
 	// error, not a constraint conflict to diagnose — loosening can't help, the type can.
@@ -49,7 +49,7 @@ void PhysicalDecide::CheckDecisionDomains() {
 				return false;
 			}
 			return term.frame_read != DConstants::INVALID_INDEX ||
-			       (read < variable_scopes.size() && variable_scopes[read].IsKeyed()) ||
+			       (read < tree->variable_scopes.size() && tree->variable_scopes[read].IsKeyed()) ||
 			       may_lack_value(read, depth + 1);
 		};
 		for (auto constraint : tree->Constraints()) {
@@ -85,7 +85,7 @@ void PhysicalDecide::CheckDecisionDomains() {
 				written.Add(bound.sense, bound.k);
 			}
 		}
-		for (const auto &bound : user_singleton_row_bounds) {
+		for (const auto &bound : tree->user_singleton_row_bounds) {
 			if (bound.decide_var_idx != var) {
 				continue;
 			}
@@ -110,12 +110,12 @@ void PhysicalDecide::CheckDecisionDomains() {
 			is_signed[var] = true;
 		}
 	}
-	domains.resize(num_decide_vars);
+	tree->domains.resize(num_decide_vars);
 	for (idx_t var = 0; var < num_decide_vars; var++) {
 		if (is_helper[var] || may_lack_value(var, 0)) {
 			continue;
 		}
-		bool is_bool = var < is_boolean_var.size() && is_boolean_var[var];
+		bool is_bool = var < tree->is_boolean_var.size() && tree->is_boolean_var[var];
 		DecideWrittenBox written = written_box(var);
 		// A product takes its factor's sign (`b * x` with x >= -5 reaches -5, AddBooleanProduct): its floor is
 		// the factor's where that is negative, and none where the factor holds a value of either sign.
@@ -130,25 +130,25 @@ void PhysicalDecide::CheckDecisionDomains() {
 			                   is_signed[other] ? -DECIDE_SOLVER_INFINITY : written_box(other).Box().EffectiveLower());
 		}
 		// An auxiliary decision (an ABS, a norm) is named by what it stands for.
-		const bool is_aux = var >= num_decide_vars - num_auxiliary_vars;
-		string vname = decide_variables[var]->GetName();
-		for (auto &label : aux_var_expressions) {
+		const bool is_aux = var >= num_decide_vars - tree->num_auxiliary_vars;
+		string vname = tree->decide_variables[var]->GetName();
+		for (auto &label : display.aux_var_expressions) {
 			if (is_aux && label.first == var) {
 				vname = label.second;
 			}
 		}
-		domains[var] = {true, written.Box(), is_bool, vname};
+		tree->domains[var] = {true, written.Box(), is_bool, vname};
 		// The clause that set the bound `k` (`max(x) <= -5` as much as `x <= -5`, a strict `x < 0` as typed rather than
 		// the folded `x <= -1`).
 		auto refusal = DecideRefuseDomain(written.Box(), is_bool, vname);
 		if (!refusal.message.empty()) {
 			idx_t clause = DConstants::INVALID_INDEX;
-			const vector<LogicalDecide::UserBoundSpec> *lists[] = {&user_singleton_row_bounds,
+			const vector<LogicalDecide::UserBoundSpec> *lists[] = {&tree->user_singleton_row_bounds,
 			                                                       &member_singleton_row_bounds};
 			for (auto *bounds : lists) {
 				for (const auto &bound : *bounds) {
 					if (bound.decide_var_idx == var && bound.sense != (refusal.upper ? '>' : '<') &&
-					    bound.k == refusal.k && bound.origin.source_clause_id < constraint_sources.size()) {
+					    bound.k == refusal.k && bound.origin.source_clause_id < display.constraint_sources.size()) {
 						clause = bound.origin.source_clause_id;
 						break;
 					}
@@ -157,7 +157,7 @@ void PhysicalDecide::CheckDecisionDomains() {
 					break;
 				}
 			}
-			throw InvalidInputException(refusal.message, DecideClauseErrorInfo(constraint_sources, clause));
+			throw InvalidInputException(refusal.message, DecideClauseErrorInfo(display.constraint_sources, clause));
 		}
 	}
 }

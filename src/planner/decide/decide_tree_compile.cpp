@@ -224,7 +224,7 @@ public:
 				}
 			} else if (field.kind == DecideSignatureFieldKind::FRAME) {
 				// Its timeline, and its anchor's place there when it reads relative to it.
-				auto &frame = *tree.nodes[tree.frame_nodes[field.frame]]->frame_spec;
+				auto &frame = op.frames[field.frame];
 				for (auto &element : DecideKeyElements(tree.keys, frame.timeline_key)) {
 					add(*element.expression, element.name);
 				}

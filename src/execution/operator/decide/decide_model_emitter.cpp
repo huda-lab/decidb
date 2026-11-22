@@ -88,7 +88,7 @@ const vector<bool> &DecideModelEmitter::ReadEntriesOf(const DecideTermSite &term
 	if (qualifier_scope == DConstants::INVALID_INDEX) {
 		return candidates;
 	}
-	if (qualifier_scope >= op.keyed_scopes.size() || term_site.node >= tree.nodes.size() ||
+	if (qualifier_scope >= tree.keyed_scopes.size() || term_site.node >= tree.nodes.size() ||
 	    term_site.qualifier_operand >= tree.nodes.size()) {
 		throw InternalException("DECIDE model emitter: invalid relation-qualified term site");
 	}
@@ -187,7 +187,7 @@ static vector<idx_t> SignatureStarts(const DecideTree &tree, const DecideNode &n
 			start += DecideKeyElements(tree.keys, field.key).size();
 		} else {
 			auto &frame = *tree.nodes[tree.frame_nodes[field.frame]];
-			start += DecideKeyElements(tree.keys, frame.key).size() + (frame.frame_spec->Relative() ? 1 : 0);
+			start += DecideKeyElements(tree.keys, frame.key).size() + (tree.frames[frame.frame].Relative() ? 1 : 0);
 		}
 		starts.push_back(start);
 	}
@@ -195,7 +195,7 @@ static vector<idx_t> SignatureStarts(const DecideTree &tree, const DecideNode &n
 }
 
 vector<Value> DecideModelEmitter::Fallback(idx_t frame, idx_t row) const {
-	const bool reaches = op.frames[frame].fallback && gstate.frame_maps[frame].Missing(row);
+	const bool reaches = tree.frames[frame].fallback && gstate.frame_maps[frame].Missing(row);
 	vector<Value> read {Value::BOOLEAN(reaches)};
 	if (!reaches) {
 		return read;
@@ -265,15 +265,16 @@ DecideVariantDifference DecideModelEmitter::ObjectiveDifference(idx_t root, cons
 				return DecideDescentKeyLess(fallback, first) || DecideDescentKeyLess(first, fallback);
 			});
 		};
-		return DecideFrameDifference(node.signature[field], op.frames[f], tree.keys, frame);
+		return DecideFrameDifference(node.signature[field], tree.frames[f], tree.keys, frame);
 	};
-	return DecideObjectiveTwice(node.signature, tree.keys, tree.variable_scopes, op.frames, op.source_text, read);
+	return DecideObjectiveTwice(node.signature, tree.keys, tree.variable_scopes, tree.frames, op.display.source_text,
+	                            read);
 }
 
 void DecideModelEmitter::KeyedMappings(vector<KeyedMapping> &mappings) {
 	mappings = DecideDeclaredMappings(descent);
-	for (idx_t scope = 0; scope < op.keyed_scopes.size(); scope++) {
-		if (op.keyed_scopes[scope].signature != DConstants::INVALID_INDEX) {
+	for (idx_t scope = 0; scope < tree.keyed_scopes.size(); scope++) {
+		if (tree.keyed_scopes[scope].signature != DConstants::INVALID_INDEX) {
 			mappings[scope] = SignatureMapping(scope);
 		}
 	}
@@ -286,7 +287,7 @@ KeyedMapping DecideModelEmitter::SignatureMapping(idx_t scope) {
 	if (operand == DConstants::INVALID_INDEX) {
 		throw InternalException("DECIDE tree: no reducer is qualified by keyed scope %llu", scope);
 	}
-	auto &signature = op.signatures[op.keyed_scopes[scope].signature];
+	auto &signature = tree.signatures[tree.keyed_scopes[scope].signature];
 	const auto variants = Variants(operand, &signature);
 	KeyedMapping mapping;
 	mapping.num_classes = variants.count;
@@ -365,7 +366,7 @@ KeyedMapping DecideModelEmitter::HelperMapping(idx_t node_index) {
 }
 
 void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
-	gstate.absent_reads.assign(op.decide_variables.size(), vector<bool>());
+	gstate.absent_reads.assign(tree.decide_variables.size(), vector<bool>());
 	columns.Absence().ReadClasses(mappings, gstate.absent_reads);
 	gstate.evaluated_bilinear_links.clear();
 	for (auto function : tree.function_nodes) {
@@ -571,11 +572,11 @@ void DecideModelEmitter::Constraints() {
 		}
 	}
 	// The folded bounds follow under DIAGNOSE, numbered after every other clause: only the repair model emits them.
-	const idx_t num_evaluated = num_constraints + (op.diagnose ? tree.singleton_row_count : 0);
+	const idx_t num_evaluated = num_constraints + (tree.diagnose ? tree.singleton_row_count : 0);
 	// A decision with no instance has no value wherever a clause reads it (D84), a folded bound included: the data
 	// answers it as for a row, which counts the bound's skipped instances and warns when it constrains nothing, and the
 	// bound stays in the box. A clause whose decisions have an instance at every row reads nothing here.
-	for (idx_t c = num_evaluated; c < roots.size() && !op.diagnose; c++) {
+	for (idx_t c = num_evaluated; c < roots.size() && !tree.diagnose; c++) {
 		auto &clause = *tree.nodes[roots[c]]->compiled.clause;
 		const DecideAbsentReads absent_reads(columns.Absence(), clause.lhs_terms);
 		if (!clause.lhs_is_aggregate && absent_reads.Any()) {
@@ -689,8 +690,8 @@ EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
 		evaluated.num_groups = 1;
 	}
 	const auto instances = CountInstances(evaluated.row_group_ids, evaluated.num_groups, num_rows, false);
-	if (DescribeBound(clause, num_rows, op.diagnose, op.source_text, op.constraint_sources, op.keyed_scopes, op.keys,
-	                  evaluated)) {
+	if (DescribeBound(clause, num_rows, tree.diagnose, op.display.source_text, op.display.constraint_sources,
+	                  tree.keyed_scopes, tree.keys, evaluated)) {
 		scatter(columns.Numbers(root, body.rhs, tested, &nulls), evaluated.rhs_values);
 	}
 	// A term reading a decision with no instance at the row has no value there (D84), nor has an auxiliary where what
@@ -725,11 +726,11 @@ void DecideModelEmitter::CheckDomain(idx_t root, const EvaluatedConstraint &eval
 		return;
 	}
 	const auto var = clause.lhs_terms[0].variable_index;
-	if (var >= op.domains.size() || !op.domains[var].checked ||
-	    clause.origin.source_clause_id >= op.constraint_sources.size()) {
+	if (var >= tree.domains.size() || !tree.domains[var].checked ||
+	    clause.origin.source_clause_id >= op.display.constraint_sources.size()) {
 		return;
 	}
-	auto &domain = op.domains[var];
+	auto &domain = tree.domains[var];
 	// The rows its term's site reads, whose members (an easy MIN's or MAX's reducer filter keeps some) each write a
 	// row.
 	const auto site = tree.nodes[root]->compiled.linear[0].node;
@@ -751,8 +752,8 @@ void DecideModelEmitter::CheckDomain(idx_t root, const EvaluatedConstraint &eval
 		}
 		auto refusal = DecideRefuseDomain(box, domain.is_bool, domain.name);
 		if (!refusal.message.empty()) {
-			throw InvalidInputException(refusal.message,
-			                            DecideClauseErrorInfo(op.constraint_sources, clause.origin.source_clause_id));
+			throw InvalidInputException(
+			    refusal.message, DecideClauseErrorInfo(op.display.constraint_sources, clause.origin.source_clause_id));
 		}
 	}
 }
@@ -760,7 +761,7 @@ void DecideModelEmitter::CheckDomain(idx_t root, const EvaluatedConstraint &eval
 void DecideModelEmitter::Classes(idx_t root, const vector<bool> &tested, EvaluatedConstraint &evaluated) {
 	auto &clause = *tree.nodes[root]->compiled.clause;
 	const auto signature =
-	    clause.scope.signature == DConstants::INVALID_INDEX ? nullptr : &op.signatures[clause.scope.signature];
+	    clause.scope.signature == DConstants::INVALID_INDEX ? nullptr : &tree.signatures[clause.scope.signature];
 	const auto variants = Variants(root, signature);
 	vector<idx_t> class_of, first_rows, variants_per_class;
 	DecideOneRowPerVariant(variants.of_row, variants.class_of_row, variants.count, variants.num_classes,
@@ -781,7 +782,7 @@ void DecideModelEmitter::Classes(idx_t root, const vector<bool> &tested, Evaluat
 			evaluated.group_names.push_back(class_names[class_of[variant]]);
 		}
 	}
-	if (!op.diagnose) {
+	if (!tree.diagnose) {
 		return;
 	}
 	// Each variant's row stands for the classes of every kept row it reads (D28), as an aggregate row's group does:
@@ -820,7 +821,7 @@ vector<Value> DecideModelEmitter::Identity(idx_t node, idx_t entry) const {
 		// an entry stands for.
 		const auto f = fields[i].frame;
 		auto &map = gstate.frame_maps[f];
-		identity.push_back(Value::UBIGINT(op.frames[f].Relative() ? map.peer[row] : map.timeline[row]));
+		identity.push_back(Value::UBIGINT(tree.frames[f].Relative() ? map.peer[row] : map.timeline[row]));
 		auto fallback = Fallback(f, row);
 		identity.insert(identity.end(), fallback.begin(), fallback.end());
 	}
@@ -1126,7 +1127,7 @@ EmittedClause DecideModelEmitter::Groups(idx_t root, bool counted) {
 	// clause's (Classes), though its groups merge the instances.
 	if (clause.scope.per == DecideClauseScope::PerRole::NAMES_CLASSES &&
 	    clause.scope.signature != DConstants::INVALID_INDEX) {
-		auto &signature = op.signatures[clause.scope.signature];
+		auto &signature = tree.signatures[clause.scope.signature];
 		const auto variants = Variants(root, &signature, false);
 		if (variants.count > variants.num_classes) {
 			op.RecordVariants(signature, "constraints", variants.count, variants.num_classes);
@@ -1159,13 +1160,13 @@ EmittedClause DecideModelEmitter::Groups(idx_t root, bool counted) {
 	});
 	const auto kept_groups = GroupRowsByShape(
 	    clause, num_rows, kept, has_local_filters, active, keyed ? &key_groups : nullptr, class_of_row,
-	    op.diagnose || clause.tightest_frame_bound ? &kept_row_group_ids : nullptr, evaluated, grouped_instances);
+	    tree.diagnose || clause.tightest_frame_bound ? &kept_row_group_ids : nullptr, evaluated, grouped_instances);
 	if (keyed) {
 		Name(by, kept_groups, evaluated);
 	}
 	// The classes each group's row stands for, which a diagnosis reports one by one (D28). With no `by` key no group
 	// numbers the kept rows, and a clause with no groups is one group of every kept row.
-	if (op.diagnose) {
+	if (tree.diagnose) {
 		evaluated.group_class_set = DecideGroupClassSets(
 		    clause.scope, num_rows, kept, kept_row_group_ids,
 		    evaluated.row_group_ids.empty() ? 1 : evaluated.num_groups,
@@ -1193,7 +1194,7 @@ EmittedClause DecideModelEmitter::Groups(idx_t root, bool counted) {
 	if (!bound_null.empty()) {
 		// Taken once every rule that drops an instance has run but the next, which reads `null_rows`.
 		TakeTightestFrameBound(evaluated.comparison_type, RenderDecideSource(*clause.rhs_expr, names),
-		                       DecideSpanLocation(op.source_text, clause.rhs_expr->GetQueryLocation()), kept,
+		                       DecideSpanLocation(op.display.source_text, clause.rhs_expr->GetQueryLocation()), kept,
 		                       bound_null, kept_row_group_ids, evaluated.row_group_ids, evaluated.num_groups,
 		                       evaluated.group_names, key_values, evaluated.rhs_values.MutableDense(), null_rows);
 	}
@@ -1213,8 +1214,8 @@ vector<bool> DecideModelEmitter::GroupBound(idx_t root, const DecideEntryRows &r
 	auto &body = tree.nodes[root]->compiled;
 	auto &clause = *body.clause;
 	auto &evaluated = result.row;
-	if (!DescribeBound(clause, num_rows, op.diagnose, op.source_text, op.constraint_sources, op.keyed_scopes, op.keys,
-	                   evaluated)) {
+	if (!DescribeBound(clause, num_rows, tree.diagnose, op.display.source_text, op.display.constraint_sources,
+	                   tree.keyed_scopes, tree.keys, evaluated)) {
 		return vector<bool>();
 	}
 	// A tightest frame bound's NULL bounds nothing, rather than leaving its instance no value (D85), and a row in no
@@ -1368,7 +1369,7 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 	// The objective is produced once (D72): a second variant over its kept rows would be a second objective, which
 	// is checked before any clause is read.
 	const auto signature =
-	    op.objective_signature == DConstants::INVALID_INDEX ? nullptr : &op.signatures[op.objective_signature];
+	    tree.objective_signature == DConstants::INVALID_INDEX ? nullptr : &tree.signatures[tree.objective_signature];
 	// Counted first, each row's variant read only for a second variant's message.
 	if (Variants(root, signature, false).count > 1) {
 		const auto variants = Variants(root, signature);
@@ -1553,9 +1554,10 @@ void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {
 	vector<idx_t> payload_vars, fallback_vars;
 	const auto payload = read(body.members, body.linear, map.ReadRows(), payload_vars);
 	const auto fallback = read(body.fallback, body.fallback_sites, map.FallbackAnchors(), fallback_vars);
-	DecideListFrameMembers(map, tree_node.aggregate,
-	                       DecideClauseRefOf(op.constraint_sources, op.source_text, tree_node.value_link_clause),
-	                       tree_node.text, payload, payload_vars, fallback, fallback_vars, out);
+	DecideListFrameMembers(
+	    map, tree_node.aggregate,
+	    DecideClauseRefOf(op.display.constraint_sources, op.display.source_text, tree_node.value_link_clause),
+	    tree_node.text, payload, payload_vars, fallback, fallback_vars, out);
 }
 
 void DecideModelEmitter::ValueLinks() {
@@ -1629,8 +1631,8 @@ void DecideModelEmitter::ValueLinks() {
 					}
 				}
 				if (!std::isfinite(constant)) {
-					throw DecideTooLargeError(
-					    DecideClauseRefOf(op.constraint_sources, op.source_text, tree_node.value_link_clause));
+					throw DecideTooLargeError(DecideClauseRefOf(op.display.constraint_sources, op.display.source_text,
+					                                            tree_node.value_link_clause));
 				}
 				spec.members.AddMember(constant);
 				for (idx_t term = 0; term < variables.size(); term++) {

@@ -23,20 +23,10 @@
 
 namespace duckdb {
 
-//! Singleton-row folding is decided at layer 05 (DecideOptimizer::FoldSingletonRows).
-//! `UserBoundSpec` lives on LogicalDecide with it; execution reads the resulting box
-//! rather than deriving one.
-using UserBoundSpec = LogicalDecide::UserBoundSpec;
-
 class DecideGlobalSinkState : public GlobalSinkState {
 public:
 	explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
 	    : data(context, op.children[0]->GetTypes()), op(op) {
-		// The decision column box was resolved by DecideOptimizer::FoldSingletonRows.
-		// A variable whose box never had a lower bound written is one the query never
-		// lowered, and Finalize resolves it to the default 0 floor.
-		singleton_row_boxes = op.singleton_row_boxes;
-		user_singleton_row_bounds = op.user_singleton_row_bounds;
 	}
 
 	mutex lock;
@@ -48,14 +38,6 @@ public:
 	ColumnDataCollection data;
 
 	const PhysicalDecide &op;
-
-	//! Local copies of the decision column box and the singleton-row-bound records that
-	//! DecideOptimizer::FoldSingletonRows resolved. Finalize copies the box into
-	//! solver_input; the records quote a bound that contradicts its domain and re-open its
-	//! direction of the rigid box, while its clause reaches the repair model through
-	//! `singleton_row_constraints`.
-	vector<DecideBoundBox> singleton_row_boxes;
-	vector<UserBoundSpec> user_singleton_row_bounds;
 
 	//===--------------------------------------------------------------------===//
 	// Evaluated Coefficients (Phase 2)
@@ -123,7 +105,7 @@ public:
 		if (frame_read == DConstants::INVALID_INDEX) {
 			return variable;
 		}
-		if (variable < op.variable_scopes.size() && op.variable_scopes[variable].IsGlobal()) {
+		if (variable < op.tree->variable_scopes.size() && op.tree->variable_scopes[variable].IsGlobal()) {
 			return variable;
 		}
 		auto read = std::make_pair(variable, frame_read);
@@ -132,7 +114,7 @@ public:
 			frame_reads.push_back(read);
 			it = frame_reads.end() - 1;
 		}
-		return op.decide_variables.size() + static_cast<idx_t>(it - frame_reads.begin());
+		return op.tree->decide_variables.size() + static_cast<idx_t>(it - frame_reads.begin());
 	}
 
 	//! Set when the solve failed under DIAGNOSE: the findings were handed off instead of

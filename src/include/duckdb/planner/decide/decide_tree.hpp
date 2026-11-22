@@ -153,6 +153,8 @@ struct DecideNode {
 	DecideTreePer per = DecideTreePer::ROW;
 	//! E: per key, G: by/path key, O: timeline key.
 	idx_t key = DConstants::INVALID_INDEX;
+	//! The fields the descent splits this node's entries by: what the descent and `Identity` read, where `signatures`
+	//! is what `Variants` reads.
 	vector<DecideSignatureField> signature;
 	//! The decisions its own expressions read, a defined one among them, whether or not sigma names them.
 	vector<idx_t> decisions;
@@ -193,9 +195,9 @@ struct DecideNode {
 	//! every row of the ABS from them.
 	unique_ptr<Expression> abs_expressions[2];
 	vector<idx_t> abs_envelope_roots;
-	unique_ptr<DecideFrameSpec> frame_spec;
 	string aggregate;
 	idx_t link = DConstants::INVALID_INDEX;
+	//! A FRAME node's selector: an index into DecideTree::frames, INVALID for any other node.
 	idx_t frame = DConstants::INVALID_INDEX;
 	idx_t value_var = DConstants::INVALID_INDEX;
 	//! A linked G/O's output contract, copied onto the owning node for formulation.
@@ -241,7 +243,6 @@ struct DecideNode {
 };
 
 struct DecideTree {
-	idx_t decide_index = DConstants::INVALID_INDEX;
 	idx_t input_column_count = 0;
 	//! The direction the objective was written in (LogicalDecide::written_sense): FEASIBILITY for none.
 	DecideSense written_sense = DecideSense::FEASIBILITY;
@@ -261,6 +262,7 @@ struct DecideTree {
 	vector<idx_t> function_nodes;
 	//! Deterministic children-first order, including shared and definition edges.
 	vector<idx_t> eval_order;
+	//! Every key of the clause, its expressions resolved against the input chunk.
 	vector<DecideKey> keys;
 	vector<KeyedScopeInfo> keyed_scopes;
 	vector<DecideVarScopeInfo> variable_scopes;
@@ -281,6 +283,46 @@ struct DecideTree {
 	//! Per frame column (DecideFrameReads::columns), what its O computes for it; a reducer's over frames
 	//! (AGGREGATE) is its G's fold.
 	vector<DecideFrameColumnPrograms> frame_columns;
+
+	// The facts the plan states of the query, which PlanDecide moves in from the LogicalDecide once the tree is
+	// finished: the construction reads the LogicalDecide's own until then.
+
+	//! The variables to be decided: the user's, then the auxiliaries (`num_auxiliary_vars`) at the end.
+	vector<unique_ptr<Expression>> decide_variables;
+	idx_t num_auxiliary_vars = 0;
+	//! Per decision, whether it was declared IS BOOLEAN. A BOOLEAN is lowered to an INTEGER with a 0/1 domain, so its
+	//! runtime type is INTEGER: this flag is the only signal that the 0/1 box is its intrinsic domain, not a bound the
+	//! user wrote.
+	vector<bool> is_boolean_var;
+	//! The constant canonicalization peeled off the objective (LogicalDecide::objective_constant_offset), so the
+	//! objective value a solve reports is the minimized objective's (the negation of a MAXIMIZE query's).
+	double objective_constant_offset = 0.0;
+	//! The variant signatures, the plan's verbatim: `Variants` (DecideModelEmitter) reads the field kinds in the order
+	//! written, and a node's `signature` would change the order its variants are numbered in. The objective's,
+	//! INVALID_INDEX for none.
+	vector<DecideSignature> signatures;
+	idx_t objective_signature = DConstants::INVALID_INDEX;
+	//! The frame selectors (LogicalDecide::frames), one home for every reader: a frame node names its own by `frame`.
+	vector<DecideFrameSpec> frames;
+	//! The `DIAGNOSE` prefix the user wrote. It is the only thing that arms the diagnosis engines: when true a failed
+	//! solve stashes its findings for the DIAGNOSE operator above to return as rows instead of raising, and none of the
+	//! diagnostic prep (unbounded-ray extraction, model retention, the elastic re-solves) is done or paid for
+	//! otherwise.
+	bool diagnose = false;
+
+	//! What the domain check reads of a decision: the box of the bounds written on it as constants, whose floor holds
+	//! the floors a `when` or `per` lowers (conservatively: the lowest), and how its message names the decision.
+	//! `checked` is false for a decision no bound contradicts a type of (a helper, an auxiliary that may read no
+	//! value).
+	struct DecisionDomain {
+		bool checked = false;
+		DecideBoundBox box;
+		bool is_bool = false;
+		string name;
+	};
+	//! One per decision, filled by CheckDecisionDomains. The run-time check of a per-row bound reads it
+	//! (DecideModelEmitter::CheckDomain).
+	vector<DecisionDomain> domains;
 
 	//! Reject dangling edges, cycles, invalid keys and non-physical source reads.
 	void Validate() const;

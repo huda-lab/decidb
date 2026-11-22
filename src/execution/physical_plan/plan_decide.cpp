@@ -84,7 +84,7 @@ static vector<string> UserWrittenColumnNames(LogicalDecide &op) {
 //! `input_column_in_clause`, aligned with the materialized data chunk. Only a query under DIAGNOSE reads them, so only
 //! one under DIAGNOSE builds them. `child_userwritten_names` is UserWrittenColumnNames of the plan the operator was
 //! made from.
-static void NameInputColumns(PhysicalDecide &decide_op, LogicalDecide &op,
+static void NameInputColumns(DecideDisplay &display, const DecideTree &tree, LogicalDecide &op,
                              const vector<string> &child_userwritten_names) {
 	// Resolve source column names for the surviving (post-pruning) child columns,
 	// positionally aligned with the materialized data chunk. Used by the unbounded
@@ -101,8 +101,8 @@ static void NameInputColumns(PhysicalDecide &decide_op, LogicalDecide &op,
 	// names. Anything still empty after that (a computed column with no user alias) is
 	// left blank on purpose: the unbounded diagnosis suppresses categorical rules over
 	// unnamed columns rather than inventing a positional `colN` the user never typed.
-	decide_op.input_column_names.assign(child_userwritten_names.size(), string());
-	decide_op.input_column_in_clause.assign(child_userwritten_names.size(), false);
+	display.input_column_names.assign(child_userwritten_names.size(), string());
+	display.input_column_in_clause.assign(child_userwritten_names.size(), false);
 	// Names are kept as SQL, as the query writes them (`t.depot`, `"my col"`), so a remedy that prints one is
 	// pasteable. A reference is quoted from the DECIDE text at its query location, as a message quotes a clause; one
 	// the text does not hold (a column only the SELECT list names, a reference rewritten without its location) keeps
@@ -111,20 +111,20 @@ static void NameInputColumns(PhysicalDecide &decide_op, LogicalDecide &op,
 	auto written_name = [&](const BoundReferenceExpression &ref, const string &fallback) {
 		string text;
 		int binding;
-		return decide_op.source_text.CutExpr(ref.GetQueryLocation(), text, binding) ? text : fallback;
+		return display.source_text.CutExpr(ref.GetQueryLocation(), text, binding) ? text : fallback;
 	};
 	auto harvest_key = [&](idx_t key) {
-		for (auto &element : DecideKeyElements(decide_op.keys, key)) {
+		for (auto &element : DecideKeyElements(tree.keys, key)) {
 			auto &expr = *element.expression;
 			if (expr.GetExpressionClass() != ExpressionClass::BOUND_REF) {
 				harvest(expr);
 				continue;
 			}
 			auto &ref = expr.Cast<BoundReferenceExpression>();
-			if (ref.index < decide_op.input_column_names.size()) {
-				decide_op.input_column_in_clause[ref.index] = true;
-				if (decide_op.input_column_names[ref.index].empty()) {
-					decide_op.input_column_names[ref.index] = written_name(ref, element.name);
+			if (ref.index < display.input_column_names.size()) {
+				display.input_column_in_clause[ref.index] = true;
+				if (display.input_column_names[ref.index].empty()) {
+					display.input_column_names[ref.index] = written_name(ref, element.name);
 				}
 			}
 		}
@@ -132,12 +132,12 @@ static void NameInputColumns(PhysicalDecide &decide_op, LogicalDecide &op,
 	harvest = [&](const Expression &e) {
 		if (e.GetExpressionClass() == ExpressionClass::BOUND_REF) {
 			auto &r = e.Cast<BoundReferenceExpression>();
-			if (r.index < decide_op.input_column_names.size()) {
+			if (r.index < display.input_column_names.size()) {
 				// Reached from the DECIDE clause, so it explains rather than correlates
 				// — recorded even when an earlier reference already supplied the name.
-				decide_op.input_column_in_clause[r.index] = true;
-				if (decide_op.input_column_names[r.index].empty()) {
-					decide_op.input_column_names[r.index] =
+				display.input_column_in_clause[r.index] = true;
+				if (display.input_column_names[r.index].empty()) {
+					display.input_column_names[r.index] =
 					    written_name(r, QuoteColumnName(StripDecideTags(r.GetName())));
 				}
 			}
@@ -151,22 +151,22 @@ static void NameInputColumns(PhysicalDecide &decide_op, LogicalDecide &op,
 			}
 		}
 	};
-	if (decide_op.decide_constraints) {
-		harvest(*decide_op.decide_constraints);
+	if (display.decide_constraints) {
+		harvest(*display.decide_constraints);
 	}
-	if (decide_op.decide_objective) {
-		harvest(*decide_op.decide_objective);
+	if (display.decide_objective) {
+		harvest(*display.decide_objective);
 	}
 	// A `by` key and a scope check read the clause's data too; an aggregate-shape clause
 	// keeps its `per` wrapper (DecideCanonicalizer::CanonicalizeTreeInternal), so its key
 	// is named above. A key only a declaration writes names no column: a column the
 	// clauses never name stays unnamed.
-	for (idx_t key = 0; key < decide_op.keys.size(); key++) {
-		if (decide_op.keys[key].written_as_by) {
+	for (idx_t key = 0; key < tree.keys.size(); key++) {
+		if (tree.keys[key].written_as_by) {
 			harvest_key(key);
 		}
 	}
-	for (auto &signature : decide_op.signatures) {
+	for (auto &signature : tree.signatures) {
 		if (signature.rows) {
 			harvest(*signature.rows);
 		}
@@ -190,9 +190,9 @@ static void NameInputColumns(PhysicalDecide &decide_op, LogicalDecide &op,
 	// Back-fill SELECT-only columns from the child projection's user-written names.
 	// Only slots the DECIDE-clause harvest left empty are touched, so a name the user
 	// referenced in the clause always wins over the raw projection alias.
-	for (idx_t i = 0; i < decide_op.input_column_names.size(); i++) {
-		if (decide_op.input_column_names[i].empty() && !child_userwritten_names[i].empty()) {
-			decide_op.input_column_names[i] = QuoteColumnName(child_userwritten_names[i]);
+	for (idx_t i = 0; i < display.input_column_names.size(); i++) {
+		if (display.input_column_names[i].empty() && !child_userwritten_names[i].empty()) {
+			display.input_column_names[i] = QuoteColumnName(child_userwritten_names[i]);
 		}
 	}
 }
@@ -246,43 +246,38 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 		child_userwritten_names = UserWrittenColumnNames(op);
 	}
 	auto child_plan = CreatePlan(*op.children[0]);
-	auto decide_op = make_uniq<PhysicalDecide>(
-	    op.types, op.estimated_cardinality, std::move(child_plan), op.decide_index, std::move(op.decide_variables),
-	    std::move(op.decide_constraints), op.written_sense, std::move(op.decide_objective));
-	decide_op->tree = std::move(tree);
+	// What the tree's construction read of the LogicalDecide is read; each fact the plan states moves in, so the tree
+	// is its one home.
+	tree->decide_variables = std::move(op.decide_variables);
+	tree->num_auxiliary_vars = op.num_auxiliary_vars;
+	tree->is_boolean_var = std::move(op.is_boolean_var);
+	tree->objective_constant_offset = op.objective_constant_offset;
+	tree->signatures = std::move(op.signatures);
+	tree->objective_signature = op.objective_signature;
+	tree->frames = std::move(op.frames);
+	tree->diagnose = op.diagnose;
+	auto decide_op = make_uniq<PhysicalDecide>(op.types, op.estimated_cardinality, std::move(child_plan));
+	auto &display = decide_op->display;
+	display.decide_index = op.decide_index;
+	display.decide_constraints = std::move(op.decide_constraints);
+	display.decide_objective = std::move(op.decide_objective);
+	display.constraint_sources = std::move(op.constraint_sources);
+	display.written_objective = std::move(op.written_objective);
+	display.canonical_objective = std::move(op.canonical_objective);
+	display.objective_canonical_differs = op.objective_canonical_differs;
+	display.source_text = std::move(op.source_text);
+	display.aux_var_expressions = std::move(op.aux_var_expressions);
+	display.rewrite_accounts = std::move(op.rewrite_accounts);
 	decide_op->debug = GetDecideDebug(context);
-	// The DIAGNOSE prefix, carried the last leg of parser → binder → plan → stage 08.
-	decide_op->diagnose = op.diagnose;
 	decide_op->solver_backend_name = op.solver_backend_name;
 	decide_op->use_native_constructs = op.use_native_constructs;
 	decide_op->force_native_constructs = op.force_native_constructs;
-	decide_op->num_auxiliary_vars = op.num_auxiliary_vars;
-	decide_op->is_boolean_var = op.is_boolean_var;
-	decide_op->aux_var_expressions = std::move(op.aux_var_expressions);
-	decide_op->constraint_sources = std::move(op.constraint_sources);
-	decide_op->written_objective = std::move(op.written_objective);
-	decide_op->canonical_objective = std::move(op.canonical_objective);
-	decide_op->objective_canonical_differs = op.objective_canonical_differs;
-	decide_op->objective_constant_offset = op.objective_constant_offset;
-	decide_op->source_text = std::move(op.source_text);
-	decide_op->rewrite_accounts = std::move(op.rewrite_accounts);
-	decide_op->singleton_row_boxes = std::move(op.singleton_row_boxes);
-	decide_op->user_singleton_row_bounds = std::move(op.user_singleton_row_bounds);
-	decide_op->member_singleton_row_bounds = std::move(op.member_singleton_row_bounds);
-
-	decide_op->keyed_scopes = std::move(op.keyed_scopes);
-	decide_op->variable_scopes = std::move(op.variable_scopes);
-	// Resolved like every other expression the operator owns (EnumerateExpressions).
-	decide_op->keys = std::move(op.keys);
-	decide_op->frames = std::move(op.frames);
-	decide_op->signatures = std::move(op.signatures);
-	decide_op->objective_signature = op.objective_signature;
-
 	if (op.diagnose) {
-		NameInputColumns(*decide_op, op, child_userwritten_names);
+		NameInputColumns(display, *tree, op, child_userwritten_names);
 	}
+	decide_op->tree = std::move(tree);
 	// The refusal of a bound the decision's type cannot hold reads the plan alone, so it is raised here.
-	decide_op->CheckDecisionDomains();
+	decide_op->CheckDecisionDomains(op.member_singleton_row_bounds);
 	return std::move(decide_op);
 }
 

@@ -203,7 +203,7 @@ private:
 	//! MIN's or MAX's members among them): a bound the decision's type cannot hold (`per g: x <= -1` on a BOOL or a
 	//! non-negative INT) is an error pointing at the clause, as for a bound folded into the decision's box
 	//! (DecideRefuseDomain). Only a bound written as a constant is checked, and its box takes the lowest floor any
-	//! clause lowers the decision to (PhysicalDecide::domains), so a clause the solve could satisfy is never
+	//! clause lowers the decision to (DecideTree::domains), so a clause the solve could satisfy is never
 	//! refused.
 	void CheckDomain(idx_t root, const EvaluatedConstraint &evaluated);
 	//! A clause in the grouped shape, the aggregate shape or a MIN or MAX: one model row per group of its `by` key, its

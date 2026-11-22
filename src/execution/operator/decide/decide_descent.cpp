@@ -106,9 +106,9 @@ static const DecideNode *DescentFrameNode(const DecideTree &tree, idx_t frame) {
 	return nullptr;
 }
 
-//! Whether a frame field of a signature reads its order key: relative to the anchor, or with no spec.
-static bool DescentFrameReadsOrder(const DecideNode &frame) {
-	return !frame.frame_spec || frame.frame_spec->Relative();
+//! Whether a frame field of a signature reads its order key: relative to the anchor.
+static bool DescentFrameReadsOrder(const DecideTree &tree, const DecideNode &frame) {
+	return tree.frames[frame.frame].Relative();
 }
 
 //! The columns of `node`'s signature values, as Signature computes them: a value, a decision and its instance, a
@@ -142,7 +142,7 @@ static vector<LogicalType> DescentSignatureTypes(const DecideTree &tree, const D
 			}
 			auto key = DescentKeyTypes(tree, frame->key);
 			types.insert(types.end(), key.begin(), key.end());
-			if (DescentFrameReadsOrder(*frame)) {
+			if (DescentFrameReadsOrder(tree, *frame)) {
 				types.push_back(frame->over->return_type);
 			}
 			break;
@@ -383,13 +383,11 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 			types.push_back(node.over->return_type);
 			layout.order_key = types.size();
 			types.push_back(LogicalType::BLOB);
-			if (node.frame_spec) {
-				layout.partition = types.size();
-				auto partition = DescentKeyTypes(tree, node.frame_spec->partition_key);
-				types.insert(types.end(), partition.begin(), partition.end());
-				layout.partition_present = types.size();
-				types.push_back(LogicalType::BOOLEAN);
-			}
+			layout.partition = types.size();
+			auto partition = DescentKeyTypes(tree, tree.frames[node.frame].partition_key);
+			types.insert(types.end(), partition.begin(), partition.end());
+			layout.partition_present = types.size();
+			types.push_back(LogicalType::BOOLEAN);
 		}
 		layout.end = types.size();
 		container.values.Initialize(allocator, types);
@@ -803,7 +801,7 @@ void DecideDescent::Signature(idx_t node_index, DataChunk &chunk, const Reach &r
 			for (idx_t c = 0; c < keys.ColumnCount(); c++) {
 				values.data[column++].Reference(keys.data[c]);
 			}
-			if (frame && DescentFrameReadsOrder(*frame)) {
+			if (frame && DescentFrameReadsOrder(tree, *frame)) {
 				Evaluate(*frame->over, chunk, rows, values.data[column++]);
 			}
 			break;
@@ -1219,17 +1217,16 @@ void DecideDescent::InsertDistinct(Pending &batch, idx_t row_base) {
 
 void DecideDescent::FrameOrder(const DecideNode &node, const DecideEntryLayout &layout, DataChunk &chunk,
                                const Reach &stored, DataChunk &values) {
-	if (node.frame_spec) {
-		DataChunk partition;
-		unsafe_vector<bool> present;
-		Key(node.frame_spec->partition_key, chunk, stored, partition, present);
-		for (idx_t c = 0; c < partition.ColumnCount(); c++) {
-			values.data[layout.partition + c].Reference(partition.data[c]);
-		}
-		auto flags = FlatVector::GetData<bool>(values.data[layout.partition_present]);
-		for (idx_t i = 0; i < stored.size(); i++) {
-			flags[i] = present[i];
-		}
+	auto &frame = tree.frames[node.frame];
+	DataChunk partition;
+	unsafe_vector<bool> present;
+	Key(frame.partition_key, chunk, stored, partition, present);
+	for (idx_t c = 0; c < partition.ColumnCount(); c++) {
+		values.data[layout.partition + c].Reference(partition.data[c]);
+	}
+	auto flags = FlatVector::GetData<bool>(values.data[layout.partition_present]);
+	for (idx_t i = 0; i < stored.size(); i++) {
+		flags[i] = present[i];
 	}
 	auto &order = values.data[layout.order];
 	Evaluate(*node.over, chunk, stored, order);
@@ -1237,7 +1234,7 @@ void DecideDescent::FrameOrder(const DecideNode &node, const DecideEntryLayout &
 	// than Value's order.
 	Vector *compared = &order;
 	unique_ptr<Vector> collated;
-	if (node.frame_spec && node.frame_spec->order_collation) {
+	if (frame.order_collation) {
 		// The order keys stand at the rows' own positions in the chunk, so a collation that raises names its row.
 		SelectionVector at(chunk.size());
 		for (idx_t i = 0; i < chunk.size(); i++) {
@@ -1250,12 +1247,11 @@ void DecideDescent::FrameOrder(const DecideNode &node, const DecideEntryLayout &
 		raw.InitializeEmpty({node.over->return_type});
 		raw.data[0].Slice(order, at, chunk.size());
 		raw.SetCardinality(chunk.size());
-		collated = make_uniq<Vector>(node.frame_spec->order_collation->return_type);
-		Evaluate(*node.frame_spec->order_collation, raw, stored, *collated);
+		collated = make_uniq<Vector>(frame.order_collation->return_type);
+		Evaluate(*frame.order_collation, raw, stored, *collated);
 		compared = collated.get();
 	}
-	const auto direction =
-	    node.frame_spec && node.frame_spec->descending ? OrderType::DESCENDING : OrderType::ASCENDING;
+	const auto direction = frame.descending ? OrderType::DESCENDING : OrderType::ASCENDING;
 	OrderModifiers modifiers(direction,
 	                         DBConfig::GetConfig(context).ResolveNullOrder(direction, OrderByNullType::ORDER_DEFAULT));
 	CreateSortKeyHelpers::CreateSortKey(*compared, stored.size(), modifiers, values.data[layout.order_key]);

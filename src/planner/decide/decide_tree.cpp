@@ -137,39 +137,10 @@ static DecideSignatureField CopyField(const DecideSignatureField &field) {
 	return result;
 }
 
-static unique_ptr<DecideFrameSpec> CopyFrame(const DecideFrameSpec &frame) {
-	auto result = make_uniq<DecideFrameSpec>();
-	result->range = frame.range;
-	result->reducer = frame.reducer;
-	result->from = frame.from;
-	result->from_k = frame.from_k;
-	result->to = frame.to;
-	result->to_k = frame.to_k;
-	result->every = frame.every;
-	result->all = frame.all;
-	result->fallback = CopyOrNull(frame.fallback);
-	result->order = CopyOrNull(frame.order);
-	result->order_collation = CopyOrNull(frame.order_collation);
-	result->descending = frame.descending;
-	result->cyclic = frame.cyclic;
-	result->within_key = frame.within_key;
-	result->text = frame.text;
-	result->location = frame.location;
-	result->spelling = frame.spelling;
-	result->rows = CopyOrNull(frame.rows);
-	result->timeline_key = frame.timeline_key;
-	result->timeline_names = frame.timeline_names;
-	result->order_name = frame.order_name;
-	result->partition_key = frame.partition_key;
-	result->partition_subject = frame.partition_subject;
-	return result;
-}
-
 class DecideTreeBuilder {
 public:
 	DecideTreeBuilder(ClientContext &context, const LogicalDecide &op) : context(context), op(op) {
 		tree = make_uniq<DecideTree>();
-		tree->decide_index = op.decide_index;
 		tree->written_sense = op.written_sense;
 		tree->variable_scopes = op.variable_scopes;
 		tree->keyed_scopes = op.keyed_scopes;
@@ -1376,7 +1347,6 @@ private:
 		auto &node = *tree->nodes[index];
 		auto &frame = op.frames[frame_index];
 		node.frame = frame_index;
-		node.frame_spec = CopyFrame(frame);
 		node.key = frame.timeline_key;
 		// An anchor whose `within` column is NULL lies in no timeline, so it reads no value (D75): the O holds it in a
 		// slot of its own, which no timeline is built from (DecideTreeColumns::ReadFrames).
@@ -1386,7 +1356,6 @@ private:
 		Gates(index, frame.rows.get());
 		if (frame.order) {
 			node.over = Resolve(*frame.order);
-			node.frame_spec->order = node.over->Copy();
 		}
 		if (marker && marker->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 			auto &aggregate = marker->Cast<BoundAggregateExpression>();
@@ -1408,7 +1377,6 @@ private:
 		auto payload_signature = std::move(node.signature);
 		if (frame.fallback) {
 			node.fallback = Lower(index, *frame.fallback);
-			node.frame_spec->fallback = node.fallback->Copy();
 		}
 		node.signature = std::move(payload_signature);
 		return index;
