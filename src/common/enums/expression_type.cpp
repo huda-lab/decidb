@@ -139,6 +139,8 @@ string ExpressionTypeToString(ExpressionType type) {
 		return "BOUND_LAMBDA_REF";
 	case ExpressionType::DECIDE_FRAME:
 		return "DECIDE_FRAME";
+	case ExpressionType::DECIDE_REDUCER:
+		return "DECIDE_REDUCER";
 	case ExpressionType::LAMBDA:
 		return "LAMBDA";
 	case ExpressionType::ARROW:
@@ -166,6 +168,8 @@ string ExpressionClassToString(ExpressionClass type) {
 		return "LAMBDA_REF";
 	case ExpressionClass::DECIDE_FRAME:
 		return "DECIDE_FRAME";
+	case ExpressionClass::DECIDE_REDUCER:
+		return "DECIDE_REDUCER";
 	case ExpressionClass::COMPARISON:
 		return "COMPARISON";
 	case ExpressionClass::CONJUNCTION:

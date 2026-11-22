@@ -51,6 +51,9 @@ unique_ptr<ParsedExpression> ParsedExpression::Deserialize(Deserializer &deseria
 	case ExpressionClass::DECIDE_FRAME:
 		result = DecideFrameExpression::Deserialize(deserializer);
 		break;
+	case ExpressionClass::DECIDE_REDUCER:
+		result = DecideReducerExpression::Deserialize(deserializer);
+		break;
 	case ExpressionClass::DEFAULT:
 		result = DefaultExpression::Deserialize(deserializer);
 		break;
@@ -224,6 +227,23 @@ unique_ptr<ParsedExpression> DecideFrameExpression::Deserialize(Deserializer &de
 	deserializer.ReadPropertyWithDefault<bool>(210, "descending", result->descending);
 	deserializer.ReadPropertyWithDefault<bool>(211, "cyclic", result->cyclic);
 	deserializer.ReadPropertyWithDefault<vector<unique_ptr<ParsedExpression>>>(212, "within", result->within);
+	return std::move(result);
+}
+
+void DecideReducerExpression::Serialize(Serializer &serializer) const {
+	ParsedExpression::Serialize(serializer);
+	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(200, "call", call);
+	serializer.WriteProperty<DecideScope>(201, "scope", scope);
+	serializer.WritePropertyWithDefault<bool>(202, "has_by", has_by);
+	serializer.WritePropertyWithDefault<vector<unique_ptr<ParsedExpression>>>(203, "by", by);
+}
+
+unique_ptr<ParsedExpression> DecideReducerExpression::Deserialize(Deserializer &deserializer) {
+	auto result = duckdb::unique_ptr<DecideReducerExpression>(new DecideReducerExpression());
+	deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(200, "call", result->call);
+	deserializer.ReadProperty<DecideScope>(201, "scope", result->scope);
+	deserializer.ReadPropertyWithDefault<bool>(202, "has_by", result->has_by);
+	deserializer.ReadPropertyWithDefault<vector<unique_ptr<ParsedExpression>>>(203, "by", result->by);
 	return std::move(result);
 }
 

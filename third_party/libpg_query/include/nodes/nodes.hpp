@@ -495,6 +495,9 @@ typedef enum PGNodeTag {
 	T_PGPositionalReference,
     T_PGDecideClause,
 	T_PGDecideScope,
+	T_PGDecideItem,
+	T_PGDecideDeclaration,
+	T_PGDecideReducer,
 	T_PGDecideFrame,
 
 	/*

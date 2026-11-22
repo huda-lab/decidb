@@ -1530,5 +1530,117 @@
       }
     ],
     "pointer_type": "none"
+  },
+  {
+    "class": "DecideScope",
+    "includes": [
+      "duckdb/parser/decide/parsed_decide.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "when",
+        "type": "ParsedExpression*"
+      },
+      {
+        "id": 101,
+        "name": "per",
+        "type": "DecidePer"
+      },
+      {
+        "id": 102,
+        "name": "key",
+        "type": "vector<ParsedExpression*>"
+      },
+      {
+        "id": 103,
+        "name": "location",
+        "type": "optional_idx",
+        "default": "optional_idx()"
+      }
+    ],
+    "pointer_type": "none"
+  },
+  {
+    "class": "DecideDeclaration",
+    "includes": [
+      "duckdb/parser/decide/parsed_decide.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "name",
+        "type": "string"
+      },
+      {
+        "id": 101,
+        "name": "type",
+        "type": "DecideVariableType"
+      },
+      {
+        "id": 102,
+        "name": "scope",
+        "type": "DecideScope"
+      },
+      {
+        "id": 103,
+        "name": "location",
+        "type": "optional_idx",
+        "default": "optional_idx()"
+      }
+    ],
+    "pointer_type": "none"
+  },
+  {
+    "class": "DecideClause",
+    "includes": [
+      "duckdb/parser/decide/parsed_decide.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "scope",
+        "type": "DecideScope"
+      },
+      {
+        "id": 101,
+        "name": "body",
+        "type": "ParsedExpression*"
+      }
+    ],
+    "pointer_type": "none"
+  },
+  {
+    "class": "ParsedDecide",
+    "includes": [
+      "duckdb/parser/decide/parsed_decide.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "variables",
+        "type": "vector<DecideDeclaration>"
+      },
+      {
+        "id": 101,
+        "name": "constraints",
+        "type": "vector<DecideClause>"
+      },
+      {
+        "id": 102,
+        "name": "objective",
+        "type": "DecideClause"
+      },
+      {
+        "id": 103,
+        "name": "sense",
+        "type": "DecideSense"
+      },
+      {
+        "id": 104,
+        "name": "text",
+        "type": "DecideSourceText"
+      }
+    ]
   }
 ]

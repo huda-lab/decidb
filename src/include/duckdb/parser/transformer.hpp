@@ -15,6 +15,7 @@
 #include "duckdb/common/types.hpp"
 #include "duckdb/common/unordered_map.hpp"
 #include <map>
+#include "duckdb/parser/decide/parsed_decide.hpp"
 #include "duckdb/parser/group_by_node.hpp"
 #include "duckdb/parser/parsed_data/create_info.hpp"
 #include "duckdb/parser/parsed_data/create_secret_info.hpp"
@@ -281,6 +282,12 @@ private:
 
 	//! DeciDB: transform a frame selector of a DECIDE clause
 	unique_ptr<ParsedExpression> TransformDecideFrame(duckdb_libpgquery::PGDecideFrame &root);
+	//! DeciDB: transform a reducer with a scope inside it or a `by` after it
+	unique_ptr<ParsedExpression> TransformDecideReducer(duckdb_libpgquery::PGDecideReducer &root);
+	//! DeciDB: transform `[when c] [per K]`; null is no scope
+	DecideScope TransformDecideScope(optional_ptr<duckdb_libpgquery::PGNode> node);
+	//! DeciDB: transform one constraint or the objective
+	DecideClause TransformDecideItem(duckdb_libpgquery::PGNode &node);
 
 	unique_ptr<ParsedExpression> TransformSQLValueFunction(duckdb_libpgquery::PGSQLValueFunction &node);
 

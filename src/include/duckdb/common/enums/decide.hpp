@@ -118,6 +118,21 @@ enum class DecideSignatureFieldKind : uint8_t { VALUE = 0, DECISION = 1, BY_KEY 
 //!   VALUE    — a column a relation element stands for (`per D`, `by (D)`): NULL is a value,
 //!              so every row of D is one class whatever its NULLs
 enum class DecideKeyNullMode : uint8_t { NO_GROUP = 0, VALUE = 1 };
+//! How a `per` is written.
+enum class DecidePer : uint8_t {
+	//! No `per`
+	NONE = 0,
+	//! `per row`, the default written out
+	ROW = 1,
+	//! `per ()`: one for the whole query
+	ALL = 2,
+	//! `per K`: one per distinct key
+	KEY = 3
+};
+
+//! The type a declaration gives its decision.
+enum class DecideVariableType : uint8_t { REAL = 0, INT = 1, BOOL = 2 };
+
 //! A frame selector's position on the anchor row's timeline (language/guide.md §5.6):
 //! the first or last peer, or k peers before or after the anchor's.
 enum class DecideFrameAnchor : uint8_t { FIRST = 0, LAST = 1, PREVIOUS = 2, NEXT = 3 };

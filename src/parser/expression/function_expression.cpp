@@ -1,7 +1,6 @@
 #include "duckdb/parser/expression/function_expression.hpp"
 
 #include <utility>
-#include "duckdb/parser/decide/decide_parsed_markers.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/hash.hpp"
@@ -36,15 +35,6 @@ FunctionExpression::FunctionExpression(const string &function_name, vector<uniqu
 }
 
 string FunctionExpression::ToString() const {
-	// DeciDB: the parser's markers print as the DECIDE syntax they stand for.
-	if (IsDecideScope(*this)) {
-		auto scope = ReadDecideScope(*this);
-		return scope.ToString() + ": " + (*scope.body)->ToString();
-	}
-	if (IsDecideBy(*this)) {
-		auto by = ReadDecideBy(*this);
-		return (*by.call)->ToString() + " BY (" + by.key.ToString() + ")";
-	}
 	return ToString<FunctionExpression, ParsedExpression>(*this, catalog, schema, function_name, is_operator, distinct,
 	                                                      filter.get(), order_bys.get(), export_state, true);
 }

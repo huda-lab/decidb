@@ -196,6 +196,33 @@
     ]
   },
   {
+    "class": "DecideReducerExpression",
+    "base": "ParsedExpression",
+    "enum": "DECIDE_REDUCER",
+    "members": [
+      {
+        "id": 200,
+        "name": "call",
+        "type": "ParsedExpression*"
+      },
+      {
+        "id": 201,
+        "name": "scope",
+        "type": "DecideScope"
+      },
+      {
+        "id": 202,
+        "name": "has_by",
+        "type": "bool"
+      },
+      {
+        "id": 203,
+        "name": "by",
+        "type": "vector<ParsedExpression*>"
+      }
+    ]
+  },
+  {
     "class": "LambdaRefExpression",
     "base": "ParsedExpression",
     "enum": "LAMBDA_REF",

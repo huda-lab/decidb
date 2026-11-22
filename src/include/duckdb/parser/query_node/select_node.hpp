@@ -15,8 +15,7 @@
 #include "duckdb/parser/parsed_data/sample_options.hpp"
 #include "duckdb/parser/group_by_node.hpp"
 #include "duckdb/common/enums/aggregate_handling.hpp"
-#include "duckdb/common/decide_source_info.hpp"
-#include "duckdb/common/enums/decide.hpp"
+#include "duckdb/parser/decide/parsed_decide.hpp"
 
 namespace duckdb {
 
@@ -44,13 +43,8 @@ public:
 	AggregateHandling aggregate_handling;
 	//! The SAMPLE clause
 	unique_ptr<SampleOptions> sample;
-	// decidb's DECIDE
-	vector<unique_ptr<ParsedExpression>> decide_variables;
-	unique_ptr<ParsedExpression> decide_constraints;
-	DecideSense decide_sense = DecideSense::FEASIBILITY;
-	unique_ptr<ParsedExpression> decide_objective;
-	//! The text of the DECIDE tail as the user wrote it, with the spans the binders cut from it
-	DecideSourceText decide_text;
+	//! DeciDB: the DECIDE part; null when the query has none
+	unique_ptr<ParsedDecide> decide;
 
 	const vector<unique_ptr<ParsedExpression>> &GetSelectList() const override {
 		return select_list;

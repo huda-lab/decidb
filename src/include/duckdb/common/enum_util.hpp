@@ -138,6 +138,10 @@ enum class DecideSense : uint8_t;
 
 enum class DecideFrameAnchor : uint8_t;
 
+enum class DecidePer : uint8_t;
+
+enum class DecideVariableType : uint8_t;
+
 enum class DecideVarScope : uint8_t;
 
 enum class DefaultOrderByNullType : uint8_t;
@@ -577,6 +581,12 @@ const char* EnumUtil::ToChars<DecideSense>(DecideSense value);
 
 template<>
 const char* EnumUtil::ToChars<DecideFrameAnchor>(DecideFrameAnchor value);
+
+template<>
+const char* EnumUtil::ToChars<DecidePer>(DecidePer value);
+
+template<>
+const char* EnumUtil::ToChars<DecideVariableType>(DecideVariableType value);
 
 template<>
 const char* EnumUtil::ToChars<DecideVarScope>(DecideVarScope value);
@@ -1157,6 +1167,12 @@ DecideSense EnumUtil::FromString<DecideSense>(const char *value);
 
 template<>
 DecideFrameAnchor EnumUtil::FromString<DecideFrameAnchor>(const char *value);
+
+template<>
+DecidePer EnumUtil::FromString<DecidePer>(const char *value);
+
+template<>
+DecideVariableType EnumUtil::FromString<DecideVariableType>(const char *value);
 
 template<>
 DecideVarScope EnumUtil::FromString<DecideVarScope>(const char *value);

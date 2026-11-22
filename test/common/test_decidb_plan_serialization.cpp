@@ -4,6 +4,7 @@
 #include "duckdb/common/serializer/binary_deserializer.hpp"
 #include "duckdb/common/serializer/binary_serializer.hpp"
 #include "duckdb/common/serializer/memory_stream.hpp"
+#include "duckdb/parser/expression/comparison_expression.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/statement/select_statement.hpp"
@@ -223,7 +224,7 @@ TEST_CASE("Parsed DECIDE scope spellings survive ToString and binary round trips
 	// ToString prints the tail as the user wrote it; the tree renderer is what these pins check, so they clear the
 	// source text (a statement built without the parser's text renders its tree).
 	auto without_text = [](duckdb::unique_ptr<SelectStatement> statement) {
-		statement->node->Cast<SelectNode>().decide_text = DecideSourceText();
+		statement->node->Cast<SelectNode>().decide->text = DecideSourceText();
 		return statement;
 	};
 	REQUIRE(ParseSelect("SELECT a FROM t DECIDE x(INT) SUCH THAT when a = 1: x <= 1 AND x >= 0")->ToString() ==
@@ -275,6 +276,77 @@ TEST_CASE("Parsed DECIDE scope spellings survive ToString and binary round trips
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT per a: x <= 1 WHEN b", "syntax error at or near", "WHEN");
 	rejects("SELECT SUM(x) BY (a) FROM t", "syntax error at or near", "BY");
 	rejects("SELECT SUM(when a: x) FROM t", "syntax error at or near", "when");
+}
+
+TEST_CASE("The parsed DECIDE tree prints, parses, copies, compares and serializes", "[decidb]") {
+	// The statement without the text the user wrote, so ToString prints the tree: every declaration, clause, scope
+	// and reducer node (DecideDeclaration, DecideClause, DecideScope, DecideReducerExpression).
+	auto tree_of = [](const string &sql) {
+		auto statement = ParseSelect(sql);
+		statement->node->Cast<SelectNode>().decide->text = DecideSourceText();
+		return statement;
+	};
+	const string query =
+	    "SELECT a FROM t DECIDE per t.a, t: x(INT), per (): cap(REAL), per row: y(BOOL) "
+	    "SUCH THAT when a > 0 per a, t.b: sum(when a > 1 per t: x) by (a, b + 1) <= cap "
+	    "AND per (): avg(per (): x) by () <= 3 AND per row: min(per row: y) <= 1 AND count(x) by (a) <= 2 "
+	    "MAXIMIZE when a = 1 per (): sum(x) by ()";
+	auto tree = tree_of(query);
+	auto printed = tree->ToString();
+	INFO(printed);
+	auto reparsed = tree_of(printed);
+	REQUIRE(tree->Equals(*reparsed));
+	REQUIRE(reparsed->ToString() == printed);
+	auto copy = tree->Copy();
+	REQUIRE(tree->Equals(*copy));
+	REQUIRE(copy->ToString() == printed);
+	auto deserialized = RoundTripStatement(*tree);
+	REQUIRE(tree->Equals(*deserialized));
+	REQUIRE(deserialized->ToString() == printed);
+
+	// A reducer node hashes by its parts: a copy hashes the same, another `per` or one more `by` does not.
+	auto reducer_of = [&](const string &constraint) {
+		auto statement = tree_of("SELECT a FROM t DECIDE x(INT) SUCH THAT " + constraint + " <= 1");
+		auto &body = statement->node->Cast<SelectNode>().decide->constraints[0].body;
+		return std::move(body->Cast<ComparisonExpression>().left);
+	};
+	auto reducer = reducer_of("sum(per a: x)");
+	REQUIRE(reducer->GetExpressionClass() == ExpressionClass::DECIDE_REDUCER);
+	REQUIRE(reducer->Hash() == reducer->Copy()->Hash());
+	REQUIRE(reducer->Hash() != reducer_of("sum(per (): x)")->Hash());
+	REQUIRE(reducer->Hash() != reducer_of("sum(per a: x) by ()")->Hash());
+	// A plain call is no reducer node.
+	REQUIRE(reducer_of("sum(x)")->GetExpressionClass() == ExpressionClass::FUNCTION);
+
+	// Each part is compared: two statements that differ in one of them are not equal.
+	const duckdb::vector<std::pair<string, string>> different = {
+	    // a declaration's type, name and `per`
+	    {"DECIDE x(INT) SUCH THAT x <= 1", "DECIDE x(REAL) SUCH THAT x <= 1"},
+	    {"DECIDE x(INT) SUCH THAT x <= 1", "DECIDE x(INT), y(INT) SUCH THAT x <= 1"},
+	    {"DECIDE per a: x(INT) SUCH THAT x <= 1", "DECIDE per b: x(INT) SUCH THAT x <= 1"},
+	    {"DECIDE per (): x(INT) SUCH THAT x <= 1", "DECIDE per row: x(INT) SUCH THAT x <= 1"},
+	    // a clause's scope, its body, and the number of clauses
+	    {"DECIDE x(INT) SUCH THAT when a: x <= 1", "DECIDE x(INT) SUCH THAT when b: x <= 1"},
+	    {"DECIDE x(INT) SUCH THAT when a: x <= 1", "DECIDE x(INT) SUCH THAT x <= 1"},
+	    {"DECIDE x(INT) SUCH THAT per a: x <= 1", "DECIDE x(INT) SUCH THAT per a: x <= 2"},
+	    {"DECIDE x(INT) SUCH THAT x <= 1", "DECIDE x(INT) SUCH THAT x <= 1 AND x >= 0"},
+	    // the objective, its scope and its sense
+	    {"DECIDE x(INT) SUCH THAT x <= 1 MAXIMIZE sum(x)", "DECIDE x(INT) SUCH THAT x <= 1 MINIMIZE sum(x)"},
+	    {"DECIDE x(INT) SUCH THAT x <= 1 MAXIMIZE sum(x)", "DECIDE x(INT) SUCH THAT x <= 1"},
+	    {"DECIDE x(INT) SUCH THAT x <= 1 MAXIMIZE sum(x)", "DECIDE x(INT) SUCH THAT x <= 1 MAXIMIZE when a: sum(x)"},
+	    // a reducer's call, its scope and its `by`
+	    {"DECIDE x(INT) SUCH THAT sum(per a: x) <= 1", "DECIDE x(INT) SUCH THAT avg(per a: x) <= 1"},
+	    {"DECIDE x(INT) SUCH THAT sum(per a: x) <= 1", "DECIDE x(INT) SUCH THAT sum(when a: x) <= 1"},
+	    {"DECIDE x(INT) SUCH THAT sum(x) by (a) <= 1", "DECIDE x(INT) SUCH THAT sum(x) by (b) <= 1"},
+	    {"DECIDE x(INT) SUCH THAT sum(per a: x) by () <= 1", "DECIDE x(INT) SUCH THAT sum(per a: x) <= 1"},
+	};
+	for (auto &pair : different) {
+		INFO(pair.first);
+		INFO(pair.second);
+		REQUIRE(!tree_of("SELECT a FROM t " + pair.first)->Equals(*tree_of("SELECT a FROM t " + pair.second)));
+	}
+	// A query with a DECIDE part is not the query without it.
+	REQUIRE(!tree_of("SELECT a FROM t DECIDE x(INT) SUCH THAT x <= 1")->Equals(*ParseSelect("SELECT a FROM t")));
 }
 
 TEST_CASE("Parsed frame selectors survive ToString and binary round trips", "[decidb]") {

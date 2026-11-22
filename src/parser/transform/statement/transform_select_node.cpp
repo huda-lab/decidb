@@ -1,5 +1,6 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/parser/expression/conjunction_expression.hpp"
 #include "duckdb/parser/expression/star_expression.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/query_node/set_operation_node.hpp"
@@ -103,24 +104,17 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
 		// DeciDB's decide
 		if (stmt.decideClause) {
 			auto &decide_clause = PGCast<duckdb_libpgquery::PGDecideClause>(*stmt.decideClause);
-			// A declaration with no type has a NULL type here (select.y, typed_decide_variable): refused only now,
-			// after the whole query has parsed, so that a syntax error after the name is the one reported. Its
-			// location is the name's.
+			// A declaration with no type is refused only now, after the whole query has parsed, so that a syntax error
+			// after the name is the one reported.
 			for (auto cell = decide_clause.variables ? decide_clause.variables->head : nullptr; cell;
 			     cell = cell->next) {
-				auto &declaration =
-				    PGCast<duckdb_libpgquery::PGAExpr>(*PGPointerCast<duckdb_libpgquery::PGNode>(cell->data.ptr_value));
-				if (!declaration.rexpr) {
-					// The name, under any scope the declaration is written in.
-					auto name = declaration.lexpr;
-					while (name->type == duckdb_libpgquery::T_PGAExpr) {
-						name = PGCast<duckdb_libpgquery::PGAExpr>(*name).lexpr;
-					}
-					auto &column = PGCast<duckdb_libpgquery::PGColumnRef>(*name);
-					auto text = PGPointerCast<duckdb_libpgquery::PGValue>(column.fields->head->data.ptr_value)->val.str;
-					throw ParserException::SyntaxError(*RootTransformer().parsed_query,
-					                                   StringUtil::Format("decision '%s' has no type", text),
-					                                   NumericCast<idx_t>(declaration.location));
+				auto &declaration = PGCast<duckdb_libpgquery::PGDecideDeclaration>(
+				    *PGPointerCast<duckdb_libpgquery::PGNode>(cell->data.ptr_value));
+				if (declaration.var_type == duckdb_libpgquery::PG_DECIDE_TYPE_NONE) {
+					throw ParserException::SyntaxError(
+					    *RootTransformer().parsed_query,
+					    StringUtil::Format("decision '%s' has no type", declaration.name),
+					    NumericCast<idx_t>(declaration.location));
 				}
 			}
 			if (!decide_clause.constraints) {
@@ -130,23 +124,46 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
 			if (decide_clause.spans) {
 				RootTransformer().IndexDecideExpressions(*decide_clause.spans);
 			}
-			TransformExpressionList(*decide_clause.variables, result.decide_variables);
-			result.decide_constraints = TransformExpression(decide_clause.constraints);
+			result.decide = make_uniq<ParsedDecide>();
+			auto &decide = *result.decide;
+			for (auto cell = decide_clause.variables->head; cell; cell = cell->next) {
+				auto &declaration = PGCast<duckdb_libpgquery::PGDecideDeclaration>(
+				    *PGPointerCast<duckdb_libpgquery::PGNode>(cell->data.ptr_value));
+				DecideDeclaration variable;
+				variable.name = declaration.name;
+				variable.type =
+				    declaration.var_type == duckdb_libpgquery::PG_DECIDE_TYPE_REAL   ? DecideVariableType::REAL
+				    : declaration.var_type == duckdb_libpgquery::PG_DECIDE_TYPE_BOOL ? DecideVariableType::BOOL
+				                                                                     : DecideVariableType::INT;
+				variable.scope = TransformDecideScope(declaration.scope);
+				variable.location = NumericCast<idx_t>(declaration.location);
+				decide.variables.push_back(std::move(variable));
+			}
+			for (auto cell = decide_clause.constraints->head; cell; cell = cell->next) {
+				auto clause = TransformDecideItem(*PGPointerCast<duckdb_libpgquery::PGNode>(cell->data.ptr_value));
+				// `(a AND b)` with no scope in front is its constraints, each one a clause.
+				if (clause.scope.IsEmpty() && clause.body->GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
+					for (auto &child : clause.body->Cast<ConjunctionExpression>().children) {
+						decide.constraints.emplace_back();
+						decide.constraints.back().body = std::move(child);
+					}
+					continue;
+				}
+				decide.constraints.push_back(std::move(clause));
+			}
 			if (decide_clause.sense == duckdb_libpgquery::PG_OBJ_MAXIMIZE) {
-				result.decide_sense = DecideSense::MAXIMIZE;
+				decide.sense = DecideSense::MAXIMIZE;
 			} else if (decide_clause.sense == duckdb_libpgquery::PG_OBJ_MINIMIZE) {
-				result.decide_sense = DecideSense::MINIMIZE;
-			} else {
-				result.decide_sense = DecideSense::FEASIBILITY;
+				decide.sense = DecideSense::MINIMIZE;
 			}
 			if (decide_clause.objective) {
-				result.decide_objective = TransformExpression(decide_clause.objective);
+				decide.objective = TransformDecideItem(*decide_clause.objective);
 			}
 			// The text the user wrote, from DECIDE through the objective, with where the parser found each construct.
 			auto &query = RootTransformer().parsed_query;
 			if (query && decide_clause.decl_start >= 0 && decide_clause.decl_start <= decide_clause.tail_start &&
 			    decide_clause.tail_end <= NumericCast<int>(query->size())) {
-				auto &text = result.decide_text;
+				auto &text = decide.text;
 				text.start = NumericCast<idx_t>(decide_clause.decl_start);
 				text.tail_start = NumericCast<idx_t>(decide_clause.tail_start);
 				text.text = query->substr(text.start, NumericCast<idx_t>(decide_clause.tail_end) - text.start);

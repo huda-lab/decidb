@@ -48,22 +48,18 @@ void ExpressionBinder::ReplaceMacroParametersInLambda(FunctionExpression &functi
 
 void ExpressionBinder::ReplaceMacroParametersInQueryNode(QueryNode &node,
                                                          vector<unordered_set<string>> &lambda_params) {
-	optional_ptr<SelectNode> select;
-	if (node.type == QueryNodeType::SELECT_NODE) {
-		select = optional_ptr<SelectNode>(node.Cast<SelectNode>());
+	// DeciDB: a substitution inside this node's DECIDE part leaves its text as written out of date.
+	optional_ptr<ParsedDecide> decide;
+	unordered_set<unique_ptr<ParsedExpression> *> decide_expressions;
+	if (node.type == QueryNodeType::SELECT_NODE && node.Cast<SelectNode>().decide) {
+		decide = node.Cast<SelectNode>().decide.get();
+		decide->EnumerateExpressions([&](unique_ptr<ParsedExpression> &child) { decide_expressions.insert(&child); });
 	}
 	ParsedExpressionIterator::EnumerateQueryNodeChildren(node, [&](unique_ptr<ParsedExpression> &child) {
-		bool in_decide_tail = false;
-		if (select) {
-			in_decide_tail = &child == &select->decide_constraints || &child == &select->decide_objective;
-			for (auto &variable : select->decide_variables) {
-				in_decide_tail = in_decide_tail || &child == &variable;
-			}
-		}
 		auto before = macro_substitutions;
 		ReplaceMacroParameters(child, lambda_params);
-		if (in_decide_tail && macro_substitutions != before) {
-			select->decide_text = DecideSourceText();
+		if (macro_substitutions != before && decide_expressions.count(&child)) {
+			decide->text = DecideSourceText();
 		}
 	});
 }

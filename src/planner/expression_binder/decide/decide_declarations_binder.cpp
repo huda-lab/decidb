@@ -34,6 +34,21 @@ namespace duckdb {
 //! names are their own.
 static void RefuseQualifiedDecisionReferences(const ParsedExpression &expr, BindContext &bind_context,
                                               const case_insensitive_map_t<idx_t> &variables,
+                                              const DecideSourceText *text, bool data_position);
+
+static void RefuseQualifiedDecisionReferences(const DecideScope &scope, BindContext &bind_context,
+                                              const case_insensitive_map_t<idx_t> &variables,
+                                              const DecideSourceText *text) {
+	if (scope.when) {
+		RefuseQualifiedDecisionReferences(*scope.when, bind_context, variables, text, true);
+	}
+	for (auto &element : scope.key) {
+		RefuseQualifiedDecisionReferences(*element, bind_context, variables, text, true);
+	}
+}
+
+static void RefuseQualifiedDecisionReferences(const ParsedExpression &expr, BindContext &bind_context,
+                                              const case_insensitive_map_t<idx_t> &variables,
                                               const DecideSourceText *text, bool data_position) {
 	if (expr.GetExpressionClass() == ExpressionClass::COLUMN_REF) {
 		auto &colref = expr.Cast<ColumnRefExpression>();
@@ -51,21 +66,11 @@ static void RefuseQualifiedDecisionReferences(const ParsedExpression &expr, Bind
 		throw BinderException(expr, "%s", DecisionInDataMessage(DecideWrittenSql(expr, text), "when, per and by"));
 	}
 	// A scope's condition and key and a `by` key are data positions.
-	if (IsDecideScope(expr)) {
-		auto scope = ReadDecideScope(expr);
-		RefuseQualifiedDecisionReferences(**scope.body, bind_context, variables, text, data_position);
-		if (scope.when) {
-			RefuseQualifiedDecisionReferences(**scope.when, bind_context, variables, text, true);
-		}
-		for (auto &element : scope.key) {
-			RefuseQualifiedDecisionReferences(*element, bind_context, variables, text, true);
-		}
-		return;
-	}
-	if (IsDecideBy(expr)) {
-		auto by = ReadDecideBy(expr);
-		RefuseQualifiedDecisionReferences(**by.call, bind_context, variables, text, data_position);
-		for (auto &element : by.key) {
+	if (expr.GetExpressionClass() == ExpressionClass::DECIDE_REDUCER) {
+		auto &reducer = expr.Cast<DecideReducerExpression>();
+		RefuseQualifiedDecisionReferences(*reducer.call, bind_context, variables, text, data_position);
+		RefuseQualifiedDecisionReferences(reducer.scope, bind_context, variables, text);
+		for (auto &element : reducer.by) {
 			RefuseQualifiedDecisionReferences(*element, bind_context, variables, text, true);
 		}
 		return;
@@ -133,6 +138,7 @@ DecideDeclarationsBinder::DecideDeclarationsBinder(Binder &binder, ClientContext
 
 void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSelectNode &result) {
 	auto &bind_context = binder.bind_context;
+	auto &decide = *statement.decide;
 
 	case_insensitive_map_t<idx_t> decide_variable_names;
 	vector<string> var_names;
@@ -149,21 +155,20 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 	// Every declared name, checked and collected before any key resolves, so a key
 	// element can be told from a decision declared before or after it.
 	case_insensitive_set_t declared_names;
-	for (const auto &expr_ptr : statement.decide_variables) {
-		auto name = ReadDecideDeclaration(*expr_ptr).name;
+	for (auto &declaration : decide.variables) {
+		auto &name = declaration.name;
 		// GetMatchingBinding skips a USING column (its binding is the join's merged column), so a
 		// decision named like one has to be asked for separately.
 		if (bind_context.GetMatchingBinding(name) || bind_context.GetUsingBinding(name)) {
-			throw BinderException(*expr_ptr, "decision '%s' has the name of a column", name);
+			throw BinderException(declaration.location, "decision '%s' has the name of a column", name);
 		}
-		RefuseDecideTagInName(*expr_ptr, name);
+		RefuseDecideTagInName(declaration.location, name);
 		if (!declared_names.insert(name).second) {
-			throw BinderException(*expr_ptr, "decision '%s' is declared twice", name);
+			throw BinderException(declaration.location, "decision '%s' is declared twice", name);
 		}
 	}
 
-	for (const auto &expr_ptr : statement.decide_variables) {
-		auto declaration = ReadDecideDeclaration(*expr_ptr);
+	for (auto &declaration : decide.variables) {
 		auto &name = declaration.name;
 		idx_t var_idx = var_names.size();
 		decide_variable_names.emplace(name, var_idx);
@@ -173,15 +178,15 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 		if (declaration.scope.per == DecidePer::ALL) {
 			variable_scopes.push_back(DecideVarScopeInfo::Global());
 		} else if (declaration.scope.per == DecidePer::KEY) {
-			auto key_text = declaration.scope.key.ToString();
+			auto key_text = DecideKeyToString(declaration.scope.key);
 			auto scope_idx = FindOrCreateKeyScope(context, binder, declaration.scope.key, declared_names, key_text,
-			                                      &statement.decide_text, keys, keyed_scopes);
+			                                      &decide.text, keys, keyed_scopes);
 			keyed_scopes[scope_idx].scoped_variable_indices.push_back(var_idx);
 			variable_scopes.push_back(DecideVarScopeInfo::Keyed(scope_idx, key_text));
 		} else {
 			variable_scopes.push_back(DecideVarScopeInfo::Row());
 		}
-		variable_scopes.back().declaration = expr_ptr->GetQueryLocation();
+		variable_scopes.back().declaration = declaration.location;
 		var_names.push_back(name);
 		// An `INT` decision is BIGINT, not INTEGER. Nothing bounds a decision to
 		// int32: the solver works in doubles, and an optimum driven by an aggregate
@@ -198,47 +203,31 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 	}
 
 	// One spelling per function, before any check below reads a name.
-	if (statement.decide_constraints) {
-		RespellDecideAliases(context, *statement.decide_constraints);
-	}
-	if (statement.decide_objective) {
-		RespellDecideAliases(context, *statement.decide_objective);
-	}
+	decide.EnumerateExpressions([&](unique_ptr<ParsedExpression> &expr) { RespellDecideAliases(context, *expr); });
 
+	// The constraints, then the objective.
+	vector<reference<DecideClause>> clauses(decide.constraints.begin(), decide.constraints.end());
+	if (decide.objective.body) {
+		clauses.push_back(decide.objective);
+	}
 	// A relation-qualified decision in a `when`, `per` or `by` is refused.
-	if (statement.decide_constraints) {
-		RefuseQualifiedDecisionReferences(*statement.decide_constraints, bind_context, decide_variable_names,
-		                                  &statement.decide_text, false);
+	for (auto &clause : clauses) {
+		RefuseQualifiedDecisionReferences(*clause.get().body, bind_context, decide_variable_names, &decide.text, false);
+		RefuseQualifiedDecisionReferences(clause.get().scope, bind_context, decide_variable_names, &decide.text);
 	}
-	if (statement.decide_objective) {
-		RefuseQualifiedDecisionReferences(*statement.decide_objective, bind_context, decide_variable_names,
-		                                  &statement.decide_text, false);
-	}
-
 	// Where `when`, `per` and `by` may stand, before anything reads the clauses: every
 	// decision name is known now, so a decision in a condition or a key is named the
 	// way the user spelled it.
-	if (statement.decide_constraints) {
-		for (auto &constraint : DecideConstraintList(statement.decide_constraints)) {
-			ValidateDecideScopeSpellings(*constraint.get(), decide_variable_names, &statement.decide_text);
-		}
+	for (auto &clause : clauses) {
+		ValidateDecideScopeSpellings(clause.get(), decide_variable_names, &decide.text);
 	}
-	if (statement.decide_objective) {
-		ValidateDecideScopeSpellings(*statement.decide_objective, decide_variable_names, &statement.decide_text);
-	}
-
 	// This is the only point where cast authorship is still observable. Reject
 	// explicit casts over decisions before DECIDE generates any parsed nodes and
 	// before DuckDB binding adds its own type-reconciliation casts. SELECT-list
 	// expressions are intentionally outside this solver-algebra policy.
-	if (statement.decide_constraints) {
-		ValidateDecideNoExplicitDecisionCasts(*statement.decide_constraints, decide_variable_names,
-		                                      &statement.decide_text);
-	}
-	if (statement.decide_objective) {
-		ValidateDecideNoExplicitDecisionCasts(*statement.decide_objective, decide_variable_names,
-		                                      &statement.decide_text);
-	}
+	decide.EnumerateExpressions([&](unique_ptr<ParsedExpression> &expr) {
+		ValidateDecideNoExplicitDecisionCasts(*expr, decide_variable_names, &decide.text);
+	});
 
 	bind_context.AddGenericBinding(result.decide_index, "decide_variables", var_names, var_types);
 	// Query-wide decisions (`per (): x`), so the constraint and objective binders can
@@ -256,38 +245,34 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 	qualifier_context.decide_index = result.decide_index;
 	qualifier_context.keyed_scopes = &keyed_scopes;
 	qualifier_context.keys = &keys;
-	qualifier_context.source_text = &statement.decide_text;
+	qualifier_context.source_text = &decide.text;
 	vector<DecideFrameSpec> frames;
 	qualifier_context.frames = &frames;
 	// Isolate with brackets to avoid multiple active binders.
 	{
 		DecideConstraintsBinder decide_constraints_binder(binder, context, decide_variable_names, scalar_variable_names,
 		                                                  &qualifier_context);
-		unique_ptr<ParsedExpression> constraints = std::move(statement.decide_constraints);
+		auto constraints = std::move(decide.constraints);
 		result.decide_constraints = decide_constraints_binder.BindConstraints(constraints);
-		if (result.decide_constraints) {
-			RefuseVolatile(*result.decide_constraints);
-			result.decide_constraint_sources = InitializeConstraintSourceInfo(
-			    *result.decide_constraints, statement.decide_text, keyed_scopes, result.decide_index, &keys, frames);
-		}
+		RefuseVolatile(*result.decide_constraints);
+		result.decide_constraint_sources = InitializeConstraintSourceInfo(
+		    *result.decide_constraints, decide.text, keyed_scopes, result.decide_index, &keys, frames);
 	}
-	if (statement.decide_objective) {
+	if (decide.objective.body) {
 		DecideObjectiveBinder decide_objective_binder(binder, context, decide_variable_names, scalar_variable_names,
 		                                              &qualifier_context);
-		decide_objective_binder.decide_sense = statement.decide_sense;
-		unique_ptr<ParsedExpression> objective = std::move(statement.decide_objective);
-		result.decide_objective = decide_objective_binder.Bind(objective);
-		if (result.decide_objective) {
-			RefuseVolatile(*result.decide_objective);
-		}
+		decide_objective_binder.decide_sense = decide.sense;
+		auto objective = std::move(decide.objective);
+		result.decide_objective = decide_objective_binder.BindObjective(objective);
+		RefuseVolatile(*result.decide_objective);
 	}
 	for (auto &key : keys) {
 		for (auto &element : key.elements) {
 			RefuseVolatile(*element.expression);
 		}
 	}
-	result.decide_text = statement.decide_text;
-	result.decide_sense = statement.decide_sense;
+	result.decide_text = decide.text;
+	result.decide_sense = decide.sense;
 	// Update types in bind context to reflect the determined types from DECIDE clause
 	bind_context.GetBindingsList().back()->types = var_types;
 	for (idx_t i = 0; i < var_names.size(); i++) {

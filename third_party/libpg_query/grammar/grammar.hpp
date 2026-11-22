@@ -213,7 +213,9 @@ static PGNode *makeDecideClause(PGList *decl, PGNode *body, int decl_location,
 								int body_location, core_yyscan_t yyscanner);
 static PGNode *makeDecideScope(PGDecidePer per, PGList *key, int location,
 							   core_yyscan_t yyscanner);
-static PGNode *applyDecideScope(PGNode *scope, PGNode *body);
+static PGNode *makeDecideItem(PGNode *scope, PGNode *body);
+static PGNode *makeDecideDeclaration(PGNode *scope, char *name, int var_type, int location);
+static PGNode *makeDecideReducer(PGNode *call, PGNode *scope, bool has_by, PGList *by, int location);
 static void noteDecideSpan(core_yyscan_t yyscanner, int anchor, PGDecideSpanRole role, YYLTYPE span);
 static PGNode *noteDecideExpr(PGNode *expr, YYLTYPE span, core_yyscan_t yyscanner);
 static PGNode *noteDecideParen(PGNode *expr, core_yyscan_t yyscanner);
@@ -226,7 +228,7 @@ static PGNode *makeDecideFramePoint(PGList *point, PGNode *fallback, PGNode *pay
 static PGNode *makeDecideFrameRange(PGList *funcname, PGList *from, PGList *to, int every, PGNode *fallback,
 									bool all, PGList *args, PGNode *over, int location);
 static bool decideSpells(const char *name, const char *word);
-static PGTypeName *makeDecideVariableType(const char *name, int location, core_yyscan_t yyscanner);
+static int makeDecideVariableType(const char *name, int location, core_yyscan_t yyscanner);
 static PGNode *makeAndExpr(PGNode *lexpr, PGNode *rexpr, int location);
 static PGNode *makeOrExpr(PGNode *lexpr, PGNode *rexpr, int location);
 static PGNode *makeNotExpr(PGNode *expr, int location);

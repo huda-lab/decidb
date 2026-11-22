@@ -46,7 +46,7 @@ bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_m
 	return !colref.IsQualified() && variables.count(colref.GetColumnName()) > 0;
 }
 
-void RefuseDecideTagInName(const ParsedExpression &at, const string &name) {
+void RefuseDecideTagInName(optional_idx at, const string &name) {
 	if (DecideNameContainsTag(name)) {
 		throw BinderException(at, "'%s' is not allowed as a name in DECIDE", name);
 	}
@@ -123,28 +123,44 @@ void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr, const c
 //! there: a `when` condition, a key, a `by` key and an ordinary SQL subquery written in
 //! the clause (which is lexed with the clause's keywords) take data only.
 static void ValidateNoScopeSpelling(const ParsedExpression &expr, const DecideSourceText *text) {
-	if (IsDecideScope(expr)) {
-		// The outer keyword names the scope: its `per`, else its `when`.
-		const char *spelling = "when";
-		switch (ReadDecideScope(expr).per) {
-		case DecidePer::KEY:
-			spelling = "per";
-			break;
-		case DecidePer::ALL:
-			spelling = "per ()";
-			break;
-		case DecidePer::ROW:
-			spelling = "per row";
-			break;
-		default:
-			break;
+	if (expr.GetExpressionClass() == ExpressionClass::DECIDE_REDUCER) {
+		auto &reducer = expr.Cast<DecideReducerExpression>();
+		if (reducer.has_by) {
+			throw NotImplementedException(expr, "'by' inside a subquery is not supported");
 		}
-		throw NotImplementedException(expr, "'%s' inside a subquery is not supported", spelling);
-	}
-	if (IsDecideBy(expr)) {
-		throw NotImplementedException(expr, "'%s' inside a subquery is not supported", "by");
+		// The outer keyword names the scope: its `per`, else its `when`.
+		const char *spelling = reducer.scope.per == DecidePer::KEY   ? "per"
+		                       : reducer.scope.per == DecidePer::ALL ? "per ()"
+		                       : reducer.scope.per == DecidePer::ROW ? "per row"
+		                                                             : "when";
+		throw NotImplementedException(reducer.scope.location,
+		                              StringUtil::Format("'%s' inside a subquery is not supported", spelling));
 	}
 	EnumerateChildrenAndSubqueries(expr, [&](const ParsedExpression &child) { ValidateNoScopeSpelling(child, text); });
+}
+
+//! SUM, AVG, MIN or MAX: the reducers a scope may stand inside.
+static bool IsDecideAggregateName(const string &name) {
+	auto lname = StringUtil::Lower(name);
+	return lname == "sum" || lname == "avg" || lname == "min" || lname == "max";
+}
+
+//! A call a `by` may follow: a reducer, `norm` (lowered onto one, which keeps the key) or `count` (D34, D35).
+static bool TakesReducerBy(const ParsedExpression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
+		return false;
+	}
+	auto &func = expr.Cast<FunctionExpression>();
+	return !func.is_operator &&
+	       (IsDecideAggregateName(func.function_name) || StringUtil::CIEquals(func.function_name, "norm") ||
+	        StringUtil::CIEquals(func.function_name, "count") ||
+	        StringUtil::CIEquals(func.function_name, "count_star"));
+}
+
+//! The call of a reducer written with a scope or a `by`, else `expr` itself.
+static const ParsedExpression &ReducerCall(const ParsedExpression &expr) {
+	return expr.GetExpressionClass() == ExpressionClass::DECIDE_REDUCER ? *expr.Cast<DecideReducerExpression>().call
+	                                                                    : expr;
 }
 
 //! The first reference to a decision in `expr`, subquery bodies included, or null: `when`, `per` and `by` take data.
@@ -239,7 +255,7 @@ static void ValidateFrameKey(const ParsedExpression &key, const case_insensitive
 		throw BinderException(*window, WINDOW_IN_DATA_MESSAGE);
 	}
 	std::function<void(const ParsedExpression &)> refuse_reducer = [&](const ParsedExpression &node) {
-		if (TakesReducerBy(UnwrapReducerMarkers(node))) {
+		if (TakesReducerBy(ReducerCall(node))) {
 			throw BinderException(node, REDUCER_IN_DATA_MESSAGE);
 		}
 		ParsedExpressionIterator::EnumerateChildren(node, refuse_reducer);
@@ -255,7 +271,7 @@ static void ValidateFramePayload(const ParsedExpression &expr, const DecideFrame
 	if (expr.GetExpressionClass() == ExpressionClass::DECIDE_FRAME) {
 		throw BinderException(expr, "a frame selector inside '%s' is not allowed", DecideWrittenSql(frame, text));
 	}
-	if (TakesReducerBy(UnwrapReducerMarkers(expr))) {
+	if (TakesReducerBy(ReducerCall(expr))) {
 		throw BinderException(expr, "a reducer inside '%s' is not allowed", DecideWrittenSql(frame, text));
 	}
 	ParsedExpressionIterator::EnumerateChildren(
@@ -284,22 +300,15 @@ static void ValidateFrame(const DecideFrameExpression &frame, const case_insensi
 	}
 }
 
-//! `[when c] [per K]:` off a clause or a reducer's argument: the key elements and the
-//! condition are validated as data, and the body is returned.
-static const ParsedExpression &PeelScopeSpelling(const ParsedExpression &expr,
-                                                 const case_insensitive_map_t<idx_t> &variables,
-                                                 const DecideSourceText *text) {
-	if (!IsDecideScope(expr)) {
-		return expr;
-	}
-	auto scope = ReadDecideScope(expr);
+//! `[when c] [per K]:` in front of a clause or a reducer's argument: the key elements and the condition are data.
+static void ValidateScope(const DecideScope &scope, const case_insensitive_map_t<idx_t> &variables,
+                          const DecideSourceText *text) {
 	for (auto &element : scope.key) {
 		ValidateScopeData(*element, variables, text);
 	}
 	if (scope.when) {
-		ValidateScopeData(**scope.when, variables, text);
+		ValidateScopeData(*scope.when, variables, text);
 	}
-	return **scope.body;
 }
 
 namespace {
@@ -322,28 +331,31 @@ static void ValidateScopePlacement(const ParsedExpression &expr, ScopePlacement 
 		ValidateFrame(expr.Cast<DecideFrameExpression>(), placement.variables, placement.text);
 		return;
 	}
+	if (expr.GetExpressionClass() == ExpressionClass::DECIDE_REDUCER) {
+		auto &reducer = expr.Cast<DecideReducerExpression>();
+		auto &call = *reducer.call;
+		if (reducer.has_by && !TakesReducerBy(call)) {
+			throw BinderException(expr, "by (...) does not follow a reducer");
+		}
+		bool aggregate = call.GetExpressionClass() == ExpressionClass::FUNCTION &&
+		                 IsDecideAggregateName(call.Cast<FunctionExpression>().function_name);
+		if (!reducer.scope.IsEmpty() && !aggregate) {
+			throw BinderException(expr, "when or per inside '%s', which is not a reducer",
+			                      DecideWrittenSql(expr, placement.text));
+		}
+		for (auto &element : reducer.by) {
+			ValidateScopeData(*element, placement.variables, placement.text);
+		}
+		ValidateScope(reducer.scope, placement.variables, placement.text);
+		ValidateScopePlacement(call, placement);
+		return;
+	}
 	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
 		ParsedExpressionIterator::EnumerateChildren(
 		    expr, [&](const ParsedExpression &child) { ValidateScopePlacement(child, placement); });
 		return;
 	}
-	if (IsDecideBy(expr)) {
-		auto by = ReadDecideBy(expr);
-		if (!TakesReducerBy(**by.call)) {
-			throw BinderException(expr, "by (...) does not follow a reducer");
-		}
-		for (auto &element : by.key) {
-			ValidateScopeData(*element, placement.variables, placement.text);
-		}
-		ValidateScopePlacement(**by.call, placement);
-		return;
-	}
 	auto &func = expr.Cast<const FunctionExpression>();
-	bool scoped_argument = IsDecideScopedCall(expr);
-	if (scoped_argument && !IsDecideAggregateName(func.function_name)) {
-		throw BinderException(expr, "when or per inside '%s', which is not a reducer",
-		                      DecideWrittenSql(expr, placement.text));
-	}
 	bool reducer = TakesReducerBy(func);
 	// A reducer over decisions may not stand inside a norm (D80), which has no tree lowering yet. Under an ABS, a
 	// POWER or a product with a decision it stays at its written position and the tree lowers it beneath its reader.
@@ -361,22 +373,19 @@ static void ValidateScopePlacement(const ParsedExpression &expr, ScopePlacement 
 	if (reducer) {
 		inner.in_reducer = true;
 	}
-	for (idx_t i = 0; i < func.children.size(); i++) {
-		auto &child = i == 0 && scoped_argument
-		                  ? PeelScopeSpelling(*func.children[0], placement.variables, placement.text)
-		                  : *func.children[i];
-		ValidateScopePlacement(child, reducer ? inner : placement);
+	for (auto &child : func.children) {
+		ValidateScopePlacement(*child, reducer ? inner : placement);
 	}
 	if (func.filter) {
 		ValidateNoScopeSpelling(*func.filter, placement.text);
 	}
 }
 
-void ValidateDecideScopeSpellings(const ParsedExpression &clause, const case_insensitive_map_t<idx_t> &variables,
+void ValidateDecideScopeSpellings(const DecideClause &clause, const case_insensitive_map_t<idx_t> &variables,
                                   const DecideSourceText *text) {
-	auto &body = PeelScopeSpelling(clause, variables, text);
+	ValidateScope(clause.scope, variables, text);
 	// Every clause follows the scope rules (D30).
-	ValidateScopePlacement(body, ScopePlacement {variables, text});
+	ValidateScopePlacement(*clause.body, ScopePlacement {variables, text});
 }
 
 //! Column `column_index` of `binding` as a key column. A base table's goes through
@@ -522,7 +531,7 @@ unique_ptr<ParsedExpression> DecideBinder::QualifyColumnName(ColumnRefExpression
 	if (!qualified) {
 		ThrowIfOuterColumn(binder, col_ref);
 	} else {
-		RefuseDecideTagInName(col_ref, col_ref.column_names.back());
+		RefuseDecideTagInName(col_ref.GetQueryLocation(), col_ref.column_names.back());
 	}
 	return qualified;
 }
@@ -547,7 +556,7 @@ static void ResolveKeyElement(Binder &binder, const ColumnRefExpression &element
 		    bind_context.GetBinding(RelationAlias(vector<string>(names.begin(), names.end() - 1)), names.back(), error);
 	}
 	if (binding) {
-		RefuseDecideTagInName(element, names.back());
+		RefuseDecideTagInName(element.GetQueryLocation(), names.back());
 		AddKeyColumn(element, *binding, binding->GetBindingIndex(names.back()), columns, text);
 		return;
 	}
@@ -561,8 +570,8 @@ static void ResolveKeyElement(Binder &binder, const ColumnRefExpression &element
 }
 
 //! The columns of the key `key` lists (none for `()`), each element resolved by ResolveKeyElement.
-static KeyColumns ResolveKey(Binder &binder, const DecideKeyView &key, const case_insensitive_set_t &decision_names,
-                             const DecideSourceText *text) {
+static KeyColumns ResolveKey(Binder &binder, const vector<unique_ptr<ParsedExpression>> &key,
+                             const case_insensitive_set_t &decision_names, const DecideSourceText *text) {
 	KeyColumns columns;
 	for (auto &element : key) {
 		ResolveKeyElement(binder, element->Cast<ColumnRefExpression>(), decision_names, columns, text);
@@ -594,14 +603,14 @@ static idx_t FindOrCreateScope(idx_t key, vector<KeyedScopeInfo> &keyed_scopes) 
 	return keyed_scopes.size() - 1;
 }
 
-idx_t FindOrCreateKeyScope(ClientContext &context, Binder &binder, const DecideKeyView &key,
+idx_t FindOrCreateKeyScope(ClientContext &context, Binder &binder, const vector<unique_ptr<ParsedExpression>> &key,
                            const case_insensitive_set_t &decision_names, const string &key_text,
                            const DecideSourceText *text, vector<DecideKey> &keys,
                            vector<KeyedScopeInfo> &keyed_scopes) {
 	return FindOrCreateScope(BindKey(context, binder, key, decision_names, key_text, text, keys), keyed_scopes);
 }
 
-idx_t BindKey(ClientContext &context, Binder &binder, const DecideKeyView &key,
+idx_t BindKey(ClientContext &context, Binder &binder, const vector<unique_ptr<ParsedExpression>> &key,
               const case_insensitive_set_t &decision_names, const string &key_text, const DecideSourceText *text,
               vector<DecideKey> &keys) {
 	return FindOrCreateDecideKey(KeyElements(context, ResolveKey(binder, key, decision_names, text)), key_text, keys);
@@ -638,15 +647,15 @@ static vector<DecideKeyElement> BindRelationColumns(ClientContext &context, Bind
 }
 
 bool ContainsDecideAggregate(const ParsedExpression &expr) {
+	if (expr.GetExpressionClass() == ExpressionClass::DECIDE_REDUCER) {
+		// A scope and a `by` key are not part of the value.
+		return ContainsDecideAggregate(*expr.Cast<DecideReducerExpression>().call);
+	}
 	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
 		auto &func = expr.Cast<const FunctionExpression>();
 		if (!func.is_operator &&
 		    (IsDecideAggregateName(func.function_name) || StringUtil::CIEquals(func.function_name, "norm"))) {
 			return true;
-		}
-		// A `by` key is not part of the value.
-		if (IsDecideBy(expr)) {
-			return ContainsDecideAggregate(**ReadDecideBy(expr).call);
 		}
 		for (auto &child : func.children) {
 			if (ContainsDecideAggregate(*child)) {
@@ -717,6 +726,7 @@ bool DecideBinder::IsScalarDecideVariable(const ParsedExpression &expr) const {
 bool DecideBinder::IsDataOperand(const ParsedExpression &expr) const {
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::FUNCTION:
+	case ExpressionClass::DECIDE_REDUCER:
 	case ExpressionClass::SUBQUERY:
 	case ExpressionClass::WINDOW:
 		return false;
@@ -853,60 +863,41 @@ case_insensitive_set_t DecisionNames(const case_insensitive_map_t<idx_t> &variab
 	return names;
 }
 
-BindResult DecideBinder::BindScopedReducer(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
-	auto &reducer = expr_ptr->Cast<FunctionExpression>();
-	// Take `[when c] [per K]:` off the argument; the reducer itself reduces the body. The scope's parts stay
-	// alive in the argument as it was written.
-	auto scoped_argument = std::move(reducer.children[0]);
-	auto scope = ReadDecideScope(*scoped_argument);
-	reducer.children[0] = std::move(*scope.body);
-
-	auto result = BindFunction(expr_ptr, depth);
+BindResult DecideBinder::BindReducer(DecideReducerExpression &reducer, idx_t depth) {
+	auto &scope = reducer.scope;
+	// Read before the key elements bind in place.
+	auto key_text = DecideKeyToString(reducer.by);
+	auto result = BindFunction(reducer.call, depth);
 	if (result.HasError()) {
 		return result;
 	}
 	auto *aggregate = GetBoundAggregate(*result.expression);
 	if (!aggregate) {
-		throw InternalException("DECIDE: a scoped reducer did not bind to an aggregate");
+		throw InternalException("DECIDE: a reducer with a scope or a by did not bind to an aggregate");
 	}
 	if (scope.when) {
 		// The condition takes data only (ValidateDecideScopeSpellings), so it binds as plain
 		// SQL: a compound condition needs no parentheses.
-		auto condition_error = BindDataChild(*scope.when, depth);
+		auto condition_error = BindDataChild(scope.when, depth);
 		if (condition_error.HasError()) {
 			return BindResult(std::move(condition_error));
 		}
 		aggregate->filter = BoundCastExpression::AddCastToType(
-		    context, std::move(BoundExpression::GetExpression(**scope.when)), LogicalType::BOOLEAN);
+		    context, std::move(BoundExpression::GetExpression(*scope.when)), LogicalType::BOOLEAN);
 	}
 	// `per row`, the default written out, is one value per row, as without it.
 	if (scope.per == DecidePer::ALL || scope.per == DecidePer::KEY) {
 		auto scope_idx = FindOrCreateKeyScope(context, binder, scope.key, DecisionNames(variables),
-		                                      scope.key.ToString(), qualifier_context->source_text,
+		                                      DecideKeyToString(scope.key), qualifier_context->source_text,
 		                                      *qualifier_context->keys, *qualifier_context->keyed_scopes);
 		AddDecideTag(aggregate->alias, MakeQualifiedReducerTag(scope_idx));
 	}
-	return result;
-}
-
-BindResult DecideBinder::BindReducerBy(FunctionExpression &by, idx_t depth) {
-	auto parts = ReadDecideBy(by);
-	// Read before the key elements bind in place.
-	auto key_text = parts.key.ToString();
-	auto result = BindExpression(*parts.call, depth);
-	if (result.HasError()) {
-		return result;
-	}
-	auto *aggregate = GetBoundAggregate(*result.expression);
-	if (!aggregate) {
-		throw InternalException("DECIDE: a reducer with by did not bind to an aggregate");
-	}
-	if (parts.key.empty()) {
-		return result; // `by ()`: every kept row, the default
+	if (reducer.by.empty()) {
+		return result; // no `by`, or `by ()`: every kept row, the default
 	}
 	// Each element is a data expression, or a relation standing for its stored columns.
 	vector<DecideKeyElement> key;
-	for (auto &element : parts.key) {
+	for (auto &element : reducer.by) {
 		if (element->GetExpressionClass() == ExpressionClass::COLUMN_REF) {
 			auto relation = ResolveRelationName(binder.bind_context, element->Cast<ColumnRefExpression>());
 			if (relation) {
@@ -926,7 +917,7 @@ BindResult DecideBinder::BindReducerBy(FunctionExpression &by, idx_t depth) {
 	}
 	// The key as the user wrote it, when the parser kept it.
 	string written_key;
-	if (qualifier_context->WrittenText(by, DecideSpanRole::BY, written_key)) {
+	if (qualifier_context->WrittenText(reducer, DecideSpanRole::BY, written_key)) {
 		key_text = std::move(written_key);
 	}
 	// Every relation stores a column, so a `by` that lists anything is a key (not INVALID_INDEX).
@@ -1122,8 +1113,7 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 		within_text.push_back(DecideWrittenSql(*element, source_text));
 	}
 	spec.within_key = FindOrCreateDecideKey(
-	    KeyElements(context, ResolveKey(binder, DecideKeyView(frame.within.data(), frame.within.size()),
-	                                    DecisionNames(variables), source_text)),
+	    KeyElements(context, ResolveKey(binder, frame.within, DecisionNames(variables), source_text)),
 	    StringUtil::Join(within_text, ", "), *qualifier_context->keys);
 
 	// The aggregate prints as the frame written: DecideBinder::BindExpression gives it the frame's query location.
@@ -1136,14 +1126,6 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
 	auto &expr = *expr_ptr;
 	auto &function = expr.Cast<FunctionExpression>();
-	// `by (key)` and a scope in front of a reducer's argument. ValidateDecideScopeSpellings
-	// has already refused both on anything but SUM, AVG, MIN and MAX.
-	if (IsDecideBy(expr)) {
-		return BindReducerBy(function, depth);
-	}
-	if (IsDecideScopedCall(expr)) {
-		return BindScopedReducer(expr_ptr, depth);
-	}
 	// NORM is DECIDE syntax, not a catalog function. Bind it as a deliberately
 	// inert SUM aggregate marker; DecideOptimizer owns the mathematical rewrite
 	// and replaces this marker before it can reach physical planning. Keeping an
@@ -1264,11 +1246,16 @@ BindResult DecideBinder::BindExpressionInternal(unique_ptr<ParsedExpression> &ex
 	if (expr.GetExpressionClass() == ExpressionClass::DECIDE_FRAME) {
 		return BindDecideFrame(expr.Cast<DecideFrameExpression>(), depth);
 	}
+	if (expr.GetExpressionClass() == ExpressionClass::DECIDE_REDUCER) {
+		// ValidateDecideScopeSpellings has already refused a scope on anything but SUM, AVG, MIN and MAX, and a `by`
+		// after anything but a reducer.
+		return BindReducer(expr.Cast<DecideReducerExpression>(), depth);
+	}
 	if (expr.GetExpressionClass() == ExpressionClass::WINDOW) {
 		return BindUnsupportedExpression(expr, depth, "a window function is not allowed in a DECIDE clause");
 	}
-	// The constraints and objective binders call this for a frame, at any depth, and for a subquery they met at depth
-	// 0, and bind every other class themselves.
+	// The constraints and objective binders call this for a frame and a scoped reducer, at any depth, and for a
+	// subquery they met at depth 0, and bind every other class themselves.
 	D_ASSERT(depth == 0 && expr.GetExpressionClass() == ExpressionClass::SUBQUERY);
 	if (expr.Cast<SubqueryExpression>().subquery_type != SubqueryType::SCALAR) {
 		return BindResult(BinderException(expr, "%s", SubqueryNotScalarMessage()));

@@ -4,7 +4,6 @@
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
-#include "duckdb/parser/decide/decide_parsed_markers.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
@@ -29,6 +28,21 @@
 #include <cstring>
 
 namespace duckdb {
+
+//! `text` without the one pair of parentheses that encloses all of it, else `text` itself.
+static string WithoutEnclosingParentheses(const string &text) {
+	if (text.size() < 2 || text.front() != '(' || text.back() != ')') {
+		return text;
+	}
+	int depth = 0;
+	for (idx_t i = 0; i + 1 < text.size(); i++) {
+		depth += text[i] == '(' ? 1 : text[i] == ')' ? -1 : 0;
+		if (depth == 0) {
+			return text; // the opening parenthesis closes before the end
+		}
+	}
+	return text.substr(1, text.size() - 2);
+}
 
 //! Spell a comparison the way DECIDE documents it. `ExpressionTypeToOperator` renders
 //! not-equal as `!=`, but every other user-facing DECIDE surface -- the syntax

@@ -655,26 +655,20 @@ decideSpells(const char *name, const char *word)
  * makes DuckDB quote every name that spells it, as the UNION member bool). int, real and bool are
  * the types, in any case; any other name is a syntax error at it.
  */
-static PGTypeName *
+static int
 makeDecideVariableType(const char *name, int location, core_yyscan_t yyscanner)
 {
-	const char *marker;
-	PGTypeName *type;
-
 	if (decideSpells(name, "int"))
-		marker = "integer_variable";
-	else if (decideSpells(name, "real"))
-		marker = "real_variable";
-	else if (decideSpells(name, "bool"))
-		marker = "bool_variable";
-	else
-		ereport(ERROR,
-				(errcode(PG_ERRCODE_SYNTAX_ERROR),
-				 errmsg("syntax error at or near \"%s\"", name),
-				 parser_errposition(location)));
-	type = makeTypeName((char *) marker);
-	type->location = location;
-	return type;
+		return PG_DECIDE_TYPE_INT;
+	if (decideSpells(name, "real"))
+		return PG_DECIDE_TYPE_REAL;
+	if (decideSpells(name, "bool"))
+		return PG_DECIDE_TYPE_BOOL;
+	ereport(ERROR,
+			(errcode(PG_ERRCODE_SYNTAX_ERROR),
+			 errmsg("syntax error at or near \"%s\"", name),
+			 parser_errposition(location)));
+	return PG_DECIDE_TYPE_NONE;
 }
 
 /*
@@ -752,29 +746,42 @@ noteDecideReducerKey(PGNode *scope_node, int anchor, core_yyscan_t yyscanner)
 	noteDecideSpan(yyscanner, anchor, PG_DECIDE_SPAN_PER, key);
 }
 
-/*
- * DeciDB: fold a scope around the body it governs. WHEN applies first and PER
- * second, so PER is the outer node. PER ROW is the default written out: it names
- * no key, but it keeps a node of its own, so the clause follows the scoping
- * language like every other spelling.
- */
+/* DeciDB: one constraint, or the objective. */
 static PGNode *
-applyDecideScope(PGNode *scope_node, PGNode *body)
+makeDecideItem(PGNode *scope, PGNode *body)
 {
-	PGDecideScope *scope = (PGDecideScope *) scope_node;
+	PGDecideItem *item = makeNode(PGDecideItem);
 
-	if (scope->when)
-	{
-		((PGAExpr *) scope->when)->lexpr = body;
-		body = scope->when;
-	}
-	if (scope->per == PG_DECIDE_PER_ALL || scope->per == PG_DECIDE_PER_KEY)
-		body = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_PER, "scope_per", body,
-										  (PGNode *) scope->key, scope->location);
-	else if (scope->per == PG_DECIDE_PER_ROW)
-		body = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_PER_ROW, "scope_per_row", body,
-										  NULL, scope->location);
-	return body;
+	item->scope = scope;
+	item->body = body;
+	return (PGNode *) item;
+}
+
+/* DeciDB: one declaration; var_type is PG_DECIDE_TYPE_NONE when none is written. */
+static PGNode *
+makeDecideDeclaration(PGNode *scope, char *name, int var_type, int location)
+{
+	PGDecideDeclaration *declaration = makeNode(PGDecideDeclaration);
+
+	declaration->scope = scope;
+	declaration->name = name;
+	declaration->var_type = (PGDecideVariableType) var_type;
+	declaration->location = location;
+	return (PGNode *) declaration;
+}
+
+/* DeciDB: a reducer with a scope in front of its first argument, a BY after it, or both. */
+static PGNode *
+makeDecideReducer(PGNode *call, PGNode *scope, bool has_by, PGList *by, int location)
+{
+	PGDecideReducer *reducer = makeNode(PGDecideReducer);
+
+	reducer->call = call;
+	reducer->scope = scope;
+	reducer->has_by = has_by;
+	reducer->by = by;
+	reducer->location = location;
+	return (PGNode *) reducer;
 }
 
 /*

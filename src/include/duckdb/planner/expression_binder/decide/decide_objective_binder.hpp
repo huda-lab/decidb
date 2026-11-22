@@ -23,16 +23,15 @@ public:
 	                      optional_ptr<DecideQualifierContext> qualifier_context = nullptr);
 	DecideSense decide_sense = DecideSense::MINIMIZE;
 
+	//! Binds `[when c] [per ()]: objective`: `per ()` is the objective's only key and adds nothing; `when c` becomes
+	//! the WHEN wrapper.
+	unique_ptr<Expression> BindObjective(DecideClause &objective);
+
 protected:
 	BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
 	                          bool root_expression = false) override;
 	//! The dispatch itself; `BindExpression` wraps it to stamp the source location.
 	BindResult BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression);
-
-private:
-	//! Binds `[when c] [per ()]: objective`: `per ()` is the objective's only key and adds
-	//! nothing; `when c` becomes the WHEN wrapper.
-	BindResult BindScopedObjective(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
 };
 
 } // namespace duckdb

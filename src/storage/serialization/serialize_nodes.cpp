@@ -38,6 +38,7 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/common/decide_source_info.hpp"
+#include "duckdb/parser/decide/parsed_decide.hpp"
 
 namespace duckdb {
 
@@ -442,6 +443,34 @@ ConstraintSourceInfo ConstraintSourceInfo::Deserialize(Deserializer &deserialize
 	return result;
 }
 
+void DecideClause::Serialize(Serializer &serializer) const {
+	serializer.WriteProperty<DecideScope>(100, "scope", scope);
+	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(101, "body", body);
+}
+
+DecideClause DecideClause::Deserialize(Deserializer &deserializer) {
+	DecideClause result;
+	deserializer.ReadProperty<DecideScope>(100, "scope", result.scope);
+	deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(101, "body", result.body);
+	return result;
+}
+
+void DecideDeclaration::Serialize(Serializer &serializer) const {
+	serializer.WritePropertyWithDefault<string>(100, "name", name);
+	serializer.WriteProperty<DecideVariableType>(101, "type", type);
+	serializer.WriteProperty<DecideScope>(102, "scope", scope);
+	serializer.WritePropertyWithDefault<optional_idx>(103, "location", location, optional_idx());
+}
+
+DecideDeclaration DecideDeclaration::Deserialize(Deserializer &deserializer) {
+	DecideDeclaration result;
+	deserializer.ReadPropertyWithDefault<string>(100, "name", result.name);
+	deserializer.ReadProperty<DecideVariableType>(101, "type", result.type);
+	deserializer.ReadProperty<DecideScope>(102, "scope", result.scope);
+	deserializer.ReadPropertyWithExplicitDefault<optional_idx>(103, "location", result.location, optional_idx());
+	return result;
+}
+
 void DecideFrameSpec::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<bool>(100, "range", range);
 	serializer.WriteProperty<DecideFrameAnchor>(101, "from", from);
@@ -523,6 +552,22 @@ DecideKeyElement DecideKeyElement::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadPropertyWithDefault<string>(101, "name", result.name);
 	deserializer.ReadProperty<DecideKeyNullMode>(102, "null_mode", result.null_mode);
 	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(103, "collated", result.collated);
+	return result;
+}
+
+void DecideScope::Serialize(Serializer &serializer) const {
+	serializer.WritePropertyWithDefault<unique_ptr<ParsedExpression>>(100, "when", when);
+	serializer.WriteProperty<DecidePer>(101, "per", per);
+	serializer.WritePropertyWithDefault<vector<unique_ptr<ParsedExpression>>>(102, "key", key);
+	serializer.WritePropertyWithDefault<optional_idx>(103, "location", location, optional_idx());
+}
+
+DecideScope DecideScope::Deserialize(Deserializer &deserializer) {
+	DecideScope result;
+	deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(100, "when", result.when);
+	deserializer.ReadProperty<DecidePer>(101, "per", result.per);
+	deserializer.ReadPropertyWithDefault<vector<unique_ptr<ParsedExpression>>>(102, "key", result.key);
+	deserializer.ReadPropertyWithExplicitDefault<optional_idx>(103, "location", result.location, optional_idx());
 	return result;
 }
 
@@ -745,6 +790,24 @@ OrderByNode OrderByNode::Deserialize(Deserializer &deserializer) {
 	auto null_order = deserializer.ReadProperty<OrderByNullType>(101, "null_order");
 	auto expression = deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(102, "expression");
 	OrderByNode result(type, null_order, std::move(expression));
+	return result;
+}
+
+void ParsedDecide::Serialize(Serializer &serializer) const {
+	serializer.WritePropertyWithDefault<vector<DecideDeclaration>>(100, "variables", variables);
+	serializer.WritePropertyWithDefault<vector<DecideClause>>(101, "constraints", constraints);
+	serializer.WriteProperty<DecideClause>(102, "objective", objective);
+	serializer.WriteProperty<DecideSense>(103, "sense", sense);
+	serializer.WriteProperty<DecideSourceText>(104, "text", text);
+}
+
+unique_ptr<ParsedDecide> ParsedDecide::Deserialize(Deserializer &deserializer) {
+	auto result = duckdb::unique_ptr<ParsedDecide>(new ParsedDecide());
+	deserializer.ReadPropertyWithDefault<vector<DecideDeclaration>>(100, "variables", result->variables);
+	deserializer.ReadPropertyWithDefault<vector<DecideClause>>(101, "constraints", result->constraints);
+	deserializer.ReadProperty<DecideClause>(102, "objective", result->objective);
+	deserializer.ReadProperty<DecideSense>(103, "sense", result->sense);
+	deserializer.ReadProperty<DecideSourceText>(104, "text", result->text);
 	return result;
 }
 

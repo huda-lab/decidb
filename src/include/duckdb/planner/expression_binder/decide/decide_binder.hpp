@@ -8,7 +8,7 @@
 
 #pragma once
 
-#include "duckdb/parser/decide/decide_parsed_markers.hpp"
+#include "duckdb/parser/expression/decide_reducer_expression.hpp"
 #include "duckdb/planner/expression_binder.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/exception.hpp" // Required for NotImplementedException
@@ -56,7 +56,7 @@ void ThrowIfOuterColumn(Binder &binder, const ColumnRefExpression &column);
 //! repetition aside -- share one key (BindKey) and one scope. `key_text` is the key as
 //! written, kept for display. A reducer's `per ()` is the empty key: one scope every row
 //! belongs to.
-idx_t FindOrCreateKeyScope(ClientContext &context, Binder &binder, const DecideKeyView &key,
+idx_t FindOrCreateKeyScope(ClientContext &context, Binder &binder, const vector<unique_ptr<ParsedExpression>> &key,
                            const case_insensitive_set_t &decision_names, const string &key_text,
                            const DecideSourceText *text, vector<DecideKey> &keys, vector<KeyedScopeInfo> &keyed_scopes);
 
@@ -65,7 +65,7 @@ idx_t FindOrCreateKeyScope(ClientContext &context, Binder &binder, const DecideK
 //! does, a relation element stands for its stored columns, which compare NULL as a
 //! value. `key_text` is the key as written, kept for display; each column element is named as `text` has it written
 //! (null: as it prints), the way a message quotes it.
-idx_t BindKey(ClientContext &context, Binder &binder, const DecideKeyView &key,
+idx_t BindKey(ClientContext &context, Binder &binder, const vector<unique_ptr<ParsedExpression>> &key,
               const case_insensitive_set_t &decision_names, const string &key_text, const DecideSourceText *text,
               vector<DecideKey> &keys);
 
@@ -81,19 +81,19 @@ struct DecideQualifierContext {
 	vector<DecideKey> *keys = nullptr;
 	//! Every frame selector bound so far; a frame's FRAME_TAG_PREFIX tag indexes it.
 	vector<DecideFrameSpec> *frames = nullptr;
-	//! The text the user wrote for the DECIDE tail (SelectNode::decide_text), which a node's query location indexes.
+	//! The text the user wrote for the DECIDE tail (ParsedDecide::text), which a node's query location indexes.
 	const DecideSourceText *source_text = nullptr;
 
-	//! The text written for the scope or `by` marker `marker`, as the user wrote it; false when the parser kept none.
-	bool WrittenText(const ParsedExpression &marker, DecideSpanRole role, string &text) const {
-		return source_text && source_text->Cut(marker.GetQueryLocation(), role, text);
+	//! The key of the reducer `reducer` (its `per` or its `by`), as the user wrote it; false when the parser kept none.
+	bool WrittenText(const ParsedExpression &reducer, DecideSpanRole role, string &text) const {
+		return source_text && source_text->Cut(reducer.GetQueryLocation(), role, text);
 	}
 };
 
 bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
 //! Refuses `name`, a decision's or a column a clause reads, at `at` when it contains a DECIDE tag (R20).
-void RefuseDecideTagInName(const ParsedExpression &at, const string &name);
+void RefuseDecideTagInName(optional_idx at, const string &name);
 
 //! `expr` as a message quotes it: the span of the query the user wrote for it (`text`, which its query location
 //! indexes), else, for a node the parser kept no span for, its SQL without the tags the binders put on its nodes.
@@ -117,7 +117,7 @@ void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr, const c
 //! to any depth (§5.5), but not a norm, and one over decisions not one over data alone
 //! (D80). Anything else -- a scope inside a condition, a key or an ordinary subquery --
 //! is refused.
-void ValidateDecideScopeSpellings(const ParsedExpression &clause, const case_insensitive_map_t<idx_t> &variables,
+void ValidateDecideScopeSpellings(const DecideClause &clause, const case_insensitive_map_t<idx_t> &variables,
                                   const DecideSourceText *text);
 
 bool ContainsDecideAggregate(const ParsedExpression &expr);
@@ -171,18 +171,15 @@ protected:
 	//! True when `expr`, or the body of a subquery in it, names a decision that is not query-wide.
 	bool ReadsRowDecision(const ParsedExpression &expr) const;
 	//! True when `expr`, sitting below a clause's top, is plain data that DuckDB binds by its
-	//! own rules: it reads no decision, and it is not a function (a reducer or a scope
-	//! marker) or a subquery, which keep their DECIDE handling. A CASE over data is plain data.
+	//! own rules: it reads no decision, and it is not a function, a reducer or a subquery, which keep their DECIDE
+	//! handling. A CASE over data is plain data.
 	bool IsDataOperand(const ParsedExpression &expr) const;
 
 	BindResult BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) override;
-	//! Binds `agg([when c] [per K]: e)`: `agg(e)` with `c` as the aggregate's filter and
-	//! `K` as the key it keeps one row of each class by (an exact key scope, tagged like a
-	//! qualifier; `per ()` is the empty key).
-	BindResult BindScopedReducer(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
-	//! Binds `agg(...) BY (key)`: the reducer, then the key into LogicalDecide::keys,
-	//! named on the aggregate by a GROUP_KEY_TAG_PREFIX tag (none for `BY ()`).
-	BindResult BindReducerBy(FunctionExpression &by, idx_t depth);
+	//! Binds `agg([when c] [per K]: e) [BY (key)]`: `agg(e)` with `c` as the aggregate's filter and `K` as the key it
+	//! keeps one row of each class by (an exact key scope, tagged like a qualifier; `per ()` is the empty key), then
+	//! the `by` key into LogicalDecide::keys, named on the aggregate by a GROUP_KEY_TAG_PREFIX tag (none for `BY ()`).
+	BindResult BindReducer(DecideReducerExpression &reducer, idx_t depth);
 	//! Binds a frame selector (language/guide.md §5.6) to an aggregate over its payload
 	//! -- `first(e)` for a point frame, its reducer for a range -- tagged by
 	//! FRAME_TAG_PREFIX with the frame's entry in LogicalDecide::frames, which holds the

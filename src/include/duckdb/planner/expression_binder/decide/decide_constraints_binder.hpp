@@ -22,7 +22,7 @@ public:
 	                        optional_ptr<DecideQualifierContext> qualifier_context = nullptr);
 
 	//! Binds the constraints of SUCH THAT, joined by AND when there are several.
-	unique_ptr<Expression> BindConstraints(unique_ptr<ParsedExpression> &constraints);
+	unique_ptr<Expression> BindConstraints(vector<DecideClause> &constraints);
 
 protected:
 	BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
@@ -37,7 +37,7 @@ private:
 	//! Binds `[when c] [per K]: constraint`: the constraint wrapped in a WHEN wrapper for
 	//! `c` and a PER_CLASS_TAG wrapper for `K` (no columns for `per ()`). A BETWEEN binds to
 	//! two comparisons, each wrapped in the scope.
-	BindResult BindScopedConstraint(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
+	BindResult BindClause(DecideClause &clause);
 };
 
 } // namespace duckdb

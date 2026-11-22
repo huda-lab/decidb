@@ -101,9 +101,12 @@ BindResult ExpressionBinder::BindExpression(unique_ptr<ParsedExpression> &expr, 
 	case ExpressionClass::STAR:
 		return BindResult(BinderException::Unsupported(expr_ref, "STAR expression is not supported here"));
 	case ExpressionClass::DECIDE_FRAME:
-		// DeciDB: only a DECIDE clause's own binders read a frame selector. The parser builds one only inside a DECIDE
-		// clause, and the DECIDE binder refuses an outer column before an outer query could bind the clause.
-		throw InternalException("DECIDE: a frame selector reached a binder outside its DECIDE clause");
+	case ExpressionClass::DECIDE_REDUCER:
+		// DeciDB: only a DECIDE clause's own binders read a frame selector or a reducer with a scope or a `by`. The
+		// parser builds one only inside a DECIDE clause, and the DECIDE binder refuses an outer column before an outer
+		// query could bind the clause.
+		throw InternalException(
+		    "DECIDE: a frame selector or a scoped reducer reached a binder outside its DECIDE clause");
 	default:
 		throw NotImplementedException("Unimplemented expression class");
 	}

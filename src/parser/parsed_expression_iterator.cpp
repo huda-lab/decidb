@@ -114,6 +114,15 @@ void ParsedExpressionIterator::EnumerateChildren(
 		}
 		break;
 	}
+	case ExpressionClass::DECIDE_REDUCER: {
+		auto &reducer = expr.Cast<DecideReducerExpression>();
+		callback(reducer.call);
+		reducer.scope.EnumerateExpressions(callback);
+		for (auto &element : reducer.by) {
+			callback(element);
+		}
+		break;
+	}
 	case ExpressionClass::DECIDE_FRAME: {
 		auto &frame_expr = expr.Cast<DecideFrameExpression>();
 		callback(frame_expr.payload);
@@ -305,13 +314,8 @@ void ParsedExpressionIterator::EnumerateQueryNodeChildren(
 		if (sel_node.qualify) {
 			expr_callback(sel_node.qualify);
 		}
-		// DECIDE's clauses hold values (a macro's parameter, a CTE read in a subquery); its
-		// declarations hold only names, types and key columns, so they are not visited.
-		if (decide_clauses && sel_node.decide_constraints) {
-			expr_callback(sel_node.decide_constraints);
-		}
-		if (decide_clauses && sel_node.decide_objective) {
-			expr_callback(sel_node.decide_objective);
+		if (decide_clauses && sel_node.decide) {
+			sel_node.decide->EnumerateExpressions(expr_callback);
 		}
 
 		EnumerateTableRefChildren(*sel_node.from_table.get(), expr_callback, ref_callback, decide_clauses);

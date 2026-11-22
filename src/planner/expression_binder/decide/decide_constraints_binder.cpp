@@ -145,52 +145,59 @@ BindResult DecideConstraintsBinder::BindConjunction(unique_ptr<ParsedExpression>
 	return BindResult(std::move(result));
 }
 
-unique_ptr<Expression> DecideConstraintsBinder::BindConstraints(unique_ptr<ParsedExpression> &constraints) {
-	auto clauses = DecideConstraintList(constraints);
-	if (clauses.size() == 1) {
-		return Bind(constraints);
-	}
+unique_ptr<Expression> DecideConstraintsBinder::BindConstraints(vector<DecideClause> &constraints) {
 	// Each constraint binds on its own; the first error is the one raised.
 	ErrorData error;
-	for (auto &clause : clauses) {
-		is_top_expression = true;
-		BindChild(clause.get(), 0, error);
+	vector<unique_ptr<Expression>> bound;
+	for (auto &clause : constraints) {
+		auto result = BindClause(clause);
+		if (!result.HasError()) {
+			bound.push_back(std::move(result.expression));
+		} else if (!error.HasError()) {
+			error = std::move(result.error);
+		}
 	}
 	if (error.HasError()) {
 		error.Throw();
 	}
-	auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-	for (auto &clause : clauses) {
-		auto &bound = BoundExpression::GetExpression(*clause.get());
-		result->children.push_back(BoundCastExpression::AddCastToType(context, std::move(bound), LogicalType::BOOLEAN));
+	if (bound.size() == 1) {
+		return std::move(bound[0]);
 	}
-	result->SetQueryLocation(constraints->GetQueryLocation());
+	auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+	for (auto &constraint : bound) {
+		result->children.push_back(
+		    BoundCastExpression::AddCastToType(context, std::move(constraint), LogicalType::BOOLEAN));
+	}
 	return std::move(result);
 }
 
-BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
+BindResult DecideConstraintsBinder::BindClause(DecideClause &clause) {
 	// `[when c] [per K]: body`. The scope's parts bind in place. `per row`, the default written out, adds no class
 	// key: one constraint per kept row.
-	auto scope = ReadDecideScope(*expr_ptr);
+	auto &scope = clause.scope;
 	bool per = scope.per == DecidePer::ALL || scope.per == DecidePer::KEY;
-	auto *when = scope.when;
-	auto *body = scope.body;
+	auto &when = scope.when;
+	idx_t depth = 0;
 
 	ErrorData body_error;
 	is_top_expression = true;
-	BindChild(*body, depth, body_error);
+	BindChild(clause.body, depth, body_error);
 	if (body_error.HasError()) {
 		return BindResult(std::move(body_error));
+	}
+	auto bound = std::move(BoundExpression::GetExpression(*clause.body));
+	if (scope.IsEmpty()) {
+		return BindResult(std::move(bound));
 	}
 
 	// The condition takes data only (ValidateDecideScopeSpellings): plain SQL, no
 	// parentheses needed around a compound one.
-	auto bind_condition = [&](unique_ptr<ParsedExpression> &parsed, unique_ptr<Expression> &bound) {
+	auto bind_condition = [&](unique_ptr<ParsedExpression> &parsed, unique_ptr<Expression> &out) {
 		is_top_expression = false;
 		auto error = BindDataChild(parsed, depth);
 		if (!error.HasError()) {
-			bound = BoundCastExpression::AddCastToType(context, std::move(BoundExpression::GetExpression(*parsed)),
-			                                           LogicalType::BOOLEAN);
+			out = BoundCastExpression::AddCastToType(context, std::move(BoundExpression::GetExpression(*parsed)),
+			                                         LogicalType::BOOLEAN);
 		}
 		return error;
 	};
@@ -199,8 +206,8 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 	unique_ptr<ParsedExpression> condition_text;
 	unique_ptr<Expression> condition;
 	if (when) {
-		condition_text = (*when)->Copy();
-		auto error = bind_condition(*when, condition);
+		condition_text = when->Copy();
+		auto error = bind_condition(when, condition);
 		if (error.HasError()) {
 			return BindResult(std::move(error));
 		}
@@ -208,7 +215,7 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 	idx_t key = DConstants::INVALID_INDEX;
 	if (per) {
 		// The key as written (`per D`), read before its elements bind.
-		auto key_text = scope.key.ToString();
+		auto key_text = DecideKeyToString(scope.key);
 		key = BindKey(context, binder, scope.key, DecisionNames(variables), key_text, qualifier_context->source_text,
 		              *qualifier_context->keys);
 	}
@@ -239,16 +246,14 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 				AddDecideTag(wrapper->alias, MakePerKeyTag(key));
 			}
 			// The wrapper stands at its `per`, where the parser kept the key as written.
-			wrapper->SetQueryLocation(scope.per_location);
+			wrapper->SetQueryLocation(scope.location);
 			constraint = std::move(wrapper);
 		}
 		return constraint;
 	};
-	auto bound = std::move(BoundExpression::GetExpression(**body));
 	if (bound->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &halves = bound->Cast<BoundConjunctionExpression>();
 		auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		for (auto &half : halves.children) {
+		for (auto &half : bound->Cast<BoundConjunctionExpression>().children) {
 			result->children.push_back(apply_scope(std::move(half)));
 		}
 		return BindResult(std::move(result));
@@ -292,16 +297,16 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
 		// A bare column at the top level of SUCH THAT is never a valid constraint.
 		return NotAComparison(expr, qualifier_context->source_text);
 	}
-	case ExpressionClass::FUNCTION: {
-		// `[when c] [per K]:` in front of a constraint.
-		if (IsDecideScope(expr)) {
-			return BindScopedConstraint(expr_ptr, depth);
-		}
+	case ExpressionClass::FUNCTION:
 		if (!is_top_expression) {
 			return BindFunction(expr_ptr, depth);
 		}
 		break;
-	}
+	case ExpressionClass::DECIDE_REDUCER:
+		if (!is_top_expression) {
+			return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
+		}
+		break;
 	case ExpressionClass::COMPARISON:
 		return BindComparison(expr_ptr, depth);
 	case ExpressionClass::OPERATOR: {

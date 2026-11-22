@@ -10,6 +10,7 @@ add_library_unity(
   comparison_expression.cpp
   constant_expression.cpp
   decide_frame_expression.cpp
+  decide_reducer_expression.cpp
   default_expression.cpp
   function_expression.cpp
   lambda_expression.cpp

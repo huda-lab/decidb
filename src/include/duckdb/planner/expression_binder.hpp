@@ -148,7 +148,7 @@ public:
 	//! Recursively replaces macro parameters with the provided input parameters.
 	void ReplaceMacroParameters(unique_ptr<ParsedExpression> &expr, vector<unordered_set<string>> &lambda_params);
 	//! ReplaceMacroParameters over every expression of a query node. A DECIDE tail whose expressions took an argument
-	//! loses its source text (SelectNode::decide_text): the text describes the query it was cut from, and the
+	//! loses its source text (ParsedDecide::text): the text describes the query it was cut from, and the
 	//! argument comes from another one.
 	void ReplaceMacroParametersInQueryNode(QueryNode &node, vector<unordered_set<string>> &lambda_params);
 	//! How many parameters ReplaceMacroParameters has replaced.

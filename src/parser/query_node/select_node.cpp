@@ -1,6 +1,5 @@
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/expression_util.hpp"
-#include "duckdb/parser/decide/decide_parsed_markers.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/common/serializer/serializer.hpp"
 #include "duckdb/common/serializer/deserializer.hpp"
@@ -12,36 +11,7 @@ SelectNode::SelectNode()
 }
 
 bool SelectNode::HasDecideClause() const {
-	return !decide_variables.empty();
-}
-
-//! One declaration as DECIDE writes it, `[PER key: ]name(TYPE)`.
-static string DecideVariableToString(const ParsedExpression &expr) {
-	auto declaration = ReadDecideDeclaration(expr);
-	string type;
-	switch (declaration.type) {
-	case DecideVariableType::REAL:
-		type = "REAL";
-		break;
-	case DecideVariableType::INT:
-		type = "INT";
-		break;
-	default:
-		type = "BOOL";
-		break;
-	}
-	auto scope = declaration.scope.ToString();
-	return (scope.empty() ? "" : scope + ": ") + (*declaration.scope.body)->ToString() + "(" + type + ")";
-}
-
-//! The constraints of SUCH THAT as written, joined by AND. Each prints through the ordinary
-//! `ParsedExpression::ToString()`.
-static string DecideConstraintsToString(const unique_ptr<ParsedExpression> &constraints) {
-	// The list is read through the slots the binder binds in place; printing changes none.
-	auto clauses = DecideConstraintList(const_cast<unique_ptr<ParsedExpression> &>(constraints)); // NOLINT
-	return StringUtil::Join(
-	    clauses, clauses.size(), " AND ",
-	    [](const reference<unique_ptr<ParsedExpression>> &clause) { return clause.get()->ToString(); });
+	return decide != nullptr;
 }
 
 string SelectNode::ToString() const {
@@ -85,28 +55,8 @@ string SelectNode::ToString() const {
 	if (where_clause) {
 		result += " WHERE " + where_clause->ToString();
 	}
-	if (HasDecideClause()) {
-		result += " DECIDE ";
-		for (idx_t i = 0; i < decide_variables.size(); i++) {
-			if (i > 0) {
-				result += ", ";
-			}
-			result += DecideVariableToString(*decide_variables[i]);
-		}
-		if (decide_text.HasText()) {
-			// the tail as written, so a statement parsed from this string keeps the text the user wrote
-			result += " " + decide_text.Tail();
-		} else {
-			result += " SUCH THAT " + DecideConstraintsToString(decide_constraints);
-			if (decide_objective) {
-				if (decide_sense == DecideSense::MAXIMIZE) {
-					result += " MAXIMIZE ";
-				} else if (decide_sense == DecideSense::MINIMIZE) {
-					result += " MINIMIZE ";
-				}
-				result += decide_objective->ToString();
-			}
-		}
+	if (decide) {
+		result += " " + decide->ToString();
 	}
 	if (!groups.grouping_sets.empty()) {
 		result += " GROUP BY ";
@@ -183,19 +133,8 @@ bool SelectNode::Equals(const QueryNode *other_p) const {
 	if (!TableRef::Equals(from_table, other.from_table)) {
 		return false;
 	}
-	// decidb's DECIDE
-	if (!ParsedExpression::ListEquals(decide_variables, other.decide_variables)) {
-		return false;
-	}
-	if (!ParsedExpression::Equals(decide_constraints, other.decide_constraints)) {
-		return false;
-	}
-	if (HasDecideClause() && other.HasDecideClause()) {
-		if (decide_sense != other.decide_sense) {
-			return false;
-		}
-	}
-	if (!ParsedExpression::Equals(decide_objective, other.decide_objective)) {
+	// DeciDB's DECIDE
+	if (HasDecideClause() != other.HasDecideClause() || (decide && !decide->Equals(*other.decide))) {
 		return false;
 	}
 	// WHERE
@@ -229,16 +168,7 @@ unique_ptr<QueryNode> SelectNode::Copy() const {
 		result->select_list.push_back(child->Copy());
 	}
 	result->from_table = from_table ? from_table->Copy() : nullptr;
-	// decidb's decide
-	for (auto &child : decide_variables) {
-		result->decide_variables.push_back(child->Copy());
-	}
-	result->decide_constraints = decide_constraints ? decide_constraints->Copy() : nullptr;
-	if (!decide_variables.empty()) {
-		result->decide_sense = decide_sense;
-	}
-	result->decide_objective = decide_objective ? decide_objective->Copy() : nullptr;
-	result->decide_text = decide_text;
+	result->decide = decide ? decide->Copy() : nullptr;
 	result->where_clause = where_clause ? where_clause->Copy() : nullptr;
 	// groups
 	for (auto &group : groups.group_expressions) {

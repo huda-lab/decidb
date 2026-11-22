@@ -13,34 +13,23 @@ DecideObjectiveBinder::DecideObjectiveBinder(Binder &binder, ClientContext &cont
     : DecideBinder(binder, context, variables, scalar_variables, qualifier_context) {
 }
 
-BindResult DecideObjectiveBinder::BindScopedObjective(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
-	// `[when c] [per ()]: objective`. An objective is produced once, so `per ()` is its
-	// default and adds nothing; the parser refuses any other key.
-	auto scope = ReadDecideScope(*expr_ptr);
-	auto *when = scope.when;
-	auto *body = scope.body;
-	ErrorData body_error;
-	BindChild(*body, depth, body_error);
-	if (body_error.HasError()) {
-		return BindResult(std::move(body_error));
-	}
-	auto bound = std::move(BoundExpression::GetExpression(**body));
-	if (!when) {
-		return BindResult(std::move(bound));
-	}
-	auto condition_error = BindDataChild(*when, depth);
-	if (condition_error.HasError()) {
-		return BindResult(std::move(condition_error));
-	}
-	auto wrap = [&](unique_ptr<Expression> objective) -> unique_ptr<Expression> {
+unique_ptr<Expression> DecideObjectiveBinder::BindObjective(DecideClause &objective) {
+	// An objective is produced once, so `per ()` is its default and adds nothing; the parser refuses any other key.
+	auto &scope = objective.scope;
+	auto bound = Bind(objective.body);
+	if (scope.when) {
+		auto condition_error = BindDataChild(scope.when, 0);
+		if (condition_error.HasError()) {
+			condition_error.Throw();
+		}
 		auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		wrapper->children.push_back(std::move(objective));
+		wrapper->children.push_back(std::move(bound));
 		wrapper->children.push_back(BoundCastExpression::AddCastToType(
-		    context, std::move(BoundExpression::GetExpression(**when)), LogicalType::BOOLEAN));
+		    context, std::move(BoundExpression::GetExpression(*scope.when)), LogicalType::BOOLEAN));
 		wrapper->alias = WHEN_FILTER_TAG;
-		return std::move(wrapper);
-	};
-	return BindResult(wrap(std::move(bound)));
+		bound = std::move(wrapper);
+	}
+	return bound;
 }
 
 BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
@@ -62,12 +51,9 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 	// Whether the objective reads a decision, and in what shape, is judged on the bound tree after canonicalization
 	// (DecideShapeCheck). What only the parsed tree can tell is left here.
 	switch (expr.GetExpressionClass()) {
-	case ExpressionClass::FUNCTION: {
-		if (IsDecideScope(expr)) {
-			return BindScopedObjective(expr_ptr, depth);
-		}
+	case ExpressionClass::FUNCTION:
 		return BindFunction(expr_ptr, depth);
-	}
+	case ExpressionClass::DECIDE_REDUCER:
 	case ExpressionClass::SUBQUERY:
 	case ExpressionClass::WINDOW:
 	case ExpressionClass::DECIDE_FRAME:

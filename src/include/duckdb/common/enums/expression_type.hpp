@@ -136,6 +136,8 @@ enum class ExpressionType : uint8_t {
 	LAMBDA_REF = 206,
 	// DeciDB: a frame selector inside a DECIDE clause
 	DECIDE_FRAME = 207,
+	// DeciDB: a reducer with a scope inside it or a `by` after it
+	DECIDE_REDUCER = 208,
 
 	// -----------------------------
 	// Miscellaneous
@@ -180,6 +182,8 @@ enum class ExpressionClass : uint8_t {
 	LAMBDA_REF = 20,
 	// DeciDB: a frame selector inside a DECIDE clause (DecideFrameExpression)
 	DECIDE_FRAME = 21,
+	// DeciDB: a reducer written with DECIDE syntax (DecideReducerExpression)
+	DECIDE_REDUCER = 22,
 	//===--------------------------------------------------------------------===//
 	// Bound Expressions
 	//===--------------------------------------------------------------------===//

@@ -163,6 +163,8 @@ unique_ptr<ParsedExpression> Transformer::TransformExpressionInternal(duckdb_lib
 		return TransformBooleanTest(PGCast<duckdb_libpgquery::PGBooleanTest>(node));
 	case duckdb_libpgquery::T_PGMultiAssignRef:
 		return TransformMultiAssignRef(PGCast<duckdb_libpgquery::PGMultiAssignRef>(node));
+	case duckdb_libpgquery::T_PGDecideReducer:
+		return TransformDecideReducer(PGCast<duckdb_libpgquery::PGDecideReducer>(node));
 	case duckdb_libpgquery::T_PGDecideFrame:
 		return TransformDecideFrame(PGCast<duckdb_libpgquery::PGDecideFrame>(node));
 

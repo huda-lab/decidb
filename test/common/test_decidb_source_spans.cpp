@@ -29,10 +29,8 @@ duckdb::vector<string> TailSpans(const string &sql) {
 	REQUIRE(parser.statements.size() == 1);
 	auto &select = parser.statements[0]->Cast<SelectStatement>().node->Cast<SelectNode>();
 	duckdb::vector<string> spans;
-	CollectSpans(*select.decide_constraints, select.decide_text, spans);
-	if (select.decide_objective) {
-		CollectSpans(*select.decide_objective, select.decide_text, spans);
-	}
+	select.decide->EnumerateExpressions(
+	    [&](duckdb::unique_ptr<ParsedExpression> &expr) { CollectSpans(*expr, select.decide->text, spans); });
 	return spans;
 }
 
@@ -65,12 +63,12 @@ TEST_CASE("A span says how tightly its text binds, as the parser read it", "[dec
 	std::function<void(const ParsedExpression &)> walk = [&](const ParsedExpression &expr) {
 		string text;
 		int binding;
-		if (select.decide_text.CutExpr(expr.GetQueryLocation(), text, binding)) {
+		if (select.decide->text.CutExpr(expr.GetQueryLocation(), text, binding)) {
 			found.emplace_back(text, binding);
 		}
 		ParsedExpressionIterator::EnumerateChildren(expr, walk);
 	};
-	walk(*select.decide_objective);
+	walk(*select.decide->objective.body);
 	auto binding_of = [&](const string &text) {
 		for (auto &entry : found) {
 			if (entry.first == text) {
@@ -98,12 +96,12 @@ TEST_CASE("A comparison and an AND bind looser than arithmetic, a CASE is whole"
 	std::function<void(const ParsedExpression &)> walk = [&](const ParsedExpression &expr) {
 		string text;
 		int binding;
-		if (select.decide_text.CutExpr(expr.GetQueryLocation(), text, binding)) {
+		if (select.decide->text.CutExpr(expr.GetQueryLocation(), text, binding)) {
 			found.emplace_back(text, binding);
 		}
 		ParsedExpressionIterator::EnumerateChildren(expr, walk);
 	};
-	walk(*select.decide_objective);
+	walk(*select.decide->objective.body);
 	for (auto text : {"a > 1 AND b", "a > 1", "CASE WHEN a > 1 AND b THEN 1 ELSE 2 END"}) {
 		auto entry =
 		    std::find_if(found.begin(), found.end(), [&](const std::pair<string, int> &e) { return e.first == text; });

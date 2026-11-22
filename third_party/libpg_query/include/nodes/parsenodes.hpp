@@ -1273,10 +1273,10 @@ typedef struct PGDecideSpan {
 } PGDecideSpan;
 
 typedef struct PGDecideClause {
-    PGList *variables;      /* DECIDE <variables> */
-    PGNode *constraints;    /* SUCH THAT <constraints> */
+    PGList *variables;      /* DECIDE <variables>: PGDecideDeclaration */
+    PGList *constraints;    /* SUCH THAT <constraints>: PGDecideItem */
     PGObjectiveSense sense; /* [MAXIMIZE|MINIMIZE] <objective> */
-    PGNode *objective;
+    PGNode *objective;      /* PGDecideItem, or NULL */
     int decl_start;         /* the DECIDE: the clause's text runs from here through tail_end */
     int tail_start;         /* the tail, from SUCH THAT through the objective */
     int tail_end;
@@ -1288,9 +1288,7 @@ typedef struct PGDecideClause {
 
 /*
  * DeciDB: the scope written in front of a constraint, an objective, a declared
- * variable or a reducer's argument -- [WHEN condition] [PER key]. It never leaves
- * the grammar: the production owning the scoped body folds it into
- * PG_AEXPR_SCOPE_* nodes (applyDecideScope).
+ * variable or a reducer's argument -- [WHEN condition] [PER key].
  */
 typedef enum PGDecidePer {
 	PG_DECIDE_PER_NONE, /* no PER written */
@@ -1301,13 +1299,46 @@ typedef enum PGDecidePer {
 
 typedef struct PGDecideScope {
 	PGNodeTag type;
-	PGNode *when;    /* PG_AEXPR_SCOPE_WHEN awaiting its body, or NULL */
+	PGNode *when;    /* the condition, or NULL */
 	PGDecidePer per;
 	PGList *key;     /* key elements; NIL unless per is PG_DECIDE_PER_KEY */
-	int location;    /* of PER, or -1 without one */
+	int location;    /* of PER, else of WHEN */
 	int key_start;   /* the key's text; PG_DECIDE_PER_KEY only */
 	int key_end;
 } PGDecideScope;
+
+/* DeciDB: one constraint, or the objective: [scope:] body. */
+typedef struct PGDecideItem {
+	PGNodeTag type;
+	PGNode *scope; /* PGDecideScope, or NULL */
+	PGNode *body;
+} PGDecideItem;
+
+typedef enum PGDecideVariableType {
+	PG_DECIDE_TYPE_NONE, /* no type written, which the transformer refuses */
+	PG_DECIDE_TYPE_INT,
+	PG_DECIDE_TYPE_REAL,
+	PG_DECIDE_TYPE_BOOL
+} PGDecideVariableType;
+
+/* DeciDB: one declaration, [PER key:] name(TYPE). */
+typedef struct PGDecideDeclaration {
+	PGNodeTag type;
+	char *name;
+	PGDecideVariableType var_type;
+	PGNode *scope; /* PGDecideScope, or NULL */
+	int location;
+} PGDecideDeclaration;
+
+/* DeciDB: a reducer written with DECIDE syntax: a scope in front of its first argument, a BY after it, or both. */
+typedef struct PGDecideReducer {
+	PGNodeTag type;
+	PGNode *call;
+	PGNode *scope; /* PGDecideScope, or NULL */
+	bool has_by;
+	PGList *by;    /* key elements; NIL for BY () */
+	int location;  /* of BY, else of the call */
+} PGDecideReducer;
 
 /*
  * DeciDB: a frame selector inside a DECIDE clause -- at(F [else v]: e) over (S ...),

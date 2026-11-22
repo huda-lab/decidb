@@ -1212,6 +1212,25 @@ DecideFrameAnchor EnumUtil::FromString<DecideFrameAnchor>(const char *value) {
 	return static_cast<DecideFrameAnchor>(StringUtil::StringToEnum(GetDecideFrameAnchorValues(), 4, "DecideFrameAnchor", value));
 }
 
+const StringUtil::EnumStringLiteral *GetDecidePerValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+	    {static_cast<uint32_t>(DecidePer::NONE), "NONE"},
+	    {static_cast<uint32_t>(DecidePer::ROW), "ROW"},
+	    {static_cast<uint32_t>(DecidePer::ALL), "ALL"},
+	    {static_cast<uint32_t>(DecidePer::KEY), "KEY"}};
+	return values;
+}
+
+template <>
+const char *EnumUtil::ToChars<DecidePer>(DecidePer value) {
+	return StringUtil::EnumToString(GetDecidePerValues(), 4, "DecidePer", static_cast<uint32_t>(value));
+}
+
+template <>
+DecidePer EnumUtil::FromString<DecidePer>(const char *value) {
+	return static_cast<DecidePer>(StringUtil::StringToEnum(GetDecidePerValues(), 4, "DecidePer", value));
+}
+
 const StringUtil::EnumStringLiteral *GetDecideSignatureFieldKindValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 	    {static_cast<uint32_t>(DecideSignatureFieldKind::VALUE), "VALUE"},
@@ -1231,6 +1250,24 @@ template <>
 DecideSignatureFieldKind EnumUtil::FromString<DecideSignatureFieldKind>(const char *value) {
 	return static_cast<DecideSignatureFieldKind>(
 	    StringUtil::StringToEnum(GetDecideSignatureFieldKindValues(), 4, "DecideSignatureFieldKind", value));
+}
+
+const StringUtil::EnumStringLiteral *GetDecideVariableTypeValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+	    {static_cast<uint32_t>(DecideVariableType::REAL), "REAL"},
+	    {static_cast<uint32_t>(DecideVariableType::INT), "INT"},
+	    {static_cast<uint32_t>(DecideVariableType::BOOL), "BOOL"}};
+	return values;
+}
+
+template <>
+const char *EnumUtil::ToChars<DecideVariableType>(DecideVariableType value) {
+	return StringUtil::EnumToString(GetDecideVariableTypeValues(), 3, "DecideVariableType", static_cast<uint32_t>(value));
+}
+
+template <>
+DecideVariableType EnumUtil::FromString<DecideVariableType>(const char *value) {
+	return static_cast<DecideVariableType>(StringUtil::StringToEnum(GetDecideVariableTypeValues(), 3, "DecideVariableType", value));
 }
 
 const StringUtil::EnumStringLiteral *GetDecideSenseValues() {

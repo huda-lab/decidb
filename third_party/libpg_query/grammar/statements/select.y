@@ -178,40 +178,17 @@ variable_type:
  */
 typed_decide_variable:
 			ColId '(' variable_type ')'
-				{
-					/* Row-scoped variable: x(TYPE) */
-					PGColumnRef *col = makeNode(PGColumnRef);
-					col->fields = list_make1(makeString($1));
-					col->location = @1;
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (PGNode *)col, (PGNode *)$3, @2);
-				}
+				{ $$ = makeDecideDeclaration(NULL, $1, $3, @2); }
 			| decide_per ':' ColId '(' variable_type ')'
-				{
-					/* Keyed variable: PER key: x(TYPE). The scope wraps the name. */
-					PGColumnRef *col = makeNode(PGColumnRef);
-					col->fields = list_make1(makeString($3));
-					col->location = @3;
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", applyDecideScope($1, (PGNode *)col), (PGNode *)$5, @4);
-				}
+				{ $$ = makeDecideDeclaration($1, $3, $5, @4); }
 			/* A declaration with no type. Bison reduces by default, so an action here runs before the
 			 * parser reads the token after the name: an error raised here would hide the syntax error
-			 * there (DECIDE t.x(INT) ...). The declaration is built as the typed forms are, with a NULL
-			 * type (as CREATE TABLE builds a column with no type), which the transformer refuses once
-			 * the whole query has parsed. */
+			 * there (DECIDE t.x(INT) ...). The declaration is built with no type, which the transformer
+			 * refuses once the whole query has parsed. */
 			| ColId
-				{
-					PGColumnRef *col = makeNode(PGColumnRef);
-					col->fields = list_make1(makeString($1));
-					col->location = @1;
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", (PGNode *)col, NULL, @1);
-				}
+				{ $$ = makeDecideDeclaration(NULL, $1, PG_DECIDE_TYPE_NONE, @1); }
 			| decide_per ':' ColId
-				{
-					PGColumnRef *col = makeNode(PGColumnRef);
-					col->fields = list_make1(makeString($3));
-					col->location = @3;
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OF, "=", applyDecideScope($1, (PGNode *)col), NULL, @3);
-				}
+				{ $$ = makeDecideDeclaration($1, $3, PG_DECIDE_TYPE_NONE, @3); }
 		;
 
 /* The declarators of a DECIDE: "x(INT), per K: y(BOOL)" */
@@ -226,8 +203,7 @@ typed_decide_variable_list:
  * variable or a reducer's argument -- [WHEN condition] [PER key]. A ':' always
  * ends it, so the condition is a full a_expr and needs no parentheses. */
 decide_when:
-			WHEN_DECIDE a_expr
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_WHEN, "scope_when", NULL, $2, @1); }
+			WHEN_DECIDE a_expr						{ $$ = $2; }
 		;
 
 decide_per:
@@ -247,7 +223,7 @@ decide_per:
 decide_scope:
 			decide_when
 				{
-					$$ = makeDecideScope(PG_DECIDE_PER_NONE, NIL, -1, yyscanner);
+					$$ = makeDecideScope(PG_DECIDE_PER_NONE, NIL, @1, yyscanner);
 					((PGDecideScope *) $$)->when = $1;
 				}
 			| decide_when decide_per
@@ -331,10 +307,10 @@ decide_objective_item:
 								(errcode(PG_ERRCODE_SYNTAX_ERROR),
 								 errmsg("an objective cannot have a per key"),
 								 parser_errposition(scope->location)));
-					$$ = applyDecideScope($1, $3);
+					$$ = makeDecideItem($1, $3);
 				}
 			| decide_item_expr
-				{ $$ = $1; }
+				{ $$ = makeDecideItem(NULL, $1); }
 		;
 
 /* DeciDB: the constraints and optional objective. Shared by both clause
@@ -470,16 +446,16 @@ decide_body:
 
 decide_constraint_list:
 			decide_constraint_item
-				{ $$ = $1; }
+				{ $$ = list_make1($1); }
 			| decide_constraint_list AND decide_constraint_item
-				{ $$ = makeAndExpr($1, $3, @2); }
+				{ $$ = lappend($1, $3); }
 		;
 
 decide_constraint_item:
 			decide_scope ':' decide_item_expr
-				{ $$ = applyDecideScope($1, $3); }
+				{ $$ = makeDecideItem($1, $3); }
 			| decide_item_expr
-				{ $$ = $1; }
+				{ $$ = makeDecideItem(NULL, $1); }
 		;
 
 simple_select:
@@ -3052,22 +3028,19 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 			| func_application decide_by
 				{
 					/* DeciDB: reducer BY (key). The binder validates that it is a reducer. */
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_REDUCER_BY, "reducer_by", $1, (PGNode *) $2, @2);
+					$$ = makeDecideReducer($1, NULL, true, $2, @2);
 				}
 			| func_name '(' decide_scope ':' func_arg_list ')'
 				{
 					/* DeciDB: a scope inside a reducer, sum(WHEN c PER k: expr). It scopes
 					 * the first argument, the expression being reduced. */
 					noteDecideReducerKey($3, @1.start, yyscanner);
-					linitial($5) = applyDecideScope($3, (PGNode *) linitial($5));
-					$$ = (PGNode *) makeFuncCall($1, $5, @1);
+					$$ = makeDecideReducer((PGNode *) makeFuncCall($1, $5, @1), $3, false, NIL, @1);
 				}
 			| func_name '(' decide_scope ':' func_arg_list ')' decide_by
 				{
 					noteDecideReducerKey($3, @7.start, yyscanner);
-					linitial($5) = applyDecideScope($3, (PGNode *) linitial($5));
-					$$ = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_REDUCER_BY, "reducer_by", (PGNode *) makeFuncCall($1, $5, @1), (PGNode *) $7, @7);
+					$$ = makeDecideReducer((PGNode *) makeFuncCall($1, $5, @1), $3, true, $7, @7);
 				}
 			| AT_DECIDE '(' decide_frame_point ':' a_expr ')' decide_frame_over
 				{
