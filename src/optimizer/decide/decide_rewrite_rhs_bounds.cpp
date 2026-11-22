@@ -231,7 +231,7 @@ private:
 		if (class_key == DConstants::INVALID_INDEX) {
 			return;
 		}
-		D_ASSERT(class_key < decide.keys.size());
+		D_ASSERT(class_key < decide.bound.keys.size());
 		for (auto &element : decide.bound.keys[class_key].elements) {
 			if (element.null_mode == DecideKeyNullMode::NO_GROUP) {
 				auto value = calc.Of(*bound);
@@ -281,9 +281,9 @@ private:
 		record.arguments = std::move(arguments);
 		record.key = PathKeyOf(reducer, path);
 		if (reducer.per != DConstants::INVALID_INDEX) {
-			D_ASSERT(reducer.per < decide.keyed_scopes.size());
+			D_ASSERT(reducer.per < decide.bound.keyed_scopes.size());
 			// Only the optimizer's helper decisions have scopes over a link, and they are made after this pass.
-			D_ASSERT(decide.keyed_scopes[reducer.per].value_link == DConstants::INVALID_INDEX);
+			D_ASSERT(decide.bound.keyed_scopes[reducer.per].value_link == DConstants::INVALID_INDEX);
 			record.counts_classes = true;
 			record.class_key = decide.bound.keyed_scopes[reducer.per].key;
 		}
@@ -360,9 +360,8 @@ private:
 		auto name = StringUtil::Lower(reducer.function->name);
 		D_ASSERT(name == "count" || name == "count_star" || name == "min" || name == "max" || name == "arg_min" ||
 		         name == "arg_max" || name == "sum" || name == "avg");
-		// The binder rejects DISTINCT and drops an ORDER BY these functions ignore, canonicalization gave every norm of
-		// data its definition, and the AVG rewrite of `<>` runs after this pass.
-		D_ASSERT(!reducer.IsDistinct() && !reducer.order_bys && !reducer.count_scale);
+		// Canonicalization gave every norm of data its definition, and the AVG rewrite of `<>` runs after this pass.
+		D_ASSERT(!reducer.count_scale);
 		if (!argument || name == "count") {
 			return nullptr;
 		}

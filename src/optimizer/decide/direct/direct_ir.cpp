@@ -175,7 +175,7 @@ private:
 private:
 	void ReadDecisions(DirectIR &ir) const {
 		auto count = decide.bound.variables.size();
-		D_ASSERT(decide.is_boolean_var.size() == count && decide.variable_scopes.size() == count);
+		D_ASSERT(decide.bound.is_boolean_var.size() == count && decide.bound.variable_scopes.size() == count);
 		for (idx_t i = 0; i < count; i++) {
 			auto &variable = decide.bound.variables[i];
 			DirectIRDecision decision;
@@ -286,7 +286,7 @@ private:
 
 	//! The key a reducer groups by, as the plan reads it; false when it reads more than the source.
 	bool ReadKey(idx_t key, vector<DirectKeyElement> &elements) const {
-		D_ASSERT(key < decide.keys.size());
+		D_ASSERT(key < decide.bound.keys.size());
 		for (auto &element : DecideKeyElements(decide.bound.keys, key)) {
 			if (!CheckablePredicate(&element.Grouping()) || !CheckablePredicate(element.expression.get())) {
 				return false;
@@ -307,7 +307,7 @@ private:
 			MarkNotProved(part.status); // a frame's marker, no reducer
 			return;
 		}
-		D_ASSERT(!aggregate.IsDistinct() && !aggregate.order_bys && aggregate.children.size() == 1);
+		D_ASSERT(aggregate.children.size() == 1);
 		if (!aggregate.function) {
 			// Canonicalization replaced every order but 0 with its definition. Order 0 needs indicator variables, so no
 			// rule models it.
