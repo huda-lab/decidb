@@ -32,6 +32,12 @@ recommendation; nobody settles one silently. Rulings about a single task live wi
 | R18 | `DecideGroupBound` goes: a direct rule reads a bound's values from side tables, as for every other bound. No benchmark: the change removes a representation (2026-11-18) |
 | R19 | R12 covers every error message, not only the NaN and direct-solve ones; `DIAGNOSE` proposes edits (2026-11-18) |
 | R20 | Every DECIDE tag in an expression's name goes, replaced by the tree's typed nodes, records and fields in Phase 5; no interim tag field. Until then a reader tells a helper from a user decision by the tree's typed function nodes (no origin field), and DECIDE refuses a user name that contains a tag or a helper-name prefix (2026-11-18) |
+| R21 | Phase 5 goes one carrier at a time across every stage that reads it, with no adapter: parser nodes, clause records, the reducer node, the frame node, function nodes and helpers, one lowering walk, direct rules. The canonicalizer, the clause walkers and the term splitter are called from both sides of every stage boundary, so a stage-by-stage order would keep two of each (2026-11-22) |
+| R22 | The clause list is a vector of clause records (scope, body, origin, and the clause's facts), in place of one AND expression with tagged wrappers (2026-11-22) |
+| R23 | `DecideTree` stays the executor's structure, derived from the bound tree by one lowering walk at physical planning. Execution stays vectorized: no task of Phase 5 or 6 adds a loop over input rows (2026-11-22) |
+| R24 | A scope (`when`, `per`) is a record inside a clause or a reducer node, not a node of its own (2026-11-22) |
+| R25 | A thing several places read is a record in a table, and a node names it by a typed index: keys, frames, and one table of helper definitions that owns each helper's body (2026-11-22) |
+| R26 | A written clause's shape and variant signature are stored once by the canonicalizer and never recomputed. Bound reduction records the fact it relied on, and a debug build checks that record after each pass (2026-11-22) |
 
 ## Open decisions
 

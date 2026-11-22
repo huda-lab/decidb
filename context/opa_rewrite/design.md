@@ -35,70 +35,308 @@ the descent's containers; program value columns; the emitter's output; `SolverIn
 
 ## 3. Phase 5: the tree is the representation
 
-**Target.** The parser builds the structure and every later stage works on it.
+**Target.** The parser builds the structure and every later stage works on it. The tasks are TREE-1 to TREE-9
+(`context/docs/pipeline/todo.md`).
+
+### 3.1 The change in one picture
+
+Today a clause is an ordinary SQL expression, and what makes it a DECIDE clause rides beside it:
 
 ```text
-Parser / transformer:  build the DECIDE structure (E, G, O nodes)
-            |
-Binder:                resolve names and types in it; derive signatures
-            |
-Canonicalizer, optimizer:  analyse and transform it
-            |
-     choose an implementation
-        /              \
-direct relational plan    compiled tree execution
-                                  |
-                       model written at the nodes (Phase 6)
+parser      fake function calls named by a tag            (5 tags)
+binder      one AND expression; `when`/`per` are tagged wrappers; reducers and frames are tagged aggregates
+            + tables: keys, frames, constraint_sources
+rewrites    more tags, + tables: value links, ABS, products, L0, definitions, boxes   (55 tags in all)
+planning    two lowerings read the tags and tables and build the tree, joined by expression address
+execution   reads the tree
 ```
 
-- **Parser.** The transformer creates explicit scope, reducer and frame nodes. The grammar builds no execution
-  objects, and ordinary SQL expressions inside the nodes stay DuckDB expressions. `DecideFrameExpression` is already
-  a parsed node of this kind.
-- **Binder.** Resolves names, types, keys, aggregate overloads and collations in that structure and derives each
-  node's signature. It refuses only what needs the parsed tree (BIND-4).
-- **Canonicalizer and optimizer.** Transform the bound tree or apply a rule at a node. No stage rediscovers
-  structure from marker strings or helper records.
-- **One home per fact.** The clause list is a list of clause records (ARCH-1). A reducer's `per` and `by`, a norm and
-  a frame are fields or node classes, not markers. The linear-form records and the side tables go as their readers
-  move. Nodes are split by kind, as DuckDB's `Expression` is.
+After the phase the structure is built once, by the parser, and each stage transforms it:
 
-**Pattern.** A typed intermediate representation with explicit lowering. DuckDB's own form is one structure in two
-typed phases, a parsed class and a bound class, as `ParsedExpression` and `Expression` are. Use that unless there is
-a reason not to.
+```text
+parser      declarations, clause records, reducer and frame nodes
+binder      the same records and nodes, bound
+rewrites    transform the records and nodes; a rewrite's result is a node, a record or a field
+planning    one walk lowers the clauses to the tree execution runs
+execution   reads that tree, unchanged
+```
 
-**Contracts the design must state**
+No stage finds structure by searching an alias or by a child's position. [measured] 55 tag constants, 269 uses
+outside their header; execution and model building hold 2 of them.
 
-1. **Meaning apart from execution state.** Scopes, decision identity, expressions and source locations belong to
-   the tree. Programs, column positions, containers, hash tables, solver indices and sparse rows are derived from it
-   at a named boundary. Derived structures are fine; independently kept copies of the same meaning are the problem.
-2. **DuckDB can see every expression.** Column binding, column pruning and the optimizer's visitors must reach each
-   SQL expression the tree owns. Today `LogicalDecide::EnumerateExpressions` is the one list they use, and the tree
-   avoids the question by being built after DuckDB's optimizer has run. This is the largest technical risk.
-3. **Copy, equality and serialization** at each phase boundary, covering prepared statements and repeated execution
-   (`DECIDB_VERIFY_SERIALIZER=1`).
-4. **What each rewrite invalidates.** A rewrite can make signatures, degree, bounds, frame placement or
-   dependencies stale. State which analyses it preserves and which are recomputed.
-5. **An error is raised where it is found** (`../docs/language/errors.md` § How DECIDE throws an error). The first
-   error the evaluation reaches stops the query, and no order among errors is owed (R10, R11). It points at the user's
-   text when the expression in hand has a location, and nothing is built to give it one.
+**One rule for shared things.** A thing with identity that several places read is a record in a table on
+`BoundDecide`, and a node names it by a typed index: a key, a frame, a helper's definition. Today the index
+travels inside an alias string; after the phase it is a field. The tables stay.
 
-**Order** (ARCH-1 decides): front to back, with an adapter that lowers the new bound tree to today's tagged expressions
-for the stages not yet converted. Errors follow R11: the first one reached is raised.
+### 3.2 The structure
 
-**Size** [measured]: parser about 1,300 lines, binder 3,600, the rest of planning 11,500, optimizer rewrites 7,800.
+The deck's grammar (p. 28) is `E ::= [when θ] [per K] : B`, `G ::= agg(E) [by (Γ)]`, `B ::= f(e…, G…)`. A scope E
+never stands alone: it is a clause's root or a reducer's operand. A body B is an ordinary expression whose leaves
+are columns, decisions, reducers and frames.
 
-**Accepted when**
+**Pattern.** One structure in two typed phases, a parsed class and a bound class, as DuckDB's `ParsedExpression` and
+`Expression` are. A postfix `by` makes a reducer node as a postfix `OVER` makes DuckDB's `WindowExpression`
+(the deck draws the same analogy, p. 28).
+
+#### 3.2.1 Parsed (stage 01)
+
+| Thing | Kind | Holds | Replaces |
+|---|---|---|---|
+| `DecideScope` | struct | `when`; `per` as written: absent, `row`, `()`, or a key list | `__scope_when__`, `__scope_per__`, `__scope_per_row__` calls; "one child means `per ()`" |
+| `DecideDeclaration` | struct | name, type (INT, REAL, BOOL), its `per`, location | a comparison of the name with a string constant (`'integer_variable'`) |
+| `DecideClause` | struct | `DecideScope`, body, location | one item of the AND expression |
+| `DecideReducerExpression` | `ParsedExpression` | function name, arguments, the operand's `DecideScope`, `by` (absent, `()`, or a key list) | `__reducer_by__`, `__qualified_reducer__`, a scope marker as a call's first argument |
+| `DecideFrameExpression` | `ParsedExpression` | as today | — |
+
+`SelectNode` holds `vector<DecideDeclaration>`, `vector<DecideClause>`, the objective as one `DecideClause` with its
+sense, and the source text.
+
+- `sum(D, T: e)` is the operand's `per` with a key of relations; it has no field of its own.
+- A reducer node is made only where DECIDE syntax is written (a scope inside the call, a `by`, a relation prefix).
+  A plain `sum(x)` stays a `FunctionExpression`, and the binder makes a bound reducer of both, because whether a
+  name is an aggregate is the catalog's to say.
+- Each class follows `DecideFrameExpression`, which has every piece: copy, equality, hash, `ToString`, generated
+  serialization (`parsed_expression.json`), child enumeration (`parsed_expression_iterator.cpp`).
+- The DECIDE part of `SelectNode` has one `EnumerateExpressions`. [read] Two walkers list its fields by hand today:
+  macro substitution (`parsed_expression_iterator.cpp:308`) and the node's own copy and equality.
+
+#### 3.2.2 Bound (stage 02 onward)
+
+| Thing | Kind | Holds | Replaces |
+|---|---|---|---|
+| `BoundDecide` | struct | decisions with their scopes, keys, keyed scopes, frames, clauses, the objective clause, sense, constant offset, source text | 13 fields copied one by one from `BoundSelectNode` to `LogicalDecide` |
+| `BoundDecideClause` | struct | scope, body (the comparison), origin, and the facts of § 3.3 contract 4 | an AND child, its wrapper tags, `constraint_sources[i]` |
+| `BoundDecideReducerExpression` | `Expression` | kind (SUM, AVG, MIN, MAX, COUNT, NORM with its order and bound), the operand's scope, `arguments`, `by` key index, the bound aggregate function, written name | a `BoundAggregateExpression` with `__group_key_`, `__qualified_by_`, `__decide_norm_`, `__written_norm_` tags; `norm` as a SUM with a patched return type |
+| `BoundDecideFrameExpression` | `Expression` | a frame index and the payload | a tagged aggregate carrying `__frame_<i>__` |
+| `BoundDecideValueExpression` | `Expression` | a computed value read whole, and what it is: an uncorrelated subquery, a correlated one, or a recorded bound reducer and its record | `__query_wide_value__`, `__row_varying_subquery__`, `__bound_reducer__` on a leaf † |
+
+- **Existing types are reused.** A clause's scope is today's `DecideClauseScope` (`decide_tree_terms.hpp:107`) and
+  its origin is today's `DecideRowOrigin` (`decide_source_info.hpp:203`), held by the clause from binding on.
+  `DecideEnclosingScope`, a pair of pointers to wrapper nodes, goes.
+- **`BoundDecide` is moved whole**: binder → `LogicalDecide` → physical planning. `LogicalDecide` keeps what is the
+  operator's own: `decide_index`, `optimized`, the solver choice, `value_checks`, `bound_aggregates`.
+- **A reducer node keeps what the aggregate binding gives.** [read] `FunctionBinder` picks the overload, the return
+  type and the argument casts for a decision reducer too (`decide_binder.cpp:848`), a collated MIN or MAX has two
+  arguments (`decide_binder.cpp:1122`), and execution folds a data reducer with the bound function and its bind data
+  (`decide_tree_columns.cpp:32`). So the node holds `arguments` and a function-only aggregate, as
+  `DecideBoundAggregate` does today (`logical_decide.hpp:226`).
+- **The frames table stays**, as the key table does. [read] One frame is one O node however many places read it
+  (`decide_tree.cpp:1338`), and signatures, helpers and frame columns hold its index.
+
+#### 3.2.3 What the rewrites add
+
+A rewrite changes a node or a record; it leaves no tag.
+
+| Today | After |
+|---|---|
+| ABS, Boolean product, L0, definition: a tag on the kept call carrying an index into `abs_functions`, `bilinear_function_groups`, `l0_indicator_functions`, `definition_functions` | `BoundDecideFunctionExpression` (the F node) over the kept call: kind and the index of its definition |
+| A reducer replaced by a helper's column, its definition in `reducer_value_links` | Unchanged in shape: the reader holds the helper's column, the definition holds the reducer node once |
+| Rows a rewrite adds: appended by wrapping the whole tree in a new AND; role in `__decide_structural_constraint__`, `__defines_<i>__`, `__objective_row__` | A `BoundDecideClause` appended to the vector, its origin saying what it is |
+| Shape, easy MIN/MAX, folded bound, tightest frame bound: tags on the comparison | Fields of the clause |
+
+- **A helper is defined once.** [read] One value link is shared by every clause that reads the same reducer, and
+  the rewrites copy clauses (`decide_rewrite_minmax.cpp:136`). If each reading node held the body, a later rewrite
+  would make one auxiliary per copy. So the definition owns the body, and a reader or a copy holds only its index.
+- The five definition tables become one table of helper definitions with a kind, read by one loop where
+  `EnumerateExpressions` and the tree's construction have five today.
+- Helpers are still allocated at planning in this phase. Phase 6 moves that to the nodes.
+
+#### 3.2.4 The tree execution runs
+
+`DecideTree` and `DecideNode` stay the executor's structure. Physical planning derives them from `BoundDecide` in
+three steps, where column bindings are final (`plan_decide.cpp:224`):
+
+1. **One lowering walk** over the clauses and the helper definitions. A clause makes its root E; a reducer node makes
+   a G and its operand E; a frame index makes its O once; a function node makes its F and the rows it owns. Terms
+   are split in the same walk, so a term names its G directly.
+2. **The solver gate** (`RequireDecideSolverSupport`), as today.
+3. **`CompileDecideTree`**, today's program compiler, unchanged.
+
+- Gone: the second lowering, the address maps that join the two (`DecideTreeSources`, `retained_function_links`),
+  and the checks that they agree. [read] 81 internal errors in the three construction files.
+- Kept, because they serve more than the join: the term splitter (three rewrites and the direct rules use it),
+  like-term collection, the frame-column registry, and the order of rows the model dumps record.
+- `DecideNode` loses its copies of plan facts and its unread fields, then is split by kind. [read] 60 fields today:
+  20 common, 9 for E, 3 for O, 13 for F, the rest shared by two kinds.
+- Programs, layouts, containers and the three execution files do what they do today.
+
+#### 3.2.5 The tree is built once
+
+| When | What happens | Per query |
+|---|---|---|
+| Parsing | the nodes are built | once |
+| Binding | each parsed node becomes its bound node: names, types and keys resolved | once |
+| Rewrites | a rewrite changes the clause or node it applies to, in place | no rebuild |
+| Physical planning | the lowering walk derives the executor's tree | once |
+
+- **Three forms, each derived forward once.** They are DuckDB's own three: `ParsedExpression`, `Expression` and the
+  executor's `ExpressionState`; a statement, a `LogicalOperator` and a `PhysicalOperator`. No stage reads a later
+  form back, and no form is built a second time.
+- **A rewrite touches the clause it changes and no other.** A pass that changed a clause canonicalizes that clause.
+  No pass moves the whole clause list out and back. [read] Today the norm pass and the AVG pass send every
+  constraint through the canonicalizer again (`decide_rewrite_norm_in.cpp:147`,
+  `decide_rewrite_notequal_avg.cpp:84`), which copies every wrapper node (`decide_canonicalizer.cpp:1653`), and
+  each added row wraps the whole tree in a new AND (`logical_decide.cpp:271`).
+- **The executor's tree is not a copy of the bound tree.** It is the deck's tree with its run-time parts: a reducer
+  node becomes a G and its operand E, a frame index becomes one O, and each node gets programs over column
+  positions, which exist only at physical planning.
+
+### 3.3 The five contracts
+
+1. **Meaning apart from execution state.** `BoundDecide` holds meaning: scopes, keys, decisions, expressions,
+   locations. The executor's tree holds execution state: programs, column positions, layouts, slots. The boundary is
+   the lowering walk. No planning stage reads the executor's tree.
+2. **DuckDB can see every expression.** A new `Expression` class owes DuckDB four things:
+
+   | Obligation | Where | Why |
+   |---|---|---|
+   | A case in `ExpressionIterator::EnumerateChildren` | `expression_iterator.cpp:96` | every generic walk reaches its children, as `BoundWindowExpression`'s |
+   | A case in `LogicalOperatorVisitor::VisitExpression` | `logical_operator_visitor.cpp:185` | [read] an unknown class is an internal error there, and column binding and pruning go through it |
+   | `IsFoldable()` false | `expression.cpp:83` | [read] the default is "all children foldable", so `sum(1)` would read as a constant; DECIDE code asks it |
+   | Copy, equality, hash, serialization | `expression.json` | contract 3 |
+
+   `BoundDecide` has one `EnumerateExpressions`: decisions, keys, frames, clauses, helper definitions.
+   `LogicalDecide`'s adds its own `value_checks` and `bound_aggregates`. [read] Four DuckDB passes read it (column
+   binding, column pruning, binding replacement, statistics), and the binder's `PlanSubqueries` lists the same
+   fields by hand; it uses the one function. The DECIDE optimizer runs before join ordering and column pruning
+   (`optimizer.cpp:147`), so nodes hold column bindings throughout planning. The debug build's
+   `ColumnBindingResolver::Verify` after every pass is the check.
+3. **Copy, equality, serialization.** Parsed classes: as `DecideFrameExpression`. Bound classes and records:
+   generated from `expression.json` and `nodes.json`. [read] Only a plan the DECIDE optimizer has not run on is
+   serialized (`SupportSerialization` returns `!optimized`), so what the binder and the canonicalizer build is
+   serialized, and what the rewrites add (function nodes, helper definitions) is not, as
+   `BoundSubqueryExpression` is not. A prepared statement keeps its physical plan and so its executor tree.
+4. **What each rewrite invalidates.** Three kinds of fact, each with one rule.
+
+   | Kind | Facts | Rule |
+   |---|---|---|
+   | A fact of the written clause | shape (value or aggregate), its grouping key, its variant signature | set once by the canonicalizer, stored on the clause, never recomputed. [read] The rewrites replace reducers by helpers, so recomputing after them gives a different answer (`decide_canonicalizer.cpp:1668`, `decide_tree.cpp:784`) |
+   | A fact joined over a helper's readers | the sides a MIN or MAX helper needs (`push`), whether an ABS is exact, the innermost-first order of definitions | stored on the definition; a rewrite that adds a reader widens it |
+   | Computed when asked | degree | never stored, as today |
+
+   One transformation relies on a fact a later pass can change: bound reduction reads the comparison's direction and
+   shape before the scoped-reducer pass runs (`decide_rewrite_scoped.cpp:565` states the hazard). It records what it
+   relied on, on the clause, and a debug build checks that record after each pass, in the one place every pass runs
+   (`RunPass`, `decide_optimizer.cpp:66`). Nothing else is verified this way.
+5. **An error is raised where it is found.** Every node and record carries its query location, so the expression in
+   hand has one and nothing is built to supply it.
+
+### 3.4 The steps
+
+One carrier at a time across every stage (branch by abstraction). Each step has three moves, each its own commit
+with goldens identical: (a) every reader goes through an accessor; (b) the accessor reads a field, and the binder
+or rewrite writes it; (c) the tags are deleted. [read] Much of (a) exists: `EnumerateBodies` (19 calls) hands each
+pass a clause's scope, and `DecideReducerGroupKey` and `TryGetDecideFrame` read a reducer's key and frame.
+
+The steps run in order, one at a time: each touches files the next one touches.
+
+| Task | Carrier | Stages touched | Deletes |
+|---|---|---|---|
+| TREE-1 | Parser nodes (§ 3.2.1) | 01, 02 | 5 parser tags, `decide_parsed_markers`, the string-typed declarator |
+| TREE-2 | `BoundDecide`, moved whole | 02, 03, planning | the field-by-field copies at each hop |
+| TREE-3 | Clause records | 02–05, planning, 08's readers, direct front end, EXPLAIN, DIAGNOSE | the AND tree, its wrappers, `constraint_sources`, 14 tags |
+| TREE-4 | Reducer node and value node | 02–05, DuckDB's statistics pass, planning, 08's readers, direct front end | 15 tags; `norm` as a patched SUM |
+| TREE-5 | Frame node | 02–05, planning | 4 tags, the frame guards |
+| TREE-6 | Function nodes and one table of helper definitions (§ 3.2.3) | 05, planning | 9 tags; four of the five definition tables |
+| TREE-7 | One lowering walk; `DecideNode` by kind (§ 3.2.4) | planning, 08 (field access only) | the second lowering, the address join |
+| TREE-8 | Direct rules read `BoundDecide` (R17) | direct solve | `DirectIR` and its front end, the last tag |
+| TREE-9 | The tag machinery goes (R20) | all | the tag section of `enums/decide.hpp`, `DECIDE_TAGS`, the refusal of a name that holds a tag (BIND-3), tag stripping at renders; docs |
+
+**TREE-8 opens with its own short design.** [read] `DirectIR` is named about 130 times across the rules, and each
+rule reads it through shared readers (`DirectRead*`). The design says which readers take a clause record and which
+records of `DirectIR` are a view worth keeping; it is written when TREE-5 lands, and the owner approves it.
+
+**Checks.** Each commit: `make decide-test`, goldens identical. TREE-2 to TREE-4 add the serializer mode. TREE-4 is
+the first step with a new `Expression` class under DuckDB's passes, so it also runs the debug build. TREE-7 runs
+the debug build and `ab_bench.py`. TREE-8 runs the direct matrix. The phase ends with the full matrix and a debug
+run.
+
+**Tests at each boundary** (the phase's accepted-when):
+
+| Boundary | Test |
+|---|---|
+| Parser | each new class: parse, print, parse again; copy, equality, serialization round trip (C++) |
+| Binder | serializer mode over the suite; a C++ test of copy and equality for each bound class |
+| Rewrites | goldens; the debug check of contract 4 |
+| Direct solve against its fallback | the direct matrix (auto and off) |
+| Parallel execution | `test_descent_merge.py`, unchanged |
+
+### 3.5 The tag checklist (R20)
+
+Every tag constant, its home, and the step after which it is gone. A tag with two carriers is listed under both and
+goes with the later one.
+
+| Gone after | Tags | Home |
+|---|---|---|
+| TREE-1 | `SCOPE_WHEN`, `SCOPE_PER`, `SCOPE_PER_ROW`, `REDUCER_BY`, `QUALIFIED_REDUCER` | `DecideScope`, `DecideReducerExpression` |
+| TREE-3 | `WHEN_FILTER`, `PER_CLASS`, `PER_KEY_`, `SIGNATURE_` | the clause's scope |
+| TREE-3 | `SOURCE_CLAUSE_`, `REMOVAL_GROUP_`, `BETWEEN_LOWER`, `BETWEEN_UPPER`, `STRUCTURAL_CONSTRAINT`, `DEFINES_`, `OBJECTIVE_ROW` | the clause's origin |
+| TREE-3 | `MINMAX_EASY_REWRITE`, `SINGLETON_ROW_BOUND`, `SINGLETON_ROW_CLAUSE_ROWS` | clause fields |
+| TREE-4 | `VALUE_REWRITE`, `GROUP_KEY_` | on a comparison: clause fields (TREE-3). On a reducer: reducer fields |
+| TREE-4 | `QUALIFIED_REDUCER_SCOPE_`, `NORM_MARKER_`, `WRITTEN_NORM_`, `AVG_REWRITE`, `SKIP_NULL` | reducer fields: the operand's `per`, kind, written kind, the count scale, the NULL tests kept apart from the written `when` |
+| TREE-4 | `TREE_RETAINED_EXPRESSION_`, `TREE_REDUCER_SCOPE_`, `TREE_REDUCER_KEY_` | none: the reducer keeps its own scope and key |
+| TREE-4 | `QUERY_WIDE_VALUE`, `ROW_VARYING_SUBQUERY`, `BOUND_REDUCER` | the value node † |
+| TREE-4 | `QUERY_WIDE_BOUND` | a clause field |
+| TREE-4 | `WRITTEN_NAME_` | on a reducer: a field. On a scalar call (`@`, `**`): the text at its location, or its own name if the binder stops renaming † |
+| TREE-5 | `FRAME_`, `FRAME_COLUMN`, `FRAME_TIGHTEST_BOUND` | the frame node's index; a clause field for the tightest bound |
+| TREE-5 | `FRAME_AGGREGATE_` | a field of the data reducer naming its `frame_aggregates` record |
+| TREE-6 | `ABS_FUNCTION_`, `ABS_FUNCTION_NEG_`, `BILINEAR_FUNCTION_GROUP_`, `L0_INDICATOR_FUNCTION_`, `DEFINITION_FUNCTION_`, `BODY_DEFINITION`, `L0_AUTO_BOUND`, `L0_WRITTEN_BOUND`, `L0_TOLERANCE` | the function node and its definition |
+| TREE-8 | `NULL_GUARD` | a term's fact, applied when its program is compiled; the direct front end is its second writer † |
+| TREE-9 | the seven helper name prefixes (`ABS_AUX_NAME_`, `VALUE_LINK_NAME_`, …) | none: [read] no code reads a helper's origin from its name. They stay as display names and leave the tag list with the name refusal |
+
+† The home is proposed. The task's accessor move confirms it or names another, and no tag is kept for display.
+
+### 3.6 What Phase 6 needs from this phase
+
+- A helper's definition holds its reducer node, its kind and its `push` as one value, not two booleans.
+- A reducer several readers share is one definition; the lowering walk lists its readers.
+- The executor's tree is visited children first (`eval_order`), and a G finds its members per group in its container.
+- Model rows are not written here. The emitter and the linear-form records keep their shape until Phase 6.
+
+### 3.7 Choices in this design
+
+Decided by the evidence, stated so they can be reversed:
+
+- A parsed reducer node only where DECIDE syntax is written (§ 3.2.1).
+- Existing types are reused for a clause's scope and origin (§ 3.2.2).
+- Helpers stay allocated at planning in this phase (§ 3.2.3).
+- The steps run one at a time, with no parallel lanes (§ 3.4).
+- Serialization field ids of `LogicalDecide` are reassigned; a serialized DECIDE plan does not outlive its process.
+
+Ruled by the owner (`decisions.md` R21 to R26):
+
+1. **The executor's input.** `DecideTree` stays the executor's structure, derived by one lowering walk (§ 3.2.4).
+   It keeps execution as it is, and it is DuckDB's own split between an expression and its executor state. The
+   executor reading the bound nodes directly would rewrite the three execution files in the same phase.
+2. **A scope is a struct, not a node** (§ 3.2.1, § 3.2.2). [read] Every place a scope is written fits: a declarator
+   takes only `per`, a frame's payload takes none, the objective takes the same pair, and the rows a rewrite
+   generates need only `when` and `per`. A clause has exactly one scope by construction. The executor's tree has
+   an E node either way.
+3. **Shared things are tables named by typed index** (§ 3.1, § 3.2.3): keys, frames, and one table of helper
+   definitions that owns each helper's body. A reading node owning its body would make a helper per copy of a
+   clause.
+4. **A written clause's shape and signature are stored once, and one debug check guards bound reduction**
+   (contract 4). Computing them when asked gives a different answer after the rewrites.
+
+### 3.8 Risks
+
+| Risk | Where it is met | Guard |
+|---|---|---|
+| A DuckDB pass does not reach an expression inside a new class, or folds a reducer as a constant | TREE-4 | the four obligations of contract 2; the debug binding verifier after every pass |
+| A wide step breaks many files at once | TREE-3, TREE-4 | move (a) is a refactor with no change in behaviour and lands first |
+| EXPLAIN or DIAGNOSE text moves | TREE-3 | both print from the clause records in the same step; their tests are in the step's gate |
+| A proposed home (†) does not hold | TREE-4, TREE-8 | the task stops and names the home before it flips the accessor |
+| The direct rules' move is larger than one task | TREE-8 | its own design first |
+
+### 3.9 Accepted when
 
 - scopes, reducers and frames originate in parsing, and binding and every rewrite use them;
 - evaluation and model generation do not reconstruct them from helper lists or marker strings;
-- no DECIDE tag constant remains in `enums/decide.hpp` (R20): the tag list is this phase's checklist, each tag
-  replaced by a node, a record or a field, and the refusal of user names that contain a tag goes with the last one;
-- behaviour tests exist at each boundary: parser and binder, rewrites, serialization, direct solve against its
-  fallback, and parallel execution.
-
-**A lesson that binds this phase.** Sami's tip answered an infeasible query because a rewrite turned a clause from
-one shape into another after the pass that reduces its bound had run on the old shape. Building the tree earlier
-does not prevent that by itself; contract 4 does.
+- no DECIDE tag constant remains in `enums/decide.hpp` (R20), and the refusal of user names that contain a tag
+  goes with the last one;
+- behaviour tests exist at each boundary (§ 3.4);
+- execution is vectorized as before: `tools/ab_bench.py` against the build before the phase, no workload beyond
+  about 10%.
 
 ## 4. Phase 6: the model is written at the nodes
 

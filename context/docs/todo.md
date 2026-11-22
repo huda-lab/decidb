@@ -12,8 +12,16 @@ the owner rules first.
 
 # Phase 5 — The parser builds the tree
 
-## 5.1 Design (one lane)
-- [ ] ARCH-1 Design Phase 5 and file its tasks (decision) — pipeline/todo.md § ARCH-1
+## 5.1 The tree, one carrier at a time (one lane; the tasks run in this order)
+- [ ] TREE-1 Parser nodes — pipeline/todo.md § TREE-1
+- [ ] TREE-2 `BoundDecide`, moved whole — pipeline/todo.md § TREE-2
+- [ ] TREE-3 Clause records — pipeline/todo.md § TREE-3
+- [ ] TREE-4 Reducer node and value node — pipeline/todo.md § TREE-4
+- [ ] TREE-5 Frame node — pipeline/todo.md § TREE-5
+- [ ] TREE-6 Function nodes and one table of helper definitions — pipeline/todo.md § TREE-6
+- [ ] TREE-7 One lowering walk; `DecideNode` by kind — pipeline/todo.md § TREE-7
+- [ ] TREE-8 Direct rules read `BoundDecide` (decision) — pipeline/todo.md § TREE-8
+- [ ] TREE-9 The tag machinery goes — pipeline/todo.md § TREE-9
 
 # Phase 6 — The model is written at the nodes
 
