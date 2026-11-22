@@ -5,11 +5,9 @@
 #include "duckdb/main/connection.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
-#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 
@@ -46,6 +44,13 @@ duckdb::unique_ptr<Expression> Comparison(ExpressionType type, duckdb::unique_pt
 	return make_uniq<BoundComparisonExpression>(type, std::move(left), std::move(right));
 }
 
+//! The clause whose body is `body`, with no scope.
+BoundDecideClause Clause(duckdb::unique_ptr<Expression> body) {
+	BoundDecideClause clause;
+	clause.body = std::move(body);
+	return clause;
+}
+
 } // namespace
 
 TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifier]") {
@@ -57,89 +62,70 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 	DecideCanonicalizer canonicalizer(*con.context, DECIDE_INDEX,
 	                                  {DecideVarScopeInfo::Row(), DecideVarScopeInfo::Row()}, keyed_scopes, keys,
 	                                  duckdb::vector<bool> {false, false});
+	auto canonical_of = [&](BoundDecideClause clause) {
+		duckdb::vector<BoundDecideClause> clauses;
+		clauses.push_back(std::move(clause));
+		canonicalizer.CanonicalizeClauses(clauses);
+		return std::move(clauses[0]);
+	};
+	auto bound_on_x = [&]() {
+		return Clause(Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO, DecideRef(0), DoubleConstant(5)));
+	};
 
 	SECTION("canonical reversed comparison is a fixed point") {
-		auto written = Comparison(ExpressionType::COMPARE_GREATERTHANOREQUALTO, DoubleConstant(5), DecideRef(0));
-		auto canonical = canonicalizer.CanonicalizeTree(*written);
-		REQUIRE_NOTHROW(canonicalizer.VerifyCanonical(*canonical));
+		auto canonical = canonical_of(
+		    Clause(Comparison(ExpressionType::COMPARE_GREATERTHANOREQUALTO, DoubleConstant(5), DecideRef(0))));
+		REQUIRE_NOTHROW(canonicalizer.VerifyCanonical(canonical));
 	}
 
 	SECTION("decision reference on the RHS violates C2") {
-		auto invalid = Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO, DecideRef(0), DecideRef(1, "y"));
-		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(*invalid));
+		auto invalid = Clause(Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO, DecideRef(0), DecideRef(1, "y")));
+		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(invalid));
 	}
 
 	SECTION("decision-free comparison violates C1") {
-		auto invalid = Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO, DoubleConstant(1), DoubleConstant(2));
-		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(*invalid));
+		auto invalid =
+		    Clause(Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO, DoubleConstant(1), DoubleConstant(2)));
+		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(invalid));
 	}
 
-	SECTION("WHEN wrapper arity is structural") {
-		auto wrapped = MakeWhenWrapperWithoutCondition(
-		    Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO, DecideRef(0), DoubleConstant(5)));
-		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(*wrapped));
+	SECTION("a clause under a WHEN is a fixed point") {
+		auto clause = bound_on_x();
+		clause.scope.when = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
+		clause.origin = DecideRowOrigin::OfClause(0);
+		auto canonical = canonical_of(std::move(clause));
+		REQUIRE_NOTHROW(canonicalizer.VerifyCanonical(canonical));
 	}
 
-	SECTION("WHEN wrapper remains structural with composable metadata") {
-		auto wrapped =
-		    MakeScopedRow(Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO, DecideRef(0), DoubleConstant(5)),
-		                  make_uniq<BoundConstantExpression>(Value::BOOLEAN(true)));
-		StampClauseOrigin(*wrapped, DecideRowOrigin::OfClause(0));
-		auto canonical = canonicalizer.CanonicalizeTree(*wrapped);
-		REQUIRE_NOTHROW(canonicalizer.VerifyCanonical(*canonical));
-	}
-
-	// C0's scope rule: every walk that carries a clause's enclosing scope reads one `when` and one `per` per clause.
-	auto when_wrapper = [&](duckdb::unique_ptr<Expression> constraint) {
-		return MakeScopedRow(std::move(constraint), make_uniq<BoundConstantExpression>(Value::BOOLEAN(true)));
-	};
-	auto bound_on_x = [&]() {
-		return canonicalizer.CanonicalizeTree(
-		    *Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO, DecideRef(0), DoubleConstant(5)));
-	};
-
-	SECTION("a plain AND under a wrapper violates C0") {
-		auto both = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		both->children.push_back(bound_on_x());
-		both->children.push_back(bound_on_x());
-		const DecideRowPer per_all;
-		auto per = MakeScopedRow(std::move(both), nullptr, &per_all);
-		REQUIRE_THROWS_AS(canonicalizer.VerifyCanonical(*per), InternalException);
-	}
-
-	SECTION("a WHEN inside a WHEN violates C0") {
-		auto nested = when_wrapper(when_wrapper(bound_on_x()));
-		REQUIRE_THROWS_AS(canonicalizer.VerifyCanonical(*nested), InternalException);
-	}
-
-	SECTION("a WHEN inside a per wrapper is one scope") {
-		const DecideRowPer per_all;
-		auto per = MakeScopedRow(bound_on_x(), make_uniq<BoundConstantExpression>(Value::BOOLEAN(true)), &per_all);
-		REQUIRE_NOTHROW(canonicalizer.VerifyCanonical(*per));
+	SECTION("a clause under a WHEN and a per is a fixed point") {
+		auto clause = bound_on_x();
+		clause.scope = DecideClauseScope::Per(DConstants::INVALID_INDEX);
+		clause.scope.when = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
+		auto canonical = canonical_of(std::move(clause));
+		REQUIRE_NOTHROW(canonicalizer.VerifyCanonical(canonical));
 	}
 
 	SECTION("missing query-wide bound provenance breaks the fixed point") {
-		auto written = Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO, DecideRef(0), DoubleConstant(5));
-		auto canonical = canonicalizer.CanonicalizeTree(*written);
-		auto &comparison = canonical->Cast<BoundComparisonExpression>();
+		auto canonical = canonical_of(bound_on_x());
+		auto &comparison = canonical.body->Cast<BoundComparisonExpression>();
 		auto alias = comparison.right->GetAlias();
 		RemoveDecideTag(alias, QUERY_WIDE_BOUND_TAG);
 		comparison.right->SetAlias(std::move(alias));
-		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(*canonical));
+		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(canonical));
 	}
 
 	SECTION("stale query-wide provenance on row data breaks the fixed point") {
-		auto invalid = Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO, DecideRef(0), DataRef());
-		auto &comparison = invalid->Cast<BoundComparisonExpression>();
+		auto invalid = Clause(Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO, DecideRef(0), DataRef()));
+		auto &comparison = invalid.body->Cast<BoundComparisonExpression>();
 		auto alias = comparison.right->GetAlias();
 		AddDecideTag(alias, QUERY_WIDE_BOUND_TAG);
 		comparison.right->SetAlias(std::move(alias));
-		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(*invalid));
+		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(invalid));
 	}
 
 	SECTION("optimizer Boolean placeholder is an allowed non-comparison leaf") {
-		auto placeholder = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
-		REQUIRE_NOTHROW(canonicalizer.VerifyCanonical(*placeholder));
+		auto placeholder = Clause(make_uniq<BoundConstantExpression>(Value::BOOLEAN(true)));
+		REQUIRE_NOTHROW(canonicalizer.VerifyCanonical(placeholder));
 	}
 
 	auto sum_of = [&](duckdb::unique_ptr<Expression> left, duckdb::unique_ptr<Expression> right) {
@@ -153,12 +139,12 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 		// Binding `+` reads the catalog.
 		con.BeginTransaction();
 		double offset = 0;
-		auto canonical = canonicalizer.CanonicalizeObjective(*sum_of(DecideRef(0), DataRef()), offset);
-		REQUIRE_NOTHROW(canonicalizer.VerifyCanonicalObjective(*canonical));
+		auto canonical = canonicalizer.CanonicalizeObjective(Clause(sum_of(DecideRef(0), DataRef())), offset);
+		REQUIRE_NOTHROW(canonicalizer.VerifyCanonicalObjective(canonical));
 	}
 
 	SECTION("a constant left beside the decisions violates O2") {
 		con.BeginTransaction();
-		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonicalObjective(*sum_of(DecideRef(0), DoubleConstant(5))));
+		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonicalObjective(Clause(sum_of(DecideRef(0), DoubleConstant(5)))));
 	}
 }

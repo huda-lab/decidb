@@ -21,8 +21,8 @@ public:
 	                        const case_insensitive_set_t &scalar_variables = case_insensitive_set_t(),
 	                        optional_ptr<DecideQualifierContext> qualifier_context = nullptr);
 
-	//! Binds the constraints of SUCH THAT, joined by AND when there are several.
-	unique_ptr<Expression> BindConstraints(vector<DecideClause> &constraints);
+	//! Binds the constraints of SUCH THAT: one clause record per row, in the order written.
+	vector<BoundDecideClause> BindConstraints(vector<DecideClause> &constraints);
 
 protected:
 	BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
@@ -32,12 +32,9 @@ private:
 	BindResult BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression);
 	BindResult BindComparison(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
 	BindResult BindOperator(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
-	BindResult BindBetween(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
-	BindResult BindConjunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
-	//! Binds `[when c] [per K]: constraint`: the constraint wrapped in a `when` wrapper for
-	//! `c` and a `per` wrapper for `K` (no columns for `per ()`). A BETWEEN binds to
-	//! two comparisons, each wrapped in the scope.
-	BindResult BindClause(DecideClause &clause);
+	//! Binds `[when c] [per K]: constraint` and appends its rows to `bound`, each with the scope: a BETWEEN binds to
+	//! two comparisons, and an AND to its operands. Returns the first error.
+	ErrorData BindClause(DecideClause &clause, vector<BoundDecideClause> &bound);
 };
 
 } // namespace duckdb

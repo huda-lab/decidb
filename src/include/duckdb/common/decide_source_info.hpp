@@ -120,7 +120,7 @@ struct ConstraintSourceInfo {
 	string qualifier;
 	ConstraintSourceRhsKind rhs_kind = ConstraintSourceRhsKind::NUMERIC_FALLBACK;
 	//! Whether canonicalization changed the clause, as the canonicalizer reports it (DecideCanonicalizer::
-	//! CanonicalizeTree), so a plan shows the canonical layer under the written one.
+	//! CanonicalizeClauses), so a plan shows the canonical layer under the written one.
 	bool canonical_differs = false;
 	//! The two sides of a clause whose sides BOTH read a decision (`ship <= capacity * open`), as DeciDB renders them
 	//! before canonicalization; empty for any other clause. Canonicalization has to merge such sides

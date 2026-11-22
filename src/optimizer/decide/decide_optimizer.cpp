@@ -23,7 +23,6 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
@@ -167,12 +166,14 @@ void decide_rewrite::AddValueCheck(LogicalDecide &decide, unique_ptr<Expression>
 	decide.value_checks.push_back(std::move(check));
 }
 
-void decide_rewrite::MarkFormulationConstraint(Expression &expr, const DecideRowOrigin &origin, idx_t defined) {
-	MarkStructuralRow(expr);
-	if (defined != DConstants::INVALID_INDEX) {
-		SetDefinedHelper(expr, defined);
-	}
-	StampClauseOrigin(expr, origin);
+BoundDecideClause decide_rewrite::MakeFormulationRow(unique_ptr<Expression> body, const DecideRowOrigin &origin,
+                                                     idx_t defined) {
+	BoundDecideClause row;
+	row.body = std::move(body);
+	row.origin = origin;
+	row.structural = true;
+	row.defines = defined;
+	return row;
 }
 
 idx_t decide_rewrite::AddAuxiliaryDecision(LogicalDecide &decide, const string &name, const LogicalType &type,
@@ -266,8 +267,8 @@ string decide_rewrite::RenderForPlan(const Expression &expr, const LogicalDecide
 	                                          decide.decide_index, decide.aux_var_expressions, decide.bound.frames));
 }
 
-idx_t decide_rewrite::SourceClauseOf(const Expression &comparison, const LogicalDecide &decide) {
-	const idx_t source_id = ClauseOriginOf(comparison).source_clause_id;
+idx_t decide_rewrite::SourceClauseOf(const BoundDecideClause &clause, const LogicalDecide &decide) {
+	const idx_t source_id = clause.origin.source_clause_id;
 	if (source_id >= decide.bound.constraint_sources.size()) {
 		throw InternalException("DECIDE: a comparison carries no source clause");
 	}
@@ -347,34 +348,28 @@ void DecideOptimizer::TagAtomicRemovalGroups(LogicalDecide &decide) {
 		}
 		return true; // a COMPARE_IN
 	};
-	// The clause a leaf belongs to, named by its first source id: a BETWEEN is one clause of two leaves, which
+	// The clause a row belongs to, named by its first source id: a BETWEEN is one clause of two rows, which
 	// diagnosis removes together or not at all.
-	auto clause_of = [&](const Expression &node) {
-		return WrittenClauseId(decide.bound.constraint_sources, SourceClauseOf(node, decide));
+	auto clause_of = [&](const BoundDecideClause &row) {
+		return WrittenClauseId(decide.bound.constraint_sources, SourceClauseOf(row, decide));
 	};
 	std::set<idx_t> removable_clauses;
-	decide.EnumerateBodies([&](DecideOwnedBody &body) {
-		if (body.owner == DecideOwnedBody::Owner::CLAUSE && is_removable(*body.expr)) {
-			removable_clauses.insert(clause_of(*body.expr));
+	for (auto &row : decide.bound.clauses) {
+		if (is_removable(*row.body)) {
+			removable_clauses.insert(clause_of(row));
 		}
-	});
+	}
 	idx_t next_group = 0;
 	std::map<idx_t, idx_t> group_of_clause;
-	decide.EnumerateBodies([&](DecideOwnedBody &body) {
-		if (body.owner != DecideOwnedBody::Owner::CLAUSE) {
-			return;
-		}
-		auto &node = *body.expr;
-		auto clause = clause_of(node);
+	for (auto &row : decide.bound.clauses) {
+		auto clause = clause_of(row);
 		if (removable_clauses.count(clause) == 0) {
-			return;
+			continue;
 		}
 		idx_t group = group_of_clause.emplace(clause, next_group).first->second;
 		next_group = std::max(next_group, group + 1);
-		DecideRowOrigin removal_group;
-		removal_group.removal_group_id = group;
-		StampClauseOrigin(node, removal_group);
-	});
+		row.origin.removal_group_id = group;
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -385,57 +380,40 @@ void DecideOptimizer::TagAtomicRemovalGroups(LogicalDecide &decide) {
 // where the factor is finally applied, is written up in decide_rewrite_minmax.cpp --
 // MIN/MAX is the only construct whose linearization the sign actually changes.
 
-//! A TRUE placeholder standing where a lifted clause used to be.
-//!
-//! `origin` is the origin of the clause it replaces. Carrying the clause id onto
-//! the placeholder is what lets EXPLAIN keep the clause in the position it was written:
-//! the constraint tree is the only record of written order, and a lifted clause that
-//! left an anonymous `true` behind was indistinguishable from a clause that never
-//! existed, so it sorted to the end of the plan.
-unique_ptr<Expression> decide_rewrite::MakeTrueExpression(const DecideRowOrigin &origin) {
-	auto placeholder = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
-	StampClauseOrigin(*placeholder, origin);
-	return placeholder;
-}
-
-unique_ptr<Expression> decide_rewrite::ScopeHelperRow(unique_ptr<Expression> row, const Expression *when) {
-	return MakeScopedRow(std::move(row), when ? when->Copy() : nullptr);
-}
-
-unique_ptr<Expression> decide_rewrite::ScopeRowPerClause(ClientContext &context, LogicalDecide &decide,
-                                                         unique_ptr<Expression> row, const DecideEnclosingScope &scope,
-                                                         const DecideRowOrigin &origin) {
-	if (!scope.per_wrapper) {
-		return ScopeHelperRow(std::move(row), scope.Condition());
+void decide_rewrite::ScopeRowPerClause(ClientContext &context, LogicalDecide &decide, BoundDecideClause &row,
+                                       const BoundDecideClause &clause) {
+	auto &scope = clause.scope;
+	row.scope.when = scope.when ? scope.when->Copy() : nullptr;
+	if (!scope.HasPer()) {
+		return;
 	}
+	// The row names its key as the key was first written: only a `per` the user wrote stands in the query.
 	DecideCanonicalizer canonicalizer(context, decide.decide_index, decide.bound.variable_scopes,
 	                                  decide.bound.keyed_scopes, decide.bound.keys, decide.bound.is_boolean_var);
 	canonicalizer.frames = &decide.bound.frames;
 	vector<DecideSignatureField> fields;
-	canonicalizer.CollectSignatureFields(*row, scope.PerKey(), fields);
-	// The wrapper holds its clause only and names its key (DecideConstraintsBinder).
-	DecideRowPer per;
-	per.key = scope.PerKey();
+	canonicalizer.CollectSignatureFields(*row.body, scope.class_key, fields);
+	row.scope.per = DecideClauseScope::PerRole::NAMES_CLASSES;
+	row.scope.class_key = scope.class_key;
 	if (!fields.empty()) {
-		const idx_t written = PerWrapperSignature(*scope.per_wrapper);
 		DecideSignature signature;
-		signature.rows = scope.Condition() ? scope.Condition()->Copy() : nullptr;
-		signature.key = scope.PerKey();
+		signature.rows = scope.when ? scope.when->Copy() : nullptr;
+		signature.key = scope.class_key;
 		signature.fields = std::move(fields);
-		signature.text = written != DConstants::INVALID_INDEX
-		                     ? decide.bound.signatures[written].text
-		                     : "per " + DecideKeyText(decide.bound.keys, scope.PerKey());
-		signature.source_clause_id = origin.source_clause_id;
+		signature.text = scope.signature != DConstants::INVALID_INDEX
+		                     ? decide.bound.signatures[scope.signature].text
+		                     : "per " + DecideKeyText(decide.bound.keys, scope.class_key);
+		signature.source_clause_id = clause.origin.source_clause_id;
 		decide.bound.signatures.push_back(std::move(signature));
-		per.signature = decide.bound.signatures.size() - 1;
+		row.scope.signature = decide.bound.signatures.size() - 1;
 	}
-	return MakeScopedRow(std::move(row), scope.Condition() ? scope.Condition()->Copy() : nullptr, &per);
 }
 
-unique_ptr<Expression> decide_rewrite::ScopeRowPerInstance(const LogicalDecide &decide, unique_ptr<Expression> row,
-                                                           const DecideVarScopeInfo &scope) {
-	if (!scope.IsGlobal() && !scope.IsKeyed()) {
-		return row;
+void decide_rewrite::ScopeRowPerInstance(const LogicalDecide &decide, BoundDecideClause &row,
+                                         const DecideVarScopeInfo &scope) {
+	// A row under its clause's own `per` (ScopeRowPerClause) stands for that key's classes.
+	if (row.scope.HasPer() || (!scope.IsGlobal() && !scope.IsKeyed())) {
+		return;
 	}
 	// A range frame's helper has one instance per window of its frame, which no key's classes name
 	// (RewriteFrameRanges): a row of it stays one per row, each reading its window's instance, and the rows of one
@@ -443,14 +421,13 @@ unique_ptr<Expression> decide_rewrite::ScopeRowPerInstance(const LogicalDecide &
 	if (scope.IsKeyed()) {
 		auto link = decide.bound.keyed_scopes[scope.keyed_scope_idx].value_link;
 		if (link != DConstants::INVALID_INDEX && decide.reducer_value_links[link].frame != DConstants::INVALID_INDEX) {
-			return row;
+			return;
 		}
 	}
-	DecideRowPer per;
+	row.scope.per = DecideClauseScope::PerRole::NAMES_CLASSES;
 	if (scope.IsKeyed()) {
-		per.key = decide.bound.keyed_scopes[scope.keyed_scope_idx].key;
+		row.scope.class_key = decide.bound.keyed_scopes[scope.keyed_scope_idx].key;
 	}
-	return MakeScopedRow(std::move(row), nullptr, &per);
 }
 
 void decide_rewrite::WalkPolarity(ClientContext &context, const BooleanDecisions &booleans,

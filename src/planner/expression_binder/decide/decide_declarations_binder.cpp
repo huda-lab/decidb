@@ -253,10 +253,12 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 		DecideConstraintsBinder decide_constraints_binder(binder, context, decide_variable_names, scalar_variable_names,
 		                                                  &qualifier_context);
 		auto constraints = std::move(decide.constraints);
-		result.decide.constraints = decide_constraints_binder.BindConstraints(constraints);
-		RefuseVolatile(*result.decide.constraints);
+		result.decide.clauses = decide_constraints_binder.BindConstraints(constraints);
+		for (auto &clause : result.decide.clauses) {
+			clause.EnumerateExpressions([](unique_ptr<Expression> &expression) { RefuseVolatile(*expression); });
+		}
 		result.decide.constraint_sources = InitializeConstraintSourceInfo(
-		    *result.decide.constraints, decide.text, keyed_scopes, result.decide_index, &keys, frames);
+		    result.decide.clauses, decide.text, keyed_scopes, result.decide_index, &keys, frames);
 	}
 	if (decide.objective.body) {
 		DecideObjectiveBinder decide_objective_binder(binder, context, decide_variable_names, scalar_variable_names,
@@ -264,7 +266,8 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 		decide_objective_binder.decide_sense = decide.sense;
 		auto objective = std::move(decide.objective);
 		result.decide.objective = decide_objective_binder.BindObjective(objective);
-		RefuseVolatile(*result.decide.objective);
+		result.decide.objective.EnumerateExpressions(
+		    [](unique_ptr<Expression> &expression) { RefuseVolatile(*expression); });
 	}
 	for (auto &key : keys) {
 		for (auto &element : key.elements) {

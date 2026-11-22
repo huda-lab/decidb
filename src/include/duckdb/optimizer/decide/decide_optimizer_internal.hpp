@@ -6,7 +6,7 @@
 // Helpers shared between the DECIDE rewrite passes, which are split across
 // decide_optimizer.cpp and its decide_rewrite_*.cpp siblings. Internal to
 // layer 5 — nothing outside src/optimizer/decide/ includes this. The nested
-// namespace keeps deliberately short names (StrToAggType, MakeTrueExpression,
+// namespace keeps deliberately short names (StrToAggType, MakeFormulationRow,
 // ScopeOf) out of `duckdb`; each rewrite file pulls it in with a
 // file-scope `using namespace decide_rewrite;`.
 //
@@ -18,7 +18,6 @@
 
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
@@ -51,39 +50,31 @@ unique_ptr<Expression> BindSumOver(Optimizer &optimizer, unique_ptr<Expression> 
 //! Recognize the binder's `norm` marker alias and return its payload.
 bool TryParseNormMarker(const string &alias, string &payload);
 
-//! Stamp an expression as formulation-generated (a row this layer emitted rather
-//! than one the user wrote), attributed to the clause `origin`, so diagnostics still name the clause the user typed; a
-//! row defining auxiliary `defined` says so (DefinedHelperOf).
-void MarkFormulationConstraint(Expression &expr, const DecideRowOrigin &origin,
-                               idx_t defined = DConstants::INVALID_INDEX);
+//! A row this layer emits (rather than one the user wrote) with the body `body`: structural, and of the clause
+//! `origin`, so diagnostics still name the clause the user typed; a row defining auxiliary `defined` says so
+//! (BoundDecideClause::defines). It has no scope.
+BoundDecideClause MakeFormulationRow(unique_ptr<Expression> body, const DecideRowOrigin &origin,
+                                     idx_t defined = DConstants::INVALID_INDEX);
 
-//! A TRUE placeholder standing in for the clause `origin`, which a rewrite has consumed.
-unique_ptr<Expression> MakeTrueExpression(const DecideRowOrigin &origin);
+//! Puts `row`, which a rewrite adds for `clause`, in the clause's scope: a copy of its `when`, so the row reads only
+//! the rows the clause keeps, and its own `per K:`, so the row stands for the same classes (D28): a row whose key is
+//! NULL is in none. A written clause's variant signature splits its classes by the fields the clause reads (D70),
+//! which are not the fields of a row the rewrite made of it: the row gets the signature of what it reads itself, built
+//! as the canonicalizer builds one (none when it reads no field, so one instance per class).
+void ScopeRowPerClause(ClientContext &context, LogicalDecide &decide, BoundDecideClause &row,
+                       const BoundDecideClause &clause);
 
-//! `row`, which a rewrite adds for a clause, wrapped in a copy of the clause's `when` condition when it has one, so
-//! it reads only the rows the clause keeps.
-unique_ptr<Expression> ScopeHelperRow(unique_ptr<Expression> row, const Expression *when);
-
-//! `row`, which a rewrite adds for a clause, in the clause's scope: its `when` (ScopeHelperRow) and its own `per K:`
-//! outermost as the binder nests it, so the row stands for the same classes (D28): a row whose key is NULL is in none.
-//! A written clause's variant signature splits its classes by the fields the clause reads (D70), which are not the
-//! fields of a row the rewrite made of it: the row gets the signature of what it reads itself, built as the binder
-//! builds one (none when it reads no field, so one instance per class). `origin` names the clause.
-unique_ptr<Expression> ScopeRowPerClause(ClientContext &context, LogicalDecide &decide, unique_ptr<Expression> row,
-                                         const DecideEnclosingScope &scope, const DecideRowOrigin &origin);
-
-//! `row` once per instance of `scope`: under `per K:` for a scope keyed by K, under `per ():` for a query-wide one,
-//! and as it is for one per row or for a range frame's helper, whose windows no key's classes name. A row that reads
-//! only columns of `scope` is the same on every row of an instance.
-unique_ptr<Expression> ScopeRowPerInstance(const LogicalDecide &decide, unique_ptr<Expression> row,
-                                           const DecideVarScopeInfo &scope);
+//! Makes `row` one per instance of `scope`: `per K:` for a scope keyed by K, `per ():` for a query-wide one, and as it
+//! is for one per row or for a range frame's helper, whose windows no key's classes name. A row that reads only
+//! columns of `scope` is the same on every row of an instance. A row that has its clause's `per` keeps it.
+void ScopeRowPerInstance(const LogicalDecide &decide, BoundDecideClause &row, const DecideVarScopeInfo &scope);
 
 //! A lower-envelope row the tree states for a recorded ABS (LogicalDecide::AbsFunction), under its F node: `aux >=
 //! operand`, or `aux >= -operand` when `negated`, on the rows the ABS is read on, once per instance of the auxiliary's
 //! scope, attributed to the clause the ABS was written in. The emitter evaluates each per row, and stage 06 states
 //! every row of the ABS from them (EmitAbsEnvelopes, EmitAbsConstraints).
-unique_ptr<Expression> MakeAbsRow(ClientContext &context, const LogicalDecide &decide,
-                                  const LogicalDecide::AbsFunction &function, bool negated);
+BoundDecideClause MakeAbsRow(ClientContext &context, const LogicalDecide &decide,
+                             const LogicalDecide::AbsFunction &function, bool negated);
 
 //! What the way down to a node passed through, besides the sign it carries (WalkPolarity).
 struct PolarityPath {
@@ -150,10 +141,10 @@ void ReplaceWithDecision(ClientContext &context, const LogicalDecide &decide, id
 //! of an auxiliary decision, the text of a rewrite account.
 string RenderForPlan(const Expression &expr, const LogicalDecide &decide);
 
-//! The id of the source clause a written comparison carries (ClauseOriginOf). Every comparison of the
-//! user's constraints is given one when the binder registers the sources, so a stage-05 refusal quotes its clause
-//! through QuoteWrittenClause (qualifier included) rather than rendering the comparison.
-idx_t SourceClauseOf(const Expression &comparison, const LogicalDecide &decide);
+//! The id of the source clause of a written clause. Every clause the user wrote is given one when the binder registers
+//! the sources, so a stage-05 refusal quotes its clause through QuoteWrittenClause (qualifier included) rather than
+//! rendering the comparison.
+idx_t SourceClauseOf(const BoundDecideClause &clause, const LogicalDecide &decide);
 
 //! Refuses `operand`, which `construct` (`<>`, ABS) reads as a linear form, when it holds a product or a power of
 //! decisions. The refusal is the construct's: `at` is the expression the caret points at. It runs after the bilinear

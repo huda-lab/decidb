@@ -20,7 +20,6 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_tree.hpp"
 #include "duckdb/planner/bind_context.hpp"
 
@@ -73,6 +72,9 @@ struct RenderContext {
 	//! True for a row a rewrite built (RenderFunctionRow): a term of zero it added is left out, and a number it wrote
 	//! prints as a plain number.
 	bool rewrite_row = false;
+	//! The body of a BETWEEN half being rendered: it carries the BETWEEN's location, but is half of its value, so it is
+	//! not quoted by that span. Null for any other render.
+	const Expression *between_half = nullptr;
 };
 } // namespace
 
@@ -379,16 +381,6 @@ static string RenderSource(const Expression &expr, const DecideSourceText &text,
 	return RenderSource(expr, ctx);
 }
 
-template <class CALLBACK>
-static void VisitSourceInOperators(Expression &expr, CALLBACK &&callback) {
-	ForEachConstraintLeaf(expr, [&](Expression &node) {
-		// The constraint binder admits no other operator as a clause.
-		if (node.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
-			callback(node);
-		}
-	});
-}
-
 //! The text the user wrote for `expr`, when its query location names a span of the query and the render may quote
 //! it. A message quotes every located node (ctx.written). A plan quotes the located nodes that read no decision and
 //! reprints the rest: canonicalization and the rewrites reshape the decision structure, and a located node's text is
@@ -400,7 +392,7 @@ static bool QuoteSpan(const Expression &expr, const RenderContext &ctx, string &
 		return false;
 	}
 	// The two comparisons a BETWEEN binds to carry its location, but each is half of its value, not the whole.
-	if (BetweenHalfOf(expr) != DecideBetweenHalf::NONE) {
+	if (&expr == ctx.between_half) {
 		return false;
 	}
 	if (!ctx.written && BoundExpressionReferencesDecide(expr, ctx.decide_index)) {
@@ -542,15 +534,14 @@ static string AppendQualifier(string prefix, const string &suffix) {
 	return prefix;
 }
 
-string RenderDecidePerKey(const BoundConjunctionExpression &conj, const DecideSourceText &text,
+string RenderDecidePerKey(idx_t key, optional_idx location, const DecideSourceText &text,
                           const vector<DecideKey> *keys) {
 	string written;
-	if (text.Cut(conj.GetQueryLocation(), DecideSpanRole::PER, written)) {
+	if (text.Cut(location, DecideSpanRole::PER, written)) {
 		return written;
 	}
-	// A wrapper the optimizer built, or one of a statement with no source text, names the key as it was first written;
+	// A `per` the optimizer built, or one of a statement with no source text, names the key as it was first written;
 	// `per ()` names none.
-	const idx_t key = PerWrapperKey(conj);
 	if (key == DConstants::INVALID_INDEX) {
 		return "()";
 	}
@@ -558,62 +549,25 @@ string RenderDecidePerKey(const BoundConjunctionExpression &conj, const DecideSo
 	return DecideKeyText(*keys, key);
 }
 
-//! `per K`, in front of its clause.
-static string PerClassQualifier(const BoundConjunctionExpression &conj, const RenderContext &ctx) {
-	return "per " + RenderDecidePerKey(conj, ctx.text, ctx.keys);
-}
-
-//! The condition of a `when` wrapper as the user wrote it: the wrapper's second child, a data expression, quoted.
-static string WrittenWhen(const BoundConjunctionExpression &conj, const RenderContext &ctx) {
-	return RenderSource(*conj.children[1], ctx);
-}
-
-//! The qualifier of a `when` wrapper: `when c`, in front of its clause.
-static string WhenQualifier(const BoundConjunctionExpression &conj, const RenderContext &ctx) {
-	return "when " + WrittenWhen(conj, ctx);
-}
-
 //! A qualifier (`when c per K`) is written in front of its clause and ends in a colon.
 static string FrontQualifier(const string &qualifier) {
 	return qualifier.empty() ? qualifier : qualifier + ":";
 }
 
-//! The `when c per K` qualifier of a clause's scope, as written in front of it.
-static string ScopeQualifier(const DecideEnclosingScope &scope, const RenderContext &ctx) {
-	return AppendQualifier(scope.when_wrapper ? WhenQualifier(*scope.when_wrapper, ctx) : string(),
-	                       scope.per_wrapper ? PerClassQualifier(*scope.per_wrapper, ctx) : string());
+//! The `when c per K` qualifier of a clause's scope, as written in front of it: the condition, a data expression,
+//! quoted.
+static string ScopeQualifier(const BoundDecideClause &clause, const RenderContext &ctx) {
+	auto &scope = clause.scope;
+	return AppendQualifier(scope.when ? "when " + RenderSource(*scope.when, ctx) : string(),
+	                       scope.HasPer()
+	                           ? "per " + RenderDecidePerKey(scope.class_key, clause.per_location, ctx.text, ctx.keys)
+	                           : string());
 }
 
-//! Every comparison of a constraint tree with the `when c per K:` qualifier of the
-//! wrappers it sits under.
-template <class CALLBACK>
-static void VisitSourceComparisons(Expression &expr, const RenderContext &ctx, DecideEnclosingScope scope,
-                                   CALLBACK &&callback) {
-	scope = EnterDecideScope(expr, scope);
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		for (idx_t i = 0; i < conj.children.size(); i++) {
-			if (IsConstraintChild(conj, i)) {
-				VisitSourceComparisons(*conj.children[i], ctx, scope, callback);
-			}
-		}
-		return;
-	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-		callback(expr.Cast<BoundComparisonExpression>(), FrontQualifier(ScopeQualifier(scope, ctx)));
-	}
-}
-
-//! The qualifier of an IN marker, which VisitSourceComparisons passes over: the front
-//! qualifier of the wrappers it sits under.
-static string ScopedInQualifier(const Expression &constraints, const Expression &in, const RenderContext &ctx) {
-	string found;
-	ForEachScopedConstraintLeaf(constraints, [&](const Expression &leaf, const DecideEnclosingScope &scope) {
-		if (&leaf == &in) {
-			found = FrontQualifier(ScopeQualifier(scope, ctx));
-		}
-	});
-	return found;
+//! The context that renders the body of `clause`.
+static RenderContext ClauseContext(RenderContext ctx, const BoundDecideClause &clause) {
+	ctx.between_half = clause.between == DecideBetweenHalf::NONE ? nullptr : clause.body.get();
+	return ctx;
 }
 
 //! Whether an expression references a decision variable -- a column ref bound to the
@@ -657,7 +611,8 @@ static void LinkBetweenHalves(ConstraintSourceInfo &lower, ConstraintSourceInfo 
 	upper.between_upper = true;
 }
 
-vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints, const DecideSourceText &text,
+vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(vector<BoundDecideClause> &clauses,
+                                                            const DecideSourceText &text,
                                                             const vector<KeyedScopeInfo> &keyed_scopes,
                                                             idx_t decide_index, const vector<DecideKey> *keys,
                                                             const vector<DecideFrameSpec> &frames) {
@@ -665,59 +620,64 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 	RenderContext ctx {text, keyed_scopes, keys};
 	ctx.decide_index = decide_index;
 	ctx.frames = &frames;
-	// The `>=` half of the BETWEEN being visited: its `<=` half is the next comparison the walk reaches.
+	// The `>=` half of the BETWEEN being visited: its `<=` half is the next comparison.
 	idx_t lower_half = DConstants::INVALID_INDEX;
-	VisitSourceComparisons(constraints, ctx, DecideEnclosingScope(),
-	                       [&](BoundComparisonExpression &cmp, const string &qualifier) {
-		                       idx_t source_id = result.size();
-		                       const auto between_half = BetweenHalfOf(cmp);
-		                       StampClauseOrigin(cmp, DecideRowOrigin::OfClause(source_id));
-		                       // The last point at which the clause is as written: whether canonicalization has to
-		                       // merge the sides. That is the one rewrite that leaves algebra the user cannot
-		                       // recognize, when BOTH sides bear decisions: `ship <= capacity * open`
-		                       // becomes `ship - capacity * open <= 0`, a clause the query does not contain, against a
-		                       // literal bound that is not in it either. When only one side bears decisions the
-		                       // rewrite is a clean move and the leftover bound folds into something BETTER than what
-		                       // was written: `(SELECT 7) >= x + 2` becomes `x <= 5`, turning an opaque subquery into a
-		                       // number the user can edit.
-		                       ConstraintSourceInfo info;
-		                       // A scope written in front belongs to the clause as written: canonicalization drops the
-		                       // `per K:` of a clause in the aggregate shape, which still holds (its scope checks).
-		                       info.qualifier = qualifier;
-		                       info.location = cmp.GetQueryLocation();
-		                       if (ReferencesDecideVariable(*cmp.left, decide_index) &&
-		                           ReferencesDecideVariable(*cmp.right, decide_index)) {
-			                       // What an edit quotes stays DeciDB's own rendering.
-			                       info.source_lhs = RenderSource(*cmp.left, ctx);
-			                       info.source_rhs = RenderSource(*cmp.right, ctx);
-			                       info.source_rhs_reads_data = ReadsRowData(*cmp.right, decide_index);
-		                       }
-		                       if (between_half == DecideBetweenHalf::LOWER) {
-			                       lower_half = source_id;
-		                       } else if (between_half == DecideBetweenHalf::UPPER) {
-			                       if (lower_half == DConstants::INVALID_INDEX) {
-				                       throw InternalException("DECIDE: the upper half of a BETWEEN came without "
-				                                               "its lower half; the binder emits them in order");
-			                       }
-			                       LinkBetweenHalves(result[lower_half], info, lower_half, source_id);
-			                       lower_half = DConstants::INVALID_INDEX;
-		                       }
-		                       result.push_back(std::move(info));
-	                       });
+	for (auto &clause : clauses) {
+		if (clause.body->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+			continue;
+		}
+		auto &cmp = clause.body->Cast<BoundComparisonExpression>();
+		idx_t source_id = result.size();
+		clause.origin.source_clause_id = source_id;
+		// The last point at which the clause is as written: whether canonicalization has to
+		// merge the sides. That is the one rewrite that leaves algebra the user cannot
+		// recognize, when BOTH sides bear decisions: `ship <= capacity * open`
+		// becomes `ship - capacity * open <= 0`, a clause the query does not contain, against a
+		// literal bound that is not in it either. When only one side bears decisions the
+		// rewrite is a clean move and the leftover bound folds into something BETTER than what
+		// was written: `(SELECT 7) >= x + 2` becomes `x <= 5`, turning an opaque subquery into a
+		// number the user can edit.
+		ConstraintSourceInfo info;
+		// A scope written in front belongs to the clause as written: canonicalization drops the
+		// `per K:` of a clause in the aggregate shape, which still holds (its scope checks).
+		info.qualifier = FrontQualifier(ScopeQualifier(clause, ctx));
+		info.location = cmp.GetQueryLocation();
+		if (ReferencesDecideVariable(*cmp.left, decide_index) && ReferencesDecideVariable(*cmp.right, decide_index)) {
+			// What an edit quotes stays DeciDB's own rendering.
+			info.source_lhs = RenderSource(*cmp.left, ctx);
+			info.source_rhs = RenderSource(*cmp.right, ctx);
+			info.source_rhs_reads_data = ReadsRowData(*cmp.right, decide_index);
+		}
+		if (clause.between == DecideBetweenHalf::LOWER) {
+			lower_half = source_id;
+		} else if (clause.between == DecideBetweenHalf::UPPER) {
+			if (lower_half == DConstants::INVALID_INDEX) {
+				throw InternalException("DECIDE: the upper half of a BETWEEN came without "
+				                        "its lower half; the binder emits them in order");
+			}
+			LinkBetweenHalves(result[lower_half], info, lower_half, source_id);
+			lower_half = DConstants::INVALID_INDEX;
+		}
+		result.push_back(std::move(info));
+	}
 	// A DECIDE-variable IN is intentionally an opaque pre-optimizer marker, not
 	// a comparison. Give it the same stable source identity now so every emitted
-	// indicator/linking row can still point back to the original SQL clause.
-	VisitSourceInOperators(constraints, [&](Expression &in) {
-		idx_t source_id = result.size();
-		StampClauseOrigin(in, DecideRowOrigin::OfClause(source_id));
+	// indicator/linking row can still point back to the original SQL clause. The
+	// constraint binder admits no other operator as a clause.
+	for (auto &clause : clauses) {
+		if (clause.body->GetExpressionClass() != ExpressionClass::BOUND_OPERATOR) {
+			continue;
+		}
+		auto &in = *clause.body;
+		clause.origin.source_clause_id = result.size();
 		ConstraintSourceInfo info;
 		info.location = in.GetQueryLocation();
 		info.canonical_lhs = RenderSource(in, ctx);
 		info.rhs_kind = ConstraintSourceRhsKind::NUMERIC_FALLBACK;
 		// Its scope in front, as a comparison's: the IN itself shows no scope word.
-		info.qualifier = ScopedInQualifier(constraints, in, ctx);
+		info.qualifier = FrontQualifier(ScopeQualifier(clause, ctx));
 		result.push_back(std::move(info));
-	});
+	}
 	return result;
 }
 
@@ -734,33 +694,39 @@ static bool ContainsSubquerySource(const Expression &expr) {
 	return found;
 }
 
-void FinalizeConstraintSourceInfo(const Expression &constraints, vector<ConstraintSourceInfo> &sources,
+void FinalizeConstraintSourceInfo(const vector<BoundDecideClause> &clauses, vector<ConstraintSourceInfo> &sources,
                                   const DecideSourceText &text, const vector<KeyedScopeInfo> &keyed_scopes,
                                   idx_t decide_index, const vector<DecideKey> *keys,
                                   const vector<DecideFrameSpec> &frames) {
-	auto &mutable_constraints = const_cast<Expression &>(constraints);
 	RenderContext ctx {text, keyed_scopes, keys};
 	ctx.decide_index = decide_index;
 	ctx.frames = &frames;
-	VisitSourceComparisons(
-	    mutable_constraints, ctx, DecideEnclosingScope(), [&](BoundComparisonExpression &cmp, const string &) {
-		    // InitializeConstraintSourceInfo tagged every comparison of the clause tree.
-		    const idx_t source_id = ClauseOriginOf(cmp).source_clause_id;
-		    if (source_id >= sources.size()) {
-			    throw InternalException("DECIDE: a comparison reached the clause registry without its clause tag; "
-			                            "InitializeConstraintSourceInfo tags every comparison of the tree");
-		    }
-		    auto &info = sources[source_id];
-		    info.canonical_lhs = RenderSource(*cmp.left, ctx);
-		    info.canonical_rhs = RenderSource(*cmp.right, ctx);
-		    info.lhs_location = cmp.left->GetQueryLocation();
-		    info.canonical_cmp = DecideComparisonOperator(cmp.type);
-		    if (!IsQueryWideBoundTag(cmp.right->GetAlias()) && !ContainsSubquerySource(*cmp.right)) {
-			    info.rhs_kind = ConstraintSourceRhsKind::DATA_EXPRESSION;
-		    } else {
-			    info.rhs_kind = ConstraintSourceRhsKind::NUMERIC_FALLBACK;
-		    }
-	    });
+	for (auto &clause : clauses) {
+		if (clause.body->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+			continue;
+		}
+		auto &cmp = clause.body->Cast<BoundComparisonExpression>();
+		// InitializeConstraintSourceInfo gave every comparison its source clause.
+		const idx_t source_id = clause.origin.source_clause_id;
+		if (source_id >= sources.size()) {
+			throw InternalException("DECIDE: a comparison reached the clause registry without its source clause; "
+			                        "InitializeConstraintSourceInfo gives every comparison one");
+		}
+		auto &info = sources[source_id];
+		info.canonical_lhs = RenderSource(*cmp.left, ctx);
+		info.canonical_rhs = RenderSource(*cmp.right, ctx);
+		info.lhs_location = cmp.left->GetQueryLocation();
+		info.canonical_cmp = DecideComparisonOperator(cmp.type);
+		if (!IsQueryWideBoundTag(cmp.right->GetAlias()) && !ContainsSubquerySource(*cmp.right)) {
+			info.rhs_kind = ConstraintSourceRhsKind::DATA_EXPRESSION;
+		} else {
+			info.rhs_kind = ConstraintSourceRhsKind::NUMERIC_FALLBACK;
+		}
+	}
+}
+
+string RenderDecideClauseBody(const BoundDecideClause &clause, const DecideSourceNames &names) {
+	return RenderSource(*clause.body, ClauseContext(ContextOf(names), clause));
 }
 
 string RenderDecideSource(const Expression &expr, const DecideSourceText &text,
@@ -784,18 +750,10 @@ DecideSourceNames DecidePlanNames(const DecideSourceText &text, const vector<Key
 	return names;
 }
 
-//! The source id CollectExpressionStrings reports for a row a rewrite added for the
+//! The source id CollectDecideClauseLayers gives a row a rewrite added for the
 //! objective (DecideRowOrigin::objective): no clause's, and not INVALID_INDEX, which is a row no
 //! one claims.
 static constexpr idx_t OBJECTIVE_ROW_SOURCE_ID = DConstants::INVALID_INDEX - 1;
-
-//! Push one rendered clause, keeping `out_source_ids` the same length as `out`.
-static void PushClause(vector<string> &out, vector<idx_t> *out_source_ids, string rendered, idx_t source_id) {
-	out.push_back(std::move(rendered));
-	if (out_source_ids) {
-		out_source_ids->push_back(source_id);
-	}
-}
 
 //! The residue of a clause the optimizer lifted out of the tree (a NORM or IN lowering
 //! replaces its comparison with a TRUE placeholder). It carries no information, and
@@ -826,61 +784,26 @@ static string RenderWrittenSense(const Expression &expr, const RenderContext &ct
 	return result;
 }
 
-//! `CollectDecideExpressionStrings` with the pending `when c per K:` front qualifier.
-static void CollectExpressionStrings(const Expression &expr, const DecideSourceNames &names, vector<string> &out,
-                                     vector<idx_t> *out_source_ids, DecideEnclosingScope scope, bool written_sense) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		// A clause's `when c per K:` prints in front. A plain AND is the constraint list itself, so each child is its
-		// own clause.
-		auto inner = EnterDecideScope(conj, scope);
-		for (idx_t i = 0; i < conj.children.size(); i++) {
-			if (IsConstraintChild(conj, i)) {
-				CollectExpressionStrings(*conj.children[i], names, out, out_source_ids, inner, written_sense);
-			}
-		}
-		return;
+//! One clause as a plan prints it: its `when c per K:` in front, then its body. Empty for a placeholder and for a
+//! defined body's row, which restates the body the reducer already prints (the account line says how it is held): the
+//! placeholder is the only thing left marking where the lifted clause stood, and a caller ordering clauses by
+//! position needs that position. `written_sense` renders an objective in the direction it was written.
+static string RenderClause(const BoundDecideClause &clause, const DecideSourceNames &names, bool written_sense) {
+	auto &body = *clause.body;
+	if (IsTruePlaceholder(body) || HasDecideTag(body.GetAlias(), BODY_DEFINITION_TAG)) {
+		return string();
 	}
-	// The clause a row came from: its source clause, or the objective's for a row a rewrite added for it.
-	const auto origin = ClauseOriginOf(expr);
-	const idx_t leaf_source_id = origin.source_clause_id == DConstants::INVALID_INDEX && origin.objective
-	                                 ? OBJECTIVE_ROW_SOURCE_ID
-	                                 : origin.source_clause_id;
-	// A defined body's row restates the body the reducer already prints; the account line says how it is held.
-	if (IsTruePlaceholder(expr) || HasDecideTag(expr.GetAlias(), BODY_DEFINITION_TAG)) {
-		// Emitted as an empty string rather than dropped: the placeholder is the only
-		// thing left marking where the extracted clause stood, and a caller ordering
-		// clauses by tree position needs that position. Callers drop the empty string.
-		PushClause(out, out_source_ids, string(), leaf_source_id);
-		return;
-	}
-	auto front_qualifier = FrontQualifier(ScopeQualifier(scope, ContextOf(names)));
-	auto ctx = ContextOf(names);
-	PushClause(
-	    out, out_source_ids,
-	    AppendQualifier(front_qualifier, written_sense ? RenderWrittenSense(expr, ctx) : RenderSource(expr, ctx)),
-	    leaf_source_id);
+	auto ctx = ClauseContext(ContextOf(names), clause);
+	return AppendQualifier(FrontQualifier(ScopeQualifier(clause, ctx)),
+	                       written_sense ? RenderWrittenSense(body, ctx) : RenderSource(body, ctx));
 }
 
-void CollectDecideExpressionStrings(const Expression &expr, const DecideSourceNames &names, vector<string> &out,
-                                    vector<idx_t> *out_source_ids, bool written_sense) {
-	CollectExpressionStrings(expr, names, out, out_source_ids, DecideEnclosingScope(), written_sense);
+string DecideObjectiveQualifier(const BoundDecideClause &objective, const DecideSourceNames &names) {
+	return FrontQualifier(ScopeQualifier(objective, ContextOf(names)));
 }
 
-string DecideObjectiveQualifier(const Expression &objective, const DecideSourceNames &names) {
-	auto ctx = ContextOf(names);
-	return FrontQualifier(ScopeQualifier(EnterDecideScope(objective, DecideEnclosingScope()), ctx));
-}
-
-string RenderDecideObjective(const Expression &expr, const DecideSourceNames &names, bool written_sense) {
-	vector<string> parts;
-	CollectDecideExpressionStrings(expr, names, parts, nullptr, written_sense);
-	// An objective is one clause: its `when` and `per` wrappers hold it in their first child.
-	if (parts.size() != 1) {
-		throw InternalException("DECIDE: an objective rendered as %llu clauses; the objective binder wraps it as one",
-		                        static_cast<uint64_t>(parts.size()));
-	}
-	return parts[0];
+string RenderDecideObjective(const BoundDecideClause &objective, const DecideSourceNames &names, bool written_sense) {
+	return RenderClause(objective, names, written_sense);
 }
 
 //! A term's coefficient is left out when it is the literal 1, as a user writes no factor of 1; an L0 link's bound and
@@ -945,18 +868,23 @@ vector<DecideFunctionRow> CollectDecideFunctionRows(const DecideTree &tree, cons
 	return rows;
 }
 
-vector<DecideClauseLayers> CollectDecideClauseLayers(const Expression &constraints, const DecideSourceNames &names,
-                                                     const vector<ConstraintSourceInfo> &sources,
-                                                     vector<string> &unattributed, vector<string> &objective_rows,
-                                                     const vector<LogicalDecide::RewriteAccount> &accounts,
-                                                     const vector<DecideFunctionRow> &function_rows,
-                                                     const string &objective_qualifier) {
-	// Every row the solver will see, tagged with the clause it came from.
+vector<DecideClauseLayers>
+CollectDecideClauseLayers(const vector<BoundDecideClause> &clauses, const DecideSourceNames &names,
+                          const vector<ConstraintSourceInfo> &sources, vector<string> &unattributed,
+                          vector<string> &objective_rows, const vector<LogicalDecide::RewriteAccount> &accounts,
+                          const vector<DecideFunctionRow> &function_rows, const string &objective_qualifier) {
+	// Every row the solver will see, with the clause it came from: its source clause, or the objective's for a row a
+	// rewrite added for it.
 	vector<string> rows;
 	vector<idx_t> row_ids;
-	CollectDecideExpressionStrings(constraints, names, rows, &row_ids);
+	for (auto &clause : clauses) {
+		rows.push_back(RenderClause(clause, names, false));
+		row_ids.push_back(clause.origin.source_clause_id == DConstants::INVALID_INDEX && clause.origin.objective
+		                      ? OBJECTIVE_ROW_SOURCE_ID
+		                      : clause.origin.source_clause_id);
+	}
 	vector<vector<string>> by_clause(sources.size());
-	// Display follows the tree, not the registry. Source ids are handed out in two
+	// Display follows the clause list, not the registry. Source ids are handed out in two
 	// passes -- every comparison first, then the DECIDE-variable INs -- so registry
 	// order would print an `IN` written first as though it were written last.
 	vector<idx_t> clause_order;

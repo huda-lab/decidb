@@ -962,9 +962,9 @@
       },
       {
         "id": 202,
-        "name": "decide_constraints",
-        "property": "bound.constraints",
-        "type": "Expression*"
+        "name": "clauses",
+        "property": "bound.clauses",
+        "type": "vector<BoundDecideClause>"
       },
       {
         "id": 203,
@@ -974,9 +974,9 @@
       },
       {
         "id": 204,
-        "name": "decide_objective",
+        "name": "objective",
         "property": "bound.objective",
-        "type": "Expression*"
+        "type": "BoundDecideClause"
       },
       {
         "id": 205,

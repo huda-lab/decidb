@@ -128,9 +128,9 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 	                       display.decide_index,
 	                       display.source_text,
 	                       display.aux_var_expressions,
-	                       *display.decide_constraints,
+	                       display.clauses,
 	                       display.constraint_sources,
-	                       display.decide_objective.get(),
+	                       display.objective,
 	                       display.written_objective,
 	                       display.canonical_objective,
 	                       display.objective_canonical_differs};

@@ -624,8 +624,12 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 	REQUIRE(after->bound.is_boolean_var == before->bound.is_boolean_var);
 	REQUIRE(after->num_auxiliary_vars == before->num_auxiliary_vars);
 	REQUIRE(after->bound.variables.size() == before->bound.variables.size());
-	REQUIRE(after->bound.constraints != nullptr);
-	REQUIRE(after->bound.objective != nullptr);
+	REQUIRE(after->bound.clauses.size() == before->bound.clauses.size());
+	for (idx_t i = 0; i < before->bound.clauses.size(); i++) {
+		REQUIRE(after->bound.clauses[i].body->Equals(*before->bound.clauses[i].body));
+		REQUIRE(after->bound.clauses[i].origin.source_clause_id == before->bound.clauses[i].origin.source_clause_id);
+	}
+	REQUIRE(after->bound.objective.body != nullptr);
 }
 
 TEST_CASE("A clause is stored with its span, and the canonicalizer reports whether it changed it", "[decidb]") {

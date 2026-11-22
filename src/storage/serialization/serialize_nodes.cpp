@@ -37,6 +37,7 @@
 #include "duckdb/common/column_index.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
+#include "duckdb/planner/decide/decide_tree_terms.hpp"
 #include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/parser/decide/parsed_decide.hpp"
 
@@ -97,6 +98,44 @@ BoundCaseCheck BoundCaseCheck::Deserialize(Deserializer &deserializer) {
 	BoundCaseCheck result;
 	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(100, "when_expr", result.when_expr);
 	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(101, "then_expr", result.then_expr);
+	return result;
+}
+
+void BoundDecideClause::Serialize(Serializer &serializer) const {
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(100, "body", body);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(101, "when", scope.when);
+	serializer.WriteProperty<DecidePerRole>(102, "per", scope.per);
+	serializer.WritePropertyWithDefault<idx_t>(103, "class_key", scope.class_key, DConstants::INVALID_INDEX);
+	serializer.WritePropertyWithDefault<idx_t>(104, "signature", scope.signature, DConstants::INVALID_INDEX);
+	serializer.WriteProperty<optional_idx>(105, "per_location", per_location);
+	serializer.WritePropertyWithDefault<idx_t>(106, "source_clause_id", origin.source_clause_id, DConstants::INVALID_INDEX);
+	serializer.WritePropertyWithDefault<idx_t>(107, "removal_group_id", origin.removal_group_id, DConstants::INVALID_INDEX);
+	serializer.WritePropertyWithDefault<bool>(108, "objective", origin.objective, false);
+	serializer.WriteProperty<DecideBetweenHalf>(109, "between", between);
+	serializer.WritePropertyWithDefault<bool>(110, "structural", structural, false);
+	serializer.WritePropertyWithDefault<idx_t>(111, "defines", defines, DConstants::INVALID_INDEX);
+	serializer.WritePropertyWithDefault<bool>(112, "minmax_easy", minmax_easy, false);
+	serializer.WritePropertyWithDefault<bool>(113, "folded_bound", folded_bound, false);
+	serializer.WritePropertyWithDefault<bool>(114, "folded_clause_rows", folded_clause_rows, false);
+}
+
+BoundDecideClause BoundDecideClause::Deserialize(Deserializer &deserializer) {
+	BoundDecideClause result;
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(100, "body", result.body);
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(101, "when", result.scope.when);
+	deserializer.ReadProperty<DecidePerRole>(102, "per", result.scope.per);
+	deserializer.ReadPropertyWithExplicitDefault<idx_t>(103, "class_key", result.scope.class_key, DConstants::INVALID_INDEX);
+	deserializer.ReadPropertyWithExplicitDefault<idx_t>(104, "signature", result.scope.signature, DConstants::INVALID_INDEX);
+	deserializer.ReadProperty<optional_idx>(105, "per_location", result.per_location);
+	deserializer.ReadPropertyWithExplicitDefault<idx_t>(106, "source_clause_id", result.origin.source_clause_id, DConstants::INVALID_INDEX);
+	deserializer.ReadPropertyWithExplicitDefault<idx_t>(107, "removal_group_id", result.origin.removal_group_id, DConstants::INVALID_INDEX);
+	deserializer.ReadPropertyWithExplicitDefault<bool>(108, "objective", result.origin.objective, false);
+	deserializer.ReadProperty<DecideBetweenHalf>(109, "between", result.between);
+	deserializer.ReadPropertyWithExplicitDefault<bool>(110, "structural", result.structural, false);
+	deserializer.ReadPropertyWithExplicitDefault<idx_t>(111, "defines", result.defines, DConstants::INVALID_INDEX);
+	deserializer.ReadPropertyWithExplicitDefault<bool>(112, "minmax_easy", result.minmax_easy, false);
+	deserializer.ReadPropertyWithExplicitDefault<bool>(113, "folded_bound", result.folded_bound, false);
+	deserializer.ReadPropertyWithExplicitDefault<bool>(114, "folded_clause_rows", result.folded_clause_rows, false);
 	return result;
 }
 

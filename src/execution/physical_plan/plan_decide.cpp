@@ -5,7 +5,6 @@
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_tree.hpp"
 #include "duckdb/decidb/solver/ilp_solver.hpp"
 #include "duckdb/optimizer/decide/decide_linear_form.hpp"
@@ -143,24 +142,25 @@ static void NameInputColumns(DecideDisplay &display, const DecideTree &tree, Log
 			}
 		}
 		ExpressionIterator::EnumerateChildren(e, harvest);
-		// A `per K:` names its key after its clause, as written.
-		if (e.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			auto &conjunction = e.Cast<BoundConjunctionExpression>();
-			if (IsPerClassWrapper(conjunction)) {
-				harvest_key(PerWrapperKey(conjunction));
-			}
+	};
+	// A `per K:` names its key after its clause, as written.
+	auto harvest_clause = [&](const BoundDecideClause &clause) {
+		harvest(*clause.body);
+		if (clause.scope.when) {
+			harvest(*clause.scope.when);
+		}
+		if (clause.scope.HasPer()) {
+			harvest_key(clause.scope.class_key);
 		}
 	};
-	if (display.decide_constraints) {
-		harvest(*display.decide_constraints);
+	for (auto &clause : display.clauses) {
+		harvest_clause(clause);
 	}
-	if (display.decide_objective) {
-		harvest(*display.decide_objective);
+	if (display.objective.body) {
+		harvest_clause(display.objective);
 	}
-	// A `by` key and a scope check read the clause's data too; an aggregate-shape clause
-	// keeps its `per` wrapper (DecideCanonicalizer::CanonicalizeTreeInternal), so its key
-	// is named above. A key only a declaration writes names no column: a column the
-	// clauses never name stays unnamed.
+	// A `by` key and a scope check read the clause's data too. A key only a declaration writes names no column: a
+	// column the clauses never name stays unnamed.
 	for (idx_t key = 0; key < tree.keys.size(); key++) {
 		if (tree.keys[key].written_as_by) {
 			harvest_key(key);
@@ -211,15 +211,13 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	// for the same reason the constraints are: every rewrite that touches it now
 	// re-enters through LogicalDecide::SetObjective, so a rewrite that breaks the
 	// canonical form should fail loudly rather than reach the extractor.
-	if (op.bound.constraints || op.bound.objective) {
-		DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes,
-		                                  op.bound.keys, op.bound.is_boolean_var);
-		if (op.bound.constraints) {
-			canonicalizer.VerifyCanonical(*op.bound.constraints);
-		}
-		if (op.bound.objective) {
-			canonicalizer.VerifyCanonicalObjective(*op.bound.objective);
-		}
+	DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes,
+	                                  op.bound.keys, op.bound.is_boolean_var);
+	for (auto &clause : op.bound.clauses) {
+		canonicalizer.VerifyCanonical(clause);
+	}
+	if (op.bound.objective.body) {
+		canonicalizer.VerifyCanonicalObjective(op.bound.objective);
 	}
 	// Lower the verified clauses into the tree's terms. The pass itself is
 	// owned by stage 05 (src/optimizer/decide/decide_linear_form.cpp); it is TRIGGERED
@@ -259,8 +257,8 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	auto decide_op = make_uniq<PhysicalDecide>(op.types, op.estimated_cardinality, std::move(child_plan));
 	auto &display = decide_op->display;
 	display.decide_index = op.decide_index;
-	display.decide_constraints = std::move(op.bound.constraints);
-	display.decide_objective = std::move(op.bound.objective);
+	display.clauses = std::move(op.bound.clauses);
+	display.objective = std::move(op.bound.objective);
 	display.constraint_sources = std::move(op.bound.constraint_sources);
 	display.written_objective = std::move(op.written_objective);
 	display.canonical_objective = std::move(op.canonical_objective);

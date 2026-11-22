@@ -32,9 +32,9 @@ struct ElasticFormulation;
 struct DecideDisplay {
 	//! The table index of the decisions' columns.
 	idx_t decide_index = DConstants::INVALID_INDEX;
-	//! The bound constraints expression and the bound objective function expression, minimized.
-	unique_ptr<Expression> decide_constraints;
-	unique_ptr<Expression> decide_objective;
+	//! The bound clauses, and the bound objective, minimized.
+	vector<BoundDecideClause> clauses;
+	BoundDecideClause objective;
 	//! Stable source display registry.
 	vector<ConstraintSourceInfo> constraint_sources;
 	//! The objective as written and as canonicalized, so the physical plan renders the same layers the logical one

@@ -45,7 +45,6 @@
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
@@ -71,11 +70,9 @@ public:
 	}
 
 	void Run() {
-		// The parser requires a SUCH THAT clause with at least one constraint.
-		D_ASSERT(decide.decide_constraints);
 		decide.EnumerateBodies([&](DecideOwnedBody &body) {
 			if (body.owner == DecideOwnedBody::Owner::CLAUSE) {
-				ReadClause(*body.expr, body.scope);
+				ReadClause(*body.expr, body.clause->scope);
 			} else if (body.owner == DecideOwnedBody::Owner::OBJECTIVE) {
 				ReadObjective(body.expr, body.rows);
 			}
@@ -89,12 +86,12 @@ private:
 		vector<const Expression *> keys;
 	};
 
-	//! A `per K:` wrapper groups no reducer: its clause is read like any other. Its key says which rows are in a class.
-	void ReadClause(Expression &expr, const DecideEnclosingScope &scope) {
+	//! A `per K:` groups no reducer: its clause is read like any other. Its key says which rows are in a class.
+	void ReadClause(Expression &expr, const DecideClauseScope &scope) {
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 			in_objective = false;
-			when = scope.Condition();
-			class_key = scope.PerKey();
+			when = scope.when.get();
+			class_key = scope.class_key;
 			auto &comparison = expr.Cast<BoundComparisonExpression>();
 			read_as = DecideValueRole::BOUND;
 			RewriteBound(comparison);

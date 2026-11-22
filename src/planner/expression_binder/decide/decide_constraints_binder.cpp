@@ -14,7 +14,6 @@
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/main/client_context.hpp"
 
@@ -96,83 +95,58 @@ BindResult DecideConstraintsBinder::BindOperator(unique_ptr<ParsedExpression> &e
 	}
 }
 
-//! `input BETWEEN lower AND upper` as the conjunction `input >= lower AND input <= upper`. Both halves take the
-//! BETWEEN's location, where the parser kept the text of the clause, and a tag saying which half they are.
-static unique_ptr<ConjunctionExpression> ExpandBetween(const BetweenExpression &between) {
+namespace {
+
+//! One row of a written clause: a comparison or an IN, as parsed, and which half of a BETWEEN it is.
+struct WrittenRow {
+	unique_ptr<ParsedExpression> body;
+	DecideBetweenHalf between;
+};
+
+//! The rows `body` writes: an AND is its operands' rows, `input BETWEEN lower AND upper` the two comparisons
+//! `input >= lower` and `input <= upper`, and anything else one row. Both halves of a BETWEEN take its location,
+//! where the parser kept the text of the clause.
+void CollectWrittenRows(unique_ptr<ParsedExpression> body, vector<WrittenRow> &rows) {
+	if (body->GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
+		for (auto &child : body->Cast<ConjunctionExpression>().children) {
+			CollectWrittenRows(std::move(child), rows);
+		}
+		return;
+	}
+	if (body->GetExpressionClass() != ExpressionClass::BETWEEN) {
+		rows.push_back({std::move(body), DecideBetweenHalf::NONE});
+		return;
+	}
+	auto &between = body->Cast<BetweenExpression>();
 	auto lower_bound = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 	                                                   between.input->Copy(), between.lower->Copy());
 	auto upper_bound = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO, between.input->Copy(),
 	                                                   between.upper->Copy());
 	lower_bound->query_location = between.query_location;
 	upper_bound->query_location = between.query_location;
-	SetBetweenHalf(*lower_bound, DecideBetweenHalf::LOWER);
-	SetBetweenHalf(*upper_bound, DecideBetweenHalf::UPPER);
-	return make_uniq<ConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(lower_bound),
-	                                        std::move(upper_bound));
+	rows.push_back({std::move(lower_bound), DecideBetweenHalf::LOWER});
+	rows.push_back({std::move(upper_bound), DecideBetweenHalf::UPPER});
 }
 
-BindResult DecideConstraintsBinder::BindBetween(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
-	expr_ptr = ExpandBetween(expr_ptr->Cast<BetweenExpression>());
-	return BindConjunction(expr_ptr, depth);
-}
+} // namespace
 
-BindResult DecideConstraintsBinder::BindConjunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
-	auto &expr = *expr_ptr;
-	auto &conj = expr.Cast<ConjunctionExpression>();
-	// Constraints are joined with AND. An OR between them would need an indicator per
-	// alternative, which no layer builds, and every later walk reads a conjunction as AND.
-	if (conj.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
-		return BindResult(NotImplementedException(expr, "OR between SUCH THAT constraints is not supported"));
-	}
-	// Only a constraint list reaches here (an operand conjunction is data or refused), so
-	// each child is a constraint.
-	ErrorData error;
-	for (idx_t i = 0; i < conj.children.size(); i++) {
-		is_top_expression = true;
-		BindChild(conj.children[i], depth, error);
-	}
-	if (error.HasError()) {
-		return BindResult(std::move(error));
-	}
-	// the children have been successfully resolved
-	// cast the input types to boolean (if necessary)
-	// and construct the bound conjunction expression
-	auto result = make_uniq<BoundConjunctionExpression>(conj.GetExpressionType());
-	for (auto &child_expr : conj.children) {
-		auto &child = BoundExpression::GetExpression(*child_expr);
-		result->children.push_back(BoundCastExpression::AddCastToType(context, std::move(child), LogicalType::BOOLEAN));
-	}
-	// now create the bound conjunction expression
-	return BindResult(std::move(result));
-}
-
-unique_ptr<Expression> DecideConstraintsBinder::BindConstraints(vector<DecideClause> &constraints) {
+vector<BoundDecideClause> DecideConstraintsBinder::BindConstraints(vector<DecideClause> &constraints) {
 	// Each constraint binds on its own; the first error is the one raised.
 	ErrorData error;
-	vector<unique_ptr<Expression>> bound;
+	vector<BoundDecideClause> bound;
 	for (auto &clause : constraints) {
-		auto result = BindClause(clause);
-		if (!result.HasError()) {
-			bound.push_back(std::move(result.expression));
-		} else if (!error.HasError()) {
-			error = std::move(result.error);
+		auto clause_error = BindClause(clause, bound);
+		if (!error.HasError()) {
+			error = std::move(clause_error);
 		}
 	}
 	if (error.HasError()) {
 		error.Throw();
 	}
-	if (bound.size() == 1) {
-		return std::move(bound[0]);
-	}
-	auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-	for (auto &constraint : bound) {
-		result->children.push_back(
-		    BoundCastExpression::AddCastToType(context, std::move(constraint), LogicalType::BOOLEAN));
-	}
-	return std::move(result);
+	return bound;
 }
 
-BindResult DecideConstraintsBinder::BindClause(DecideClause &clause) {
+ErrorData DecideConstraintsBinder::BindClause(DecideClause &clause, vector<BoundDecideClause> &bound) {
 	// `[when c] [per K]: body`. The scope's parts bind in place. `per row`, the default written out, adds no class
 	// key: one constraint per kept row.
 	auto &scope = clause.scope;
@@ -180,15 +154,16 @@ BindResult DecideConstraintsBinder::BindClause(DecideClause &clause) {
 	auto &when = scope.when;
 	idx_t depth = 0;
 
+	// Constraints are joined with AND, and a BETWEEN is two of them: each row is a clause of its own.
+	vector<WrittenRow> rows;
+	CollectWrittenRows(std::move(clause.body), rows);
 	ErrorData body_error;
-	is_top_expression = true;
-	BindChild(clause.body, depth, body_error);
-	if (body_error.HasError()) {
-		return BindResult(std::move(body_error));
+	for (auto &row : rows) {
+		is_top_expression = true;
+		BindChild(row.body, depth, body_error);
 	}
-	auto bound = std::move(BoundExpression::GetExpression(*clause.body));
-	if (scope.IsEmpty()) {
-		return BindResult(std::move(bound));
+	if (body_error.HasError()) {
+		return body_error;
 	}
 
 	// The condition takes data only (ValidateDecideScopeSpellings): plain SQL, no
@@ -202,7 +177,7 @@ BindResult DecideConstraintsBinder::BindClause(DecideClause &clause) {
 		}
 		return error;
 	};
-	// A bound subquery cannot be copied, so a second constraint of the scope (a BETWEEN's
+	// A bound subquery cannot be copied, so a second row of the scope (a BETWEEN's
 	// other half) binds the condition afresh from it as written.
 	unique_ptr<ParsedExpression> condition_text;
 	unique_ptr<Expression> condition;
@@ -210,7 +185,7 @@ BindResult DecideConstraintsBinder::BindClause(DecideClause &clause) {
 		condition_text = when->Copy();
 		auto error = bind_condition(when, condition);
 		if (error.HasError()) {
-			return BindResult(std::move(error));
+			return error;
 		}
 	}
 	idx_t key = DConstants::INVALID_INDEX;
@@ -221,31 +196,28 @@ BindResult DecideConstraintsBinder::BindClause(DecideClause &clause) {
 		              *qualifier_context->keys);
 	}
 
-	// One scope per constraint: a BETWEEN bound to the conjunction of its two halves, and
-	// each half gets the whole scope.
-	auto apply_scope = [&](unique_ptr<Expression> constraint) -> unique_ptr<Expression> {
-		unique_ptr<Expression> this_condition = std::move(condition);
-		if (when && !this_condition) {
+	// One scope per row: each gets the whole scope.
+	for (auto &row : rows) {
+		BoundDecideClause result;
+		result.body = std::move(BoundExpression::GetExpression(*row.body));
+		result.between = row.between;
+		result.scope.when = std::move(condition);
+		if (when && !result.scope.when) {
 			auto parsed = condition_text->Copy();
-			auto error = bind_condition(parsed, this_condition);
+			auto error = bind_condition(parsed, result.scope.when);
 			if (error.HasError()) {
 				error.Throw();
 			}
 		}
-		// The wrapper stands at its `per`, where the parser kept the key as written.
-		DecideRowPer written_per;
-		written_per.key = key;
-		written_per.location = scope.location;
-		return MakeScopedRow(std::move(constraint), std::move(this_condition), per ? &written_per : nullptr);
-	};
-	if (bound->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		for (auto &half : bound->Cast<BoundConjunctionExpression>().children) {
-			result->children.push_back(apply_scope(std::move(half)));
+		if (per) {
+			result.scope.per = DecideClauseScope::PerRole::NAMES_CLASSES;
+			result.scope.class_key = key;
+			// The `per` stands where the parser kept the key as written.
+			result.per_location = scope.location;
 		}
-		return BindResult(std::move(result));
+		bound.push_back(std::move(result));
 	}
-	return BindResult(apply_scope(std::move(bound)));
+	return ErrorData();
 }
 
 BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
@@ -302,10 +274,10 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
 		}
 		return BindOperator(expr_ptr, depth);
 	}
-	case ExpressionClass::BETWEEN:
-		return BindBetween(expr_ptr, depth);
 	case ExpressionClass::CONJUNCTION:
-		return BindConjunction(expr_ptr, depth);
+		// Constraints are joined with AND (CollectWrittenRows). An OR between them would need an indicator per
+		// alternative, which no layer builds.
+		return BindResult(NotImplementedException(expr, "OR between SUCH THAT constraints is not supported"));
 	case ExpressionClass::SUBQUERY:
 	case ExpressionClass::WINDOW:
 		return DecideBinder::BindExpression(expr_ptr, depth, root_expression);

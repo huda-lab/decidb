@@ -1368,6 +1368,107 @@
     "pointer_type": "none"
   },
   {
+    "class": "BoundDecideClause",
+    "includes": [
+      "duckdb/planner/decide/decide_tree_terms.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "body",
+        "type": "Expression*"
+      },
+      {
+        "id": 101,
+        "name": "when",
+        "property": "scope.when",
+        "type": "Expression*"
+      },
+      {
+        "id": 102,
+        "name": "per",
+        "property": "scope.per",
+        "type": "DecidePerRole"
+      },
+      {
+        "id": 103,
+        "name": "class_key",
+        "property": "scope.class_key",
+        "type": "idx_t",
+        "default": "DConstants::INVALID_INDEX"
+      },
+      {
+        "id": 104,
+        "name": "signature",
+        "property": "scope.signature",
+        "type": "idx_t",
+        "default": "DConstants::INVALID_INDEX"
+      },
+      {
+        "id": 105,
+        "name": "per_location",
+        "type": "optional_idx"
+      },
+      {
+        "id": 106,
+        "name": "source_clause_id",
+        "property": "origin.source_clause_id",
+        "type": "idx_t",
+        "default": "DConstants::INVALID_INDEX"
+      },
+      {
+        "id": 107,
+        "name": "removal_group_id",
+        "property": "origin.removal_group_id",
+        "type": "idx_t",
+        "default": "DConstants::INVALID_INDEX"
+      },
+      {
+        "id": 108,
+        "name": "objective",
+        "property": "origin.objective",
+        "type": "bool",
+        "default": "false"
+      },
+      {
+        "id": 109,
+        "name": "between",
+        "type": "DecideBetweenHalf"
+      },
+      {
+        "id": 110,
+        "name": "structural",
+        "type": "bool",
+        "default": "false"
+      },
+      {
+        "id": 111,
+        "name": "defines",
+        "type": "idx_t",
+        "default": "DConstants::INVALID_INDEX"
+      },
+      {
+        "id": 112,
+        "name": "minmax_easy",
+        "type": "bool",
+        "default": "false"
+      },
+      {
+        "id": 113,
+        "name": "folded_bound",
+        "type": "bool",
+        "default": "false"
+      },
+      {
+        "id": 114,
+        "name": "folded_clause_rows",
+        "type": "bool",
+        "default": "false"
+      }
+    ],
+    "pointer_type": "none"
+  },
+  {
     "class": "DecideSignature",
     "includes": [
       "duckdb/planner/operator/decide/logical_decide.hpp"

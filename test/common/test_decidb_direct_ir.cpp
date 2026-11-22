@@ -54,13 +54,15 @@ struct QueryIR {
 	}
 	//! Rewrites every norm tag in the constraints to `payload` and reads the IR again.
 	void RetagNorms(const string &payload) {
-		ExpressionIterator::EnumerateExpression(decide->bound.constraints, [&](Expression &expression) {
-			string old_payload;
-			if (ExtractDecideTagPayload(expression.alias, NORM_MARKER_TAG_PREFIX, old_payload)) {
-				RemoveDecideTag(expression.alias, string(NORM_MARKER_TAG_PREFIX) + old_payload + "__");
-				AddDecideTag(expression.alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");
-			}
-		});
+		for (auto &clause : decide->bound.clauses) {
+			ExpressionIterator::EnumerateExpression(clause.body, [&](Expression &expression) {
+				string old_payload;
+				if (ExtractDecideTagPayload(expression.alias, NORM_MARKER_TAG_PREFIX, old_payload)) {
+					RemoveDecideTag(expression.alias, string(NORM_MARKER_TAG_PREFIX) + old_payload + "__");
+					AddDecideTag(expression.alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");
+				}
+			});
+		}
 		ir = DirectIR::Read(*client, *decide);
 	}
 	duckdb::unique_ptr<LogicalOperator> plan;
@@ -137,7 +139,7 @@ TEST_CASE("Direct-solve IR retains complete bound-clause attribution", "[decidb]
 	REQUIRE(s1->Summary() == "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi");
 
 	// Missing provenance must become a not-proved IR node.
-	decide->bound.constraints->SetAlias("");
+	decide->bound.clauses[0].origin = DecideRowOrigin();
 	auto damaged = DirectIR::Read(*con.context, *decide);
 	REQUIRE(damaged.constraints.size() == 1);
 	REQUIRE(damaged.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);

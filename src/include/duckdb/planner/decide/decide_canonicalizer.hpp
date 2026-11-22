@@ -59,7 +59,7 @@
 // CALL SITES. One boundary, two clauses, two producers -- and there must never be
 // a third producer:
 //   1. Binder::PlanSelectNode       -- everything the user wrote
-//   2. LogicalDecide::AddConstraint -- constraints the optimizer emits
+//   2. LogicalDecide::AddClause     -- constraints the optimizer emits
 //      LogicalDecide::SetObjective  -- objectives the optimizer rewrites
 //
 // OBJECTIVES SHARE THIS BOUNDARY. An objective is one SIDE of a comparison: no
@@ -97,7 +97,7 @@
 // check throws when a decision variable reaches the RHS. So a rewrite that breaks K1
 // fails loudly instead of being silently folded. Any new
 // optimizer pass that mutates a constraint in place must go through
-// LogicalDecide::AddConstraint (which canonicalizes) rather than editing the
+// LogicalDecide::AddClause (which canonicalizes) rather than editing the
 // tree directly.
 //
 //===----------------------------------------------------------------------===//
@@ -209,7 +209,7 @@ public:
 	//! Provenance-only form: no table-index evidence is available, so arbitrary column
 	//! refs are never promoted to query-wide. Explicit QUERY_WIDE_VALUE_TAG metadata is
 	//! still honored. Variable scopes remain available for homogeneity validation.
-	//! Used by LogicalDecide::AddConstraint for optimizer output.
+	//! Used by LogicalDecide::AddClause for optimizer output.
 	//!
 	//! `is_boolean[i]` says decision column `i` is declared BOOL (LogicalDecide::is_boolean_var), so a constraint may
 	//! multiply a reducer by one: `b * SUM(x)` is a product the value rewrite hands to the Boolean linearization. It
@@ -237,29 +237,27 @@ public:
 	                    const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> &keys,
 	                    const vector<bool> &is_boolean, unordered_set<idx_t> query_wide_table_indexes);
 
-	//! Canonicalize a whole SUCH THAT tree: AND-conjunctions plus the `when` and `per K:`
-	//! wrappers. Descends only into the constraint child of a wrapper, never into its
-	//! condition or key columns. Pure -- `constraints` is untouched. With `sources`, it reports in each clause's
-	//! `canonical_differs` whether canonicalization changed that clause (the clause tag names it).
-	unique_ptr<Expression> CanonicalizeTree(const Expression &constraints,
-	                                        vector<ConstraintSourceInfo> *sources = nullptr) const;
+	//! Canonicalize the clauses of SUCH THAT in place: each body, with its clause's scope; a `when` carries no
+	//! algebra and is only rewritten to the one spelling. With `sources`, it reports in each clause's
+	//! `canonical_differs` whether canonicalization changed that clause (its source clause names it).
+	void CanonicalizeClauses(vector<BoundDecideClause> &clauses, vector<ConstraintSourceInfo> *sources = nullptr) const;
 
-	//! Canonicalize one comparison a function made after the tree was canonicalized (an ABS envelope, an L0 link, a
-	//! body definition row): the same spelling as a clause, without the shape the tree stamps on a written clause.
+	//! Canonicalize one comparison a function made after the clauses were canonicalized (an ABS envelope, an L0 link,
+	//! a body definition row): the same spelling as a clause, without the shape stamped on a written clause.
 	//! Pure -- `comparison` is untouched.
 	unique_ptr<Expression> CanonicalizeComparison(const Expression &comparison) const;
 
-	//! The variant signature of every scoped expression of the canonical SUCH THAT tree with a field
-	//! (language/guide.md §7.1; D70): each `per K:` clause, its wrapper tagged with it (SIGNATURE_TAG_PREFIX), and
+	//! The variant signature of every scoped expression of the canonical clauses with a field
+	//! (language/guide.md §7.1; D70): each `per K:` clause, which names it (DecideClauseScope::signature), and
 	//! each relation-qualified reducer over decisions, given a scope of its own (KeyedScopeInfo::signature). Its
 	//! fields are the columns its tuple terms read (D83), its frames (D82) and decisions outside reducers, and the
 	//! reducers' `by` keys; a field the key holds by construction is none. Called once, by the planner, right after
-	//! CanonicalizeTree.
-	void BuildConstraintSignatures(Expression &constraints, DecideSignatures &out) const;
+	//! CanonicalizeClauses.
+	void BuildConstraintSignatures(vector<BoundDecideClause> &clauses, DecideSignatures &out) const;
 
 	//! The objective's signature, `out.objective` -- it is produced once (D72), so execution refuses a field with a
 	//! second value -- and its qualified reducers', after CanonicalizeObjective.
-	void BuildObjectiveSignatures(Expression &objective, DecideSignatures &out) const;
+	void BuildObjectiveSignatures(BoundDecideClause &objective, DecideSignatures &out) const;
 
 	//! The signature fields `expr` reads (D70, D82, D83), appended to `fields` unless there or held by `key` already: a
 	//! decision by instance, a reducer's `by` key, a frame by its keys, and data by each column it reads.
@@ -270,17 +268,17 @@ public:
 	//! signature leaves out though its value differs between classes, or a frame, which reads another row.
 	bool MergesClasses(const Expression &clause, idx_t key) const;
 
-	//! Where every frame selector of the canonical SUCH THAT tree stands (language/guide.md §5.6): the rows its
+	//! Where every frame selector of the canonical clauses stands (language/guide.md §5.6): the rows its
 	//! timelines read, which are its scoped expression's path rows (§5.5); the key they are grouped by, the path's
 	//! `by` keys then `within`; the comparison it is written in; and whether it is inside a reducer
 	//! (DecideFrameSpec::rows, timeline_key, source_clause_id, reduced). Records the partition check (D75) of each
 	//! frame a `per` key reads directly -- a clause's `per K:`, or a reducer's own `per` -- unless the key determines
 	//! its timeline already (DecideFrameSpec::partition_key). Refuses a reducer that may read no member under `abs`
-	//! inside another reducer over decisions (D88). Called once, by the planner, after CanonicalizeTree.
-	void PlaceFrames(const Expression &constraints, DecideFramePlacement &placement) const;
+	//! inside another reducer over decisions (D88). Called once, by the planner, after CanonicalizeClauses.
+	void PlaceFrames(const vector<BoundDecideClause> &clauses, DecideFramePlacement &placement) const;
 	//! The same for the objective, after CanonicalizeObjective. Its root has one class (D72), whose fields the
 	//! objective's signature checks, so only a reducer's own `per` gets a partition check there.
-	void PlaceObjectiveFrames(const Expression &objective, DecideFramePlacement &placement) const;
+	void PlaceObjectiveFrames(const BoundDecideClause &objective, DecideFramePlacement &placement) const;
 	//! The frames a signature field may name (LogicalDecide::frames); null when the plan has none. Set by the
 	//! planner before it builds the signatures.
 	const vector<DecideFrameSpec> *frames = nullptr;
@@ -299,14 +297,14 @@ public:
 	//! a CORRELATED subquery, which is per-row and must not qualify.
 	bool IsQueryWideConstant(const Expression &expr) const;
 
-	//! Canonicalize a bound DECIDE objective. Pure -- `objective` is untouched.
+	//! Canonicalize a bound DECIDE objective: its body; its `when` is kept. Pure -- `objective` is untouched.
 	//!
 	//! An objective is structurally ONE SIDE of a comparison. There is no relation to
 	//! orient and no bound to separate, so the two side-partitioning rules (decisions
 	//! left, data right) have no analogue here. Everything else this boundary owns
-	//! applies unchanged -- wrapper recursion, additive decomposition, decision-aware
+	//! applies unchanged -- additive decomposition, decision-aware
 	//! cast transparency, and one spelling for a reducer scale -- and is SHARED with
-	//! CanonicalizeTree rather than reimplemented, which is the whole reason
+	//! CanonicalizeClauses rather than reimplemented, which is the whole reason
 	//! objectives get a boundary instead of their own normalizer.
 	//!
 	//! Additive decision-free terms are folded into `out_constant_offset`, which is
@@ -323,8 +321,8 @@ public:
 	//! minimization; what the user wrote is LogicalDecide::written_sense, which only messages, EXPLAIN and a shown
 	//! value read. An objective an optimizer rewrite hands back (LogicalDecide::SetObjective) is a minimization
 	//! already.
-	unique_ptr<Expression> CanonicalizeObjective(const Expression &objective, double &out_constant_offset,
-	                                             DecideSense sense = DecideSense::MINIMIZE) const;
+	BoundDecideClause CanonicalizeObjective(const BoundDecideClause &objective, double &out_constant_offset,
+	                                        DecideSense sense = DecideSense::MINIMIZE) const;
 
 	//! A reducer skips a row whose data it reads is NULL, as SQL's does (deck p. 50): for each
 	//! reducer over decisions, every data value its body reads where a NULL makes the summand
@@ -335,29 +333,28 @@ public:
 	//! is tested too (`scopes` and `keys` name each decision's key).
 	void SkipNullData(Expression &expr, const vector<KeyedScopeInfo> &scopes, const vector<DecideKey> &keys) const;
 
-	//! The shape of an already-canonical comparison, as CanonicalizeTree decided it with the clause's enclosing
+	//! The shape of an already-canonical comparison, as CanonicalizeClauses decided it with the clause's
 	//! scope and stamped it: VALUE_REWRITE_TAG for the VALUE shape, else AGGREGATE for a reducer on the decision side
 	//! and PER_ROW for none. INVALID for a decision on the bound side.
 	CanonicalConstraintClass ClassifyCanonicalComparison(const Expression &comparison) const;
 
 	//! Assert the structural invariant owned by this boundary. This is deliberately
 	//! non-mutating and throws InternalException: once binding/canonicalization has
-	//! accepted a constraint, a non-canonical tree is an engine bug rather than a
+	//! accepted a constraint, a non-canonical clause is an engine bug rather than a
 	//! user-input error.
 	//!
-	//! DEBUG-ONLY, like LogicalOperator::Verify: the body re-canonicalizes the whole
-	//! tree to check idempotency, which is too expensive to pay on every DECIDE query
-	//! in release. Call sites call it unconditionally; in a release build only C0's scope
-	//! rule (one scope per clause, one test per clause) runs. Build `debug` or `relassert`
-	//! to exercise the rest.
-	void VerifyCanonical(const Expression &constraints) const;
+	//! DEBUG-ONLY, like LogicalOperator::Verify: the body re-canonicalizes the
+	//! clause to check idempotency, which is too expensive to pay on every DECIDE query
+	//! in release. Call sites call it unconditionally. Build `debug` or `relassert`
+	//! to exercise it.
+	void VerifyCanonical(const BoundDecideClause &clause) const;
 
 	//! The objective counterpart of VerifyCanonical, against the canonical form
 	//! CanonicalizeObjective gives an objective. Non-mutating, and throws InternalException for the same reason:
 	//! past this boundary a non-canonical objective is an engine bug, not user input.
 	//!
 	//! DEBUG-ONLY -- see VerifyCanonical.
-	void VerifyCanonicalObjective(const Expression &objective) const;
+	void VerifyCanonicalObjective(const BoundDecideClause &objective) const;
 
 private:
 	//! Which clause a term was written in. It picks the wording of a rejection -- a
@@ -490,10 +487,8 @@ private:
 
 	bool ReferencesDecideVar(const Expression &expr) const;
 	//! `sources` (null for none) gives a clause's span, which an error points at where the comparison has none.
-	void ValidateCanonicalTree(const Expression &constraints, const vector<ConstraintSourceInfo> *sources) const;
-	void ValidateCanonicalComparison(const BoundComparisonExpression &comparison,
+	void ValidateCanonicalComparison(const BoundComparisonExpression &comparison, idx_t source_clause_id,
 	                                 const vector<ConstraintSourceInfo> *sources) const;
-	void VerifyCanonicalTree(const Expression &constraints) const;
 	//! A copy of `expr` with every norm marker of order 1, 2 or 'inf' replaced by its
 	//! definition, or nullptr when there is none to replace.
 	unique_ptr<Expression> DesugarNorms(const Expression &expr) const;
@@ -506,14 +501,11 @@ private:
 	unique_ptr<Expression> CanonicalizeObjectiveInternal(const Expression &objective, double &out_constant_offset,
 	                                                     bool negate) const;
 
-	//! Wrapper-aware structural half of VerifyCanonicalObjective. Runs before the
-	//! fixed-point check so a malformed body is reported as the invariant it breaks,
-	//! rather than as whatever CanonicalizeObjective would have thrown re-reading it.
-	void VerifyCanonicalObjectiveBody(const Expression &objective) const;
 	void VerifyCanonicalComparison(const BoundComparisonExpression &comparison) const;
 
-	unique_ptr<Expression> CanonicalizeTreeInternal(const Expression &constraints,
-	                                                DecideEnclosingScope scope = DecideEnclosingScope()) const;
+	//! The canonical form of a clause's body under `scope`: a comparison canonicalized and its shape stamped, any
+	//! other body (an IN, a placeholder) as it is.
+	unique_ptr<Expression> CanonicalizeClauseBody(const Expression &body, const DecideClauseScope &scope) const;
 
 	//! The shape of a comparison's decision side (language/guide.md §6.4): ROWS has no
 	//! decision reducer; AGGREGATE has decision reducers sharing one `by` key under
@@ -530,7 +522,6 @@ private:
 	//! scope of its own, counted over the rows its path keeps (language/guide.md §5.5).
 	void SignQualifiedReducers(Expression &expr, const DecideReducerPath &path, Clause clause, idx_t source_clause_id,
 	                           DecideSignatures &out) const;
-	void BuildConstraintSignatures(Expression &expr, const Expression *when, DecideSignatures &out) const;
 
 	//! The `per` key a scoped expression is read under, for its frames' partition check (D75):
 	//! its key and the key as written.
@@ -540,8 +531,6 @@ private:
 		//! The scope as a message names it: `per D.depotID`, `the objective (per ())`.
 		string text;
 	};
-	void PlaceClauseFrames(const Expression &expr, DecideEnclosingScope enclosing,
-	                       DecideFramePlacement &placement) const;
 	//! The frames of `expr` along `path`: one outside every reducer of its comparison
 	//! stands at the comparison's root, one in a reducer's argument reads that reducer's
 	//! members. `per` is the key of the scoped expression `expr` is the body of; null for

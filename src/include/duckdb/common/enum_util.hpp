@@ -134,6 +134,10 @@ enum class DecideKeyNullMode : uint8_t;
 
 enum class DecideSignatureFieldKind : uint8_t;
 
+enum class DecideBetweenHalf : uint8_t;
+
+enum class DecidePerRole : uint8_t;
+
 enum class DecideSense : uint8_t;
 
 enum class DecideFrameAnchor : uint8_t;
@@ -575,6 +579,12 @@ const char *EnumUtil::ToChars<DecideKeyNullMode>(DecideKeyNullMode value);
 
 template <>
 const char *EnumUtil::ToChars<DecideSignatureFieldKind>(DecideSignatureFieldKind value);
+
+template<>
+const char* EnumUtil::ToChars<DecideBetweenHalf>(DecideBetweenHalf value);
+
+template<>
+const char* EnumUtil::ToChars<DecidePerRole>(DecidePerRole value);
 
 template<>
 const char* EnumUtil::ToChars<DecideSense>(DecideSense value);
@@ -1161,6 +1171,12 @@ DecideKeyNullMode EnumUtil::FromString<DecideKeyNullMode>(const char *value);
 
 template <>
 DecideSignatureFieldKind EnumUtil::FromString<DecideSignatureFieldKind>(const char *value);
+
+template<>
+DecideBetweenHalf EnumUtil::FromString<DecideBetweenHalf>(const char *value);
+
+template<>
+DecidePerRole EnumUtil::FromString<DecidePerRole>(const char *value);
 
 template<>
 DecideSense EnumUtil::FromString<DecideSense>(const char *value);

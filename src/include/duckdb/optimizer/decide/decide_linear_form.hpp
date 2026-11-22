@@ -22,7 +22,7 @@ class LogicalDecide;
 //!
 //! It runs at physical planning (PhysicalPlanGenerator::CreatePlan of a LogicalDecide), after the DECIDE optimizer has
 //! finished and the column bindings are final. It must stay after every rewrite and after singleton-row folding: the
-//! rewrites emit fresh constraint rows through `LogicalDecide::AddConstraint`, and folding tags the comparisons it
+//! rewrites emit fresh constraint rows through `LogicalDecide::AddClause`, and folding marks the clauses it
 //! folded into the variable box. Lowering earlier would miss the former and re-emit the latter.
 //!
 //! Doing the algebra here rather than at execution time is what lets a rebuilt

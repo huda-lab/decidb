@@ -1,6 +1,5 @@
 #include "duckdb/planner/expression_binder/decide/decide_objective_binder.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
@@ -14,18 +13,19 @@ DecideObjectiveBinder::DecideObjectiveBinder(Binder &binder, ClientContext &cont
     : DecideBinder(binder, context, variables, scalar_variables, qualifier_context) {
 }
 
-unique_ptr<Expression> DecideObjectiveBinder::BindObjective(DecideClause &objective) {
+BoundDecideClause DecideObjectiveBinder::BindObjective(DecideClause &objective) {
 	// An objective is produced once, so `per ()` is its default and adds nothing; the parser refuses any other key.
 	auto &scope = objective.scope;
-	auto bound = Bind(objective.body);
+	BoundDecideClause bound;
+	bound.origin = DecideRowOrigin::OfObjective();
+	bound.body = Bind(objective.body);
 	if (scope.when) {
 		auto condition_error = BindDataChild(scope.when, 0);
 		if (condition_error.HasError()) {
 			condition_error.Throw();
 		}
-		bound = MakeScopedRow(std::move(bound), BoundCastExpression::AddCastToType(
-		                                            context, std::move(BoundExpression::GetExpression(*scope.when)),
-		                                            LogicalType::BOOLEAN));
+		bound.scope.when = BoundCastExpression::AddCastToType(
+		    context, std::move(BoundExpression::GetExpression(*scope.when)), LogicalType::BOOLEAN);
 	}
 	return bound;
 }

@@ -29,13 +29,14 @@ inline void DecideReplaces(Expression &replacement, const Expression &replaced) 
 	replacement.SetQueryLocation(replaced.GetQueryLocation());
 }
 
-//! Assign stable source ids to bound comparisons before planning rewrites them.
+//! Give every bound clause its stable source clause (DecideRowOrigin::source_clause_id) before planning rewrites them.
 //! `keys` lets a reducer print its
 //! `per K` and `by (...)`; every renderer below takes it for the same reason.
 //! Each clause gets its span (`ConstraintSourceInfo::location`); `text` is the query's text, which renders the sides of
 //! a clause whose sides canonicalization merges, and an IN. `frames` gives each frame over decisions its spelling
 //! (DecideFrameSpec::spelling).
-vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints, const DecideSourceText &text,
+vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(vector<BoundDecideClause> &clauses,
+                                                            const DecideSourceText &text,
                                                             const vector<KeyedScopeInfo> &keyed_scopes,
                                                             idx_t decide_index, const vector<DecideKey> *keys,
                                                             const vector<DecideFrameSpec> &frames);
@@ -43,7 +44,7 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 //! Render each clause's canonical sides after PlanSubqueries and canonicalization. `decide_index` tells a decision
 //! from data: the plan layer reprints the decision structure and quotes the data.
 //! `frames` gives each frame over decisions its spelling (DecideFrameSpec::spelling).
-void FinalizeConstraintSourceInfo(const Expression &constraints, vector<ConstraintSourceInfo> &sources,
+void FinalizeConstraintSourceInfo(const vector<BoundDecideClause> &clauses, vector<ConstraintSourceInfo> &sources,
                                   const DecideSourceText &text, const vector<KeyedScopeInfo> &keyed_scopes,
                                   idx_t decide_index, const vector<DecideKey> *keys,
                                   const vector<DecideFrameSpec> &frames);
@@ -112,36 +113,25 @@ const Expression *DecideWrittenNormBody(const BoundAggregateExpression &reducer)
 //! The body of the definition `reducer` holds of a norm of order `order`, or nullptr with no order.
 const Expression *DecideNormBody(const BoundAggregateExpression &reducer, const string &order);
 
-//! The key of a `per` wrapper, as written (`D.region`, `()`): cut from the query where the wrapper is located, else the
-//! key as it was first written (`keys`).
-string RenderDecidePerKey(const BoundConjunctionExpression &per, const DecideSourceText &text,
+//! The key of a clause's `per`, as written (`D.region`, `()`): cut from the query where the `per` stands (`location`),
+//! else the key as it was first written (`keys`).
+string RenderDecidePerKey(idx_t key, optional_idx location, const DecideSourceText &text,
                           const vector<DecideKey> *keys);
 
-//! Split a DECIDE constraint or objective tree into one rendered string per clause,
-//! turning the wrappers the binder stamps back into the syntax the user wrote: `when c
-//! per K:` in front. Leaves are rendered by
-//! RenderDecideSource. Used by the logical and
-//! physical EXPLAIN paths, which see the tree AFTER the optimizer, so the output
-//! includes the rows linearization emitted as well as the ones the user wrote.
-//! `out_source_ids`, when supplied, receives the source_clause_id behind each emitted
-//! string -- DConstants::INVALID_INDEX for a row no clause claims. This is what lets a
-//! caller group the post-optimizer rows under the clause they came from.
-//! `written_sense` renders an objective in the direction it was written: the tree is a minimization, so a MAXIMIZE
+//! The body of a clause as a message quotes it (RenderDecideSource). A BETWEEN half carries the BETWEEN's location but
+//! is half of its value, so it is reprinted, not quoted by that span.
+string RenderDecideClauseBody(const BoundDecideClause &clause, const DecideSourceNames &names);
+
+//! The objective as one display string, in the syntax the user wrote: `when c:` in front. Used by the logical and
+//! physical EXPLAIN paths and by the planner's snapshots.
+//! `written_sense` renders it in the direction it was written: the bound objective is a minimization, so a MAXIMIZE
 //! objective reads with the sign of each of its terms reversed (DecideCanonicalizer::CanonicalizeObjective), as the
 //! layers of a plan show the user's own sense and not the flip.
-void CollectDecideExpressionStrings(const Expression &expr, const DecideSourceNames &names, vector<string> &out,
-                                    vector<idx_t> *out_source_ids = nullptr, bool written_sense = false);
-
-//! Render a whole objective tree as one display string.
-//!
-//! Not RenderDecideSource: an objective carrying a `when` wrapper is a tagged
-//! conjunction, which the leaf renderer spells `sum(x) AND cond` rather than the
-//! `when cond: sum(x)` the user wrote. Only the clause walker unwraps those tags, so the
-//! objective's snapshots go through it too.
-string RenderDecideObjective(const Expression &expr, const DecideSourceNames &names, bool written_sense = false);
+string RenderDecideObjective(const BoundDecideClause &objective, const DecideSourceNames &names,
+                             bool written_sense = false);
 
 //! The `when c:` an objective was written with, in front of it; empty for none.
-string DecideObjectiveQualifier(const Expression &objective, const DecideSourceNames &names);
+string DecideObjectiveQualifier(const BoundDecideClause &objective, const DecideSourceNames &names);
 
 //! A row an F node of the tree owns (an ABS envelope, an L0 link), as the solver receives it, with the clause it came
 //! from (INVALID_INDEX for the objective's). `text` has no qualifier: CollectDecideClauseLayers puts the one its
@@ -179,7 +169,7 @@ struct DecideClauseLayers {
 	vector<string> rewritten;
 };
 
-//! Split the post-optimizer constraint tree into per-clause layers.
+//! Split the post-optimizer clause rows into per-clause layers.
 //!
 //! Association runs on `source_clause_id`, which the binder stamps on every written
 //! comparison and the optimizer copies onto the rows it emits. The mapping is not
@@ -191,12 +181,11 @@ struct DecideClauseLayers {
 //! qualifier its clause was written with; the objective's (INVALID_INDEX), behind `objective_qualifier`
 //! (DecideObjectiveQualifier), are left to RenderDecideObjectiveLayers, and so are the rows a rewrite added for the
 //! objective (DecideRowOrigin::objective), returned in `objective_rows`.
-vector<DecideClauseLayers> CollectDecideClauseLayers(const Expression &constraints, const DecideSourceNames &names,
-                                                     const vector<ConstraintSourceInfo> &sources,
-                                                     vector<string> &unattributed, vector<string> &objective_rows,
-                                                     const vector<LogicalDecide::RewriteAccount> &accounts,
-                                                     const vector<DecideFunctionRow> &function_rows,
-                                                     const string &objective_qualifier);
+vector<DecideClauseLayers>
+CollectDecideClauseLayers(const vector<BoundDecideClause> &clauses, const DecideSourceNames &names,
+                          const vector<ConstraintSourceInfo> &sources, vector<string> &unattributed,
+                          vector<string> &objective_rows, const vector<LogicalDecide::RewriteAccount> &accounts,
+                          const vector<DecideFunctionRow> &function_rows, const string &objective_qualifier);
 
 //! One account line: the construct a rewrite replaced and what it became, in the one
 //! vocabulary every plan uses ("`abs(e)` becomes a helper decision").
@@ -226,21 +215,21 @@ struct DecidePlanParams {
 	idx_t decide_index;
 	const DecideSourceText &source_text;
 	const vector<pair<idx_t, string>> &aux_var_expressions;
-	const Expression &constraints;
+	const vector<BoundDecideClause> &clauses;
 	const vector<ConstraintSourceInfo> &constraint_sources;
-	//! Null when no objective is written
-	const Expression *objective;
+	//! Its body is null when no objective is written
+	const BoundDecideClause &objective;
 	const string &written_objective;
 	const string &canonical_objective;
 	bool objective_canonical_differs;
 };
 
 //! The EXPLAIN parameters of a DECIDE operator, without the cardinality line: the variables, the objective and the
-//! constraints through the clause walker, so `when`/`per` wrappers print as written rather than as a generic
-//! conjunction. LogicalDecide::ParamsToString and PhysicalDecide::ParamsToString both call it and add their own
-//! cardinality. Two facts each operator knows its own way are its parameters: the rewrite `accounts` (the physical
-//! operator's add what the data made of each clause, which EXPLAIN ANALYZE prints) and the `tree` itself, whose F
-//! nodes own the rows its rewrites added (the logical operator has none).
+//! constraints, each clause's `when`/`per` printed in front as written. LogicalDecide::ParamsToString and
+//! PhysicalDecide::ParamsToString both call it and add their own cardinality. Two facts each operator knows its own way
+//! are its parameters: the rewrite `accounts` (the physical operator's add what the data made of each clause, which
+//! EXPLAIN ANALYZE prints) and the `tree` itself, whose F nodes own the rows its rewrites added (the logical operator
+//! has none).
 inline InsertionOrderPreservingMap<string> RenderDecideParams(const DecidePlanParams &plan,
                                                               const vector<LogicalDecide::RewriteAccount> &accounts,
                                                               const DecideTree *tree) {
@@ -275,15 +264,14 @@ inline InsertionOrderPreservingMap<string> RenderDecideParams(const DecidePlanPa
 		function_rows = CollectDecideFunctionRows(*tree, names, plan.variables);
 	}
 	// The parser requires a SUCH THAT clause, so a plan always has constraints (transform_select_node.cpp).
-	const string objective_qualifier = plan.objective ? DecideObjectiveQualifier(*plan.objective, names) : string();
-	auto layers = CollectDecideClauseLayers(plan.constraints, names, plan.constraint_sources, unattributed,
-	                                        objective_rows, accounts, function_rows, objective_qualifier);
+	const string objective_qualifier = plan.objective.body ? DecideObjectiveQualifier(plan.objective, names) : string();
+	auto layers = CollectDecideClauseLayers(plan.clauses, names, plan.constraint_sources, unattributed, objective_rows,
+	                                        accounts, function_rows, objective_qualifier);
 	string constraints_text = RenderDecideClauseLayers(layers, unattributed);
-	if (plan.objective) {
+	if (plan.objective.body) {
 		const bool maximize = plan.sense == DecideSense::MAXIMIZE;
 		string sense_prefix = maximize ? "MAXIMIZE " : "MINIMIZE ";
-		vector<string> objective_strs;
-		CollectDecideExpressionStrings(*plan.objective, names, objective_strs, nullptr, maximize);
+		vector<string> objective_strs {RenderDecideObjective(plan.objective, names, maximize)};
 		result["Objective"] = RenderDecideObjectiveLayers(sense_prefix, plan.written_objective,
 		                                                  plan.canonical_objective, plan.objective_canonical_differs,
 		                                                  objective_strs, objective_accounts, objective_rows);

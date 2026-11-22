@@ -19,7 +19,6 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
@@ -59,10 +58,10 @@ static bool IsReducer(const Expression &expr) {
 // DecideLinearFormBuilder
 //===--------------------------------------------------------------------===//
 
-//! Flattens the canonical constraint tree and the objective into the tree's
+//! Flattens the canonical clauses and the objective into the tree's
 //! terms, at physical planning. Everything it needs is a type or a structure: the
-//! decision variable list, their scopes, and the tags earlier passes stamped on
-//! the tree. It never reads a data row.
+//! decision variable list, their scopes, and what earlier passes recorded on
+//! the clauses. It never reads a data row.
 class DecideLinearFormBuilder {
 public:
 	DecideLinearFormBuilder(ClientContext &context, LogicalDecide &op, DecideTreeConstruction &tree)
@@ -75,26 +74,22 @@ public:
 	}
 
 	void Build() {
-		ForEachScopedConstraintLeaf(
-		    *op.bound.constraints,
-		    [&](const Expression &leaf, const DecideEnclosingScope &scope) { AnalyzeConstraint(leaf, scope); });
+		for (auto &clause : op.bound.clauses) {
+			AnalyzeConstraint(clause);
+		}
 		// Tree-owned nonlinear definition rows are built beneath their F nodes, while their placeholders preserve the
 		// clause-list position. Lower the retained rows through the same compiler as ordinary clauses.
 		for (auto function : tree.Tree().function_nodes) {
 			auto &node = *tree.Tree().nodes[function];
-			if (node.function_kind == DecideFunctionKind::DEFINITION && node.definition_expression) {
-				ForEachScopedConstraintLeaf(
-				    *node.definition_expression,
-				    [&](const Expression &leaf, const DecideEnclosingScope &scope) { AnalyzeConstraint(leaf, scope); });
+			if (node.function_kind == DecideFunctionKind::DEFINITION && node.definition_row.body) {
+				AnalyzeConstraint(node.definition_row);
 			}
 		}
 		// The L0 indicator's formulation rows remain outside the written constraint list. Prepare them in the same
 		// position they had when RewriteNorm appended them, while their tree F node owns their execution scopes.
 		for (auto &indicator : op.l0_indicator_functions) {
 			for (auto &link : indicator.links) {
-				ForEachScopedConstraintLeaf(*link, [&](const Expression &leaf, const DecideEnclosingScope &scope) {
-					AnalyzeConstraint(leaf, scope);
-				});
+				AnalyzeConstraint(link);
 			}
 		}
 		// An ABS's two lower-envelope rows (MakeAbsRow) are built beneath its F node, from the optimizer's record.
@@ -104,16 +99,13 @@ public:
 				if (node.function_kind != DecideFunctionKind::ABS || node.value_var != function.aux_idx) {
 					continue;
 				}
-				for (auto &expression : node.abs_expressions) {
-					ForEachScopedConstraintLeaf(*expression,
-					                            [&](const Expression &leaf, const DecideEnclosingScope &scope) {
-						                            AnalyzeConstraint(leaf, scope);
-					                            });
+				for (auto &row : node.abs_rows) {
+					AnalyzeConstraint(row);
 				}
 				break;
 			}
 		}
-		if (op.bound.objective) {
+		if (op.bound.objective.body) {
 			AnalyzeObjective(op.bound.objective);
 		}
 		// The reducers the value rewrite lifted into helper decisions are lowered too; a range frame's helper also
@@ -886,8 +878,9 @@ private:
 		}
 	}
 
-	//! One clause of the constraint tree, under the `when` and `per K:` that enclose it.
-	void AnalyzeConstraint(const Expression &expr, const DecideEnclosingScope &scope) {
+	//! One clause, or one row a function owns.
+	void AnalyzeConstraint(const BoundDecideClause &clause) {
+		auto &expr = *clause.body;
 		switch (expr.GetExpressionClass()) {
 		case ExpressionClass::BOUND_COMPARISON: {
 			auto &written_comp = expr.Cast<BoundComparisonExpression>();
@@ -911,12 +904,12 @@ private:
 			// tag is the decision, and it was made by FoldSingletonRows. One whose
 			// repair rows come from its clause is flattened aside, for the repair model
 			// alone (singleton_row_constraints).
-			const bool folded = IsFoldedBound(written_comp);
-			if (folded && !FoldedBoundKeepsClauseRows(written_comp)) {
+			const bool folded = clause.folded_bound;
+			if (folded && !clause.folded_clause_rows) {
 				break;
 			}
 
-			auto constraint = ReadDecideClauseFacts(context, op, *comp, scope);
+			auto constraint = ReadDecideClauseFacts(context, op, clause, *comp);
 			Expression *lhs = UnwrapDecideCasts(*comp->left, decide_index);
 
 			if (constraint->was_minmax_easy) {
@@ -1055,19 +1048,9 @@ private:
 		Stamp(agg, obj.terms, obj.product_groups, before, group_before);
 	}
 
-	void AnalyzeObjective(const unique_ptr<Expression> &expr_ptr) {
-		auto *expr = UnwrapDecideCasts(*expr_ptr, decide_index);
-
-		// DeciDB: Check for WHEN wrapper on objective
-		unique_ptr<Expression> when_cond;
-		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			auto &conj = expr->Cast<BoundConjunctionExpression>();
-			if (IsWhenFilterWrapper(conj) && conj.children.size() == 2) {
-				when_cond = conj.children[1]->Copy();
-				// Unwrap to get the actual objective expression
-				expr = UnwrapDecideCasts(*conj.children[0], decide_index);
-			}
-		}
+	void AnalyzeObjective(const BoundDecideClause &clause) {
+		auto *expr = UnwrapDecideCasts(*clause.body, decide_index);
+		auto when_cond = clause.scope.when ? clause.scope.when->Copy() : nullptr;
 
 		if (IsReducer(*expr)) {
 			auto &agg = expr->Cast<BoundAggregateExpression>();

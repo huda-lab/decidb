@@ -256,45 +256,46 @@ string LogicalDecide::GetName() const {
 	return "DECIDE";
 }
 
-void LogicalDecide::AddConstraint(ClientContext &context, unique_ptr<Expression> constraint) {
+void LogicalDecide::AddClause(ClientContext &context, BoundDecideClause clause) {
 	DecideCanonicalizer canonicalizer(context, decide_index, bound.variable_scopes, bound.keyed_scopes, bound.keys,
 	                                  bound.is_boolean_var);
-	auto canonical = canonicalizer.CanonicalizeTree(*constraint);
-	canonicalizer.VerifyCanonical(*canonical);
+	vector<BoundDecideClause> canonical;
+	canonical.push_back(std::move(clause));
+	canonicalizer.CanonicalizeClauses(canonical);
+	canonicalizer.VerifyCanonical(canonical[0]);
+	bound.clauses.push_back(std::move(canonical[0]));
+}
 
-	if (!bound.constraints) {
-		bound.constraints = std::move(canonical);
-	} else {
-		auto conj = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		conj->children.push_back(std::move(bound.constraints));
-		conj->children.push_back(std::move(canonical));
-		bound.constraints = std::move(conj);
+void LogicalDecide::CanonicalizeClauses(ClientContext &context) {
+	DecideCanonicalizer canonicalizer(context, decide_index, bound.variable_scopes, bound.keyed_scopes, bound.keys,
+	                                  bound.is_boolean_var);
+	canonicalizer.CanonicalizeClauses(bound.clauses);
+	for (auto &clause : bound.clauses) {
+		canonicalizer.VerifyCanonical(clause);
 	}
 }
 
-void LogicalDecide::SetObjective(ClientContext &context, unique_ptr<Expression> objective) {
-	if (!objective) {
-		bound.objective = nullptr;
+void LogicalDecide::SetObjective(ClientContext &context, BoundDecideClause objective) {
+	if (!objective.body) {
+		bound.objective = BoundDecideClause();
 		return;
 	}
 	DecideCanonicalizer canonicalizer(context, decide_index, bound.variable_scopes, bound.keyed_scopes, bound.keys,
 	                                  bound.is_boolean_var);
 	DecideSourceNames names {bound.source_text, bound.keyed_scopes, bound.keys};
 	canonicalizer.QuoteMessagesWith(names);
-	bound.objective = canonicalizer.CanonicalizeObjective(*objective, bound.objective_constant_offset);
-	canonicalizer.VerifyCanonicalObjective(*bound.objective);
+	bound.objective = canonicalizer.CanonicalizeObjective(objective, bound.objective_constant_offset);
+	canonicalizer.VerifyCanonicalObjective(bound.objective);
 }
 
 void BoundDecide::EnumerateExpressions(const std::function<void(unique_ptr<Expression> &expression)> &callback) {
 	for (auto &expr : variables) {
 		callback(expr);
 	}
-	if (constraints) {
-		callback(constraints);
+	for (auto &clause : clauses) {
+		clause.EnumerateExpressions(callback);
 	}
-	if (objective) {
-		callback(objective);
-	}
+	objective.EnumerateExpressions(callback);
 	// A key's columns are live even where no clause reads them: a decision keyed by a
 	// column the query never mentions still needs it in the scan.
 	for (auto &key : keys) {
@@ -373,9 +374,7 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 	}
 	for (auto &function : l0_indicator_functions) {
 		for (auto &link : function.links) {
-			if (link) {
-				callback(&link);
-			}
+			link.EnumerateExpressions([&](unique_ptr<Expression> &expression) { callback(&expression); });
 		}
 	}
 }
@@ -414,57 +413,28 @@ static int ValueLinkPush(const LogicalDecide::ReducerValueLink &link) {
 	return extremum ? 0 : -1;
 }
 
-//! Every leaf of a clause tree, with the scope and the source clause it stands in: the walk every pass over clauses
-//! makes, which descends into a wrapper's constraint and never into its condition (decide_constraint_walk.hpp).
-static void EnumerateClauseLeaves(unique_ptr<Expression> &slot, DecideEnclosingScope scope,
-                                  const DecideRowOrigin &inherited, DecideOwnedBody::Owner owner, idx_t index,
-                                  const std::function<void(DecideOwnedBody &)> &callback) {
-	const auto origin = DescendClauseOrigin(*slot, inherited);
-	scope = EnterDecideScope(*slot, scope);
-	if (slot->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conjunction = slot->Cast<BoundConjunctionExpression>();
-		for (idx_t i = 0; i < conjunction.children.size(); i++) {
-			if (IsConstraintChild(conjunction, i)) {
-				EnumerateClauseLeaves(conjunction.children[i], scope, origin, owner, index, callback);
-			}
-		}
-		return;
-	}
-	DecideOwnedBody body(owner, index, slot);
-	body.push = ComparisonPush(*slot);
-	body.rows = scope.Condition();
-	body.origin = origin;
-	body.scope = scope;
-	callback(body);
+//! The body of `clause`, which the clause list or an L0 indicator holds.
+static DecideOwnedBody ClauseBody(DecideOwnedBody::Owner owner, idx_t index, BoundDecideClause &clause) {
+	DecideOwnedBody body(owner, index, clause.body);
+	body.push = ComparisonPush(*clause.body);
+	body.rows = clause.scope.when.get();
+	body.clause = &clause;
+	return body;
 }
 
 void LogicalDecide::EnumerateBodies(const std::function<void(DecideOwnedBody &)> &callback) {
 	using Owner = DecideOwnedBody::Owner;
-	if (bound.objective) {
-		// A `when` or `per` wrapper carries no sign: the body is its first child. The objective is minimized, which
-		// pushes a positive term down.
-		auto *slot = &bound.objective;
-		DecideEnclosingScope scope;
-		auto origin = DecideRowOrigin::OfObjective();
-		while ((*slot)->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			auto &conjunction = (*slot)->Cast<BoundConjunctionExpression>();
-			if (!IsConstraintWrapper(conjunction)) {
-				break;
-			}
-			origin = DescendClauseOrigin(conjunction, origin);
-			scope = EnterDecideScope(conjunction, scope);
-			slot = &conjunction.children[0];
-		}
-		DecideOwnedBody body(Owner::OBJECTIVE, DConstants::INVALID_INDEX, *slot);
+	if (bound.objective.body) {
+		// The objective is minimized, which pushes a positive term down.
+		DecideOwnedBody body(Owner::OBJECTIVE, DConstants::INVALID_INDEX, bound.objective.body);
 		body.push = 1;
-		body.rows = scope.Condition();
-		body.origin = DescendClauseOrigin(**slot, origin);
-		body.scope = scope;
+		body.rows = bound.objective.scope.when.get();
+		body.clause = &bound.objective;
 		callback(body);
 	}
-	if (bound.constraints) {
-		EnumerateClauseLeaves(bound.constraints, DecideEnclosingScope(), DecideRowOrigin(), Owner::CLAUSE,
-		                      DConstants::INVALID_INDEX, callback);
+	for (auto &clause : bound.clauses) {
+		auto body = ClauseBody(Owner::CLAUSE, DConstants::INVALID_INDEX, clause);
+		callback(body);
 	}
 	// A definition stands apart from the clause list; `t >= q` holds the body down, `t <= q` up, `t = q` neither.
 	for (idx_t i = 0; i < definition_functions.size(); i++) {
@@ -488,7 +458,8 @@ void LogicalDecide::EnumerateBodies(const std::function<void(DecideOwnedBody &)>
 	// An L0 indicator's three rows stand beside the clauses, where the tree's indicator F node reads them.
 	for (idx_t i = 0; i < l0_indicator_functions.size(); i++) {
 		for (auto &link : l0_indicator_functions[i].links) {
-			EnumerateClauseLeaves(link, DecideEnclosingScope(), DecideRowOrigin(), Owner::L0_LINK, i, callback);
+			auto body = ClauseBody(Owner::L0_LINK, i, link);
+			callback(body);
 		}
 	}
 }
@@ -511,9 +482,9 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	                       decide_index,
 	                       bound.source_text,
 	                       aux_var_expressions,
-	                       *bound.constraints,
+	                       bound.clauses,
 	                       bound.constraint_sources,
-	                       bound.objective.get(),
+	                       bound.objective,
 	                       written_objective,
 	                       canonical_objective,
 	                       objective_canonical_differs};

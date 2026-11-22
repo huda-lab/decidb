@@ -17,7 +17,6 @@ namespace duckdb {
 
 class ClientContext;
 class BoundComparisonExpression;
-struct DecideEnclosingScope;
 
 enum class DecideNodeKind : uint8_t { SCOPE, REDUCER, FRAME, FUNCTION };
 enum class DecideFunctionKind : uint8_t { INVALID, ABS, BOOLEAN_PRODUCT, L0_INDICATOR, DEFINITION };
@@ -164,8 +163,8 @@ struct DecideNode {
 	unique_ptr<Expression> body;
 	unique_ptr<Expression> rhs;
 	unique_ptr<Expression> fallback;
-	//! The generated helper equation wrapped in its owning condition and per-instance key; a child E owns its row.
-	unique_ptr<Expression> definition_expression;
+	//! The generated helper equation, on the rows its owning condition keeps, one per instance; a child E owns its row.
+	BoundDecideClause definition_row;
 	unique_ptr<Expression> over;
 	//! Every argument is retained: collated extrema have a value and comparison key.
 	vector<unique_ptr<Expression>> arguments;
@@ -193,7 +192,7 @@ struct DecideNode {
 	//! The two lower-envelope rows this F node owns, `aux >= operand` then `aux >= -operand` (MakeAbsRow), which the
 	//! tree built from the record, and the roots made of them. They carry the operand per row to stage 06, which states
 	//! every row of the ABS from them.
-	unique_ptr<Expression> abs_expressions[2];
+	BoundDecideClause abs_rows[2];
 	vector<idx_t> abs_envelope_roots;
 	string aggregate;
 	idx_t link = DConstants::INVALID_INDEX;
@@ -400,9 +399,10 @@ idx_t DecideTreeMembersOf(const DecideTree &tree, idx_t reducer);
 string DecideTreeReducerName(const BoundAggregateExpression &aggregate);
 
 //! Read shape, provenance and bound-admission facts once. Both graph construction
-//! and term lowering use this function; neither infers a second clause shape.
+//! and term lowering use this function; neither infers a second clause shape. `comparison` is the clause's body in
+//! canonical form: the body itself, but for a function-owned row, which is canonicalized here first.
 unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const LogicalDecide &op,
-                                                   const BoundComparisonExpression &comparison,
-                                                   const DecideEnclosingScope &scope);
+                                                   const BoundDecideClause &clause,
+                                                   const BoundComparisonExpression &comparison);
 
 } // namespace duckdb

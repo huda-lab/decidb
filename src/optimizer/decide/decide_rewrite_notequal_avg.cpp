@@ -27,7 +27,6 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
@@ -37,7 +36,7 @@
 namespace duckdb {
 
 void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {
-	// Walk the bound constraint tree and find all COMPARE_NOTEQUAL expressions.
+	// Walk the bound clauses and find all COMPARE_NOTEQUAL expressions.
 	// The constraint expression itself is NOT modified — the physical operator
 	// reads each COMPARE_NOTEQUAL constraint at execution time.
 	DecideTermSplitter splitter(optimizer.context, decide);
@@ -64,7 +63,7 @@ void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {
 		// What stage 05 owns is the account: the text to call the clause in a diagnosis,
 		// spelled as the plan prints it. Stage 06 allocates the binaries for the
 		// disjunctions it actually emits, and labels them with the clause.
-		AddRewriteAccount(decide, ClauseOriginOf(comp).source_clause_id, LogicalDecide::RewriteAccount::Kind::NOT_EQUAL,
+		AddRewriteAccount(decide, body.Origin().source_clause_id, LogicalDecide::RewriteAccount::Kind::NOT_EQUAL,
 		                  RenderForPlan(comp, decide));
 	});
 }
@@ -78,24 +77,21 @@ void DecideOptimizer::RewriteAvgToSum(LogicalDecide &decide) {
 	// through the boundary.
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
 		if (body.owner == DecideOwnedBody::Owner::CLAUSE || body.owner == DecideOwnedBody::Owner::OBJECTIVE) {
-			RewriteAvgInExpression(body.expr, decide, body.origin);
+			RewriteAvgInExpression(body.expr, decide, body.Origin());
 		}
 	});
-	auto constraints = std::move(decide.bound.constraints);
-	decide.AddConstraint(optimizer.context, std::move(constraints));
-	if (decide.bound.objective) {
+	decide.CanonicalizeClauses(optimizer.context);
+	if (decide.bound.objective.body) {
 		decide.SetObjective(optimizer.context, std::move(decide.bound.objective));
 	}
 }
 
 void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide,
-                                             const DecideRowOrigin &inherited) {
+                                             const DecideRowOrigin &origin) {
 	idx_t definition_aux;
 	if (TryParseDecideIndexTag(expr->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
 		return; // AVG syntax inside this body belongs to the tree F node's definition expression
 	}
-	const auto origin = DescendClauseOrigin(*expr, inherited);
-
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		auto &agg = expr->Cast<BoundAggregateExpression>();
 		// The rewrite linearizes an AVG over decisions. One over data is a value execution computes: the bound's is a

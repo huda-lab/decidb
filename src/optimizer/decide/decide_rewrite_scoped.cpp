@@ -27,7 +27,6 @@
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_shape_check.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
@@ -153,8 +152,8 @@ struct Helpers {
 	vector<idx_t> links;                     //!< parallel: its link, into decide.reducer_value_links
 
 	//! The class key of a clause: its `per` key, DECIDE_ROW_KEY with no `per`.
-	static idx_t ClassKeyOf(const DecideEnclosingScope &scope) {
-		return scope.per_wrapper ? scope.PerKey() : DECIDE_ROW_KEY;
+	static idx_t ClassKeyOf(const DecideClauseScope &scope) {
+		return scope.HasPer() ? scope.class_key : DECIDE_ROW_KEY;
 	}
 
 	//! The link holding `agg` as a clause of class key `class_key` reads it over `rows`, grouped by `group_key` -- its
@@ -368,7 +367,7 @@ bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_
 } // namespace
 
 void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
-	if (!decide.bound.objective) {
+	if (!decide.bound.objective.body) {
 		return;
 	}
 	const idx_t decide_index = decide.decide_index;
@@ -506,9 +505,11 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		FindAndReplaceBilinear(expr, decide, origin);
 	};
 
-	// The clause leaves are rewritten where they sit, the comparisons among them: a placeholder or a bound `IN` is no
+	// The clauses are rewritten where they sit, the comparisons among them: a placeholder or a bound `IN` is no
 	// clause for a reducer to stand in.
-	auto rewrite_clause = [&](unique_ptr<Expression> &expr, const DecideEnclosingScope &scope) {
+	auto rewrite_clause = [&](BoundDecideClause &clause) {
+		auto &expr = clause.body;
+		auto &scope = clause.scope;
 		if (expr->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
 			return;
 		}
@@ -516,11 +517,11 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		// the clause's aggregate row and each MIN or MAX becomes a helper, but for the easy identity, which keeps its
 		// reducer (RewriteMinMax).
 		const bool value_shape = HasDecideTag(expr->GetAlias(), VALUE_REWRITE_TAG);
-		if (!value_shape && IsEasyMinMaxRow(*expr)) {
+		if (!value_shape && clause.minmax_easy) {
 			return;
 		}
 		auto &cmp = expr->Cast<BoundComparisonExpression>();
-		const idx_t source_clause_id = ClauseOriginOf(cmp).source_clause_id;
+		const idx_t source_clause_id = clause.origin.source_clause_id;
 		// Canonicalization put every decision reducer on the left.
 		auto sites = CollectReducerSites(optimizer.context, booleans, cmp.left);
 		if (!value_shape) {
@@ -568,11 +569,11 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		// rows keeps the value-link path, where each row and each variant holds its own.
 		const bool bound_is_query_wide = cmp.right->IsFoldable() || IsQueryWideBoundTag(cmp.right->GetAlias());
 		const bool has_nested_outer =
-		    direct_outer_is_sum && nested_outer_has_unfiltered_reducers && !scope.Condition() && bound_is_query_wide &&
-		    scope.PerKey() == DecideReducerGroupKey(direct_outer->Cast<BoundAggregateExpression>());
+		    direct_outer_is_sum && nested_outer_has_unfiltered_reducers && !scope.when && bound_is_query_wide &&
+		    scope.class_key == DecideReducerGroupKey(direct_outer->Cast<BoundAggregateExpression>());
 		DecideReducerPath path;
-		if (scope.Condition()) {
-			path.conditions.push_back(scope.Condition());
+		if (scope.when) {
+			path.conditions.push_back(scope.when.get());
 		}
 		for (auto &site : sites) {
 			if (has_nested_outer && UnwrapDecideCasts(*site.slot->get(), decide.decide_index) == direct_outer) {
@@ -594,7 +595,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 			               source_clause_id, site);
 		}
 		if (value_shape) {
-			HandProductsToBilinear(cmp.left, ClauseOriginOf(cmp));
+			HandProductsToBilinear(cmp.left, clause.origin);
 		}
 		// One row per class from here on: the shape tag has done its work.
 		auto alias = cmp.GetAlias();
@@ -616,8 +617,8 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		const bool products = HasDecideTag(body.expr->GetAlias(), VALUE_REWRITE_TAG);
 		auto sites = CollectReducerSites(optimizer.context, booleans, body.expr);
 		DecideReducerPath path;
-		if (body.scope.Condition()) {
-			path.conditions.push_back(body.scope.Condition());
+		if (body.rows) {
+			path.conditions.push_back(body.rows);
 		}
 		for (auto &site : sites) {
 			const bool nest = HasDecideTag((*site.slot)->GetAlias(), VALUE_REWRITE_TAG);
@@ -629,22 +630,22 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 			// refusal unless the product is a Boolean one (`products`).
 			if (nest || (site.IsExtremum() && !site.under_decision) || site.under_function ||
 			    (products && site.under_decision)) {
-				ReplaceReducer(helpers, names, booleans, path, Helpers::ClassKeyOf(body.scope), ExtremumPush::DOWN,
-				               DConstants::INVALID_INDEX, site);
+				ReplaceReducer(helpers, names, booleans, path, Helpers::ClassKeyOf(body.clause->scope),
+				               ExtremumPush::DOWN, DConstants::INVALID_INDEX, site);
 			}
 		}
 		// Every product in the objective, whatever shape it was read in: a reducer a helper replaced inside a function
 		// or a nest may stand under a Boolean factor without the shape tag.
-		HandProductsToBilinear(body.expr, DecideRowOrigin::OfObjective());
+		HandProductsToBilinear(body.expr, body.Origin());
 	};
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
 		if (body.owner == DecideOwnedBody::Owner::CLAUSE) {
-			rewrite_clause(body.expr, body.scope);
+			rewrite_clause(*body.clause);
 		} else if (body.owner == DecideOwnedBody::Owner::OBJECTIVE) {
 			rewrite_objective(body);
 		}
 	});
-	if (decide.bound.objective) {
+	if (decide.bound.objective.body) {
 		decide.SetObjective(optimizer.context, std::move(decide.bound.objective));
 	}
 }

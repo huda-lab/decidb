@@ -15,7 +15,6 @@
 #include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/decide_solver_capabilities.hpp"
 #include "duckdb/common/decide_numeric_policy.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_tree_terms.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 
@@ -277,15 +276,15 @@ ColumnBinding DecideSourceColumnKey(const LogicalOperator &source, const ColumnB
 //! beside it; every other owner holds one expression.
 struct DecideOwnedBody {
 	enum class Owner : uint8_t {
-		//! A leaf of the SUCH THAT tree: a comparison, or the placeholder an earlier rewrite left.
+		//! A clause of SUCH THAT: a comparison, or the placeholder an earlier rewrite left.
 		CLAUSE,
 		//! The body of a nonlinear reducer's definition (LogicalDecide::definition_functions).
 		DEFINITION,
-		//! The objective, below its `when` and `per` wrappers.
+		//! The objective.
 		OBJECTIVE,
 		//! The members of a reducer's helper decision (LogicalDecide::reducer_value_links).
 		VALUE_LINK,
-		//! One of the three rows an L0 indicator stands for, a leaf as a clause's is
+		//! One of the three rows an L0 indicator stands for, a clause as SUCH THAT's is
 		//! (LogicalDecide::l0_indicator_functions).
 		L0_LINK,
 	};
@@ -309,11 +308,15 @@ struct DecideOwnedBody {
 	//! `kept_rows` when the owner keeps two conditions (a link's `when` and its own filter).
 	const Expression *rows = nullptr;
 	unique_ptr<Expression> kept_rows;
+	//! The record the body is the body of, with its scope and origin: a clause, the objective or an L0 link. Null for
+	//! a definition and a value link, which hold an expression and no clause.
+	optional_ptr<BoundDecideClause> clause;
+
 	//! The clause the body was written in (the source clause, or the objective), which every row made of it carries on
 	//! to a message. A body with no clause of its own (a helper's) has none of the two.
-	DecideRowOrigin origin;
-	//! The `when` and `per` wrappers around a clause or the objective; none for the other owners.
-	DecideEnclosingScope scope;
+	DecideRowOrigin Origin() const {
+		return clause ? clause->origin : DecideRowOrigin();
+	}
 };
 
 //! The bound DECIDE part of a query: its decisions, its clauses and what they name. The binder fills it, and it is
@@ -332,7 +335,7 @@ struct BoundDecide {
 	vector<DecideVarScopeInfo> variable_scopes;
 
 	//! Every key the clause writes, one entry per set of columns (DecideKey). Scopes,
-	//! reducers' `by`, the `per K:` wrappers and the scope checks index it.
+	//! reducers' `by`, the `per K:` of a clause and the scope checks index it.
 	vector<DecideKey> keys;
 
 	//! Every key scope: of `per K:` and `sum(T: ...)`, one per key. Empty when no decision
@@ -342,18 +345,18 @@ struct BoundDecide {
 	//! Every frame selector written in the clause, indexed by FRAME_TAG_PREFIX tags.
 	vector<DecideFrameSpec> frames;
 
-	// The bound constraints expression
-	unique_ptr<Expression> constraints;
+	//! The bound SUCH THAT clauses, one record per row, in the order written; a row a rewrite adds follows them.
+	vector<BoundDecideClause> clauses;
 
 	//! Stable source display registry, indexed by source_clause_id.
 	vector<ConstraintSourceInfo> constraint_sources;
 
-	//! The bound objective function expression, minimized.
-	unique_ptr<Expression> objective;
+	//! The bound objective, minimized, with its `when`; its body is null when the query writes none.
+	BoundDecideClause objective;
 
 	//! The direction the objective was written in (MINIMIZE, MAXIMIZE, or FEASIBILITY for none). Read only by what
 	//! shows the user the objective: a message, EXPLAIN, and a value shown (a timeout's best objective so far,
-	//! DIAGNOSE's achievable objective). Everything else reads `decide_objective`, which is always a minimization
+	//! DIAGNOSE's achievable objective). Everything else reads `objective`, which is always a minimization
 	//! (DecideCanonicalizer::CanonicalizeObjective): a MAXIMIZE objective is its negation, carried by the sign of each
 	//! term.
 	DecideSense sense = DecideSense::FEASIBILITY;
@@ -372,8 +375,8 @@ struct BoundDecide {
 	//! reprinting the node (MSG-1).
 	DecideSourceText source_text;
 
-	//! The variant signature of every scoped expression with a field (D70), indexed by SIGNATURE_TAG_PREFIX on a
-	//! `per K:` wrapper and by KeyedScopeInfo::signature for a reducer's own `per`. Built by the planner, right after
+	//! The variant signature of every scoped expression with a field (D70), indexed by DecideClauseScope::signature of
+	//! a `per K:` clause and by KeyedScopeInfo::signature for a reducer's own `per`. Built by the planner, right after
 	//! canonicalization.
 	vector<DecideSignature> signatures;
 
@@ -450,7 +453,7 @@ public:
 		bool auto_m = false;
 		double m = 1.0;
 		string label;
-		vector<unique_ptr<Expression>> links;
+		vector<BoundDecideClause> links;
 	};
 	vector<L0IndicatorFunction> l0_indicator_functions;
 
@@ -598,7 +601,7 @@ public:
 
 	//! A user-written simple bound that was folded into a decision column's box instead
 	//! of being emitted as a model row. Recorded so the linear form can check that its
-	//! clause was flattened for the repair model (FoldedBoundKeepsClauseRows), which is what
+	//! clause was flattened for the repair model (BoundDecideClause::folded_clause_rows), which is what
 	//! gives the diagnosis its rows and quotes the bound as the user wrote it.
 	struct UserBoundSpec {
 		idx_t decide_var_idx; //!< index into decide_variables
@@ -610,7 +613,7 @@ public:
 	};
 
 	//! Per-decision-variable box, sized to decide_variables. Physical execution copies
-	//! these into SolverInput instead of re-walking the constraint tree. A box whose
+	//! these into SolverInput instead of re-walking the clauses. A box whose
 	//! lower side was never written resolves to the default 0 floor; an explicit negative
 	//! lower bound (`x >= -5`, `BETWEEN -10 AND 10`, a negative IN minimum) is honored.
 	vector<DecideBoundBox> singleton_row_boxes;
@@ -700,30 +703,29 @@ public:
 	bool optimized = false;
 
 public:
-	//! Add a constraint to the SUCH THAT tree, canonicalizing it on the way in.
-	//! This is the ONLY way a constraint may enter LogicalDecide after planning,
-	//! and it exists so that constraints synthesized by DecideOptimizer (ABS
-	//! envelopes, Big-M rows, McCormick links) arrive in the same canonical shape
-	//! as the ones the user wrote. Together with the canonicalization performed in
-	//! Binder::CreatePlan, it is one of exactly two call sites of
-	//! DecideCanonicalizer -- do not add a third, and do not append to
-	//! decide_constraints directly.
-	void AddConstraint(ClientContext &context, unique_ptr<Expression> constraint);
+	//! Add a clause to SUCH THAT, canonicalizing it on the way in.
+	//! This is the ONLY way a clause may enter LogicalDecide after planning,
+	//! and it exists so that constraints synthesized by DecideOptimizer (Big-M rows, an IN's links)
+	//! arrive in the same canonical shape as the ones the user wrote. Together with the canonicalization performed
+	//! in Binder::CreatePlan, it is one of exactly two call sites of DecideCanonicalizer for a new clause -- do not add
+	//! a third, and do not append to `bound.clauses` directly.
+	void AddClause(ClientContext &context, BoundDecideClause clause);
+
+	//! Canonicalize every clause again, in place: for a pass that rewrote clause bodies where they sit.
+	void CanonicalizeClauses(ClientContext &context);
 
 	//! Replace the objective, canonicalizing it on the way in. This is the objective's
-	//! counterpart to AddConstraint and the ONLY way DecideOptimizer may install a
+	//! counterpart to AddClause and the ONLY way DecideOptimizer may install a
 	//! rewritten objective (AVG scaling, MIN/MAX auxiliaries, ABS envelopes, bilinear
-	//! links). Before it existed the four rewrite sites assigned decide_objective
-	//! directly, so optimizer output was never re-canonicalized or verified while
-	//! constraint output always was.
+	//! links), so optimizer output is re-canonicalized and verified as constraint output is.
 	//!
 	//! Any additive constant the rewrite leaves behind is ADDED to
 	//! objective_constant_offset rather than replacing it, so the offset peeled from
 	//! what the user wrote survives every later rewrite.
-	void SetObjective(ClientContext &context, unique_ptr<Expression> objective);
+	void SetObjective(ClientContext &context, BoundDecideClause objective);
 
-	//! Calls back with every expression this operator owns: decide_variables,
-	//! decide_constraints, decide_objective, the helper decisions' reducers, every key and the scope checks.
+	//! Calls back with every expression this operator owns: the decisions, each clause's body and `when`, the
+	//! objective's, the helper decisions' reducers, every key and the scope checks.
 	//! This is the single place that
 	//! knows LogicalDecide's expression layout -- generic DuckDB passes (the
 	//! LogicalOperatorVisitor dispatcher, ColumnBindingResolver, RemoveUnusedColumns)
@@ -738,8 +740,8 @@ public:
 	//!
 	//! The callback may replace the expression in `body.expr` and append to `decide_variables` and the other
 	//! containers, but not to the container of the body it was handed. A pass that rewrote the objective hands it back
-	//! through SetObjective once the enumeration is over, and one that rewrote a clause through AddConstraint, the
-	//! canonicalizing boundaries.
+	//! through SetObjective once the enumeration is over, and one that rewrote a clause through CanonicalizeClauses,
+	//! the canonicalizing boundaries.
 	void EnumerateBodies(const std::function<void(DecideOwnedBody &)> &callback);
 	//! The columns the node's expressions read from its input: the child's, then the placeholders of the bound
 	//! aggregates the path has not built yet (bound_aggregates).

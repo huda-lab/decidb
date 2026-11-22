@@ -87,9 +87,9 @@ private:
 	//! Fold every simple `x OP const` constraint (a BETWEEN is two of them by now) into the
 	//! decision column's box (`singleton_row_boxes`, combined by `DecideFoldSingletonRow`) rather
 	//! than leaving it to become a model row: a box is smaller and tighter for the solver than
-	//! one row per data row. Folded comparisons are marked (IsFoldedBound) so physical
+	//! one row per data row. Folded comparisons are marked (BoundDecideClause::folded_bound) so physical
 	//! term extraction skips them; a recorded one (`user_singleton_row_bounds`) also keeps its
-	//! clause rows (FoldedBoundKeepsClauseRows), so its clause is flattened for the repair model.
+	//! clause rows (folded_clause_rows), so its clause is flattened for the repair model.
 	//!
 	//! MUST RUN LAST, after every other pass. RewriteInDomain emits a floor-lowering
 	//! `x >= min_value` for a negative all-constant IN domain, which is itself a singleton-row bound;
@@ -102,9 +102,9 @@ private:
 	//! reject with a user-facing message.
 	void FoldSingletonRows(LogicalDecide &decide);
 
-	//! Helper: fold the bound one clause leaf states, if it states one. A leaf under a `when`, or under a `per K:`
-	//! whose key has a NULL-skipping column, never contributes to a global bound; `scope` encloses `expr`.
-	void FoldSingletonRowsInClause(Expression &expr, const DecideEnclosingScope &scope, LogicalDecide &decide);
+	//! Helper: fold the bound one clause states, if it states one. A clause under a `when`, or under a `per K:`
+	//! whose key has a NULL-skipping column, never contributes to a global bound.
+	void FoldSingletonRowsInClause(BoundDecideClause &clause, LogicalDecide &decide);
 
 	//! Rewrite decision-bearing AVG(expr) aggregates to SUM(expr) with alias tagging.
 	//! Execution scales extracted AVG terms by the active row count.
@@ -114,9 +114,9 @@ private:
 	//! The replacement is tagged with AVG_REWRITE_TAG so coefficient evaluation can scale terms.
 	//! A decision-free AVG is skipped: there is nothing to linearize, and rebinding it as SUM
 	//! would redeclare it with SUM's integral type while its value stays fractional.
-	//! `inherited` is the clause the walk stands in (the objective's origin for the
+	//! `origin` is the clause the walk stands in (the objective's origin for the
 	//! objective), under which each rewritten AVG's account is recorded.
-	void RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide, const DecideRowOrigin &inherited);
+	void RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide, const DecideRowOrigin &origin);
 
 	//! The value rewrite (language/guide.md §6.4): a decision reducer of a comparison in
 	//! the VALUE shape (VALUE_REWRITE_TAG) becomes a helper decision defined once per `by`
@@ -150,10 +150,10 @@ private:
 	//! The other MIN/MAX clauses are RewriteScopedReducers'.
 	void RewriteMinMax(LogicalDecide &decide);
 
-	//! Helper: the easy identity of one clause leaf. `scope` encloses `expr`; a row this rewrite adds for the clause
-	//! (an equality's easy half) keeps its `when` and `per K:`.
-	void RewriteMinMaxInClause(unique_ptr<Expression> &expr, LogicalDecide &decide,
-	                           vector<unique_ptr<Expression>> &new_constraints, const DecideEnclosingScope &scope);
+	//! Helper: the easy identity of one clause. A row this rewrite adds for the clause (an equality's easy half, in
+	//! `new_clauses`) keeps its `when` and `per K:`.
+	void RewriteMinMaxInClause(BoundDecideClause &clause, LogicalDecide &decide,
+	                           vector<BoundDecideClause> &new_clauses);
 
 	//! Detect ABS(expr) over decide variables, allocate the plan-time helper, and record each ABS
 	//! (LogicalDecide::abs_functions) for the tree's ABS F node: the shape only, which stage 06 encodes.
@@ -169,9 +169,9 @@ private:
 
 	//! Helper: find affine bilinear products, collect their distributive expansion and product F specs, and leave the
 	//! source expression intact.
-	//! `inherited` is the origin of the enclosing user comparison, so the rows this
+	//! `origin` is the origin of the clause the expression stands in, so the rows this
 	//! emits can point back at the clause that produced them.
-	void FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide, const DecideRowOrigin &inherited);
+	void FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide, const DecideRowOrigin &origin);
 
 	//! Helper: recursively find BoundFunctionExpression for ABS over decide vars, allocate a helper, tag the retained
 	//! function expression and record the ABS (LogicalDecide::abs_functions), innermost first. Whether the ABS needs
@@ -180,7 +180,7 @@ private:
 	//! which the `when` of each reducer around an ABS narrows further.
 	void FindAbsAndAllocateAux(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                           const DecideCanonicalizer &canonicalizer, const AbsExactSet &exact,
-	                           const DecideRowOrigin &inherited, const Expression *rows);
+	                           const DecideRowOrigin &origin, const Expression *rows);
 
 	Optimizer &optimizer;
 };

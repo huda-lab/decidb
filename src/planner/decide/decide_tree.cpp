@@ -8,7 +8,6 @@
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
@@ -31,28 +30,28 @@ string DecideTreeReducerName(const BoundAggregateExpression &aggregate) {
 }
 
 unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const LogicalDecide &op,
-                                                   const BoundComparisonExpression &comparison,
-                                                   const DecideEnclosingScope &scope) {
+                                                   const BoundDecideClause &clause,
+                                                   const BoundComparisonExpression &comparison) {
 	auto facts = make_uniq<DecideConstraint>();
 	facts->comparison_type = comparison.type;
 	facts->rhs_expr = comparison.right->Copy();
 	facts->tightest_frame_bound = HasDecideTag(comparison.alias, FRAME_TIGHTEST_BOUND_TAG);
-	facts->origin = ClauseOriginOf(comparison);
+	facts->origin = clause.origin;
 	if (comparison.type == ExpressionType::COMPARE_NOTEQUAL) {
 		facts->kind = ConstraintKind::USER_MECHANISM;
 	}
-	if (IsStructuralRow(comparison)) {
+	if (clause.structural) {
 		facts->kind = ConstraintKind::STRUCTURAL;
 	}
-	facts->defined_var = DefinedHelperOf(comparison);
+	facts->defined_var = clause.defines;
 	if (TryParseDecideIndexTag(comparison.alias, ABS_FUNCTION_NEG_TAG_PREFIX, facts->abs_aux_idx)) {
 		facts->kind = ConstraintKind::STRUCTURAL;
 	} else if (TryParseDecideIndexTag(comparison.alias, ABS_FUNCTION_TAG_PREFIX, facts->abs_aux_idx)) {
 		facts->abs_is_pos_bound = true;
 		facts->kind = ConstraintKind::STRUCTURAL;
 	}
-	facts->was_minmax_easy = IsEasyMinMaxRow(comparison);
-	facts->scope = DecideClauseScope(scope);
+	facts->was_minmax_easy = clause.minmax_easy;
+	facts->scope = clause.scope.Copy();
 	TryParseGroupKeyTag(comparison.alias, facts->group_key);
 	DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes,
 	                                  op.bound.keys, op.bound.is_boolean_var);
@@ -96,9 +95,9 @@ unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const
 			facts->scope.per = DecideClauseScope::PerRole::ONE_ROW_PER_CLASS;
 		}
 	}
-	const bool folded = IsFoldedBound(comparison);
 	DecideSingletonRow bound;
-	if (!folded && !facts->lhs_is_aggregate && DecideReadSingletonRow(context, op, comparison, bound)) {
+	if (!clause.folded_bound && !facts->lhs_is_aggregate &&
+	    DecideReadSingletonRow(context, op, comparison, clause.minmax_easy, bound)) {
 		facts->admitted_lower = std::move(bound.lower);
 		facts->admitted_upper = std::move(bound.upper);
 		facts->admitted_a = std::move(bound.a);
@@ -192,44 +191,31 @@ public:
 			node.body = Lower(index, *check);
 			tree->roots.push_back(index);
 		}
-		if (op.bound.constraints) {
-			ForEachScopedConstraintLeaf(*op.bound.constraints, [&](const Expression &expression,
-			                                                       const DecideEnclosingScope &scope) {
-				if (expression.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-					Root(expression.Cast<BoundComparisonExpression>(), scope);
-				} else if (expression.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
-				           HasDecideTag(expression.GetAlias(), BODY_DEFINITION_TAG)) {
-					const idx_t value_var = DefinedHelperOf(expression);
-					if (value_var == DConstants::INVALID_INDEX) {
-						throw InternalException("DECIDE tree: body-definition placeholder has no helper");
-					}
-					auto function =
-					    std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(), [&](idx_t candidate) {
-						    return tree->nodes[candidate]->function_kind == DecideFunctionKind::DEFINITION &&
-						           tree->nodes[candidate]->value_var == value_var;
-					    });
-					if (function == tree->function_nodes.end() || !tree->nodes[*function]->definition_expression) {
-						throw InternalException("DECIDE tree: body-definition placeholder has no F node");
-					}
-					ForEachScopedConstraintLeaf(*tree->nodes[*function]->definition_expression,
-					                            [&](const Expression &row, const DecideEnclosingScope &row_scope) {
-						                            if (row.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-							                            Root(row.Cast<BoundComparisonExpression>(), row_scope);
-						                            }
-					                            });
+		for (auto &clause : op.bound.clauses) {
+			if (clause.body->GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+				Root(clause);
+			} else if (clause.body->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
+			           HasDecideTag(clause.body->GetAlias(), BODY_DEFINITION_TAG)) {
+				const idx_t value_var = clause.defines;
+				if (value_var == DConstants::INVALID_INDEX) {
+					throw InternalException("DECIDE tree: body-definition placeholder has no helper");
 				}
-			});
+				auto function =
+				    std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(), [&](idx_t candidate) {
+					    return tree->nodes[candidate]->function_kind == DecideFunctionKind::DEFINITION &&
+					           tree->nodes[candidate]->value_var == value_var;
+				    });
+				if (function == tree->function_nodes.end() || !tree->nodes[*function]->definition_row.body) {
+					throw InternalException("DECIDE tree: body-definition placeholder has no F node");
+				}
+				Root(tree->nodes[*function]->definition_row);
+			}
 		}
 		// RewriteNorm used to append these structural link rows after every written constraint. Preserve that order
 		// while keeping the rows as children of their L0 indicator F nodes in the tree.
 		for (auto &indicator : op.l0_indicator_functions) {
-			for (auto &expression : indicator.links) {
-				ForEachScopedConstraintLeaf(*expression,
-				                            [&](const Expression &leaf, const DecideEnclosingScope &scope) {
-					                            if (leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-						                            Root(leaf.Cast<BoundComparisonExpression>(), scope);
-					                            }
-				                            });
+			for (auto &link : indicator.links) {
+				Root(link);
 			}
 		}
 		for (auto &function : op.abs_functions) {
@@ -238,25 +224,13 @@ public:
 			if (node == tree->function_nodes.end()) {
 				throw InternalException("DECIDE tree: ABS helper %llu has no function node", function.aux_idx);
 			}
-			for (auto &expression : tree->nodes[*node]->abs_expressions) {
-				ForEachScopedConstraintLeaf(*expression,
-				                            [&](const Expression &leaf, const DecideEnclosingScope &scope) {
-					                            if (leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-						                            Root(leaf.Cast<BoundComparisonExpression>(), scope);
-					                            }
-				                            });
+			for (auto &row : tree->nodes[*node]->abs_rows) {
+				Root(row);
 			}
 		}
-		if (op.bound.objective) {
-			const Expression *body = op.bound.objective.get();
-			const Expression *condition = nullptr;
-			if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-				auto &wrapper = body->Cast<BoundConjunctionExpression>();
-				if (IsWhenFilterWrapper(wrapper) && wrapper.children.size() == 2) {
-					body = wrapper.children[0].get();
-					condition = wrapper.children[1].get();
-				}
-			}
+		if (op.bound.objective.body) {
+			const Expression *body = op.bound.objective.body.get();
+			const Expression *condition = op.bound.objective.scope.when.get();
 			auto index = NewNode(DecideNodeKind::SCOPE);
 			sources.objective_root = index;
 			auto &node = *tree->nodes[index];
@@ -293,8 +267,8 @@ public:
 			auto &node = *tree->nodes[index];
 			node.abs_exact = function.exact;
 			node.abs_written = function.written;
-			node.abs_expressions[0] = decide_rewrite::MakeAbsRow(context, op, function, false);
-			node.abs_expressions[1] = decide_rewrite::MakeAbsRow(context, op, function, true);
+			node.abs_rows[0] = decide_rewrite::MakeAbsRow(context, op, function, false);
+			node.abs_rows[1] = decide_rewrite::MakeAbsRow(context, op, function, true);
 		}
 		for (auto &function : op.abs_functions) {
 			auto found = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(),
@@ -412,11 +386,7 @@ public:
 					node.per = DecideTreePer::ONE;
 				}
 			}
-			ForEachScopedConstraintLeaf(*indicator.links[0], [&](const Expression &leaf, const DecideEnclosingScope &) {
-				if (leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-					node.origin = ClauseOriginOf(leaf);
-				}
-			});
+			node.origin = indicator.links[0].origin;
 			tree->function_nodes.push_back(index);
 			tree->roots.push_back(index);
 		}
@@ -430,18 +400,9 @@ public:
 			if (function == tree->function_nodes.end()) {
 				throw InternalException("DECIDE tree: L0 indicator %llu has no function node", indicator.value_var);
 			}
-			const Expression *operand = nullptr;
-			const Expression *condition = nullptr;
-			ForEachScopedConstraintLeaf(*indicator.links[0],
-			                            [&](const Expression &leaf, const DecideEnclosingScope &scope) {
-				                            if (leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-					                            operand = leaf.Cast<BoundComparisonExpression>().right.get();
-					                            condition = scope.Condition();
-				                            }
-			                            });
-			if (!operand) {
-				throw InternalException("DECIDE tree: L0 indicator %llu has no counted operand", indicator.value_var);
-			}
+			auto &first_link = indicator.links[0];
+			const Expression *operand = first_link.body->Cast<BoundComparisonExpression>().right.get();
+			const Expression *condition = first_link.scope.when.get();
 			auto &node = *tree->nodes[*function];
 			Gates(*function, condition);
 			node.body = Lower(*function, *operand);
@@ -492,7 +453,7 @@ public:
 				}
 			}
 			Gates(index, definition.condition.get());
-			node.definition_expression = MakeDefinitionExpression(definition);
+			node.definition_row = MakeDefinitionRow(definition);
 			tree->function_nodes.push_back(index);
 			tree->roots.push_back(index);
 		}
@@ -515,27 +476,27 @@ public:
 		}
 	}
 
-	unique_ptr<Expression> MakeDefinitionExpression(const LogicalDecide::DefinitionFunction &definition) const {
+	//! The row that defines a definition's helper from its body, on the rows its condition keeps, one per instance of
+	//! the helper.
+	BoundDecideClause MakeDefinitionRow(const LogicalDecide::DefinitionFunction &definition) const {
 		const auto &body = *definition.body;
 		auto left = BoundCastExpression::AddCastToType(context, op.bound.variables[definition.value_var]->Copy(),
 		                                               body.return_type);
-		auto row = make_uniq<BoundComparisonExpression>(definition.relation, std::move(left), body.Copy());
-		MarkStructuralRow(*row);
-		SetDefinedHelper(*row, definition.value_var);
-		AddDecideTag(row->alias, BODY_DEFINITION_TAG);
-		StampClauseOrigin(*row, DecideRowOrigin::OfClause(definition.source_clause_id));
-		auto condition = definition.condition ? definition.condition->Copy() : nullptr;
+		BoundDecideClause row;
+		row.body = make_uniq<BoundComparisonExpression>(definition.relation, std::move(left), body.Copy());
+		AddDecideTag(row.body->alias, BODY_DEFINITION_TAG);
+		row.structural = true;
+		row.defines = definition.value_var;
+		row.origin = DecideRowOrigin::OfClause(definition.source_clause_id);
 		if (definition.value_var < op.bound.variable_scopes.size()) {
 			auto &scope = op.bound.variable_scopes[definition.value_var];
 			if (scope.IsGlobal() || scope.IsKeyed()) {
-				DecideRowPer per;
-				if (scope.IsKeyed()) {
-					per.key = op.bound.keyed_scopes[scope.keyed_scope_idx].key;
-				}
-				return MakeScopedRow(std::move(row), std::move(condition), &per);
+				row.scope = DecideClauseScope::Per(scope.IsKeyed() ? op.bound.keyed_scopes[scope.keyed_scope_idx].key
+				                                                   : DConstants::INVALID_INDEX);
 			}
 		}
-		return MakeScopedRow(std::move(row), std::move(condition));
+		row.scope.when = definition.condition ? definition.condition->Copy() : nullptr;
+		return row;
 	}
 
 	//! The ABS F node owns the helper's scope and both lower-envelope rows. Its operand stays as an expression until
@@ -823,7 +784,9 @@ private:
 		UseSignature(node, scope.signature);
 	}
 
-	void Root(const BoundComparisonExpression &comparison, const DecideEnclosingScope &scope) {
+	void Root(const BoundDecideClause &clause) {
+		auto &comparison = clause.body->Cast<BoundComparisonExpression>();
+		auto &scope = clause.scope;
 		auto index = NewNode(DecideNodeKind::SCOPE);
 		auto &node = *tree->nodes[index];
 		node.root = true;
@@ -838,7 +801,7 @@ private:
 		const bool is_l0_link =
 		    TryParseDecideIndexTag(comparison.GetAlias(), L0_INDICATOR_FUNCTION_TAG_PREFIX, l0_value);
 		const bool is_definition = HasDecideTag(comparison.GetAlias(), BODY_DEFINITION_TAG);
-		const idx_t definition_value = is_definition ? DefinedHelperOf(comparison) : DConstants::INVALID_INDEX;
+		const idx_t definition_value = is_definition ? clause.defines : DConstants::INVALID_INDEX;
 		if (is_definition && definition_value >= op.bound.variables.size()) {
 			throw InternalException("DECIDE tree: nonlinear body definition has no valid helper variable");
 		}
@@ -852,12 +815,12 @@ private:
 			canonical_envelope = canonicalizer.CanonicalizeComparison(comparison);
 			row = &canonical_envelope->Cast<BoundComparisonExpression>();
 		}
-		node.facts = ReadDecideClauseFacts(context, op, *row, scope);
+		node.facts = ReadDecideClauseFacts(context, op, clause, *row);
 		node.comparison_type = row->type;
-		node.folded = IsFoldedBound(comparison);
-		node.origin = ClauseOriginOf(comparison);
+		node.folded = clause.folded_bound;
+		node.origin = clause.origin;
 		node.text = RootText(node.origin.source_clause_id);
-		node.defined_var = DefinedHelperOf(comparison);
+		node.defined_var = clause.defines;
 		if (is_l0_link) {
 			auto function =
 			    std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(), [&](idx_t candidate) {
@@ -898,14 +861,14 @@ private:
 			node.facts->kind = ConstraintKind::STRUCTURAL;
 		}
 		idx_t signature = DConstants::INVALID_INDEX;
-		if (scope.per_wrapper) {
-			node.key = scope.PerKey();
+		if (scope.HasPer()) {
+			node.key = scope.class_key;
 			node.per = node.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
-			signature = PerWrapperSignature(*scope.per_wrapper);
+			signature = scope.signature;
 		}
 		sources.root_of[&comparison] = index;
 		if (!is_abs_envelope && !is_l0_link && !is_definition) {
-			Gates(index, scope.Condition());
+			Gates(index, scope.when.get());
 		}
 		node.body = Lower(index, *row->left);
 		node.rhs = Lower(index, *row->right);
@@ -923,7 +886,7 @@ private:
 			}
 		}
 		UseSignature(node, signature);
-		if (scope.per_wrapper && node.key != DConstants::INVALID_INDEX &&
+		if (scope.HasPer() && node.key != DConstants::INVALID_INDEX &&
 		    node.facts->kind == ConstraintKind::USER_PARAMETER &&
 		    node.facts->defined_var == DConstants::INVALID_INDEX &&
 		    node.facts->scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
@@ -931,7 +894,7 @@ private:
 			                                  op.bound.keys, op.bound.is_boolean_var);
 			node.merges_classes = canonicalizer.MergesClasses(*row, node.key);
 		}
-		if (!scope.per_wrapper && node.facts->scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
+		if (!scope.HasPer() && node.facts->scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
 			// Its sigma stays what it reads (UseSignature), whose distinct values are its instances.
 			node.per = DecideTreePer::ONE;
 		}

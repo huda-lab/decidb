@@ -5,7 +5,6 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_product_form.hpp"
 #include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
@@ -354,41 +353,34 @@ void DecideShapeCheck::CheckIntegerStep(const BoundComparisonExpression &compari
 	throw NotImplementedException(comparison, "%s", FractionalComparisonMessage(op, operand));
 }
 
-void DecideShapeCheck::CheckClause(const Expression &whole, const vector<const Expression *> &sides) const {
+void DecideShapeCheck::CheckClause(const BoundDecideClause &clause, const vector<const Expression *> &sides) const {
 	bool reads_decision = false;
 	for (auto side : sides) {
 		reads_decision = reads_decision || BoundExpressionReferencesDecide(*side, decide_index);
 	}
 	if (!reads_decision) {
-		throw BinderException(whole, "'%s' reads no decision", RenderDecideSource(whole, names));
+		throw BinderException(*clause.body, "'%s' reads no decision", RenderDecideClauseBody(clause, names));
 	}
 	for (auto side : sides) {
 		CheckSide(*side);
 	}
 }
 
-void DecideShapeCheck::CheckConstraints(const Expression &constraints) const {
-	ForEachConstraintLeaf(constraints, [&](const Expression &leaf) {
-		// A bound IN marker or a bare BOOL decision is a row with nothing to judge.
-		if (leaf.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
-			return;
+void DecideShapeCheck::CheckConstraints(const vector<BoundDecideClause> &clauses) const {
+	for (auto &clause : clauses) {
+		// A bound IN marker is a row with nothing to judge.
+		if (clause.body->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+			continue;
 		}
-		auto &comparison = leaf.Cast<BoundComparisonExpression>();
-		CheckClause(comparison, {comparison.left.get(), comparison.right.get()});
+		auto &comparison = clause.body->Cast<BoundComparisonExpression>();
+		CheckClause(clause, {comparison.left.get(), comparison.right.get()});
 		CheckIntegerStep(comparison);
-	});
+	}
 }
 
-void DecideShapeCheck::CheckObjective(const Expression &objective) const {
+void DecideShapeCheck::CheckObjective(const BoundDecideClause &objective) const {
 	// The objective is the body of its clause: a `when` only chooses the rows.
-	const Expression *body = &objective;
-	if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conjunction = body->Cast<BoundConjunctionExpression>();
-		if (IsWhenFilterWrapper(conjunction) && conjunction.children.size() == 2) {
-			body = conjunction.children[0].get();
-		}
-	}
-	CheckClause(*body, {body});
+	CheckClause(objective, {objective.body.get()});
 }
 
 } // namespace duckdb

@@ -15,7 +15,6 @@
 #include "duckdb/planner/decide/decide_shape_check.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/decide/decide_tree.hpp"
@@ -113,7 +112,8 @@ struct BodySite {
 	//! inside one, or sits in a constraint that holds one.
 	bool needs_native_extremum;
 	DecideRowOrigin origin;
-	DecideEnclosingScope scope;
+	//! The clause's `when`, or null.
+	const Expression *when;
 };
 
 //! The sign every reducer in `side` carries (WalkPolarity), keyed by node.
@@ -138,11 +138,11 @@ void CollectReducerSigns(ClientContext &context, const BooleanDecisions &boolean
 void CollectBodySites(Expression &expr, idx_t decide_index, const DecideTermSplitter &splitter, bool sums,
                       bool extremum_clause, bool under_extremum, ExtremumPush outer,
                       const unordered_map<const Expression *, int> &signs, const DecideRowOrigin &origin,
-                      const DecideEnclosingScope &scope, vector<BodySite> &sites) {
+                      const Expression *when, vector<BodySite> &sites) {
 	if (!AsDecisionReducer(expr, decide_index)) {
 		ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) {
 			CollectBodySites(child, decide_index, splitter, sums, extremum_clause, under_extremum, outer, signs, origin,
-			                 scope, sites);
+			                 when, sites);
 		});
 		return;
 	}
@@ -150,7 +150,7 @@ void CollectBodySites(Expression &expr, idx_t decide_index, const DecideTermSpli
 	const bool is_extremum = IsExtremumName(StringUtil::Lower(reducer.function.name));
 	auto &body = *reducer.children[0];
 	if (HoldsReducer(body, decide_index, false)) {
-		CollectBodySites(body, decide_index, splitter, sums, extremum_clause, is_extremum, outer, signs, origin, scope,
+		CollectBodySites(body, decide_index, splitter, sums, extremum_clause, is_extremum, outer, signs, origin, when,
 		                 sites);
 		return;
 	}
@@ -160,7 +160,7 @@ void CollectBodySites(Expression &expr, idx_t decide_index, const DecideTermSpli
 	auto sign = signs.find(&expr);
 	const auto push = sign == signs.end() ? ExtremumPush::NONE : ExtremumPushOf(outer, sign->second);
 	sites.push_back({&reducer, push, !is_extremum && !under_extremum, is_extremum || under_extremum || extremum_clause,
-	                 origin, scope});
+	                 origin, when});
 }
 
 //! Copies of one reducer under one `when`: they share a helper.
@@ -169,17 +169,15 @@ bool SameReducer(const BodySite &a, const BodySite &b) {
 	    !DecideExpressionsEqual(*a.reducer, *b.reducer)) {
 		return false;
 	}
-	auto a_when = a.scope.Condition();
-	auto b_when = b.scope.Condition();
-	if (!a_when || !b_when) {
-		return !a_when && !b_when;
+	if (!a.when || !b.when) {
+		return !a.when && !b.when;
 	}
-	return DecideExpressionsEqual(*a_when, *b_when);
+	return DecideExpressionsEqual(*a.when, *b.when);
 }
 
 //! The clause's `when` and the reducer's own filter: the rows a helper is defined on.
 unique_ptr<Expression> HelperCondition(const BodySite &site) {
-	auto when = site.scope.Condition();
+	auto when = site.when;
 	if (!when || !site.reducer->filter) {
 		return when ? when->Copy() : site.reducer->filter ? site.reducer->filter->Copy() : nullptr;
 	}
@@ -218,7 +216,7 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 			auto &comparison = expr.Cast<BoundComparisonExpression>();
 			// A MIN or MAX pushed its cheap way (`max(q) <= K`, RewriteMinMax) bounds each member: one quadratic row
 			// per member, and no helper.
-			if (IsEasyMinMaxRow(comparison)) {
+			if (body.clause->minmax_easy) {
 				return;
 			}
 			// Read as `LHS - RHS <op> 0`: the relation pushes the whole expression.
@@ -227,15 +225,15 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 			CollectReducerSigns(context, booleans, comparison.right, -1, signs);
 			const auto outer = ExtremumPushOf(comparison.type);
 			CollectBodySites(*comparison.left, decide_index, splitter, true, extremum_clause, false, outer, signs,
-			                 body.origin, body.scope, sites);
+			                 body.Origin(), body.rows, sites);
 			CollectBodySites(*comparison.right, decide_index, splitter, true, extremum_clause, false, outer, signs,
-			                 body.origin, body.scope, sites);
+			                 body.Origin(), body.rows, sites);
 		} else if (body.owner == DecideOwnedBody::Owner::OBJECTIVE && HoldsReducer(*body.expr, decide_index, true)) {
 			unordered_map<const Expression *, int> signs;
 			CollectReducerSigns(context, booleans, body.expr, 1, signs);
 			const idx_t before = sites.size();
 			CollectBodySites(*body.expr, decide_index, splitter, false, false, false, ExtremumPush::DOWN, signs,
-			                 body.origin, body.scope, sites);
+			                 body.Origin(), body.rows, sites);
 			objective_defined = sites.size() > before;
 		}
 	});
@@ -265,7 +263,7 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 	DecideCanonicalizer canonicalizer(context, decide_index, decide.bound.variable_scopes, decide.bound.keyed_scopes,
 	                                  decide.bound.keys, decide.bound.is_boolean_var);
 	// The placeholders are appended after both walks, so neither walk sees the structural rows registered here.
-	vector<unique_ptr<Expression>> rows;
+	vector<BoundDecideClause> rows;
 	for (idx_t family = 0; family < families.size(); family++) {
 		auto &members = families[family];
 		auto &first = sites[members[0]];
@@ -315,10 +313,11 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 		decide.definition_functions.push_back(std::move(definition));
 		// Tree construction owns the function's row. This placeholder keeps its former clause-list position for
 		// EXPLAIN and source ordering until that tree attaches the row below the F node.
-		auto placeholder = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
-		MarkStructuralRow(*placeholder);
-		SetDefinedHelper(*placeholder, helper);
-		AddDecideTag(placeholder->alias, BODY_DEFINITION_TAG);
+		BoundDecideClause placeholder;
+		placeholder.body = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
+		AddDecideTag(placeholder.body->alias, BODY_DEFINITION_TAG);
+		placeholder.structural = true;
+		placeholder.defines = helper;
 		rows.push_back(std::move(placeholder));
 
 		for (auto member : members) {
@@ -338,7 +337,7 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 		decide.SetObjective(context, std::move(decide.bound.objective));
 	}
 	for (auto &row : rows) {
-		decide.AddConstraint(context, std::move(row));
+		decide.AddClause(context, std::move(row));
 	}
 }
 

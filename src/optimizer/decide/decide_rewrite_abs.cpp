@@ -34,7 +34,6 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
@@ -338,9 +337,9 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	vector<Revisit> worklist;
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
 		const auto helpers_before = decide.abs_functions.size();
-		FindAbsAndAllocateAux(body.expr, decide, canonicalizer, exact, body.origin, body.rows);
+		FindAbsAndAllocateAux(body.expr, decide, canonicalizer, exact, body.Origin(), body.rows);
 		if (decide.abs_functions.size() != helpers_before && BilinearReadsBody(decide, body)) {
-			worklist.push_back({&body.expr, body.origin});
+			worklist.push_back({&body.expr, body.Origin()});
 		}
 	});
 	// Worklist, as LLVM's InstCombine revisits the users of a value it changed: a body whose ABS just got its helper
@@ -357,8 +356,8 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	decide.EnumerateBodies([&](DecideOwnedBody &body) { RecordAbsOperands(*body.expr, decide, splitter); });
 }
 
-unique_ptr<Expression> decide_rewrite::MakeAbsRow(ClientContext &context, const LogicalDecide &decide,
-                                                  const LogicalDecide::AbsFunction &function, bool negated) {
+BoundDecideClause decide_rewrite::MakeAbsRow(ClientContext &context, const LogicalDecide &decide,
+                                             const LogicalDecide::AbsFunction &function, bool negated) {
 	// `aux >= inner` or `aux >= -inner`, in its natural form, which can leave decisions on both sides. The tree brings
 	// each through the canonical boundary as it does any clause.
 	auto &aux = decide.bound.variables[function.aux_idx]->Cast<BoundColumnRefExpression>();
@@ -375,21 +374,23 @@ unique_ptr<Expression> decide_rewrite::MakeAbsRow(ClientContext &context, const 
 			throw InternalException("DECIDE ABS: failed to bind the negated operand: %s", error.Message());
 		}
 	}
-	auto row = make_uniq<BoundComparisonExpression>(
+	auto comparison = make_uniq<BoundComparisonExpression>(
 	    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 	    make_uniq<BoundColumnRefExpression>(aux.alias, aux.return_type, aux.binding), std::move(bound));
-	AddDecideTag(row->alias, negated ? MakeAbsFunctionNegTag(function.aux_idx) : MakeAbsFunctionTag(function.aux_idx));
-	MarkFormulationConstraint(*row, function.origin, function.aux_idx);
-	return ScopeRowPerInstance(decide, ScopeHelperRow(std::move(row), function.when.get()), function.scope);
+	AddDecideTag(comparison->alias,
+	             negated ? MakeAbsFunctionNegTag(function.aux_idx) : MakeAbsFunctionTag(function.aux_idx));
+	auto row = MakeFormulationRow(std::move(comparison), function.origin, function.aux_idx);
+	row.scope.when = function.when ? function.when->Copy() : nullptr;
+	ScopeRowPerInstance(decide, row, function.scope);
+	return row;
 }
 
 void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                             const DecideCanonicalizer &canonicalizer, const AbsExactSet &exact,
-                                            const DecideRowOrigin &inherited, const Expression *rows) {
+                                            const DecideRowOrigin &origin, const Expression *rows) {
 	if (!expr) {
 		return;
 	}
-	const auto origin = DescendClauseOrigin(*expr, inherited);
 	idx_t definition_aux;
 	if (TryParseDecideIndexTag(expr->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
 		return; // its body is visited through DefinitionFunction metadata below

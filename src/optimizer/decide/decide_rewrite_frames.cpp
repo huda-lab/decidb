@@ -18,7 +18,6 @@
 #include "duckdb/optimizer/decide/decide_optimizer_internal.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/decide/decide_shape_check.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
@@ -238,8 +237,7 @@ void DecideOptimizer::RewriteFrameRanges(LogicalDecide &decide) {
 		}
 		unordered_map<const Expression *, int> signs;
 		CollectRangeSigns(context, decide, comparison.left, signs);
-		lifter.Lift(comparison.left, ExtremumPushOf(comparison.type), ClauseOriginOf(comparison).source_clause_id,
-		            signs);
+		lifter.Lift(comparison.left, ExtremumPushOf(comparison.type), body.Origin().source_clause_id, signs);
 	});
 	if (lifted_objective) {
 		decide.SetObjective(context, std::move(decide.bound.objective));

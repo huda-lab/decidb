@@ -27,7 +27,6 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
@@ -45,9 +44,9 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 // A MIN or MAX over decisions is a helper decision (RewriteScopedReducers) with one side of its definition, the side
 // its reader pushes it against (the epigraph auxiliary, Plaisted-Greenbaum). One identity is applied before that,
 // because it is no route but a rewrite to other clauses: `max(e) <= K` holds when every member `e <= K` does, and
-// `min(e) >= K` the mirror, so the clause keeps its reducer, marked (MarkEasyMinMaxRow), and the linear form
-// states one row per member, which bound absorption folds into the column's box (D41). An equality is the pair of its
-// two relations, as BETWEEN is: the easy one by this identity, the other left in place for the helper.
+// `min(e) >= K` the mirror, so the clause keeps its reducer, marked (BoundDecideClause::minmax_easy), and the linear
+// form states one row per member, which bound absorption folds into the column's box (D41). An equality is the pair of
+// its two relations, as BETWEEN is: the easy one by this identity, the other left in place for the helper.
 //
 // The factor on a reducer stays outside it (the canonicalizer peels it outward): MIN and MAX are order statistics, so
 // they commute with a positive factor only, and the sign is part of the direction. A factor whose sign is not known
@@ -76,26 +75,23 @@ static const BoundAggregateExpression *MatchLoneSignedExtremum(const Expression 
 }
 
 void DecideOptimizer::RewriteMinMax(LogicalDecide &decide) {
-	vector<unique_ptr<Expression>> new_constraints;
-	decide.EnumerateBodies([&](DecideOwnedBody &body) {
-		if (body.owner == DecideOwnedBody::Owner::CLAUSE) {
-			RewriteMinMaxInClause(body.expr, decide, new_constraints, body.scope);
-		}
-	});
-	for (auto &nc : new_constraints) {
-		decide.AddConstraint(optimizer.context, std::move(nc));
+	vector<BoundDecideClause> new_clauses;
+	for (auto &clause : decide.bound.clauses) {
+		RewriteMinMaxInClause(clause, decide, new_clauses);
+	}
+	for (auto &clause : new_clauses) {
+		decide.AddClause(optimizer.context, std::move(clause));
 	}
 }
 
-void DecideOptimizer::RewriteMinMaxInClause(unique_ptr<Expression> &expr, LogicalDecide &decide,
-                                            vector<unique_ptr<Expression>> &new_constraints,
-                                            const DecideEnclosingScope &scope) {
+void DecideOptimizer::RewriteMinMaxInClause(BoundDecideClause &clause, LogicalDecide &decide,
+                                            vector<BoundDecideClause> &new_clauses) {
 	// A clause in the VALUE shape holds its reducers in helpers, whatever their direction.
-	if (expr->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON ||
-	    HasDecideTag(expr->GetAlias(), VALUE_REWRITE_TAG)) {
+	if (clause.body->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON ||
+	    HasDecideTag(clause.body->GetAlias(), VALUE_REWRITE_TAG)) {
 		return;
 	}
-	auto &comp = expr->Cast<BoundComparisonExpression>();
+	auto &comp = clause.body->Cast<BoundComparisonExpression>();
 
 	ScaledAggregateMatch scale_match;
 	int term_sign;
@@ -118,8 +114,8 @@ void DecideOptimizer::RewriteMinMaxInClause(unique_ptr<Expression> &expr, Logica
 	if (!is_easy && cmp_type != ExpressionType::COMPARE_EQUAL) {
 		return;
 	}
-	AddRewriteAccount(decide, ClauseOriginOf(comp).source_clause_id,
-	                  LogicalDecide::RewriteAccount::Kind::EXTREMUM_EACH_MEMBER, RenderForPlan(agg, decide));
+	AddRewriteAccount(decide, clause.origin.source_clause_id, LogicalDecide::RewriteAccount::Kind::EXTREMUM_EACH_MEMBER,
+	                  RenderForPlan(agg, decide));
 
 	if (cmp_type == ExpressionType::COMPARE_EQUAL) {
 		// MAX(expr) = K is (expr <= K) AND (MAX(expr) >= K), and MIN(expr) = K is (expr >= K) AND (MIN(expr) <= K). A
@@ -132,21 +128,25 @@ void DecideOptimizer::RewriteMinMaxInClause(unique_ptr<Expression> &expr, Logica
 			easy_cmp_type = FlipComparisonExpression(easy_cmp_type);
 			other_cmp_type = FlipComparisonExpression(other_cmp_type);
 		}
-		// The easy half is a copy of the comparison; the other keeps the original, which the helper takes.
-		unique_ptr<Expression> easy =
-		    make_uniq<BoundComparisonExpression>(easy_cmp_type, comp.left->Copy(), comp.right->Copy());
-		easy->alias = comp.alias;
-		MarkEasyMinMaxRow(*easy);
-		// The clause's own `per K:` stands outermost: the easy half stands for the same classes (D28) and prints in
-		// front as written.
-		easy = ScopeRowPerClause(optimizer.context, decide, std::move(easy), scope, ClauseOriginOf(comp));
-		new_constraints.push_back(std::move(easy));
+		// The easy half is a copy of the clause with the easy relation; the other keeps the original, which the helper
+		// takes.
+		BoundDecideClause easy;
+		easy.body = make_uniq<BoundComparisonExpression>(easy_cmp_type, comp.left->Copy(), comp.right->Copy());
+		easy.body->alias = comp.alias;
+		easy.origin = clause.origin;
+		easy.structural = clause.structural;
+		easy.defines = clause.defines;
+		easy.minmax_easy = true;
+		// Under the clause's own `per K:`, the easy half stands for the same classes (D28) and prints in front as
+		// written.
+		ScopeRowPerClause(optimizer.context, decide, easy, clause);
+		new_clauses.push_back(std::move(easy));
 		comp.type = other_cmp_type;
 		return;
 	}
 	// The reducer stays: the linear form bounds each member (its `when` chooses the members, its `by` the rows the
 	// bound is reduced over); bound absorption folds a bare `max(x) <= K` into the column box (D41).
-	MarkEasyMinMaxRow(comp);
+	clause.minmax_easy = true;
 }
 
 } // namespace duckdb

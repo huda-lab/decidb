@@ -1270,6 +1270,44 @@ DecideVariableType EnumUtil::FromString<DecideVariableType>(const char *value) {
 	return static_cast<DecideVariableType>(StringUtil::StringToEnum(GetDecideVariableTypeValues(), 3, "DecideVariableType", value));
 }
 
+const StringUtil::EnumStringLiteral *GetDecideBetweenHalfValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+		{ static_cast<uint32_t>(DecideBetweenHalf::NONE), "NONE" },
+		{ static_cast<uint32_t>(DecideBetweenHalf::LOWER), "LOWER" },
+		{ static_cast<uint32_t>(DecideBetweenHalf::UPPER), "UPPER" }
+	};
+	return values;
+}
+
+template<>
+const char* EnumUtil::ToChars<DecideBetweenHalf>(DecideBetweenHalf value) {
+	return StringUtil::EnumToString(GetDecideBetweenHalfValues(), 3, "DecideBetweenHalf", static_cast<uint32_t>(value));
+}
+
+template<>
+DecideBetweenHalf EnumUtil::FromString<DecideBetweenHalf>(const char *value) {
+	return static_cast<DecideBetweenHalf>(StringUtil::StringToEnum(GetDecideBetweenHalfValues(), 3, "DecideBetweenHalf", value));
+}
+
+const StringUtil::EnumStringLiteral *GetDecidePerRoleValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+		{ static_cast<uint32_t>(DecidePerRole::NONE), "NONE" },
+		{ static_cast<uint32_t>(DecidePerRole::ONE_ROW_PER_CLASS), "ONE_ROW_PER_CLASS" },
+		{ static_cast<uint32_t>(DecidePerRole::NAMES_CLASSES), "NAMES_CLASSES" }
+	};
+	return values;
+}
+
+template<>
+const char* EnumUtil::ToChars<DecidePerRole>(DecidePerRole value) {
+	return StringUtil::EnumToString(GetDecidePerRoleValues(), 3, "DecidePerRole", static_cast<uint32_t>(value));
+}
+
+template<>
+DecidePerRole EnumUtil::FromString<DecidePerRole>(const char *value) {
+	return static_cast<DecidePerRole>(StringUtil::StringToEnum(GetDecidePerRoleValues(), 3, "DecidePerRole", value));
+}
+
 const StringUtil::EnumStringLiteral *GetDecideSenseValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 		{ static_cast<uint32_t>(DecideSense::MAXIMIZE), "MAXIMIZE" },

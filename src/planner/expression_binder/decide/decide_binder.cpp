@@ -33,7 +33,6 @@
 
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 
 namespace duckdb {
 

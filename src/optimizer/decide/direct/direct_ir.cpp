@@ -8,7 +8,6 @@
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
@@ -402,16 +401,17 @@ private:
 	// Constraints
 	//===--------------------------------------------------------------------===//
 
-	DirectIRConstraint ReadConstraint(const Expression &leaf, const DecideEnclosingScope &wrappers) const {
+	DirectIRConstraint ReadConstraint(const BoundDecideClause &clause) const {
+		auto &leaf = *clause.body;
 		DirectIRConstraint ir_node;
-		const idx_t source_id = ClauseOriginOf(leaf).source_clause_id;
+		const idx_t source_id = clause.origin.source_clause_id;
 		if (source_id != DConstants::INVALID_INDEX) {
-			D_ASSERT(source_id < decide.constraint_sources.size());
+			D_ASSERT(source_id < decide.bound.constraint_sources.size());
 			ir_node.written = DecideClauseRefOf(decide.bound.constraint_sources, decide.bound.source_text, source_id);
 		} else {
 			MarkNotProved(ir_node.status);
 		}
-		ReadScope(wrappers.Condition(), ir_node.scope);
+		ReadScope(clause.scope.when.get(), ir_node.scope);
 		if (HasDecideTag(leaf.GetAlias(), VALUE_REWRITE_TAG)) {
 			// No rule models the helper decision a reducer's value becomes.
 			MarkNotProved(ir_node.status);
@@ -438,9 +438,10 @@ private:
 			}
 			ir_node.rhs = comparison.right->Copy();
 			// Direct rules run before the MIN/MAX rewrite tags an easy extremum, so only a per-row bound reads here.
-			ir_node.singleton_row = DecideReadSingletonRow(context, decide, comparison, ir_node.bound);
+			ir_node.singleton_row =
+			    DecideReadSingletonRow(context, decide, comparison, clause.minmax_easy, ir_node.bound);
 			// Folding never reads a clause under a `when`: `when c: x <= 0` does not bound `x` everywhere.
-			ir_node.variable_bound = ir_node.singleton_row && ir_node.bound.folds && !wrappers.when_wrapper;
+			ir_node.variable_bound = ir_node.singleton_row && ir_node.bound.folds && !clause.scope.when;
 		}
 		for (auto &part : ir_node.lhs) {
 			if (part.status == DirectAnalysisStatus::NOT_PROVED) {
@@ -452,15 +453,14 @@ private:
 
 	void ReadConstraints(DirectIR &ir) const {
 		// The parser requires a SUCH THAT clause.
-		D_ASSERT(decide.decide_constraints);
-		ForEachScopedConstraintLeaf(*decide.bound.constraints,
-		                            [&](const Expression &leaf, const DecideEnclosingScope &scope) {
-			                            auto constraint = ReadConstraint(leaf, scope);
-			                            if (scope.per_wrapper) {
-				                            ReadPerClass(scope.PerKey(), constraint);
-			                            }
-			                            ir.constraints.push_back(std::move(constraint));
-		                            });
+		D_ASSERT(!decide.bound.clauses.empty());
+		for (auto &clause : decide.bound.clauses) {
+			auto constraint = ReadConstraint(clause);
+			if (clause.scope.HasPer()) {
+				ReadPerClass(clause.scope.class_key, constraint);
+			}
+			ir.constraints.push_back(std::move(constraint));
+		}
 	}
 
 	//! `per K: C` is one constraint per class of K and variant of C (D6, D70). An aggregate clause bounds the whole
@@ -494,11 +494,10 @@ private:
 		objective.offset = decide.bound.objective_constant_offset;
 		objective.written =
 		    DecideClauseRefOf(decide.bound.constraint_sources, decide.bound.source_text, DConstants::INVALID_INDEX);
-		if (!decide.bound.objective) {
+		if (!decide.bound.objective.body) {
 			return;
 		}
-		auto index = decide.decide_index;
-		const Expression *body = UnwrapDecideCasts(*decide.bound.objective, index);
+		const Expression *body = UnwrapDecideCasts(*decide.bound.objective.body, decide.decide_index);
 		if (HoldsValueRewrite(*body)) {
 			// No rule models the helper decision a nested reducer becomes (D81).
 			MarkNotProved(objective.status);
@@ -510,15 +509,7 @@ private:
 			MarkNotProved(objective.status);
 			return;
 		}
-		const Expression *when = nullptr;
-		if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			auto &wrapper = body->Cast<BoundConjunctionExpression>();
-			D_ASSERT(IsWhenFilterWrapper(wrapper) && wrapper.children.size() == 2);
-			when = wrapper.children[1].get();
-			body = UnwrapDecideCasts(*wrapper.children[0], index);
-		}
-		ReadScope(when, objective.scope);
-		D_ASSERT(body->GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION);
+		ReadScope(decide.bound.objective.scope.when.get(), objective.scope);
 		ReadParts(*body, objective.parts);
 		for (auto &part : objective.parts) {
 			if (part.status == DirectAnalysisStatus::NOT_PROVED) {

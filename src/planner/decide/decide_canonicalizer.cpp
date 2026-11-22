@@ -9,7 +9,6 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_product_form.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
@@ -1278,35 +1277,20 @@ static void TagNestedObjectiveReducers(const DecideCanonicalizer &canonicalizer,
 	    expr, [&](Expression &child) { TagNestedObjectiveReducers(canonicalizer, child, decide_index); });
 }
 
-unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjective(const Expression &objective,
-                                                                  double &out_constant_offset,
-                                                                  DecideSense sense) const {
-	auto desugared = DesugarNorms(objective);
-	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : objective);
-	return CanonicalizeObjectiveInternal(*written, out_constant_offset, sense == DecideSense::MAXIMIZE);
+BoundDecideClause DecideCanonicalizer::CanonicalizeObjective(const BoundDecideClause &objective,
+                                                             double &out_constant_offset, DecideSense sense) const {
+	// The `when` carries no algebra: a norm of data in it is replaced by its definition, and it is kept as it is.
+	auto result = objective.Copy();
+	result.EnumerateExpressions([&](unique_ptr<Expression> &expression) { DesugarNormsInPlace(expression); });
+	NormalizeProductsInPlace(context, decide_index, result.body);
+	result.body = CanonicalizeObjectiveInternal(*result.body, out_constant_offset, sense == DecideSense::MAXIMIZE);
+	return result;
 }
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const Expression &objective,
                                                                           double &out_constant_offset,
                                                                           bool negate) const {
 	DecideProfileScope profile("canonicalize.objective");
-	// A `when` or `per` wrapper carries no algebra: recurse into the objective child and copy
-	// the condition or grouping columns unchanged. Identical rule to C0, and the same
-	// wrapper predicate, so the two clauses cannot drift apart on what a wrapper is.
-	if (objective.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conjunction = objective.Cast<BoundConjunctionExpression>();
-		auto result = make_uniq<BoundConjunctionExpression>(conjunction.type);
-		result->children.push_back(
-		    CanonicalizeObjectiveInternal(*conjunction.children[0], out_constant_offset, negate));
-		for (idx_t i = 1; i < conjunction.children.size(); i++) {
-			result->children.push_back(conjunction.children[i]->Copy());
-		}
-		result->SetAlias(conjunction.GetAlias());
-		// The wrapper is rebuilt around the canonical body and stands where it was written (its `per`, its `when`).
-		DecideReplaces(*result, conjunction);
-		return std::move(result);
-	}
-
 	// No decision content anywhere. Not a shape this pass owns, and not an error: the binder refuses it.
 	if (!ReferencesDecideVar(objective)) {
 		return objective.Copy();
@@ -1456,6 +1440,7 @@ CanonicalConstraintClass DecideCanonicalizer::ClassifyCanonicalComparison(const 
 }
 
 void DecideCanonicalizer::ValidateCanonicalComparison(const BoundComparisonExpression &comparison,
+                                                      idx_t source_clause_id,
                                                       const vector<ConstraintSourceInfo> *sources) const {
 	if (ClassifyCanonicalComparison(comparison) == CanonicalConstraintClass::INVALID) {
 		throw InternalException("DECIDE canonicalizer: a decision survived on the bound side of '%s'",
@@ -1469,24 +1454,12 @@ void DecideCanonicalizer::ValidateCanonicalComparison(const BoundComparisonExpre
 		if (ExpressionExecutor::TryEvaluateScalar(context, *comparison.right, value) && value.IsNull()) {
 			// The bound as the user wrote it where canonicalization left it, else the clause's span.
 			auto &bound = *comparison.right;
-			const idx_t source_id = ClauseOriginOf(comparison).source_clause_id;
 			auto place = bound.GetQueryLocation().IsValid() ? bound.GetQueryLocation()
-			             : sources                          ? DecideClauseLocation(*sources, source_id)
+			             : sources                          ? DecideClauseLocation(*sources, source_clause_id)
 			                                                : optional_idx();
 			throw BinderException(place, "the bound '%s' is NULL", Quote(bound));
 		}
 	}
-}
-
-void DecideCanonicalizer::ValidateCanonicalTree(const Expression &constraints,
-                                                const vector<ConstraintSourceInfo> *sources) const {
-	auto validate = [&](const Expression &expression) {
-		if (expression.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-			ValidateCanonicalComparison(expression.Cast<BoundComparisonExpression>(), sources);
-		}
-		return true;
-	};
-	VisitConstraintTree(constraints, validate);
 }
 
 void DecideCanonicalizer::VerifyCanonicalComparison(const BoundComparisonExpression &comparison) const {
@@ -1519,77 +1492,15 @@ void DecideCanonicalizer::VerifyCanonicalComparison(const BoundComparisonExpress
 	}
 }
 
-//! C0's scope rule: under a wrapper there is one clause, and a `when` holds no other `when`, so every walk that
-//! carries the enclosing scope (DecideEnclosingScope) reads one scope per clause.
-static void VerifyOneScopePerClause(const Expression &expression, bool under_wrapper, bool under_when) {
-	if (expression.GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
-		return;
-	}
-	auto &conjunction = expression.Cast<BoundConjunctionExpression>();
-	if (!IsConstraintWrapper(conjunction) && under_wrapper) {
-		CanonicalInvariantFailure("C0", "a plain AND under a WHEN or per wrapper", expression);
-	}
-	if (IsWhenFilterWrapper(conjunction) && under_when) {
-		CanonicalInvariantFailure("C0", "a WHEN wrapper inside another WHEN wrapper", expression);
-	}
-	const bool wrapper = IsConstraintWrapper(conjunction);
-	const bool when = under_when || IsWhenFilterWrapper(conjunction);
-	for (idx_t i = 0; i < conjunction.children.size(); i++) {
-		if (IsConstraintChild(conjunction, i)) {
-			VerifyOneScopePerClause(*conjunction.children[i], under_wrapper || wrapper, when);
-		}
-	}
-}
-
-void DecideCanonicalizer::VerifyCanonicalTree(const Expression &constraints) const {
-	auto verify = [&](const Expression &expression) {
-		if (expression.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-			VerifyCanonicalComparison(expression.Cast<BoundComparisonExpression>());
-			return true;
-		}
-		if (expression.GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
-			// Optimizer-owned rewrites may replace a fully extracted constraint with a
-			// Boolean placeholder. C0 deliberately preserves non-comparison leaves.
-			return true;
-		}
-
-		auto &conjunction = expression.Cast<BoundConjunctionExpression>();
-		if (conjunction.type != ExpressionType::CONJUNCTION_AND) {
-			CanonicalInvariantFailure("C0", "constraint conjunction is not AND", expression);
-		}
-		if (IsWhenFilterWrapper(conjunction) && conjunction.children.size() != 2) {
-			CanonicalInvariantFailure("C0", "WHEN wrapper must contain one constraint and one condition", expression);
-		}
-		if (IsPerClassWrapper(conjunction) && conjunction.children.empty()) {
-			CanonicalInvariantFailure("C0", "per-class wrapper must contain a constraint", expression);
-		}
-		return true;
-	};
-	VisitConstraintTree(constraints, verify);
-}
-
-void DecideCanonicalizer::VerifyCanonicalObjectiveBody(const Expression &objective) const {
-	if (objective.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conjunction = objective.Cast<BoundConjunctionExpression>();
-		if (IsConstraintWrapper(conjunction)) {
-			if (conjunction.children.empty()) {
-				CanonicalInvariantFailure("O0", "objective wrapper has no objective child", objective);
-			}
-			VerifyCanonicalObjectiveBody(*conjunction.children[0]);
-			return;
-		}
-	}
-}
-
-void DecideCanonicalizer::VerifyCanonicalObjective(const Expression &objective) const {
+void DecideCanonicalizer::VerifyCanonicalObjective(const BoundDecideClause &objective) const {
 #ifdef DEBUG
 	try {
-		if (ContainsDesugarableNorm(objective, decide_index)) {
+		if (ContainsDesugarableNorm(*objective.body, decide_index) ||
+		    (objective.scope.when && ContainsDesugarableNorm(*objective.scope.when, decide_index))) {
 			CanonicalInvariantFailure("C8", "a norm with an expression for a definition was not replaced by it",
-			                          objective);
+			                          *objective.body);
 		}
-		VerifyCanonicalObjectiveBody(objective);
-		if (!ReferencesDecideVar(objective)) {
+		if (!ReferencesDecideVar(*objective.body)) {
 			return;
 		}
 		// Re-canonicalizing a canonical objective must peel nothing: every additive
@@ -1599,139 +1510,141 @@ void DecideCanonicalizer::VerifyCanonicalObjective(const Expression &objective) 
 		double residual_offset = 0.0;
 		auto fixed_point = CanonicalizeObjective(objective, residual_offset);
 		if (residual_offset != 0.0) {
-			CanonicalInvariantFailure("O2", "canonical objective still yields a constant offset", objective);
+			CanonicalInvariantFailure("O2", "canonical objective still yields a constant offset", *objective.body);
 		}
-		if (!CanonicalTreesEqual(objective, *fixed_point)) {
+		if (!CanonicalTreesEqual(*objective.body, *fixed_point.body)) {
 			CanonicalInvariantFailure(
-			    "O4/O7", "canonicalizing the objective again changes its structure, reducer scale, or tags", objective);
+			    "O4/O7", "canonicalizing the objective again changes its structure, reducer scale, or tags",
+			    *objective.body);
 		}
 	} catch (const InternalException &) {
 		throw;
 	} catch (const std::exception &ex) {
-		throw InternalException("DECIDE canonical objective verification failed for %s: %s", objective.ToString(),
+		throw InternalException("DECIDE canonical objective verification failed for %s: %s", objective.body->ToString(),
 		                        ex.what());
 	}
 #endif
 }
 
-void DecideCanonicalizer::VerifyCanonical(const Expression &constraints) const {
-	// One test per clause, so it runs in every build: each walk that carries a clause's scope relies on it.
-	VerifyOneScopePerClause(constraints, false, false);
+void DecideCanonicalizer::VerifyCanonical(const BoundDecideClause &clause) const {
 #ifdef DEBUG
 	try {
-		if (ContainsDesugarableNorm(constraints, decide_index)) {
+		if (ContainsDesugarableNorm(*clause.body, decide_index) ||
+		    (clause.scope.when && ContainsDesugarableNorm(*clause.scope.when, decide_index))) {
 			CanonicalInvariantFailure("C8", "a norm with an expression for a definition was not replaced by it",
-			                          constraints);
+			                          *clause.body);
 		}
-		VerifyCanonicalTree(constraints);
-		auto fixed_point = CanonicalizeTreeInternal(constraints);
-		if (!CanonicalTreesEqual(constraints, *fixed_point)) {
-			CanonicalInvariantFailure(
-			    "C4/C6/C7", "canonicalizing the tree again changes its structure, reducer scale, or provenance tags",
-			    constraints);
+		// Optimizer-owned rewrites may replace a fully extracted constraint with a Boolean placeholder. C0
+		// deliberately preserves non-comparison bodies.
+		if (clause.body->GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+			VerifyCanonicalComparison(clause.body->Cast<BoundComparisonExpression>());
+		}
+		auto fixed_point = CanonicalizeClauseBody(*clause.body, clause.scope);
+		if (!CanonicalTreesEqual(*clause.body, *fixed_point)) {
+			CanonicalInvariantFailure("C4/C6/C7",
+			                          "canonicalizing the clause again changes its structure, reducer scale, or tags",
+			                          *clause.body);
 		}
 	} catch (const InternalException &) {
 		throw;
 	} catch (const std::exception &ex) {
-		throw InternalException("DECIDE canonical invariant verification failed for %s: %s", constraints.ToString(),
+		throw InternalException("DECIDE canonical invariant verification failed for %s: %s", clause.body->ToString(),
 		                        ex.what());
 	}
 #endif
 }
 
-unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expression &constraints,
-                                                                     DecideEnclosingScope scope) const {
-	if (constraints.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = constraints.Cast<BoundConjunctionExpression>();
-		scope = EnterDecideScope(conj, scope);
-
-		auto result = make_uniq<BoundConjunctionExpression>(conj.type);
-		result->SetAlias(conj.GetAlias());
-		DecideReplaces(*result, conj); // as the objective's wrapper above
-		for (idx_t i = 0; i < conj.children.size(); i++) {
-			// A `when` or `per` wrapper holds the constraint in child 0; the remaining
-			// children are its condition / key columns and are not constraints.
-			result->children.push_back(IsConstraintChild(conj, i) ? CanonicalizeTreeInternal(*conj.children[i], scope)
-			                                                      : conj.children[i]->Copy());
-		}
-		// `per K:` over a clause in the aggregate shape adds no row to the model: its rows
-		// are one per `by` group of the kept rows, and every per-K constraint in a group
-		// differs only in its bound, which the group's tightest bound covers. The wrapper
-		// stays all the same: it names the classes each group's row stands for, which a
-		// diagnosis reports one by one (language/guide.md §8.1, D28); the linear form reads it
-		// as the clause's class key.
-		return std::move(result);
+unique_ptr<Expression> DecideCanonicalizer::CanonicalizeClauseBody(const Expression &body,
+                                                                   const DecideClauseScope &scope) const {
+	if (body.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+		return body.Copy();
 	}
-	if (constraints.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-		auto result = CanonicalizeComparisonInternal(constraints);
-		// The shape is decided here, once, with the clause's enclosing scope, and stamped on the comparison: a clause
-		// in the aggregate shape carries the `by` key its decision reducers share, as later rewrites rebuild the
-		// reducers, and one in the VALUE shape VALUE_REWRITE_TAG (ClassifyCanonicalComparison reads the stamp).
-		if (!ReferencesDecideVar(*result->Cast<BoundComparisonExpression>().right)) {
-			idx_t group_key;
-			auto shape = ClassifyScoped(result->Cast<BoundComparisonExpression>(),
-			                            scope.per_wrapper ? scope.PerKey() : DECIDE_ROW_KEY, group_key);
-			if (shape == ScopedShape::UNSUPPORTED) {
-				throw NotImplementedException(
-				    *result, "AVG in a <> constraint beside another term, or with its own when or per, "
-				             "is not supported");
-			}
-			idx_t stamped;
-			if (shape == ScopedShape::AGGREGATE && group_key != DConstants::INVALID_INDEX &&
-			    !TryParseGroupKeyTag(result->GetAlias(), stamped)) {
-				auto alias = result->GetAlias();
-				AddDecideTag(alias, MakeGroupKeyTag(group_key));
-				result->SetAlias(std::move(alias));
-			}
-			if (shape == ScopedShape::VALUE && !HasDecideTag(result->GetAlias(), VALUE_REWRITE_TAG)) {
-				auto alias = result->GetAlias();
-				AddDecideTag(alias, VALUE_REWRITE_TAG);
-				result->SetAlias(std::move(alias));
-			}
+	auto result = CanonicalizeComparisonInternal(body);
+	// The shape is decided here, once, with the clause's scope, and stamped on the comparison: a clause in the
+	// aggregate shape carries the `by` key its decision reducers share, as later rewrites rebuild the reducers, and
+	// one in the VALUE shape VALUE_REWRITE_TAG (ClassifyCanonicalComparison reads the stamp). `per K:` over a clause
+	// in the aggregate shape adds no row to the model: its rows are one per `by` group of the kept rows, and every
+	// per-K constraint in a group differs only in its bound, which the group's tightest bound covers. The clause
+	// keeps its `per` all the same: it names the classes each group's row stands for, which a diagnosis reports one
+	// by one (language/guide.md §8.1, D28); the linear form reads it as the clause's class key.
+	if (!ReferencesDecideVar(*result->Cast<BoundComparisonExpression>().right)) {
+		idx_t group_key;
+		auto shape = ClassifyScoped(result->Cast<BoundComparisonExpression>(),
+		                            scope.HasPer() ? scope.class_key : DECIDE_ROW_KEY, group_key);
+		if (shape == ScopedShape::UNSUPPORTED) {
+			throw NotImplementedException(*result,
+			                              "AVG in a <> constraint beside another term, or with its own when or per, "
+			                              "is not supported");
 		}
-		return result;
+		idx_t stamped;
+		if (shape == ScopedShape::AGGREGATE && group_key != DConstants::INVALID_INDEX &&
+		    !TryParseGroupKeyTag(result->GetAlias(), stamped)) {
+			auto alias = result->GetAlias();
+			AddDecideTag(alias, MakeGroupKeyTag(group_key));
+			result->SetAlias(std::move(alias));
+		}
+		if (shape == ScopedShape::VALUE && !HasDecideTag(result->GetAlias(), VALUE_REWRITE_TAG)) {
+			auto alias = result->GetAlias();
+			AddDecideTag(alias, VALUE_REWRITE_TAG);
+			result->SetAlias(std::move(alias));
+		}
 	}
-	return constraints.Copy();
+	return result;
 }
 
-//! Whether canonicalization changed each clause: the comparison of `canonical` that carries a source clause tag against
-//! the one of `written` that carries the same tag, on the bound tree. A clause the canonicalizer leaves alone comes
-//! back equal.
-static void ReportChangedClauses(const Expression &written, const Expression &canonical,
+//! Whether canonicalization changed each clause: the comparison of `canonical` against the one of `written` of the
+//! same source clause, on the bound expressions. A clause the canonicalizer leaves alone comes back equal.
+static void ReportChangedClauses(const vector<BoundDecideClause> &written, const vector<BoundDecideClause> &canonical,
                                  vector<ConstraintSourceInfo> &sources) {
 	unordered_map<idx_t, const BoundComparisonExpression *> before;
-	ForEachConstraintLeaf(written, [&](const Expression &leaf) {
-		const idx_t source_id = ClauseOriginOf(leaf).source_clause_id;
-		if (leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON && source_id != DConstants::INVALID_INDEX) {
-			before[source_id] = &leaf.Cast<BoundComparisonExpression>();
+	for (auto &clause : written) {
+		if (clause.body->GetExpressionClass() == ExpressionClass::BOUND_COMPARISON &&
+		    clause.origin.source_clause_id != DConstants::INVALID_INDEX) {
+			before[clause.origin.source_clause_id] = &clause.body->Cast<BoundComparisonExpression>();
 		}
-	});
-	ForEachConstraintLeaf(canonical, [&](const Expression &leaf) {
-		const idx_t source_id = ClauseOriginOf(leaf).source_clause_id;
-		if (leaf.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON || source_id >= sources.size()) {
-			return;
+	}
+	for (auto &clause : canonical) {
+		const idx_t source_id = clause.origin.source_clause_id;
+		if (clause.body->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON || source_id >= sources.size()) {
+			continue;
 		}
 		auto found = before.find(source_id);
 		if (found == before.end()) {
-			return;
+			continue;
 		}
-		auto &after = leaf.Cast<BoundComparisonExpression>();
+		auto &after = clause.body->Cast<BoundComparisonExpression>();
 		auto &was = *found->second;
 		sources[source_id].canonical_differs = was.type != after.type || !Expression::Equals(*was.left, *after.left) ||
 		                                       !Expression::Equals(*was.right, *after.right);
-	});
+	}
 }
 
-unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTree(const Expression &constraints,
-                                                             vector<ConstraintSourceInfo> *sources) const {
-	auto desugared = DesugarNorms(constraints);
-	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : constraints);
-	auto result = CanonicalizeTreeInternal(*written);
-	ValidateCanonicalTree(*result, sources);
-	if (sources) {
-		ReportChangedClauses(constraints, *result, *sources);
+void DecideCanonicalizer::CanonicalizeClauses(vector<BoundDecideClause> &clauses,
+                                              vector<ConstraintSourceInfo> *sources) const {
+	// Each step runs over every clause before the next starts, so the first clause a step refuses is the one named.
+	vector<BoundDecideClause> canonical;
+	for (auto &clause : clauses) {
+		canonical.push_back(clause.Copy());
 	}
-	return result;
+	for (auto &clause : canonical) {
+		clause.EnumerateExpressions([&](unique_ptr<Expression> &expression) { DesugarNormsInPlace(expression); });
+	}
+	for (auto &clause : canonical) {
+		NormalizeProductsInPlace(context, decide_index, clause.body);
+	}
+	for (auto &clause : canonical) {
+		clause.body = CanonicalizeClauseBody(*clause.body, clause.scope);
+	}
+	for (auto &clause : canonical) {
+		if (clause.body->GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+			ValidateCanonicalComparison(clause.body->Cast<BoundComparisonExpression>(), clause.origin.source_clause_id,
+			                            sources);
+		}
+	}
+	if (sources) {
+		ReportChangedClauses(clauses, canonical, *sources);
+	}
+	clauses = std::move(canonical);
 }
 
 //===--------------------------------------------------------------------===//
@@ -1946,74 +1859,43 @@ void DecideCanonicalizer::SignQualifiedReducers(Expression &expr, const DecideRe
 	reducer.SetAlias(std::move(alias));
 }
 
-void DecideCanonicalizer::BuildConstraintSignatures(Expression &constraints, DecideSignatures &out) const {
-	BuildConstraintSignatures(constraints, nullptr, out);
-}
-
-void DecideCanonicalizer::BuildConstraintSignatures(Expression &expr, const Expression *when,
-                                                    DecideSignatures &out) const {
-	if (expr.GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
+void DecideCanonicalizer::BuildConstraintSignatures(vector<BoundDecideClause> &clauses, DecideSignatures &out) const {
+	for (auto &clause : clauses) {
+		const Expression *when = clause.scope.when.get();
 		DecideReducerPath path;
 		if (when) {
 			path.conditions.push_back(when);
 		}
-		SignQualifiedReducers(expr, path, Clause::CONSTRAINT, ClauseOriginOf(expr).source_clause_id, out);
-		return;
-	}
-	auto &conj = expr.Cast<BoundConjunctionExpression>();
-	auto scope = EnterDecideScope(conj, DecideEnclosingScope());
-	const Expression *inner_when = scope.when_wrapper ? scope.Condition() : when;
-	for (idx_t i = 0; i < conj.children.size(); i++) {
-		if (IsConstraintChild(conj, i)) {
-			BuildConstraintSignatures(*conj.children[i], inner_when, out);
+		SignQualifiedReducers(*clause.body, path, Clause::CONSTRAINT, clause.origin.source_clause_id, out);
+		if (!clause.scope.HasPer()) {
+			continue;
 		}
-	}
-	if (!scope.per_wrapper) {
-		return;
-	}
-	// `per K: C` is one instance per class of K and distinct value of C's fields (D70): the columns its tuple terms
-	// read and its decisions outside reducers, and its reducers' `by` keys (D83). A `per` wrapper holds one
-	// clause (C0), under at most one `when`.
-	const Expression *rows = when;
-	idx_t source_clause_id = DConstants::INVALID_INDEX;
-	vector<DecideSignatureField> fields;
-	auto key = scope.PerKey();
-	ForEachScopedConstraintLeaf(*conj.children[0], [&](const Expression &leaf, const DecideEnclosingScope &below) {
-		if (below.when_wrapper) {
-			rows = below.Condition();
+		// `per K: C` is one instance per class of K and distinct value of C's fields (D70): the columns its tuple
+		// terms read and its decisions outside reducers, and its reducers' `by` keys (D83).
+		vector<DecideSignatureField> fields;
+		const auto key = clause.scope.class_key;
+		CollectSignatureFields(*clause.body, key, fields);
+		if (fields.empty()) {
+			continue; // one instance per class, as the key alone gives
 		}
-		CollectSignatureFields(leaf, key, fields);
-		if (source_clause_id == DConstants::INVALID_INDEX) {
-			source_clause_id = ClauseOriginOf(leaf).source_clause_id;
-		}
-	});
-	if (fields.empty()) {
-		return; // one instance per class, as the key alone gives
+		auto key_text = message_names ? RenderDecidePerKey(key, clause.per_location, message_names->text, &keys)
+		                              : DecideKeyText(keys, key);
+		clause.scope.signature =
+		    AddSignature(out, when, key, std::move(fields), "per " + key_text, clause.origin.source_clause_id);
 	}
-	auto key_text = message_names ? RenderDecidePerKey(conj, message_names->text, &keys) : DecideKeyText(keys, key);
-	auto signature = AddSignature(out, rows, key, std::move(fields), "per " + key_text, source_clause_id);
-	SetPerWrapperSignature(conj, signature);
 }
 
-void DecideCanonicalizer::BuildObjectiveSignatures(Expression &objective, DecideSignatures &out) const {
-	Expression *body = &objective;
-	const Expression *when = nullptr;
-	if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = body->Cast<BoundConjunctionExpression>();
-		if (IsWhenFilterWrapper(conj) && conj.children.size() == 2) {
-			when = conj.children[1].get();
-			body = conj.children[0].get();
-		}
-	}
+void DecideCanonicalizer::BuildObjectiveSignatures(BoundDecideClause &objective, DecideSignatures &out) const {
+	const Expression *when = objective.scope.when.get();
 	DecideReducerPath path;
 	if (when) {
 		path.conditions.push_back(when);
 	}
-	SignQualifiedReducers(*body, path, Clause::OBJECTIVE, DConstants::INVALID_INDEX, out);
+	SignQualifiedReducers(*objective.body, path, Clause::OBJECTIVE, DConstants::INVALID_INDEX, out);
 	// Produced once (`per ()`, D72): a field with a second value over the kept rows would be a second objective, which
 	// execution refuses.
 	vector<DecideSignatureField> fields;
-	CollectSignatureFields(*body, DConstants::INVALID_INDEX, fields);
+	CollectSignatureFields(*objective.body, DConstants::INVALID_INDEX, fields);
 	if (!fields.empty()) {
 		out.objective = AddSignature(out, when, DConstants::INVALID_INDEX, std::move(fields), "the objective",
 		                             DConstants::INVALID_INDEX);
@@ -2090,53 +1972,37 @@ void DecideCanonicalizer::PlaceFramesIn(const Expression &expr, const DecideRedu
 	                                      [&](const Expression &child) { PlaceFramesIn(child, path, per, placement); });
 }
 
-void DecideCanonicalizer::PlaceClauseFrames(const Expression &expr, DecideEnclosingScope enclosing,
-                                            DecideFramePlacement &placement) const {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		auto inner = EnterDecideScope(conj, enclosing);
-		for (idx_t i = 0; i < conj.children.size(); i++) {
-			if (IsConstraintChild(conj, i)) {
-				PlaceClauseFrames(*conj.children[i], inner, placement);
-			}
+void DecideCanonicalizer::PlaceFrames(const vector<BoundDecideClause> &clauses, DecideFramePlacement &placement) const {
+	placement.placed.resize(placement.frames.size(), false);
+	for (auto &clause : clauses) {
+		DecideReducerPath path;
+		if (clause.scope.when) {
+			path.conditions.push_back(clause.scope.when.get());
 		}
-		return;
+		FramePerKey per;
+		if (clause.scope.HasPer()) {
+			per.key = clause.scope.class_key;
+			// The key as written (`per D.depotID`), cut from the query.
+			per.text =
+			    "per " + (message_names ? RenderDecidePerKey(per.key, clause.per_location, message_names->text, &keys)
+			                            : DecideKeyText(keys, per.key));
+		}
+		PlaceFramesIn(*clause.body, path, clause.scope.HasPer() ? &per : nullptr, placement);
 	}
-	DecideReducerPath path;
-	if (enclosing.Condition()) {
-		path.conditions.push_back(enclosing.Condition());
-	}
-	FramePerKey per;
-	if (enclosing.per_wrapper) {
-		per.key = enclosing.PerKey();
-		// The key as written (`per D.depotID`), cut from the query.
-		per.text = "per " + (message_names ? RenderDecidePerKey(*enclosing.per_wrapper, message_names->text, &keys)
-		                                   : DecideKeyText(keys, per.key));
-	}
-	PlaceFramesIn(expr, path, enclosing.per_wrapper ? &per : nullptr, placement);
 }
 
-void DecideCanonicalizer::PlaceFrames(const Expression &constraints, DecideFramePlacement &placement) const {
+void DecideCanonicalizer::PlaceObjectiveFrames(const BoundDecideClause &objective,
+                                               DecideFramePlacement &placement) const {
 	placement.placed.resize(placement.frames.size(), false);
-	PlaceClauseFrames(constraints, DecideEnclosingScope(), placement);
-}
-
-void DecideCanonicalizer::PlaceObjectiveFrames(const Expression &objective, DecideFramePlacement &placement) const {
-	placement.placed.resize(placement.frames.size(), false);
-	const Expression *body = &objective;
 	DecideReducerPath path;
-	if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = body->Cast<BoundConjunctionExpression>();
-		if (IsWhenFilterWrapper(conj) && conj.children.size() == 2) {
-			path.conditions.push_back(conj.children[1].get());
-			body = conj.children[0].get();
-		}
+	if (objective.scope.when) {
+		path.conditions.push_back(objective.scope.when.get());
 	}
 	// The objective is produced once, `per ()` (deck p. 62), so its one class lies in one timeline of every frame at
 	// its root, as a `per ()` clause's does (D75).
 	FramePerKey per;
 	per.text = "the objective (per ())";
-	PlaceFramesIn(*body, path, &per, placement);
+	PlaceFramesIn(*objective.body, path, &per, placement);
 }
 
 } // namespace duckdb

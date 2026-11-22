@@ -35,6 +35,7 @@ namespace duckdb {
 class ClientContext;
 class BoundComparisonExpression;
 struct DecideSourceNames;
+struct BoundDecideClause;
 struct DecideFrameSpec;
 
 //! A strict or <> comparison over a quantity that can take fractional values: `<`, `>` and `<>` step the bound onto
@@ -51,15 +52,15 @@ public:
 	DecideShapeCheck(ClientContext &context, idx_t decide_index, const DecideSourceNames &names,
 	                 const vector<DecideFrameSpec> &frames);
 
-	//! Judge every comparison of the canonical constraint tree.
-	void CheckConstraints(const Expression &constraints) const;
+	//! Judge every comparison of the canonical clauses.
+	void CheckConstraints(const vector<BoundDecideClause> &clauses) const;
 	//! Judge the canonical objective.
-	void CheckObjective(const Expression &objective) const;
+	void CheckObjective(const BoundDecideClause &objective) const;
 
 private:
 	//! One clause of the query, `whole`, read as `sides`: a comparison and its two sides, or the objective's body. It
 	//! raises when no side reads a decision, then judges each side.
-	void CheckClause(const Expression &whole, const vector<const Expression *> &sides) const;
+	void CheckClause(const BoundDecideClause &clause, const vector<const Expression *> &sides) const;
 	//! A `<`, `>` or `<>` compares a side that is whole-numbered by declared types, else it is refused.
 	void CheckIntegerStep(const BoundComparisonExpression &comparison) const;
 	//! One side of a comparison, or the objective: its vocabulary, its frames, then the degree of each term.

@@ -46,17 +46,15 @@ unique_ptr<LogicalOperator> Binder::PlanDecide(BoundSelectNode &statement, uniqu
 			}
 			ExpressionIterator::EnumerateChildren(*slot, collect_subqueries);
 		};
-		if (statement.decide.constraints) {
-			collect_subqueries(statement.decide.constraints);
+		for (auto &clause : statement.decide.clauses) {
+			clause.EnumerateExpressions(collect_subqueries);
 		}
 		// The objective passes through the same canonicalization boundary, so it
 		// needs the same correlation evidence. Without this an UNCORRELATED
 		// subquery scaling a reducer (`(SELECT k) * MAX(x)`) is indistinguishable
 		// from a row-varying column after flattening, hits the fail-safe default,
 		// and is rejected for varying per row when it does not.
-		if (statement.decide.objective) {
-			collect_subqueries(statement.decide.objective);
-		}
+		statement.decide.objective.EnumerateExpressions(collect_subqueries);
 		// A frame's order key and its fallback are data expressions read beside the
 		// clause, so a subquery in one carries the same evidence.
 		for (auto &frame : statement.decide.frames) {
@@ -73,7 +71,7 @@ unique_ptr<LogicalOperator> Binder::PlanDecide(BoundSelectNode &statement, uniqu
 	// `is_outside_flattened` deferral because nothing reads their expressions
 	// again until RecursiveDependentJoinPlanner has peeled the outer subquery.
 	// A DECIDE clause does: canonicalization runs a few lines below, in this same
-	// function, and copies the constraint tree -- and copying a
+	// function, and copies the clauses -- and copying a
 	// BoundSubqueryExpression throws. Deferring here therefore fails any subquery
 	// written inside a nested DECIDE, whether that subquery is itself a DECIDE or
 	// a plain SELECT. Layer 4's input contract is a subquery-free bound tree, so
@@ -128,7 +126,7 @@ unique_ptr<LogicalOperator> Binder::PlanDecide(BoundSelectNode &statement, uniqu
 	// variable is exactly a BoundColumnRefExpression on decide_index -- and
 	// because it must see the flattened form PlanSubqueries just produced.
 	// Everything the optimizer emits later is canonicalized by
-	// LogicalDecide::AddConstraint. Those two are the only call sites.
+	// LogicalDecide::AddClause. Those two are the only call sites.
 	string written_objective;
 	string canonical_objective;
 	bool objective_canonical_differs = false;
@@ -148,24 +146,28 @@ unique_ptr<LogicalOperator> Binder::PlanDecide(BoundSelectNode &statement, uniqu
 		canonicalizer.frames = &statement.decide.frames;
 		// The algebra of every clause, judged once on the one spelling canonicalization wrote.
 		DecideShapeCheck shape_check(context, statement.decide_index, message_names, statement.decide.frames);
-		if (statement.decide.constraints) {
-			statement.decide.constraints =
-			    canonicalizer.CanonicalizeTree(*statement.decide.constraints, &statement.decide.constraint_sources);
-			// Before the walks below, which read a comparison that holds a decision.
-			shape_check.CheckConstraints(*statement.decide.constraints);
-			canonicalizer.PlaceFrames(*statement.decide.constraints, frame_placement);
-			canonicalizer.BuildConstraintSignatures(*statement.decide.constraints, signatures);
-			canonicalizer.VerifyCanonical(*statement.decide.constraints);
-			FinalizeConstraintSourceInfo(*statement.decide.constraints, statement.decide.constraint_sources,
-			                             statement.decide.source_text, statement.decide.keyed_scopes,
-			                             statement.decide_index, &statement.decide.keys, statement.decide.frames);
-			canonicalizer.SkipNullData(*statement.decide.constraints, statement.decide.keyed_scopes,
-			                           statement.decide.keys);
+		auto &clauses = statement.decide.clauses;
+		canonicalizer.CanonicalizeClauses(clauses, &statement.decide.constraint_sources);
+		// Before the walks below, which read a comparison that holds a decision.
+		shape_check.CheckConstraints(clauses);
+		canonicalizer.PlaceFrames(clauses, frame_placement);
+		canonicalizer.BuildConstraintSignatures(clauses, signatures);
+		for (auto &clause : clauses) {
+			canonicalizer.VerifyCanonical(clause);
+		}
+		FinalizeConstraintSourceInfo(clauses, statement.decide.constraint_sources, statement.decide.source_text,
+		                             statement.decide.keyed_scopes, statement.decide_index, &statement.decide.keys,
+		                             statement.decide.frames);
+		auto skip_null_data = [&](unique_ptr<Expression> &expression) {
+			canonicalizer.SkipNullData(*expression, statement.decide.keyed_scopes, statement.decide.keys);
+		};
+		for (auto &clause : clauses) {
+			clause.EnumerateExpressions(skip_null_data);
 		}
 		// The objective is one side of a comparison, so it belongs to the same
 		// boundary. It carries no relation to orient, which is the only part of
 		// the constraint contract that does not apply to it.
-		if (statement.decide.objective) {
+		if (statement.decide.objective.body) {
 			// The objective's counterpart to InitializeConstraintSourceInfo /
 			// FinalizeConstraintSourceInfo: written on the way in, canonical on the
 			// way out, captured around the one call that can change it. There is
@@ -179,24 +181,23 @@ unique_ptr<LogicalOperator> Binder::PlanDecide(BoundSelectNode &statement, uniqu
 			// As for a clause: the text the user wrote, cut at the parser's OBJECTIVE span, and DeciDB's
 			// renderings before and after canonicalization to tell whether it changed. The rendering stands in
 			// for the text only for a statement built without the parser's text.
-			auto rendered_objective = RenderDecideObjective(*statement.decide.objective, objective_names);
+			auto rendered_objective = RenderDecideObjective(statement.decide.objective, objective_names);
 			if (!statement.decide.source_text.Cut(statement.decide.source_text.tail_start, DecideSpanRole::OBJECTIVE,
 			                                      written_objective)) {
 				written_objective = rendered_objective;
 			}
 			statement.decide.objective = canonicalizer.CanonicalizeObjective(
-			    *statement.decide.objective, statement.decide.objective_constant_offset, statement.decide.sense);
-			shape_check.CheckObjective(*statement.decide.objective);
-			canonicalizer.PlaceObjectiveFrames(*statement.decide.objective, frame_placement);
-			canonicalizer.BuildObjectiveSignatures(*statement.decide.objective, signatures);
-			canonicalizer.VerifyCanonicalObjective(*statement.decide.objective);
+			    statement.decide.objective, statement.decide.objective_constant_offset, statement.decide.sense);
+			shape_check.CheckObjective(statement.decide.objective);
+			canonicalizer.PlaceObjectiveFrames(statement.decide.objective, frame_placement);
+			canonicalizer.BuildObjectiveSignatures(statement.decide.objective, signatures);
+			canonicalizer.VerifyCanonicalObjective(statement.decide.objective);
 			// The canonical objective is a minimization; its layer reads in the sense the user wrote, so the flip
 			// alone is no difference to show.
-			canonical_objective = RenderDecideObjective(*statement.decide.objective, objective_names,
+			canonical_objective = RenderDecideObjective(statement.decide.objective, objective_names,
 			                                            statement.decide.sense == DecideSense::MAXIMIZE);
 			objective_canonical_differs = canonical_objective != rendered_objective;
-			canonicalizer.SkipNullData(*statement.decide.objective, statement.decide.keyed_scopes,
-			                           statement.decide.keys);
+			statement.decide.objective.EnumerateExpressions(skip_null_data);
 		}
 		// A frame stands in one clause or in the objective, never nowhere: one the walks above missed would read
 		// every row as its timeline.

@@ -23,9 +23,9 @@ public:
 	                      optional_ptr<DecideQualifierContext> qualifier_context = nullptr);
 	DecideSense decide_sense = DecideSense::MINIMIZE;
 
-	//! Binds `[when c] [per ()]: objective`: `per ()` is the objective's only key and adds nothing; `when c` becomes
-	//! the WHEN wrapper.
-	unique_ptr<Expression> BindObjective(DecideClause &objective);
+	//! Binds `[when c] [per ()]: objective`: `per ()` is the objective's only key and adds nothing; `when c` is the
+	//! clause's `when`.
+	BoundDecideClause BindObjective(DecideClause &objective);
 
 protected:
 	BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,

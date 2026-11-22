@@ -60,7 +60,7 @@ void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {
 	// The tags this pass adds are read by no canonicalization, so the objective is not reinstalled.
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
 		if (BilinearReadsBody(decide, body)) {
-			FindAndReplaceBilinear(body.expr, decide, body.origin);
+			FindAndReplaceBilinear(body.expr, decide, body.Origin());
 		}
 	});
 }
@@ -196,7 +196,7 @@ idx_t AddBooleanProduct(LogicalDecide &decide, DecideBilinearFunctionGroup &grou
 } // namespace
 
 void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide,
-                                             const DecideRowOrigin &inherited) {
+                                             const DecideRowOrigin &origin) {
 	if (!expr) {
 		return;
 	}
@@ -204,7 +204,6 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 	if (TryParseDecideIndexTag(expr->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
 		return; // its source body is compiled from DefinitionFunction metadata, exactly once
 	}
-	const auto origin = DescendClauseOrigin(*expr, inherited);
 	idx_t existing_group;
 	if (TryParseDecideIndexTag(expr->GetAlias(), BILINEAR_FUNCTION_GROUP_TAG_PREFIX, existing_group)) {
 		if (existing_group >= decide.bilinear_function_groups.size()) {

@@ -10,8 +10,9 @@
 
 #include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/enums/decide.hpp"
-#include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/common/optional_idx.hpp"
 #include "duckdb/planner/expression.hpp"
+#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 
 namespace duckdb {
 
@@ -99,20 +100,22 @@ struct DecideProductGroup {
 	idx_t child = DConstants::INVALID_INDEX;
 };
 
-//! The scope of a clause that has left the constraint tree, owned: the rows its `when` keeps and what its `per K:`
-//! does. Built from the borrowed DecideEnclosingScope (decide_constraint_walk.hpp) the clause sat under, and carried
-//! by every holder of such a clause (DecideConstraint) as this one parameter
-//! object. A clause reads only the rows its `when` keeps (a NULL on another row is never evaluated), and
-//! LogicalDecide::value_checks have passed before it is evaluated.
+//! What a clause's `per K:` / `per ()` does (DecideClauseScope::per). ONE_ROW_PER_CLASS: the per-row shape emits one
+//! row per class of `class_key` and variant of `signature` among the kept rows, the variant's first (`per ()` is one
+//! class). NAMES_CLASSES: the aggregate shape and the scoped easy MIN/MAX emit their own rows, and the key only names
+//! the classes each row stands for, which a diagnosis reports one by one (D28). NONE: no `per` written, so every kept
+//! row of a group is a class of its own. A bound clause holds NONE or NAMES_CLASSES: the tree decides
+//! ONE_ROW_PER_CLASS from the clause's shape (ReadDecideClauseFacts).
+enum class DecidePerRole : uint8_t { NONE, ONE_ROW_PER_CLASS, NAMES_CLASSES };
+
+//! The scope of a clause: the rows its `when` keeps and what its `per K:` does. Carried by every holder of a clause
+//! (BoundDecideClause, DecideConstraint) as this one parameter object. A clause reads only the rows its `when` keeps
+//! (a NULL on another row is never evaluated), and LogicalDecide::value_checks have passed before it is evaluated.
 struct DecideClauseScope {
 	//! The clause's `when`, or null for every row.
 	unique_ptr<Expression> when;
-	//! What the clause's `per K:` / `per ()` does. ONE_ROW_PER_CLASS: the per-row shape emits one row per class of
-	//! `class_key` and variant of `signature` among the kept rows, the variant's first (`per ()` is one class).
-	//! NAMES_CLASSES: the aggregate shape and the scoped easy MIN/MAX emit their own rows, and
-	//! the key only names the classes each row stands for, which a diagnosis reports one by one (D28). NONE: no `per`
-	//! written, so every kept row of a group is a class of its own.
-	enum class PerRole : uint8_t { NONE, ONE_ROW_PER_CLASS, NAMES_CLASSES };
+	//! What the clause's `per K:` / `per ()` does.
+	using PerRole = DecidePerRole;
 	PerRole per = PerRole::NONE;
 	//! The `per` key (index into LogicalDecide::keys); INVALID_INDEX with NONE and for `per ()`.
 	idx_t class_key = DConstants::INVALID_INDEX;
@@ -120,18 +123,104 @@ struct DecideClauseScope {
 	//! distinct value of its fields (D70); INVALID_INDEX when it has none, so one instance per class.
 	idx_t signature = DConstants::INVALID_INDEX;
 
-	DecideClauseScope() = default;
-	//! The scope of a clause under `enclosing`: its `when`, and its `per` naming the classes its rows stand for.
-	explicit DecideClauseScope(const DecideEnclosingScope &enclosing) {
-		if (enclosing.Condition()) {
-			when = enclosing.Condition()->Copy();
+	//! Whether a `per` is written (`per K:` or `per ()`).
+	bool HasPer() const {
+		return per != PerRole::NONE;
+	}
+	DecideClauseScope Copy() const {
+		DecideClauseScope result;
+		result.when = when ? when->Copy() : nullptr;
+		result.per = per;
+		result.class_key = class_key;
+		result.signature = signature;
+		return result;
+	}
+	//! The scope `per K:` (`per ()` for INVALID_INDEX) with no `when`.
+	static DecideClauseScope Per(idx_t class_key) {
+		DecideClauseScope result;
+		result.per = PerRole::NAMES_CLASSES;
+		result.class_key = class_key;
+		return result;
+	}
+};
+
+//! The rows two conditions both keep, a copy of each as a conjunction so every conjunct keeps its tags (a reducer's
+//! NULL test, SKIP_NULL_TAG); a null condition keeps every row, so the other stands alone, and null for both.
+inline unique_ptr<Expression> DecideRowsKeptByBoth(const Expression *first, const Expression *second) {
+	if (!first || !second) {
+		const Expression *only = first ? first : second;
+		return only ? only->Copy() : nullptr;
+	}
+	return make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, first->Copy(), second->Copy());
+}
+
+//! Which comparison of the two `x BETWEEN lo AND hi` binds to a clause is, `>=` being the lower one; NONE for any
+//! other clause. InitializeConstraintSourceInfo reads it to link the halves into the one clause the user wrote, and a
+//! render does not quote a half by the BETWEEN's span.
+enum class DecideBetweenHalf : uint8_t { NONE, LOWER, UPPER };
+
+//! One row of SUCH THAT (a written comparison, a BETWEEN half, an IN, a row a rewrite adds or the TRUE placeholder it
+//! leaves where it lifted a clause), or the objective. The bound clauses are a list of these (BoundDecide::clauses):
+//! each holds its own scope, so no pass carries one down a tree.
+struct BoundDecideClause {
+	//! The comparison, the IN or the placeholder; for the objective, the minimized expression. Null for an objective
+	//! the query did not write.
+	unique_ptr<Expression> body;
+	//! The clause's `when` and `per`.
+	DecideClauseScope scope;
+	//! Where the `per` stands in the query, for one the user wrote: its key is quoted as written from there.
+	optional_idx per_location;
+	//! The clause the row came from: its source clause, its removal group, and whether a rewrite made it for the
+	//! objective. A clause holds no repair group.
+	DecideRowOrigin origin;
+	DecideBetweenHalf between = DecideBetweenHalf::NONE;
+	//! A rewrite added the row to define an auxiliary or to link its machinery. Such a row is rigid: no repair loosens
+	//! it.
+	bool structural = false;
+	//! The auxiliary decision the row defines (an ABS's envelope, a body helper's definition, an L0 indicator's
+	//! links): the auxiliary has no value where what its definition reads has none (D88). INVALID_INDEX for every
+	//! other row.
+	idx_t defines = DConstants::INVALID_INDEX;
+	//! A MIN or MAX pushed its easy way (`max(e) <= K`, `min(e) >= K`) keeps its reducer: the linear form expands it
+	//! to one row per member (RewriteMinMax).
+	bool minmax_easy = false;
+	//! The whole meaning of the row, a bound on one decision, is folded into the decision column's box
+	//! (LogicalDecide::singleton_row_boxes), so it is not also a model row. The row stays, which EXPLAIN renders
+	//! (FoldSingletonRows).
+	bool folded_bound = false;
+	//! A repair model loosens the folded bound through the clause's own rows, one per kept row or class (D28), not
+	//! through one knob on the column.
+	bool folded_clause_rows = false;
+
+	BoundDecideClause Copy() const {
+		BoundDecideClause result;
+		result.body = body ? body->Copy() : nullptr;
+		result.scope = scope.Copy();
+		result.per_location = per_location;
+		result.origin = origin;
+		result.between = between;
+		result.structural = structural;
+		result.defines = defines;
+		result.minmax_easy = minmax_easy;
+		result.folded_bound = folded_bound;
+		result.folded_clause_rows = folded_clause_rows;
+		return result;
+	}
+
+	//! The body and the `when`, each slot once, in that order.
+	template <class CALLBACK>
+	void EnumerateExpressions(CALLBACK &&callback) {
+		if (body) {
+			callback(body);
 		}
-		if (enclosing.per_wrapper) {
-			per = PerRole::NAMES_CLASSES;
-			class_key = enclosing.PerKey();
-			signature = PerWrapperSignature(*enclosing.per_wrapper);
+		if (scope.when) {
+			callback(scope.when);
 		}
 	}
+
+	//! Generated from `storage/serialization/nodes.json`.
+	void Serialize(Serializer &serializer) const;
+	static BoundDecideClause Deserialize(Deserializer &deserializer);
 };
 
 //! One canonical comparison, flattened into terms.
@@ -144,12 +233,12 @@ struct DecideConstraint {
 	bool tightest_frame_bound = false;
 	ExpressionType comparison_type; // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
 	bool lhs_is_aggregate = false;  // True if original LHS was an aggregate (e.g., SUM(...))
-	bool was_minmax_easy = false;   // An easy-direction MIN/MAX kept its reducer (IsEasyMinMaxRow): one row per
-	                                // member, the bound reduced over each `by` group.
+	bool was_minmax_easy = false;   // An easy-direction MIN/MAX kept its reducer (BoundDecideClause::minmax_easy):
+	                                // one row per member, the bound reduced over each `by` group.
 	idx_t abs_aux_idx = DConstants::INVALID_INDEX; // ABS auxiliary this envelope row bounds
 	bool abs_is_pos_bound = false;                 // true=C1 (aux >= inner), false=C2 (aux >= -inner)
-	//! The auxiliary this row defines (DefinedHelperOf): it has no value on a row where the decisions the row reads
-	//! beside it have none (D88). INVALID_INDEX for every other row.
+	//! The auxiliary this row defines (BoundDecideClause::defines): it has no value on a row where the decisions the
+	//! row reads beside it have none (D88). INVALID_INDEX for every other row.
 	idx_t defined_var = DConstants::INVALID_INDEX;
 	//! The clause's `when` and `per`.
 	DecideClauseScope scope;

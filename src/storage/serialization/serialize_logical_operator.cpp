@@ -371,9 +371,9 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	LogicalOperator::Serialize(serializer);
 	serializer.WritePropertyWithDefault<idx_t>(200, "decide_index", decide_index);
 	serializer.WritePropertyWithDefault<vector<unique_ptr<Expression>>>(201, "decide_variables", bound.variables);
-	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(202, "decide_constraints", bound.constraints);
+	serializer.WritePropertyWithDefault<vector<BoundDecideClause>>(202, "clauses", bound.clauses);
 	serializer.WriteProperty<DecideSense>(203, "written_sense", bound.sense);
-	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(204, "decide_objective", bound.objective);
+	serializer.WriteProperty<BoundDecideClause>(204, "objective", bound.objective);
 	serializer.WritePropertyWithDefault<bool>(205, "diagnose", diagnose);
 	serializer.WritePropertyWithDefault<idx_t>(206, "num_auxiliary_vars", num_auxiliary_vars);
 	serializer.WritePropertyWithDefault<vector<bool>>(207, "is_boolean_var", bound.is_boolean_var);
@@ -400,9 +400,9 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	auto result = duckdb::unique_ptr<LogicalDecide>(new LogicalDecide());
 	deserializer.ReadPropertyWithDefault<idx_t>(200, "decide_index", result->decide_index);
 	deserializer.ReadPropertyWithDefault<vector<unique_ptr<Expression>>>(201, "decide_variables", result->bound.variables);
-	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(202, "decide_constraints", result->bound.constraints);
+	deserializer.ReadPropertyWithDefault<vector<BoundDecideClause>>(202, "clauses", result->bound.clauses);
 	deserializer.ReadProperty<DecideSense>(203, "written_sense", result->bound.sense);
-	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(204, "decide_objective", result->bound.objective);
+	deserializer.ReadProperty<BoundDecideClause>(204, "objective", result->bound.objective);
 	deserializer.ReadPropertyWithDefault<bool>(205, "diagnose", result->diagnose);
 	deserializer.ReadPropertyWithDefault<idx_t>(206, "num_auxiliary_vars", result->num_auxiliary_vars);
 	deserializer.ReadPropertyWithDefault<vector<bool>>(207, "is_boolean_var", result->bound.is_boolean_var);
