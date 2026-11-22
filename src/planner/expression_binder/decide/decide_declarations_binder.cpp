@@ -50,14 +50,30 @@ static void RefuseQualifiedDecisionReferences(const ParsedExpression &expr, Bind
 		}
 		throw BinderException(expr, "%s", DecisionInDataMessage(DecideWrittenSql(expr, text), "when, per and by"));
 	}
+	// A scope's condition and key and a `by` key are data positions.
+	if (IsDecideScope(expr)) {
+		auto scope = ReadDecideScope(expr);
+		RefuseQualifiedDecisionReferences(**scope.body, bind_context, variables, text, data_position);
+		if (scope.when) {
+			RefuseQualifiedDecisionReferences(**scope.when, bind_context, variables, text, true);
+		}
+		for (auto &element : scope.key) {
+			RefuseQualifiedDecisionReferences(*element, bind_context, variables, text, true);
+		}
+		return;
+	}
+	if (IsDecideBy(expr)) {
+		auto by = ReadDecideBy(expr);
+		RefuseQualifiedDecisionReferences(**by.call, bind_context, variables, text, data_position);
+		for (auto &element : by.key) {
+			RefuseQualifiedDecisionReferences(*element, bind_context, variables, text, true);
+		}
+		return;
+	}
 	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
 		auto &func = expr.Cast<FunctionExpression>();
-		// The children after the body of a scope or `by` marker are its condition or key.
-		bool scope = func.is_operator && (func.function_name == SCOPE_WHEN_TAG || func.function_name == SCOPE_PER_TAG ||
-		                                  func.function_name == REDUCER_BY_TAG);
-		for (idx_t i = 0; i < func.children.size(); i++) {
-			RefuseQualifiedDecisionReferences(*func.children[i], bind_context, variables, text,
-			                                  data_position || (scope && i > 0));
+		for (auto &child : func.children) {
+			RefuseQualifiedDecisionReferences(*child, bind_context, variables, text, data_position);
 		}
 		if (func.filter) {
 			RefuseQualifiedDecisionReferences(*func.filter, bind_context, variables, text, data_position);
@@ -97,17 +113,6 @@ static void RespellDecideAliases(ClientContext &context, ParsedExpression &expr)
 	}
 }
 
-//! One declaration `[per K:] name(TYPE)` as the parser leaves it: the comparison
-//! `name = 'type_marker'`, its name wrapped in the `SCOPE_PER_TAG` marker when a `per`
-//! was written.
-struct ParsedDeclaration {
-	const ColumnRefExpression *name = nullptr;
-	//! The `per` marker, or null when none was written or it was `per row`, the default
-	//! written out. One child means `per ()`.
-	const FunctionExpression *per = nullptr;
-	string type_marker;
-};
-
 //! A volatile function (`random()`) would take a different value each time a clause is read, and the solver reads a
 //! clause more than once (its scope checks, its rows, a bound-side reducer), so it is refused where it is written.
 //! A value computed once per row in a subquery or CTE is ordinary data.
@@ -120,24 +125,6 @@ static void RefuseVolatile(const Expression &expr) {
 		}
 	}
 	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { RefuseVolatile(child); });
-}
-
-//! The grammar builds a declaration as `name = 'type_marker'` (typed_decide_variable), the name a column reference,
-//! under a `per` or `per row` scope marker when the declaration has one.
-static ParsedDeclaration SplitDeclaration(const ParsedExpression &declaration) {
-	auto &comp = declaration.Cast<ComparisonExpression>();
-	ParsedDeclaration result;
-	auto *name = comp.left.get();
-	if (name->GetExpressionClass() == ExpressionClass::FUNCTION) {
-		auto &marker = name->Cast<FunctionExpression>();
-		if (marker.function_name == SCOPE_PER_TAG) {
-			result.per = &marker;
-		}
-		name = marker.children[0].get();
-	}
-	result.name = &name->Cast<ColumnRefExpression>();
-	result.type_marker = comp.right->Cast<ConstantExpression>().value.ToString();
-	return result;
 }
 
 DecideDeclarationsBinder::DecideDeclarationsBinder(Binder &binder, ClientContext &context)
@@ -163,7 +150,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 	// element can be told from a decision declared before or after it.
 	case_insensitive_set_t declared_names;
 	for (const auto &expr_ptr : statement.decide_variables) {
-		auto &name = SplitDeclaration(*expr_ptr).name->GetColumnName();
+		auto name = ReadDecideDeclaration(*expr_ptr).name;
 		// GetMatchingBinding skips a USING column (its binding is the join's merged column), so a
 		// decision named like one has to be asked for separately.
 		if (bind_context.GetMatchingBinding(name) || bind_context.GetUsingBinding(name)) {
@@ -176,19 +163,18 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 	}
 
 	for (const auto &expr_ptr : statement.decide_variables) {
-		auto declaration = SplitDeclaration(*expr_ptr);
-		string name = declaration.name->GetColumnName();
-		string type_marker = declaration.type_marker;
+		auto declaration = ReadDecideDeclaration(*expr_ptr);
+		auto &name = declaration.name;
 		idx_t var_idx = var_names.size();
 		decide_variable_names.emplace(name, var_idx);
 
 		// `per (): x` is one decision for the query and carries no key scope; `per K: x`
-		// is one per class of K; no `per` is one per result row.
-		if (declaration.per && declaration.per->children.size() == 1) {
+		// is one per class of K; no `per`, or `per row`, is one per result row.
+		if (declaration.scope.per == DecidePer::ALL) {
 			variable_scopes.push_back(DecideVarScopeInfo::Global());
-		} else if (declaration.per) {
-			auto key_text = DecideKeyToString(*declaration.per);
-			auto scope_idx = FindOrCreateKeyScope(context, binder, *declaration.per, declared_names, key_text,
+		} else if (declaration.scope.per == DecidePer::KEY) {
+			auto key_text = declaration.scope.key.ToString();
+			auto scope_idx = FindOrCreateKeyScope(context, binder, declaration.scope.key, declared_names, key_text,
 			                                      &statement.decide_text, keys, keyed_scopes);
 			keyed_scopes[scope_idx].scoped_variable_indices.push_back(var_idx);
 			variable_scopes.push_back(DecideVarScopeInfo::Keyed(scope_idx, key_text));
@@ -205,10 +191,10 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 		// DuckDB itself returns for generated integers (`range()`). `BOOL` stays
 		// INTEGER — its domain is 0/1, so it cannot overflow, and widening it would
 		// change an output column type for no gain.
-		var_types.push_back(type_marker == "real_variable"   ? LogicalType::DOUBLE
-		                    : type_marker == "bool_variable" ? LogicalType::INTEGER
-		                                                     : LogicalType::BIGINT);
-		is_boolean_var.push_back(type_marker == "bool_variable");
+		var_types.push_back(declaration.type == DecideVariableType::REAL   ? LogicalType::DOUBLE
+		                    : declaration.type == DecideVariableType::BOOL ? LogicalType::INTEGER
+		                                                                   : LogicalType::BIGINT);
+		is_boolean_var.push_back(declaration.type == DecideVariableType::BOOL);
 	}
 
 	// One spelling per function, before any check below reads a name.
@@ -233,11 +219,12 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 	// decision name is known now, so a decision in a condition or a key is named the
 	// way the user spelled it.
 	if (statement.decide_constraints) {
-		ValidateDecideScopeSpellings(*statement.decide_constraints, decide_variable_names, false,
-		                             &statement.decide_text);
+		for (auto &constraint : DecideConstraintList(statement.decide_constraints)) {
+			ValidateDecideScopeSpellings(*constraint.get(), decide_variable_names, &statement.decide_text);
+		}
 	}
 	if (statement.decide_objective) {
-		ValidateDecideScopeSpellings(*statement.decide_objective, decide_variable_names, true, &statement.decide_text);
+		ValidateDecideScopeSpellings(*statement.decide_objective, decide_variable_names, &statement.decide_text);
 	}
 
 	// This is the only point where cast authorship is still observable. Reject
@@ -277,7 +264,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 		DecideConstraintsBinder decide_constraints_binder(binder, context, decide_variable_names, scalar_variable_names,
 		                                                  &qualifier_context);
 		unique_ptr<ParsedExpression> constraints = std::move(statement.decide_constraints);
-		result.decide_constraints = decide_constraints_binder.Bind(constraints);
+		result.decide_constraints = decide_constraints_binder.BindConstraints(constraints);
 		if (result.decide_constraints) {
 			RefuseVolatile(*result.decide_constraints);
 			result.decide_constraint_sources = InitializeConstraintSourceInfo(

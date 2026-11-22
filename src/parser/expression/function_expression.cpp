@@ -1,7 +1,7 @@
 #include "duckdb/parser/expression/function_expression.hpp"
 
 #include <utility>
-#include "duckdb/common/enums/decide.hpp"
+#include "duckdb/parser/decide/decide_parsed_markers.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/hash.hpp"
@@ -35,23 +35,16 @@ FunctionExpression::FunctionExpression(const string &function_name, vector<uniqu
                          std::move(order_bys), distinct, is_operator, export_state_p) {
 }
 
-string DecideKeyToString(const FunctionExpression &marker) {
-	string result;
-	for (idx_t i = 1; i < marker.children.size(); i++) {
-		result += (i > 1 ? ", " : "") + marker.children[i]->ToString();
-	}
-	return result;
-}
-
 //! A relation-qualified reducer is represented by a parser-only operator whose first
 //! child is the real aggregate and whose remaining children are relation names. Render
 //! the aggregate's complete DuckDB function surface, inserting the qualifier before
 //! its arguments, rather than exposing the private marker as a function call.
 static string QualifiedReducerToString(const FunctionExpression &wrapper) {
-	if (wrapper.children.size() < 2 || wrapper.children[0]->GetExpressionClass() != ExpressionClass::FUNCTION) {
+	auto prefix = ReadDecideRelationPrefix(wrapper);
+	if (prefix.relations.empty() || (*prefix.call)->GetExpressionClass() != ExpressionClass::FUNCTION) {
 		throw InternalException("DECIDE qualified-reducer marker has an invalid parsed shape");
 	}
-	auto &aggregate = wrapper.children[0]->Cast<FunctionExpression>();
+	auto &aggregate = (*prefix.call)->Cast<FunctionExpression>();
 	string result;
 	if (!aggregate.catalog.empty()) {
 		result += KeywordHelper::WriteOptionallyQuoted(aggregate.catalog) + ".";
@@ -60,7 +53,7 @@ static string QualifiedReducerToString(const FunctionExpression &wrapper) {
 		result += KeywordHelper::WriteOptionallyQuoted(aggregate.schema) + ".";
 	}
 	result += KeywordHelper::WriteOptionallyQuoted(aggregate.function_name) + "(";
-	result += DecideKeyToString(wrapper) + ": ";
+	result += prefix.relations.ToString() + ": ";
 	if (aggregate.distinct) {
 		result += "DISTINCT ";
 	}
@@ -95,49 +88,17 @@ static string QualifiedReducerToString(const FunctionExpression &wrapper) {
 	return result;
 }
 
-//! `[WHEN condition] [PER key]: body`. PER is the outer marker and WHEN the inner one,
-//! the order they apply in, so the pair is printed together -- WHEN first, as written.
-static string DecideScopeToString(const FunctionExpression &scope) {
-	const ParsedExpression *body = &scope;
-	string per;
-	if (scope.function_name == SCOPE_PER_TAG || scope.function_name == SCOPE_PER_ROW_TAG) {
-		if (scope.children.empty()) {
-			throw InternalException("DECIDE PER scope marker has no body");
-		}
-		if (scope.function_name == SCOPE_PER_ROW_TAG) {
-			per = "PER ROW";
-		} else {
-			auto key = DecideKeyToString(scope);
-			per = key.empty() ? "PER ()" : "PER " + key;
-		}
-		body = scope.children[0].get();
-	}
-	string when;
-	if (body->GetExpressionClass() == ExpressionClass::FUNCTION) {
-		auto &filter = body->Cast<FunctionExpression>();
-		if (filter.is_operator && filter.function_name == SCOPE_WHEN_TAG) {
-			if (filter.children.size() != 2) {
-				throw InternalException("DECIDE WHEN scope marker has %s children, expected 2", filter.children.size());
-			}
-			when = "WHEN " + filter.children[1]->ToString();
-			body = filter.children[0].get();
-		}
-	}
-	return when + (when.empty() || per.empty() ? "" : " ") + per + ": " + body->ToString();
-}
-
 string FunctionExpression::ToString() const {
-	if (is_operator &&
-	    (function_name == SCOPE_WHEN_TAG || function_name == SCOPE_PER_TAG || function_name == SCOPE_PER_ROW_TAG)) {
-		return DecideScopeToString(*this);
+	// DeciDB: the parser's markers print as the DECIDE syntax they stand for.
+	if (IsDecideScope(*this)) {
+		auto scope = ReadDecideScope(*this);
+		return scope.ToString() + ": " + (*scope.body)->ToString();
 	}
-	if (is_operator && function_name == REDUCER_BY_TAG) {
-		if (children.empty()) {
-			throw InternalException("DECIDE BY marker has no reducer");
-		}
-		return children[0]->ToString() + " BY (" + DecideKeyToString(*this) + ")";
+	if (IsDecideBy(*this)) {
+		auto by = ReadDecideBy(*this);
+		return (*by.call)->ToString() + " BY (" + by.key.ToString() + ")";
 	}
-	if (is_operator && function_name == QUALIFIED_REDUCER_TAG) {
+	if (IsDecideRelationPrefix(*this)) {
 		return QualifiedReducerToString(*this);
 	}
 	return ToString<FunctionExpression, ParsedExpression>(*this, catalog, schema, function_name, is_operator, distinct,

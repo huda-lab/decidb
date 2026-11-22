@@ -145,23 +145,36 @@ BindResult DecideConstraintsBinder::BindConjunction(unique_ptr<ParsedExpression>
 	return BindResult(std::move(result));
 }
 
+unique_ptr<Expression> DecideConstraintsBinder::BindConstraints(unique_ptr<ParsedExpression> &constraints) {
+	auto clauses = DecideConstraintList(constraints);
+	if (clauses.size() == 1) {
+		return Bind(constraints);
+	}
+	// Each constraint binds on its own; the first error is the one raised.
+	ErrorData error;
+	for (auto &clause : clauses) {
+		is_top_expression = true;
+		BindChild(clause.get(), 0, error);
+	}
+	if (error.HasError()) {
+		error.Throw();
+	}
+	auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+	for (auto &clause : clauses) {
+		auto &bound = BoundExpression::GetExpression(*clause.get());
+		result->children.push_back(BoundCastExpression::AddCastToType(context, std::move(bound), LogicalType::BOOLEAN));
+	}
+	result->SetQueryLocation(constraints->GetQueryLocation());
+	return std::move(result);
+}
+
 BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
-	// `[when c] [per K]: body`: the per marker is the outer one, the when marker the
-	// inner one. The markers stay where they are; their children bind in place. `per row`,
-	// the default written out, adds no class key: one constraint per kept row.
-	optional_ptr<FunctionExpression> per;
-	optional_ptr<FunctionExpression> when;
-	auto *body = &expr_ptr;
-	if (IsDecideMarker(**body, SCOPE_PER_ROW_TAG)) {
-		body = &(*body)->Cast<FunctionExpression>().children[0];
-	} else if (IsDecideMarker(**body, SCOPE_PER_TAG)) {
-		per = &(*body)->Cast<FunctionExpression>();
-		body = &per->children[0];
-	}
-	if (IsDecideMarker(**body, SCOPE_WHEN_TAG)) {
-		when = &(*body)->Cast<FunctionExpression>();
-		body = &when->children[0];
-	}
+	// `[when c] [per K]: body`. The scope's parts bind in place. `per row`, the default written out, adds no class
+	// key: one constraint per kept row.
+	auto scope = ReadDecideScope(*expr_ptr);
+	bool per = scope.per == DecidePer::ALL || scope.per == DecidePer::KEY;
+	auto *when = scope.when;
+	auto *body = scope.body;
 
 	ErrorData body_error;
 	is_top_expression = true;
@@ -186,24 +199,23 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 	unique_ptr<ParsedExpression> condition_text;
 	unique_ptr<Expression> condition;
 	if (when) {
-		condition_text = when->children[1]->Copy();
-		auto error = bind_condition(when->children[1], condition);
+		condition_text = (*when)->Copy();
+		auto error = bind_condition(*when, condition);
 		if (error.HasError()) {
 			return BindResult(std::move(error));
 		}
 	}
 	idx_t key = DConstants::INVALID_INDEX;
 	if (per) {
-		// The key as written (`per D`), read before its elements bind. It cannot ride on
-		// the marker's alias: the expression binder gives the bound wrapper that alias.
-		auto key_text = DecideKeyToString(*per);
-		key = BindKey(context, binder, *per, DecisionNames(variables), key_text, qualifier_context->source_text,
+		// The key as written (`per D`), read before its elements bind.
+		auto key_text = scope.key.ToString();
+		key = BindKey(context, binder, scope.key, DecisionNames(variables), key_text, qualifier_context->source_text,
 		              *qualifier_context->keys);
 	}
 
 	// One scope per constraint: a BETWEEN bound to the conjunction of its two halves, and
 	// each half gets the whole scope.
-	auto scope = [&](unique_ptr<Expression> constraint) -> unique_ptr<Expression> {
+	auto apply_scope = [&](unique_ptr<Expression> constraint) -> unique_ptr<Expression> {
 		if (when) {
 			unique_ptr<Expression> this_condition = std::move(condition);
 			if (!this_condition) {
@@ -227,7 +239,7 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 				AddDecideTag(wrapper->alias, MakePerKeyTag(key));
 			}
 			// The wrapper stands at its `per`, where the parser kept the key as written.
-			wrapper->SetQueryLocation(per->GetQueryLocation());
+			wrapper->SetQueryLocation(scope.per_location);
 			constraint = std::move(wrapper);
 		}
 		return constraint;
@@ -237,11 +249,11 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 		auto &halves = bound->Cast<BoundConjunctionExpression>();
 		auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 		for (auto &half : halves.children) {
-			result->children.push_back(scope(std::move(half)));
+			result->children.push_back(apply_scope(std::move(half)));
 		}
 		return BindResult(std::move(result));
 	}
-	return BindResult(scope(std::move(bound)));
+	return BindResult(apply_scope(std::move(bound)));
 }
 
 BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
@@ -281,10 +293,8 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
 		return NotAComparison(expr, qualifier_context->source_text);
 	}
 	case ExpressionClass::FUNCTION: {
-		auto &func = expr.Cast<FunctionExpression>();
 		// `[when c] [per K]:` in front of a constraint.
-		if (func.is_operator && (func.function_name == SCOPE_PER_TAG || func.function_name == SCOPE_WHEN_TAG ||
-		                         func.function_name == SCOPE_PER_ROW_TAG)) {
+		if (IsDecideScope(expr)) {
 			return BindScopedConstraint(expr_ptr, depth);
 		}
 		if (!is_top_expression) {

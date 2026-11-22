@@ -16,15 +16,9 @@ DecideObjectiveBinder::DecideObjectiveBinder(Binder &binder, ClientContext &cont
 BindResult DecideObjectiveBinder::BindScopedObjective(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
 	// `[when c] [per ()]: objective`. An objective is produced once, so `per ()` is its
 	// default and adds nothing; the parser refuses any other key.
-	auto *body = &expr_ptr;
-	if (IsDecideMarker(**body, SCOPE_PER_TAG)) {
-		body = &(*body)->Cast<FunctionExpression>().children[0];
-	}
-	optional_ptr<FunctionExpression> when;
-	if (IsDecideMarker(**body, SCOPE_WHEN_TAG)) {
-		when = &(*body)->Cast<FunctionExpression>();
-		body = &when->children[0];
-	}
+	auto scope = ReadDecideScope(*expr_ptr);
+	auto *when = scope.when;
+	auto *body = scope.body;
 	ErrorData body_error;
 	BindChild(*body, depth, body_error);
 	if (body_error.HasError()) {
@@ -34,7 +28,7 @@ BindResult DecideObjectiveBinder::BindScopedObjective(unique_ptr<ParsedExpressio
 	if (!when) {
 		return BindResult(std::move(bound));
 	}
-	auto condition_error = BindDataChild(when->children[1], depth);
+	auto condition_error = BindDataChild(*when, depth);
 	if (condition_error.HasError()) {
 		return BindResult(std::move(condition_error));
 	}
@@ -42,7 +36,7 @@ BindResult DecideObjectiveBinder::BindScopedObjective(unique_ptr<ParsedExpressio
 		auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 		wrapper->children.push_back(std::move(objective));
 		wrapper->children.push_back(BoundCastExpression::AddCastToType(
-		    context, std::move(BoundExpression::GetExpression(*when->children[1])), LogicalType::BOOLEAN));
+		    context, std::move(BoundExpression::GetExpression(**when)), LogicalType::BOOLEAN));
 		wrapper->alias = WHEN_FILTER_TAG;
 		return std::move(wrapper);
 	};
@@ -69,8 +63,7 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 	// (DecideShapeCheck). What only the parsed tree can tell is left here.
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::FUNCTION: {
-		auto &func = expr.Cast<FunctionExpression>();
-		if (func.is_operator && (func.function_name == SCOPE_PER_TAG || func.function_name == SCOPE_WHEN_TAG)) {
+		if (IsDecideScope(expr)) {
 			return BindScopedObjective(expr_ptr, depth);
 		}
 		return BindFunction(expr_ptr, depth);

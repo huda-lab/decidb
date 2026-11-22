@@ -1,12 +1,7 @@
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/expression_util.hpp"
-#include "duckdb/parser/expression/columnref_expression.hpp"
-#include "duckdb/parser/expression/comparison_expression.hpp"
-#include "duckdb/parser/expression/conjunction_expression.hpp"
-#include "duckdb/parser/expression/constant_expression.hpp"
-#include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/decide/decide_parsed_markers.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
-#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/serializer/serializer.hpp"
 #include "duckdb/common/serializer/deserializer.hpp"
 
@@ -20,65 +15,33 @@ bool SelectNode::HasDecideClause() const {
 	return !decide_variables.empty();
 }
 
-//! Reverse the parser-only comparison marker used for a typed DECIDE declaration.
-//! The generic expression renderer would expose the marker as
-//! `(x = 'integer_variable')`, which is neither public nor parseable DECIDE syntax.
-//! The name on its left is a column reference, under a `PER key:` or `PER ROW:` scope
-//! marker when the declaration has one; that marker renders itself.
+//! One declaration as DECIDE writes it, `[PER key: ]name(TYPE)`.
 static string DecideVariableToString(const ParsedExpression &expr) {
-	if (expr.GetExpressionClass() != ExpressionClass::COMPARISON) {
-		throw InternalException("DECIDE variable declaration is not a typed comparison marker");
-	}
-	auto &comparison = expr.Cast<ComparisonExpression>();
-	auto &name = *comparison.left;
-	bool scoped = name.GetExpressionClass() == ExpressionClass::FUNCTION &&
-	              (name.Cast<FunctionExpression>().function_name == SCOPE_PER_TAG ||
-	               name.Cast<FunctionExpression>().function_name == SCOPE_PER_ROW_TAG);
-	if (comparison.type != ExpressionType::COMPARE_EQUAL ||
-	    (!scoped && name.GetExpressionClass() != ExpressionClass::COLUMN_REF) ||
-	    comparison.right->GetExpressionClass() != ExpressionClass::CONSTANT) {
-		throw InternalException("DECIDE variable declaration has an invalid parsed shape");
-	}
-	auto &constant = comparison.right->Cast<ConstantExpression>();
-	if (constant.value.type() != LogicalType::VARCHAR) {
-		throw InternalException("DECIDE variable declaration has a non-string type marker");
-	}
-
-	auto marker = constant.value.GetValue<string>();
-	// A `scalar_` marker or a qualified name comes only from a parse tree stored before
-	// those spellings were removed; it prints as written and is refused when bound.
-	bool scalar = StringUtil::StartsWith(marker, "scalar_");
-	if (scalar) {
-		marker = marker.substr(7);
-	}
+	auto declaration = ReadDecideDeclaration(expr);
 	string type;
-	if (marker == DECIDE_VARIABLE_TYPES[0]) {
+	switch (declaration.type) {
+	case DecideVariableType::REAL:
 		type = "REAL";
-	} else if (marker == DECIDE_VARIABLE_TYPES[1]) {
+		break;
+	case DecideVariableType::INT:
 		type = "INT";
-	} else if (marker == DECIDE_VARIABLE_TYPES[2]) {
+		break;
+	default:
 		type = "BOOL";
-	} else {
-		throw InternalException("Unknown DECIDE variable type marker '%s'", marker);
+		break;
 	}
-	return string(scalar ? "scalar " : "") + comparison.left->ToString() + "(" + type + ")";
+	auto scope = declaration.scope.ToString();
+	return (scope.empty() ? "" : scope + ": ") + (*declaration.scope.body)->ToString() + "(" + type + ")";
 }
 
-//! A top-level AND is the DECIDE constraint list, not an ordinary parenthesized SQL
-//! conjunction. Keeping DuckDB's generic outer parentheses makes a following WHEN or
-//! PER unparseable, so emit the list in the grammar's own form.
-//!
-//! Each clause renders through the ordinary `ParsedExpression::ToString()`, which also
-//! spells a stored tree's removed postfix WHEN and PER back out as written --
-//! `FunctionExpression::ToString()` recognizes their operator tags itself.
-static string DecideConstraintsToString(const ParsedExpression &expr) {
-	if (expr.GetExpressionClass() != ExpressionClass::CONJUNCTION ||
-	    expr.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
-		return expr.ToString();
-	}
-	auto &conjunction = expr.Cast<ConjunctionExpression>();
-	return StringUtil::Join(conjunction.children, conjunction.children.size(), " AND ",
-	                        [](const unique_ptr<ParsedExpression> &child) { return child->ToString(); });
+//! The constraints of SUCH THAT as written, joined by AND. Each prints through the ordinary
+//! `ParsedExpression::ToString()`.
+static string DecideConstraintsToString(const unique_ptr<ParsedExpression> &constraints) {
+	// The list is read through the slots the binder binds in place; printing changes none.
+	auto clauses = DecideConstraintList(const_cast<unique_ptr<ParsedExpression> &>(constraints)); // NOLINT
+	return StringUtil::Join(
+	    clauses, clauses.size(), " AND ",
+	    [](const reference<unique_ptr<ParsedExpression>> &clause) { return clause.get()->ToString(); });
 }
 
 string SelectNode::ToString() const {
@@ -134,7 +97,7 @@ string SelectNode::ToString() const {
 			// the tail as written, so a statement parsed from this string keeps the text the user wrote
 			result += " " + decide_text.Tail();
 		} else {
-			result += " SUCH THAT " + DecideConstraintsToString(*decide_constraints);
+			result += " SUCH THAT " + DecideConstraintsToString(decide_constraints);
 			if (decide_objective) {
 				if (decide_sense == DecideSense::MAXIMIZE) {
 					result += " MAXIMIZE ";

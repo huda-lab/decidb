@@ -50,23 +50,22 @@ string SubqueryReadsDecisionMessage();
 //! caller's own "not found".
 void ThrowIfOuterColumn(Binder &binder, const ColumnRefExpression &column);
 
-//! Find or create the key scope of `per K: ...`, given the parser's `SCOPE_PER_TAG` marker
-//! (children: the body, then the elements of K). Each element resolves against the FROM
-//! clause alone, never an outer query: a declared decision is an error; otherwise it is a
+//! Find or create the key scope of `per K: ...`, given the elements of K as written. Each element resolves against
+//! the FROM clause alone, never an outer query: a declared decision is an error; otherwise it is a
 //! column, else a relation standing for its stored columns. Equal keys -- order and
 //! repetition aside -- share one key (BindKey) and one scope. `key_text` is the key as
 //! written, kept for display. A reducer's `per ()` is the empty key: one scope every row
 //! belongs to.
-idx_t FindOrCreateKeyScope(ClientContext &context, Binder &binder, const FunctionExpression &per,
+idx_t FindOrCreateKeyScope(ClientContext &context, Binder &binder, const DecideKeyView &key,
                            const case_insensitive_set_t &decision_names, const string &key_text,
                            const DecideSourceText *text, vector<DecideKey> &keys, vector<KeyedScopeInfo> &keyed_scopes);
 
-//! The entry of `keys` for the columns of `per K` (the parser's `SCOPE_PER_TAG` marker),
+//! The entry of `keys` for the columns of `per K`, given the elements of K as written,
 //! created when no key so far has them: a column element compares NULL as SQL's `=`
 //! does, a relation element stands for its stored columns, which compare NULL as a
 //! value. `key_text` is the key as written, kept for display; each column element is named as `text` has it written
 //! (null: as it prints), the way a message quotes it.
-idx_t BindKey(ClientContext &context, Binder &binder, const FunctionExpression &per,
+idx_t BindKey(ClientContext &context, Binder &binder, const DecideKeyView &key,
               const case_insensitive_set_t &decision_names, const string &key_text, const DecideSourceText *text,
               vector<DecideKey> &keys);
 
@@ -111,15 +110,15 @@ bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_i
 void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
                                            const DecideSourceText *text);
 
-//! Where `when`, `per` and `by` may stand, checked on the parsed constraints (`objective`
-//! false) or objective before binding. `[when c] [per K]:` stands in front of a clause or
+//! Where `when`, `per` and `by` may stand, checked on one parsed clause (a constraint or the
+//! objective) before binding. `[when c] [per K]:` stands in front of a clause or
 //! of a SUM/AVG/MIN/MAX argument, `by (key)` right after a SUM/AVG/MIN/MAX, `norm` or
 //! `count`; a condition, a key and a `by` key take data only. A reducer may hold reducers
 //! to any depth (§5.5), but not a norm, and one over decisions not one over data alone
 //! (D80). Anything else -- a scope inside a condition, a key or an ordinary subquery --
 //! is refused.
-void ValidateDecideScopeSpellings(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
-                                  bool objective, const DecideSourceText *text);
+void ValidateDecideScopeSpellings(const ParsedExpression &clause, const case_insensitive_map_t<idx_t> &variables,
+                                  const DecideSourceText *text);
 
 bool ContainsDecideAggregate(const ParsedExpression &expr);
 

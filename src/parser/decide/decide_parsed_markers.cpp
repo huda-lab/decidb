@@ -2,11 +2,18 @@
 
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/parser/expression/columnref_expression.hpp"
+#include "duckdb/parser/expression/comparison_expression.hpp"
+#include "duckdb/parser/expression/conjunction_expression.hpp"
+#include "duckdb/parser/expression/constant_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 
 namespace duckdb {
 
-bool IsDecideMarker(const ParsedExpression &expr, const char *tag) {
+//! The transformer writes each construct as an operator function named by a tag (transform_operator.cpp): the
+//! body or call is children[0]; a `when` holds its condition in children[1]; a `per`, a `by` and a relation prefix
+//! hold their key in children[1..]. With both a `when` and a `per`, the `per` is the outer one.
+static bool IsDecideMarker(const ParsedExpression &expr, const char *tag) {
 	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
 		return false;
 	}
@@ -14,9 +21,138 @@ bool IsDecideMarker(const ParsedExpression &expr, const char *tag) {
 	return func.is_operator && func.function_name == tag && !func.children.empty();
 }
 
-bool IsDecideScopeMarker(const ParsedExpression &expr) {
+//! The marker `expr`, whose children the views point into: they are reached through unique_ptrs, which a const
+//! parent does not make const.
+static FunctionExpression &Marker(const ParsedExpression &expr) {
+	return const_cast<ParsedExpression &>(expr).Cast<FunctionExpression>(); // NOLINT
+}
+
+//! The children of `marker` after its body.
+static DecideKeyView MarkerKey(FunctionExpression &marker) {
+	return DecideKeyView(marker.children.data() + 1, marker.children.size() - 1);
+}
+
+string DecideKeyView::ToString() const {
+	string result;
+	for (idx_t i = 0; i < count; i++) {
+		result += (i > 0 ? ", " : "") + first[i]->ToString();
+	}
+	return result;
+}
+
+string DecideScopeView::ToString() const {
+	string result = when ? "WHEN " + (*when)->ToString() : string();
+	if (per == DecidePer::NONE) {
+		return result;
+	}
+	result += result.empty() ? "" : " ";
+	switch (per) {
+	case DecidePer::ROW:
+		return result + "PER ROW";
+	case DecidePer::ALL:
+		return result + "PER ()";
+	default:
+		return result + "PER " + key.ToString();
+	}
+}
+
+bool IsDecideScope(const ParsedExpression &expr) {
 	return IsDecideMarker(expr, SCOPE_WHEN_TAG) || IsDecideMarker(expr, SCOPE_PER_TAG) ||
 	       IsDecideMarker(expr, SCOPE_PER_ROW_TAG);
+}
+
+DecideScopeView ReadDecideScope(const ParsedExpression &expr) {
+	DecideScopeView scope;
+	auto *marker = &Marker(expr);
+	if (!IsDecideMarker(expr, SCOPE_WHEN_TAG)) {
+		bool per_row = IsDecideMarker(expr, SCOPE_PER_ROW_TAG);
+		scope.per = per_row ? DecidePer::ROW : marker->children.size() == 1 ? DecidePer::ALL : DecidePer::KEY;
+		scope.key = per_row ? DecideKeyView() : MarkerKey(*marker);
+		scope.per_location = marker->GetQueryLocation();
+		scope.body = &marker->children[0];
+		if (!IsDecideMarker(**scope.body, SCOPE_WHEN_TAG)) {
+			return scope;
+		}
+		marker = &Marker(**scope.body);
+	}
+	if (marker->children.size() != 2) {
+		throw InternalException("DECIDE WHEN scope marker has %s children, expected 2", marker->children.size());
+	}
+	scope.when = &marker->children[1];
+	scope.when_location = marker->GetQueryLocation();
+	scope.body = &marker->children[0];
+	return scope;
+}
+
+bool IsDecideScopedCall(const ParsedExpression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
+		return false;
+	}
+	auto &call = expr.Cast<FunctionExpression>();
+	return !call.is_operator && !call.children.empty() && IsDecideScope(*call.children[0]);
+}
+
+bool IsDecideBy(const ParsedExpression &expr) {
+	return IsDecideMarker(expr, REDUCER_BY_TAG);
+}
+
+DecideByView ReadDecideBy(const ParsedExpression &expr) {
+	auto &marker = Marker(expr);
+	DecideByView by;
+	by.call = &marker.children[0];
+	by.key = MarkerKey(marker);
+	return by;
+}
+
+bool IsDecideRelationPrefix(const ParsedExpression &expr) {
+	return IsDecideMarker(expr, QUALIFIED_REDUCER_TAG);
+}
+
+DecideRelationPrefixView ReadDecideRelationPrefix(const ParsedExpression &expr) {
+	auto &marker = Marker(expr);
+	DecideRelationPrefixView prefix;
+	prefix.call = &marker.children[0];
+	prefix.relations = MarkerKey(marker);
+	return prefix;
+}
+
+DecideDeclarationView ReadDecideDeclaration(const ParsedExpression &declaration) {
+	// The grammar builds a declaration as `name = 'type_marker'` (typed_decide_variable), the name a column
+	// reference, under a `per` or `per row` scope when the declaration has one.
+	auto &comparison = const_cast<ParsedExpression &>(declaration).Cast<ComparisonExpression>(); // NOLINT
+	DecideDeclarationView result;
+	if (IsDecideScope(*comparison.left)) {
+		result.scope = ReadDecideScope(*comparison.left);
+	} else {
+		result.scope.body = &comparison.left;
+	}
+	result.name = (*result.scope.body)->Cast<ColumnRefExpression>().GetColumnName();
+	auto marker = comparison.right->Cast<ConstantExpression>().value.ToString();
+	if (marker == "real_variable") {
+		result.type = DecideVariableType::REAL;
+	} else if (marker == "integer_variable") {
+		result.type = DecideVariableType::INT;
+	} else if (marker == "bool_variable") {
+		result.type = DecideVariableType::BOOL;
+	} else {
+		throw InternalException("Unknown DECIDE variable type marker '%s'", marker);
+	}
+	return result;
+}
+
+vector<reference<unique_ptr<ParsedExpression>>> DecideConstraintList(unique_ptr<ParsedExpression> &constraints) {
+	// The grammar joins the constraints with AND (decide_constraint_list), and the transformer flattens that into
+	// one conjunction.
+	vector<reference<unique_ptr<ParsedExpression>>> result;
+	if (constraints->GetExpressionClass() == ExpressionClass::CONJUNCTION &&
+	    constraints->GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
+		for (auto &child : constraints->Cast<ConjunctionExpression>().children) {
+			result.push_back(child);
+		}
+	} else {
+		result.push_back(constraints);
+	}
+	return result;
 }
 
 bool IsDecideAggregateName(const string &name) {
@@ -47,10 +183,11 @@ bool TakesReducerBy(const ParsedExpression &expr) {
 
 const ParsedExpression &UnwrapReducerMarkers(const ParsedExpression &expr) {
 	const ParsedExpression *result = &expr;
-	for (auto tag : {REDUCER_BY_TAG, QUALIFIED_REDUCER_TAG}) {
-		if (IsDecideMarker(*result, tag)) {
-			result = result->Cast<FunctionExpression>().children[0].get();
-		}
+	if (IsDecideBy(*result)) {
+		result = ReadDecideBy(*result).call->get();
+	}
+	if (IsDecideRelationPrefix(*result)) {
+		result = ReadDecideRelationPrefix(*result).call->get();
 	}
 	return *result;
 }

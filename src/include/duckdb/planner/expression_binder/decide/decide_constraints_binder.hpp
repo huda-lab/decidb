@@ -21,6 +21,9 @@ public:
 	                        const case_insensitive_set_t &scalar_variables = case_insensitive_set_t(),
 	                        optional_ptr<DecideQualifierContext> qualifier_context = nullptr);
 
+	//! Binds the constraints of SUCH THAT, joined by AND when there are several.
+	unique_ptr<Expression> BindConstraints(unique_ptr<ParsedExpression> &constraints);
+
 protected:
 	BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
 	                          bool root_expression = false) override;
