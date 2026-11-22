@@ -232,13 +232,11 @@ def test_explain_multi_column_per_parenthesized(decidb_cli):
 
 @pytest.mark.explain
 def test_explain_constraints_render_sql_not_internal_tags(decidb_cli):
-    """Every constraint row shows the constraint, not the tag DECIDE stamped on it.
+    """Every constraint row shows the constraint, not a tag DECIDE stamped on it.
 
-    DECIDE records a constraint's source clause in its expression *alias*, and
-    ``GetName()`` returns the alias whenever one is set — so the Constraints
-    section rendered ``__source_clause_0__`` per constraint instead of any SQL.
-    The objective was unaffected (it carries no source-clause tag), which is why
-    the section-header assertions elsewhere in this file stayed green.
+    DECIDE marks expressions in their *alias*, and ``GetName()`` returns the alias
+    whenever one is set, so a render that prints a name prints the tag instead of
+    any SQL.
     """
     sql = """
         SELECT l_orderkey, l_linenumber, x

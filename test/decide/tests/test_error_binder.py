@@ -1252,7 +1252,7 @@ class TestTagNamesRefused:
         rows = f'SELECT id, x FROM (VALUES (1, 1.0, 5.0), (2, 2.0, 6.0)) t(id, "{name}", v) '
         decidb_cli.assert_error_at(f"{rows}DECIDE x(INT) {tail}", kind="Binder Error", at=f'"{name}"')
 
-    @pytest.mark.parametrize("name", ["__per_class__", "__abs_aux_0__"])  # a tag, and a helper decision's name prefix
+    @pytest.mark.parametrize("name", ["__skip_null__", "__abs_aux_0__"])  # a tag, and a helper decision's name prefix
     def test_decision_name(self, decidb_cli, name):
         """DecideDeclarationsBinder's refusal of a declared name."""
         decidb_cli.assert_error_at(

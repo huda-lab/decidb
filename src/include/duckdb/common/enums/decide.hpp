@@ -242,11 +242,6 @@ inline bool TryParseDecideIndexTag(const string &alias, const string &prefix, id
 	return true;
 }
 
-//! The bound form of a `when c:` in front of a constraint or the objective: a conjunction whose child 0 is the body
-//! and child 1 the condition. The body reads only the rows where the condition is true. A nested objective is a nested
-//! reducer (D81).
-static constexpr const char *WHEN_FILTER_TAG = "__when_filter__";
-
 //! Tag prefix recording a reducer's own key, `sum(per K: e)` (on
 //! BoundAggregateExpression.alias). Format: "__qualified_by_<keyed_scope_idx>__" — the
 //! index is into LogicalDecide::keyed_scopes, whose entry supplies the classes
@@ -264,43 +259,20 @@ inline bool TryParseQualifiedReducerTag(const string &alias, idx_t &scope_idx) {
 	return TryParseDecideIndexTag(alias, QUALIFIED_REDUCER_SCOPE_TAG_PREFIX, scope_idx);
 }
 
-//! The bound form of a constraint's `per key:`: a conjunction whose child 0 is the
-//! constraint and whose children[1..] are the key's columns, none for `per ()`. The
-//! constraint is generated once per class of the key among the kept rows; it groups no
-//! reducer, and NULL is a class.
-static constexpr const char *PER_CLASS_TAG = "__per_class__";
-
-//! Tag prefix naming the variant signature of a `per K:` clause (on its PER_CLASS_TAG wrapper):
-//! "__signature_<i>__" indexes LogicalDecide::signatures. The clause is one instance per class of K and value of the
-//! signature's fields (D70); no tag means it has no field, so one instance per class.
-static constexpr const char *SIGNATURE_TAG_PREFIX = "__signature_";
-
-inline string MakeSignatureTag(idx_t signature_idx) {
-	return string(SIGNATURE_TAG_PREFIX) + to_string(signature_idx) + "__";
-}
-
-//! Tag on a scoped comparison in the VALUE shape (CanonicalConstraintClass::VALUE): the
-//! canonicalizer stamps it once, and DecideOptimizer::RewriteScopedReducers replaces each
-//! decision reducer under it by a helper decision (LogicalDecide::reducer_value_links),
-//! after which the comparison is one row per class like any other.
+//! Tag on an objective's reducer that holds a reducer: the canonicalizer stamps it once, and
+//! DecideOptimizer::RewriteScopedReducers replaces the reducer by a helper decision
+//! (LogicalDecide::reducer_value_links). A clause in the VALUE shape says so in a field
+//! (BoundDecideClause::shape).
 static constexpr const char *VALUE_REWRITE_TAG = "__value_rewrite__";
 
 //! Tag prefix naming a `BY (key)`: "__group_key_<i>__" indexes LogicalDecide::keys.
 //! On a reducer, the rows it reads at a class are the kept rows sharing the class's key
-//! value; on a scoped aggregate comparison, the key its decision reducers share, which
-//! is the comparison's grouping. No tag means `BY ()`: every kept row.
+//! value. No tag means `BY ()`: every kept row. The key the decision reducers of an aggregate
+//! clause share is the clause's (BoundDecideClause::group_key).
 static constexpr const char *GROUP_KEY_TAG_PREFIX = "__group_key_";
 
 inline string MakeGroupKeyTag(idx_t group_key_idx) {
 	return string(GROUP_KEY_TAG_PREFIX) + to_string(group_key_idx) + "__";
-}
-
-//! Tag prefix naming the key of a `per K:` wrapper (PER_CLASS_TAG):
-//! "__per_key_<i>__" indexes LogicalDecide::keys. No tag means `per ()`: one class.
-static constexpr const char *PER_KEY_TAG_PREFIX = "__per_key_";
-
-inline string MakePerKeyTag(idx_t key_idx) {
-	return string(PER_KEY_TAG_PREFIX) + to_string(key_idx) + "__";
 }
 
 //! Tag prefix naming a frame selector: "__frame_<i>__" indexes LogicalDecide::frames. It
@@ -322,37 +294,12 @@ static constexpr const char *TREE_RETAINED_EXPRESSION_TAG_PREFIX = "__tree_retai
 static constexpr const char *TREE_REDUCER_SCOPE_TAG_PREFIX = "__tree_reducer_scope_";
 static constexpr const char *TREE_REDUCER_KEY_TAG_PREFIX = "__tree_reducer_key_";
 
-//! Tag marking a comparison whose LHS is an easy-direction MIN/MAX reducer
-//! (MAX(e) <= K, MIN(e) >= K). The reducer stays in the tree: the linear form expands it
-//! to one row per member, the bound reduced over each `by` group, and bound absorption
-//! folds a bare one into the column box (D41). Set on the
-//! BoundComparisonExpression.alias during RewriteMinMax.
-static constexpr const char *MINMAX_EASY_REWRITE_TAG = "__minmax_easy__";
-
 //! Tag marking a reducer with a nonlinear body held by a tree-owned definition F node. The source body remains at its
 //! written site as a DEFINITION_FUNCTION_TAG_PREFIX read, while this aggregate marker tells MIN/MAX planning that its
 //! members are helper columns. A helper has no box, so stage 08 states a MIN/MAX over it natively.
 //! Set on the BoundAggregateExpression.alias and on the BoundComparisonExpression.alias of the row defining the
 //! helper, which EXPLAIN leaves out: it restates the body, and the clause's account line says how it is held.
 static constexpr const char *BODY_DEFINITION_TAG = "__body_definition__";
-
-//! Tag marking optimizer-generated helper constraints that define auxiliaries or
-//! link rewrite machinery. These rows are rigid and must not be elastic-relaxed.
-static constexpr const char *STRUCTURAL_CONSTRAINT_TAG = "__decide_structural_constraint__";
-
-//! On a row that defines an auxiliary decision standing for a value its readers read -- an ABS's envelope, a body
-//! helper's definition, an L0 indicator's links -- the auxiliary's index (DecideConstraint::defined_var). The
-//! auxiliary has no value where what its definition reads has none (D88).
-static constexpr const char *DEFINES_TAG_PREFIX = "__defines_";
-
-inline string MakeDefinesTag(idx_t var_idx) {
-	return string(DEFINES_TAG_PREFIX) + to_string(var_idx) + "__";
-}
-
-//! Tag marking a row a rewrite added for the objective (an ABS envelope, a product's
-//! corner rows, an L0 link), which no clause owns (DecideRowOrigin::objective): the rewrites start the
-//! objective's walk with that origin, and EXPLAIN prints such rows under the objective.
-static constexpr const char *OBJECTIVE_ROW_TAG = "__objective_row__";
 
 //! Tag on the placeholder coefficient of an automatic L0 link (`norm(e, 0)` with no
 //! bound written): stage 06 replaces it with a bound derived from the column box, so a
@@ -365,22 +312,6 @@ static constexpr const char *L0_AUTO_BOUND_TAG = "__l0_auto_bound__";
 //! coefficient of 1 here is still printed.
 static constexpr const char *L0_WRITTEN_BOUND_TAG = "__l0_written_bound__";
 static constexpr const char *L0_TOLERANCE_TAG = "__l0_tolerance__";
-
-//! Tag marking a simple `x OP const` comparison whose entire meaning the optimizer
-//! folded into the decision column's box (`LogicalDecide::singleton_row_boxes`), so it
-//! must not also be emitted as a model row. Set on the BoundComparisonExpression.alias
-//! by DecideOptimizer::FoldSingletonRows; read by physical term extraction.
-//!
-//! The comparison deliberately stays in the tree rather than being replaced by a TRUE
-//! placeholder: EXPLAIN renders the constraint list from this tree, and the user wrote
-//! this bound, so it keeps rendering. The tag moves the *decision* upstream without
-//! moving the rendering.
-static constexpr const char *SINGLETON_ROW_BOUND_TAG = "__singleton_row_bound__";
-
-//! Beside SINGLETON_ROW_BOUND_TAG on a recorded bound: a repair model loosens it through the
-//! clause's own rows, one per kept row or class (its folded root's clause, DecideNode::folded,
-//! D28), not one knob per column. Set by DecideOptimizer::FoldSingletonRows.
-static constexpr const char *SINGLETON_ROW_CLAUSE_ROWS_TAG = "__singleton_row_clause_rows__";
 
 //! A private aggregate marker emitted by the DECIDE binder for norm(expr, p).
 //! The marker is only a transport representation: canonicalization replaces the
@@ -441,48 +372,8 @@ static constexpr const char *SKIP_NULL_TAG = "__skip_null__";
 //! IR's GuardCoefficients): the query never wrote it, so a render prints the value it guards.
 static constexpr const char *NULL_GUARD_TAG = "__null_guard__";
 
-//! Stable source-comparison identity. The payload indexes the per-DECIDE
-//! ConstraintSourceInfo registry; it survives canonical rebuilding and optimizer
-//! one-to-many rewrites but is never used to group elastic slacks.
-static constexpr const char *SOURCE_CLAUSE_TAG_PREFIX = "__source_clause_";
-
-//! Tags on the two comparisons `x BETWEEN lo AND hi` binds to (`DecideConstraintsBinder::BindBetween`), `>=` first.
-//! InitializeConstraintSourceInfo reads them to link the halves into the one clause the user wrote.
-static constexpr const char *BETWEEN_LOWER_TAG = "__between_lower__";
-static constexpr const char *BETWEEN_UPPER_TAG = "__between_upper__";
-
-//! Source-level identity for clauses that diagnostics may only remove atomically.
-//! Unlike source_clause_id (display provenance) and repair_group_id (elastic slack
-//! grouping), this id means every generated row carrying it is one indivisible DROP.
-static constexpr const char *REMOVAL_GROUP_TAG_PREFIX = "__removal_group_";
-
-inline string MakeSourceClauseTag(idx_t source_clause_id) {
-	return string(SOURCE_CLAUSE_TAG_PREFIX) + to_string(source_clause_id) + "__";
-}
-
-inline string MakeRemovalGroupTag(idx_t removal_group_id) {
-	return string(REMOVAL_GROUP_TAG_PREFIX) + to_string(removal_group_id) + "__";
-}
-
-inline bool TryParseSourceClauseTag(const string &alias, idx_t &source_clause_id) {
-	return TryParseDecideIndexTag(alias, SOURCE_CLAUSE_TAG_PREFIX, source_clause_id);
-}
-
-inline bool TryParseRemovalGroupTag(const string &alias, idx_t &removal_group_id) {
-	return TryParseDecideIndexTag(alias, REMOVAL_GROUP_TAG_PREFIX, removal_group_id);
-}
-
 inline bool TryParseGroupKeyTag(const string &alias, idx_t &group_key_idx) {
 	return TryParseDecideIndexTag(alias, GROUP_KEY_TAG_PREFIX, group_key_idx);
-}
-
-inline bool TryParsePerKeyTag(const string &alias, idx_t &key_idx) {
-	return TryParseDecideIndexTag(alias, PER_KEY_TAG_PREFIX, key_idx);
-}
-
-//! Reads back the signature index from an alias written by MakeSignatureTag.
-inline bool TryParseSignatureTag(const string &alias, idx_t &signature_idx) {
-	return TryParseDecideIndexTag(alias, SIGNATURE_TAG_PREFIX, signature_idx);
 }
 
 inline bool TryParseFrameTag(const string &alias, idx_t &frame_idx) {
@@ -593,28 +484,18 @@ static constexpr const char *BODY_NAME_PREFIX = "__body_";
 static constexpr const char *VALUE_LINK_NAME_PREFIX = "__value_";
 
 //! Every DECIDE tag above, the one list DecideNameContainsTag reads. A constant added above is added here.
-static constexpr const char *DECIDE_TAGS[] = {WHEN_FILTER_TAG,
-                                              QUALIFIED_REDUCER_SCOPE_TAG_PREFIX,
-                                              PER_CLASS_TAG,
-                                              SIGNATURE_TAG_PREFIX,
+static constexpr const char *DECIDE_TAGS[] = {QUALIFIED_REDUCER_SCOPE_TAG_PREFIX,
                                               VALUE_REWRITE_TAG,
                                               GROUP_KEY_TAG_PREFIX,
-                                              PER_KEY_TAG_PREFIX,
                                               FRAME_TAG_PREFIX,
                                               AVG_REWRITE_TAG,
                                               TREE_RETAINED_EXPRESSION_TAG_PREFIX,
                                               TREE_REDUCER_SCOPE_TAG_PREFIX,
                                               TREE_REDUCER_KEY_TAG_PREFIX,
-                                              MINMAX_EASY_REWRITE_TAG,
                                               BODY_DEFINITION_TAG,
-                                              STRUCTURAL_CONSTRAINT_TAG,
-                                              DEFINES_TAG_PREFIX,
-                                              OBJECTIVE_ROW_TAG,
                                               L0_AUTO_BOUND_TAG,
                                               L0_WRITTEN_BOUND_TAG,
                                               L0_TOLERANCE_TAG,
-                                              SINGLETON_ROW_BOUND_TAG,
-                                              SINGLETON_ROW_CLAUSE_ROWS_TAG,
                                               NORM_MARKER_TAG_PREFIX,
                                               WRITTEN_NORM_TAG_PREFIX,
                                               WRITTEN_NAME_TAG_PREFIX,
@@ -623,10 +504,6 @@ static constexpr const char *DECIDE_TAGS[] = {WHEN_FILTER_TAG,
                                               BOUND_REDUCER_TAG,
                                               SKIP_NULL_TAG,
                                               NULL_GUARD_TAG,
-                                              SOURCE_CLAUSE_TAG_PREFIX,
-                                              BETWEEN_LOWER_TAG,
-                                              BETWEEN_UPPER_TAG,
-                                              REMOVAL_GROUP_TAG_PREFIX,
                                               QUERY_WIDE_BOUND_TAG,
                                               FRAME_TIGHTEST_BOUND_TAG,
                                               FRAME_COLUMN_TAG,
