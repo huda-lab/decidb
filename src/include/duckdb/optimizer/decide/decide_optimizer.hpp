@@ -53,6 +53,11 @@ public:
 	//! Recursively optimize the plan, transforming any LogicalDecide nodes found
 	unique_ptr<LogicalOperator> Optimize(unique_ptr<LogicalOperator> plan);
 
+	//! Throws InternalException when a clause no longer has what bound reduction relied on
+	//! (BoundDecideClause::bound_read_shape, bound_read_type): one read in another shape is in the aggregate shape, or
+	//! one whose bound is its group's tightest value has another direction. A DEBUG build calls it after every pass.
+	static void VerifyBoundReads(const LogicalDecide &decide);
+
 private:
 	//! Optimize the subtree held by `op`, which sits inside the plan held by `root`. A direct-solve rule that replaces
 	//! a DECIDE node rewrites the references above it from `root`.
@@ -116,10 +121,11 @@ private:
 	//! would redeclare it with SUM's integral type while its value stays fractional.
 	//! `origin` is the clause the walk stands in (the objective's origin for the
 	//! objective), under which each rewritten AVG's account is recorded.
-	void RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide, const DecideRowOrigin &origin);
+	//! Whether it rewrote an AVG under `expr`.
+	bool RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide, const DecideRowOrigin &origin);
 
 	//! The value rewrite (language/guide.md §6.4): a decision reducer of a comparison in
-	//! the VALUE shape (VALUE_REWRITE_TAG) becomes a helper decision defined once per `by`
+	//! the VALUE shape (BoundDecideClause::shape) becomes a helper decision defined once per `by`
 	//! group (LogicalDecide::reducer_value_links), and the comparison is then one row per
 	//! class. A direct, unfiltered outer SUM with the same key as its clause stays in the
 	//! tree; its nested reducers still become helpers, innermost first, keyed by their path

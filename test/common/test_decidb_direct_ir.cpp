@@ -1,6 +1,7 @@
 #include "catch.hpp"
 #include "test_helpers.hpp"
 
+#include "duckdb/optimizer/decide/decide_optimizer.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/parser/parser.hpp"
@@ -851,5 +852,37 @@ TEST_CASE("Direct-solve IR records the keys of the tables the source scans", "[d
 	}
 	SECTION("A projection makes bindings of its own") {
 		REQUIRE(read("(SELECT d + 0 AS d FROM k) p").empty());
+	}
+}
+
+TEST_CASE("A clause keeps the shape and the direction bound reduction read", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	QueryIR query(con, IRQuery("x(INT)", "sum(x) <= 5", "MAXIMIZE sum(x)"));
+	auto &clause = query.decide->bound.clauses[0];
+	REQUIRE(clause.shape == CanonicalConstraintClass::AGGREGATE);
+	REQUIRE(clause.body->type == ExpressionType::COMPARE_LESSTHANOREQUALTO);
+	SECTION("a clause no bound reduction recorded is not checked") {
+		REQUIRE_NOTHROW(DecideOptimizer::VerifyBoundReads(*query.decide));
+	}
+	SECTION("the shape and the direction it read hold") {
+		clause.bound_read_shape = CanonicalConstraintClass::AGGREGATE;
+		clause.bound_read_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+		REQUIRE_NOTHROW(DecideOptimizer::VerifyBoundReads(*query.decide));
+	}
+	SECTION("a clause read in the value shape is in the aggregate shape") {
+		clause.bound_read_shape = CanonicalConstraintClass::VALUE;
+		clause.bound_read_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+		REQUIRE_THROWS_AS(DecideOptimizer::VerifyBoundReads(*query.decide), InternalException);
+	}
+	SECTION("a reduced bound's comparison has another direction") {
+		clause.bound_read_shape = CanonicalConstraintClass::AGGREGATE;
+		clause.bound_read_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+		REQUIRE_THROWS_AS(DecideOptimizer::VerifyBoundReads(*query.decide), InternalException);
+	}
+	SECTION("an equality's bound is the tightest of both directions") {
+		clause.bound_read_shape = CanonicalConstraintClass::AGGREGATE;
+		clause.bound_read_type = ExpressionType::COMPARE_EQUAL;
+		REQUIRE_NOTHROW(DecideOptimizer::VerifyBoundReads(*query.decide));
 	}
 }

@@ -399,10 +399,9 @@ idx_t DecideTreeMembersOf(const DecideTree &tree, idx_t reducer);
 string DecideTreeReducerName(const BoundAggregateExpression &aggregate);
 
 //! Read shape, provenance and bound-admission facts once. Both graph construction
-//! and term lowering use this function; neither infers a second clause shape. `comparison` is the clause's body in
-//! canonical form: the body itself, but for a function-owned row, which is canonicalized here first.
+//! and term lowering use this function; neither infers a second clause shape. `clause` is canonical: a clause of
+//! SUCH THAT, or a function-owned row as DecideCanonicalizer::CanonicalizeFunctionRow returns it.
 unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const LogicalDecide &op,
-                                                   const BoundDecideClause &clause,
-                                                   const BoundComparisonExpression &comparison);
+                                                   const BoundDecideClause &clause);
 
 } // namespace duckdb

@@ -154,6 +154,13 @@ inline unique_ptr<Expression> DecideRowsKeptByBoth(const Expression *first, cons
 	return make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, first->Copy(), second->Copy());
 }
 
+//! The row shape of a canonical comparison. VALUE: its decision side mixes a decision reducer with something the
+//! aggregate shape cannot hold -- a per-row or keyed decision, a factor that varies by row, a second `by` key, a
+//! reducer inside another expression -- so the value rewrite (stage 05) replaces each decision reducer by a helper
+//! decision defined once per `by` group. AGGREGATE: one row per group of the `by` key its decision reducers share.
+//! PER_ROW: no decision reducer. INVALID: no comparison (a placeholder, an IN), which has no shape.
+enum class CanonicalConstraintClass : uint8_t { PER_ROW, AGGREGATE, VALUE, INVALID };
+
 //! Which comparison of the two `x BETWEEN lo AND hi` binds to a clause is, `>=` being the lower one; NONE for any
 //! other clause. InitializeConstraintSourceInfo reads it to link the halves into the one clause the user wrote, and a
 //! render does not quote a half by the BETWEEN's span.
@@ -191,6 +198,18 @@ struct BoundDecideClause {
 	//! A repair model loosens the folded bound through the clause's own rows, one per kept row or class (D28), not
 	//! through one knob on the column.
 	bool folded_clause_rows = false;
+	//! The shape of the comparison, which the canonicalizer decides with the clause's scope; VALUE for an objective
+	//! with a reducer under a Boolean decision.
+	CanonicalConstraintClass shape = CanonicalConstraintClass::INVALID;
+	//! The aggregate shape: the `by` key the clause's decision reducers share (index into LogicalDecide::keys), which
+	//! groups its rows; INVALID_INDEX for the whole query and for every other shape.
+	idx_t group_key = DConstants::INVALID_INDEX;
+	//! What bound reduction (RewriteRhsAggregates) relied on for a bound that may differ between the rows of a group:
+	//! the clause's shape, since only the aggregate shape takes the group's tightest value, and the comparison's
+	//! direction, which says which value is the tightest. INVALID for any other bound. A rewrite may run after it, so
+	//! a DEBUG build checks after every pass that both still hold (DecideOptimizer::VerifyBoundReads).
+	CanonicalConstraintClass bound_read_shape = CanonicalConstraintClass::INVALID;
+	ExpressionType bound_read_type = ExpressionType::INVALID;
 
 	BoundDecideClause Copy() const {
 		BoundDecideClause result;
@@ -204,6 +223,10 @@ struct BoundDecideClause {
 		result.minmax_easy = minmax_easy;
 		result.folded_bound = folded_bound;
 		result.folded_clause_rows = folded_clause_rows;
+		result.shape = shape;
+		result.group_key = group_key;
+		result.bound_read_shape = bound_read_shape;
+		result.bound_read_type = bound_read_type;
 		return result;
 	}
 

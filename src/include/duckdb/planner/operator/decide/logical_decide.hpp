@@ -380,10 +380,6 @@ struct BoundDecide {
 	//! canonicalization.
 	vector<DecideSignature> signatures;
 
-	//! The objective's signature: it is produced once, so execution refuses a second instance (D72). INVALID_INDEX when
-	//! the objective has no field.
-	idx_t objective_signature = DConstants::INVALID_INDEX;
-
 	//! Every expression held here, each slot once.
 	void EnumerateExpressions(const std::function<void(unique_ptr<Expression> &expression)> &callback);
 };
@@ -711,8 +707,8 @@ public:
 	//! a third, and do not append to `bound.clauses` directly.
 	void AddClause(ClientContext &context, BoundDecideClause clause);
 
-	//! Canonicalize every clause again, in place: for a pass that rewrote clause bodies where they sit.
-	void CanonicalizeClauses(ClientContext &context);
+	//! Canonicalize `clause`, one of `bound.clauses`, again, in place: for a pass that rewrote its body where it sits.
+	void CanonicalizeClause(ClientContext &context, BoundDecideClause &clause);
 
 	//! Replace the objective, canonicalizing it on the way in. This is the objective's
 	//! counterpart to AddClause and the ONLY way DecideOptimizer may install a
@@ -740,7 +736,7 @@ public:
 	//!
 	//! The callback may replace the expression in `body.expr` and append to `decide_variables` and the other
 	//! containers, but not to the container of the body it was handed. A pass that rewrote the objective hands it back
-	//! through SetObjective once the enumeration is over, and one that rewrote a clause through CanonicalizeClauses,
+	//! through SetObjective once the enumeration is over, and one that rewrote a clause through CanonicalizeClause,
 	//! the canonicalizing boundaries.
 	void EnumerateBodies(const std::function<void(DecideOwnedBody &)> &callback);
 	//! The columns the node's expressions read from its input: the child's, then the placeholders of the bound

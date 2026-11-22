@@ -64,19 +64,34 @@ namespace {
 class RhsBoundRewriter {
 public:
 	RhsBoundRewriter(Optimizer &optimizer_p, LogicalDecide &decide_p)
-	    : optimizer(optimizer_p), decide(decide_p), calc(optimizer_p.context),
-	      canonicalizer(optimizer_p.context, decide_p.decide_index, decide_p.bound.variable_scopes,
-	                    decide_p.bound.keyed_scopes, decide_p.bound.keys, decide_p.bound.is_boolean_var) {
+	    : optimizer(optimizer_p), decide(decide_p), calc(optimizer_p.context) {
 	}
 
 	void Run() {
+		// A clause or an objective a value was replaced in goes back through the canonicalizing boundary: a column
+		// stands where a reducer stood, which the canonicalizer reads as a value of the row.
+		vector<BoundDecideClause *> rewritten;
 		decide.EnumerateBodies([&](DecideOwnedBody &body) {
+			if (body.owner != DecideOwnedBody::Owner::CLAUSE && body.owner != DecideOwnedBody::Owner::OBJECTIVE) {
+				return;
+			}
+			auto written = body.expr->Copy();
 			if (body.owner == DecideOwnedBody::Owner::CLAUSE) {
-				ReadClause(*body.expr, body.clause->scope);
-			} else if (body.owner == DecideOwnedBody::Owner::OBJECTIVE) {
+				ReadClause(*body.clause);
+			} else {
 				ReadObjective(body.expr, body.rows);
 			}
+			if (!Expression::Equals(*written, *body.expr)) {
+				rewritten.push_back(body.clause.get());
+			}
 		});
+		for (auto clause : rewritten) {
+			if (clause == &decide.bound.objective) {
+				decide.SetObjective(optimizer.context, std::move(decide.bound.objective));
+			} else {
+				decide.CanonicalizeClause(optimizer.context, *clause);
+			}
+		}
 	}
 
 private:
@@ -87,14 +102,14 @@ private:
 	};
 
 	//! A `per K:` groups no reducer: its clause is read like any other. Its key says which rows are in a class.
-	void ReadClause(Expression &expr, const DecideClauseScope &scope) {
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+	void ReadClause(BoundDecideClause &clause) {
+		if (clause.body->GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 			in_objective = false;
-			when = scope.when.get();
-			class_key = scope.class_key;
-			auto &comparison = expr.Cast<BoundComparisonExpression>();
+			when = clause.scope.when.get();
+			class_key = clause.scope.class_key;
+			auto &comparison = clause.body->Cast<BoundComparisonExpression>();
 			read_as = DecideValueRole::BOUND;
-			RewriteBound(comparison);
+			RewriteBound(clause);
 			read_as = DecideValueRole::COEFFICIENT;
 			ReplaceDataUnderDecisions(comparison.left, nullptr);
 		}
@@ -141,12 +156,16 @@ private:
 	//! any value is read, and one that may differ between the kept rows of a group is read as its tightest value. `<>`
 	//! keeps every value: each one is excluded. A query-wide value has one value already. A row-wise bound is checked
 	//! by the solver as it reads it.
-	void RewriteBound(BoundComparisonExpression &comparison) {
+	void RewriteBound(BoundDecideClause &clause) {
+		auto &comparison = clause.body->Cast<BoundComparisonExpression>();
 		// Canonicalization put every decision on the left, so the right is data.
 		bool aggregate_data_bound =
-		    !comparison.right->IsFoldable() &&
-		    canonicalizer.ClassifyCanonicalComparison(comparison) == CanonicalConstraintClass::AGGREGATE;
+		    !comparison.right->IsFoldable() && clause.shape == CanonicalConstraintClass::AGGREGATE;
 		bool query_wide = IsQueryWideBoundTag(comparison.right->GetAlias());
+		if (!comparison.right->IsFoldable() && !query_wide) {
+			clause.bound_read_shape = clause.shape;
+			clause.bound_read_type = comparison.type;
+		}
 		auto text = Written(*comparison.right);
 		auto location = comparison.right->GetQueryLocation();
 		auto frame = FrameText(*comparison.right);
@@ -155,7 +174,7 @@ private:
 			return;
 		}
 		bool reduces = comparison.type != ExpressionType::COMPARE_NOTEQUAL && !query_wide &&
-		               !OneValuePerGroup(*comparison.right, GroupKeyOf(comparison));
+		               !OneValuePerGroup(*comparison.right, KeyColumns(clause.group_key));
 		if (!frame.empty()) {
 			// Execution reads the bound, and its NaN, as it reads a row-wise one; one that may differ within a group
 			// it reads as the group's tightest value (D85).
@@ -174,11 +193,11 @@ private:
 		// An `=` bound takes one value in each group, which its check states ahead of the value read; the NaN check
 		// stands before it, so it reads valid values.
 		if (comparison.type == ExpressionType::COMPARE_EQUAL) {
-			AddDisagreementCheck(comparison, *comparison.right, text, SpanOf(location), OwnWhens(*comparison.left));
+			AddDisagreementCheck(clause.group_key, *comparison.right, text, SpanOf(location),
+			                     OwnWhens(*comparison.left));
 		}
 		auto function = DecideIsUpperBound(comparison.type) ? "min" : "max";
-		comparison.right =
-		    calc.Out(InGroup(comparison, RecordOver(function, *comparison.right, GroupKeyIndex(comparison))));
+		comparison.right = calc.Out(InKey(clause.group_key, RecordOver(function, *comparison.right, clause.group_key)));
 		// The bound is replaced by a column of its value, which a message quotes as it quotes the bound.
 		if (location.IsValid()) {
 			comparison.right->SetQueryLocation(location);
@@ -398,12 +417,6 @@ private:
 		}
 	}
 
-	//! `value` on a row in a group of the reducer's `by` key, NULL on a row whose written key column is NULL, which is
-	//! in no group. A relation's columns compare NULL as a value.
-	ExprPtr InGroup(const Expression &tagged, ExprPtr value) const {
-		return InKey(GroupKeyIndex(tagged), std::move(value));
-	}
-
 	//! `value` on a row in a group of the key `key_index`, `outside` (NULL when null) on a row in none; `value` for the
 	//! whole query.
 	ExprPtr InKey(idx_t key_index, ExprPtr value, const ExprPtr &outside = nullptr) const {
@@ -463,9 +476,8 @@ private:
 	//! over the source and the aggregates' side tables before any rule runs, so every path states it. A group where
 	//! some reducer reads no row holds no instance (language/guide.md §7.4). The bound's NaN check stands before it
 	//! (RewriteBound), so it reads valid values.
-	void AddDisagreementCheck(const BoundComparisonExpression &comparison, const Expression &bound, const string &text,
-	                          optional_idx place, const vector<const Expression *> &reads) {
-		const auto by = GroupKeyIndex(comparison);
+	void AddDisagreementCheck(idx_t by, const Expression &bound, const string &text, optional_idx place,
+	                          const vector<const Expression *> &reads) {
 		vector<ExprPtr> held;
 		for (auto *read : reads) {
 			held.push_back(RecordOver("bool_or", *read, by));
@@ -573,18 +585,19 @@ private:
 		return path.keys.empty() ? own : FindOrCreateDecidePathKey(path.KeysOf(own), decide.bound.keys);
 	}
 
-	//! The key a reducer or bound groups by (an index into `keys`); INVALID_INDEX for the whole query.
-	idx_t GroupKeyIndex(const Expression &tagged) const {
+	//! The key a reducer groups by (an index into `keys`); INVALID_INDEX for the whole query.
+	idx_t GroupKeyIndex(const BoundAggregateExpression &reducer) const {
 		idx_t index = DConstants::INVALID_INDEX;
-		if (TryParseGroupKeyTag(tagged.GetAlias(), index)) {
-			D_ASSERT(index < decide.keys.size());
+		if (TryParseGroupKeyTag(reducer.GetAlias(), index)) {
+			D_ASSERT(index < decide.bound.keys.size());
 		}
 		return index;
 	}
 
-	vector<const Expression *> GroupKeyOf(const Expression &tagged) const {
+	//! The grouping columns of the key `key`.
+	vector<const Expression *> KeyColumns(idx_t key) const {
 		vector<const Expression *> keys;
-		for (auto &element : DecideKeyElements(decide.bound.keys, GroupKeyIndex(tagged))) {
+		for (auto &element : DecideKeyElements(decide.bound.keys, key)) {
 			keys.push_back(&element.Grouping());
 		}
 		return keys;
@@ -637,7 +650,6 @@ private:
 	Optimizer &optimizer;
 	LogicalDecide &decide;
 	ExpressionBuilder calc;
-	DecideCanonicalizer canonicalizer;
 	//! The clause being rewritten: its `when` condition, null for none, and the key of its `per K:`, INVALID_INDEX for
 	//! none or `per ()`.
 	const Expression *when = nullptr;

@@ -73,24 +73,29 @@ void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {
 // ---------------------------------------------------------------------------
 
 void DecideOptimizer::RewriteAvgToSum(LogicalDecide &decide) {
-	// Rewrites mutate in place, so the constraints and the objective are rewritten where they sit and reinstalled
-	// through the boundary.
+	// Rewrites mutate in place, so a clause and the objective are rewritten where they sit, and one an AVG was
+	// rewritten in goes back through the canonicalizing boundary.
+	vector<BoundDecideClause *> rewritten;
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
-		if (body.owner == DecideOwnedBody::Owner::CLAUSE || body.owner == DecideOwnedBody::Owner::OBJECTIVE) {
-			RewriteAvgInExpression(body.expr, decide, body.Origin());
+		if ((body.owner == DecideOwnedBody::Owner::CLAUSE || body.owner == DecideOwnedBody::Owner::OBJECTIVE) &&
+		    RewriteAvgInExpression(body.expr, decide, body.Origin())) {
+			rewritten.push_back(body.clause.get());
 		}
 	});
-	decide.CanonicalizeClauses(optimizer.context);
-	if (decide.bound.objective.body) {
-		decide.SetObjective(optimizer.context, std::move(decide.bound.objective));
+	for (auto clause : rewritten) {
+		if (clause == &decide.bound.objective) {
+			decide.SetObjective(optimizer.context, std::move(decide.bound.objective));
+		} else {
+			decide.CanonicalizeClause(optimizer.context, *clause);
+		}
 	}
 }
 
-void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide,
+bool DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                              const DecideRowOrigin &origin) {
 	idx_t definition_aux;
 	if (TryParseDecideIndexTag(expr->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
-		return; // AVG syntax inside this body belongs to the tree F node's definition expression
+		return false; // AVG syntax inside this body belongs to the tree F node's definition expression
 	}
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		auto &agg = expr->Cast<BoundAggregateExpression>();
@@ -113,12 +118,15 @@ void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, Logic
 			AddDecideTag(new_sum->alias, AVG_REWRITE_TAG);
 
 			expr = std::move(new_sum);
-			return;
+			return true;
 		}
 	}
 
-	ExpressionIterator::EnumerateChildren(
-	    *expr, [&](unique_ptr<Expression> &child) { RewriteAvgInExpression(child, decide, origin); });
+	bool rewritten = false;
+	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
+		rewritten = RewriteAvgInExpression(child, decide, origin) || rewritten;
+	});
+	return rewritten;
 }
 
 } // namespace duckdb

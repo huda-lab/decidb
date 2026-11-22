@@ -117,6 +117,8 @@ void BoundDecideClause::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<bool>(112, "minmax_easy", minmax_easy, false);
 	serializer.WritePropertyWithDefault<bool>(113, "folded_bound", folded_bound, false);
 	serializer.WritePropertyWithDefault<bool>(114, "folded_clause_rows", folded_clause_rows, false);
+	serializer.WriteProperty<CanonicalConstraintClass>(115, "shape", shape);
+	serializer.WritePropertyWithDefault<idx_t>(116, "group_key", group_key, DConstants::INVALID_INDEX);
 }
 
 BoundDecideClause BoundDecideClause::Deserialize(Deserializer &deserializer) {
@@ -136,6 +138,8 @@ BoundDecideClause BoundDecideClause::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadPropertyWithExplicitDefault<bool>(112, "minmax_easy", result.minmax_easy, false);
 	deserializer.ReadPropertyWithExplicitDefault<bool>(113, "folded_bound", result.folded_bound, false);
 	deserializer.ReadPropertyWithExplicitDefault<bool>(114, "folded_clause_rows", result.folded_clause_rows, false);
+	deserializer.ReadProperty<CanonicalConstraintClass>(115, "shape", result.shape);
+	deserializer.ReadPropertyWithExplicitDefault<idx_t>(116, "group_key", result.group_key, DConstants::INVALID_INDEX);
 	return result;
 }
 

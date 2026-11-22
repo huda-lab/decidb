@@ -210,7 +210,6 @@ unique_ptr<LogicalOperator> Binder::PlanDecide(BoundSelectNode &statement, uniqu
 	}
 
 	statement.decide.signatures = std::move(signatures.signatures);
-	statement.decide.objective_signature = signatures.objective;
 	auto decide_op = make_uniq<LogicalDecide>(statement.decide_index, std::move(statement.decide));
 	decide_op->written_objective = std::move(written_objective);
 	decide_op->canonical_objective = std::move(canonical_objective);

@@ -251,7 +251,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	tree->is_boolean_var = std::move(op.bound.is_boolean_var);
 	tree->objective_constant_offset = op.bound.objective_constant_offset;
 	tree->signatures = std::move(op.bound.signatures);
-	tree->objective_signature = op.bound.objective_signature;
+	tree->objective_signature = op.bound.objective.scope.signature;
 	tree->frames = std::move(op.bound.frames);
 	tree->diagnose = op.diagnose;
 	auto decide_op = make_uniq<PhysicalDecide>(op.types, op.estimated_cardinality, std::move(child_plan));

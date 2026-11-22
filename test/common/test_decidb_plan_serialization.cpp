@@ -903,7 +903,7 @@ TEST_CASE("Scoped clauses keep their by keys, signatures and objective mark thro
 	REQUIRE(before->bound.keyed_scopes.size() == 2);
 	REQUIRE(before->bound.keyed_scopes[1].key == before->bound.keyed_scopes[0].key);
 	REQUIRE(before->bound.keyed_scopes[1].signature == 1);
-	REQUIRE(before->bound.objective_signature == DConstants::INVALID_INDEX);
+	REQUIRE(before->bound.objective.scope.signature == DConstants::INVALID_INDEX);
 
 	auto copied = RoundTrip(con, *plan);
 	auto *after = FindDecide(*copied);
@@ -929,7 +929,7 @@ TEST_CASE("Scoped clauses keep their by keys, signatures and objective mark thro
 			REQUIRE(copy.fields[f].text == signature.fields[f].text);
 		}
 	}
-	REQUIRE(after->bound.objective_signature == before->bound.objective_signature);
+	REQUIRE(after->bound.objective.scope.signature == before->bound.objective.scope.signature);
 	REQUIRE(after->bound.keyed_scopes.size() == before->bound.keyed_scopes.size());
 	for (idx_t i = 0; i < before->bound.keyed_scopes.size(); i++) {
 		REQUIRE(after->bound.keyed_scopes[i].key == before->bound.keyed_scopes[i].key);

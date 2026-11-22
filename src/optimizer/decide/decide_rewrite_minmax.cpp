@@ -88,7 +88,7 @@ void DecideOptimizer::RewriteMinMaxInClause(BoundDecideClause &clause, LogicalDe
                                             vector<BoundDecideClause> &new_clauses) {
 	// A clause in the VALUE shape holds its reducers in helpers, whatever their direction.
 	if (clause.body->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON ||
-	    HasDecideTag(clause.body->GetAlias(), VALUE_REWRITE_TAG)) {
+	    clause.shape == CanonicalConstraintClass::VALUE) {
 		return;
 	}
 	auto &comp = clause.body->Cast<BoundComparisonExpression>();

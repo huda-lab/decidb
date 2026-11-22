@@ -1132,10 +1132,15 @@ bool DecideCanonicalizer::IsSignedSpine(const Expression &side, const vector<Ato
 	return name == "+" || name == "-";
 }
 
-unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Expression &expr) const {
-	auto desugared = DesugarNorms(expr);
-	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : expr);
-	return CanonicalizeComparisonInternal(*written);
+BoundDecideClause DecideCanonicalizer::CanonicalizeFunctionRow(const BoundDecideClause &row) const {
+	auto result = row.Copy();
+	auto desugared = DesugarNorms(*row.body);
+	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : *row.body);
+	result.body = CanonicalizeComparisonInternal(*written);
+	result.shape = ContainsDecisionReducer(*result.body->Cast<BoundComparisonExpression>().left)
+	                   ? CanonicalConstraintClass::AGGREGATE
+	                   : CanonicalConstraintClass::PER_ROW;
+	return result;
 }
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const Expression &expr) const {
@@ -1283,14 +1288,18 @@ BoundDecideClause DecideCanonicalizer::CanonicalizeObjective(const BoundDecideCl
 	auto result = objective.Copy();
 	result.EnumerateExpressions([&](unique_ptr<Expression> &expression) { DesugarNormsInPlace(expression); });
 	NormalizeProductsInPlace(context, decide_index, result.body);
-	result.body = CanonicalizeObjectiveInternal(*result.body, out_constant_offset, sense == DecideSense::MAXIMIZE);
+	bool value_shape = false;
+	result.body =
+	    CanonicalizeObjectiveInternal(*result.body, out_constant_offset, sense == DecideSense::MAXIMIZE, value_shape);
+	result.shape = value_shape ? CanonicalConstraintClass::VALUE : CanonicalConstraintClass::INVALID;
 	return result;
 }
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const Expression &objective,
-                                                                          double &out_constant_offset,
-                                                                          bool negate) const {
+                                                                          double &out_constant_offset, bool negate,
+                                                                          bool &out_value_shape) const {
 	DecideProfileScope profile("canonicalize.objective");
+	out_value_shape = false;
 	// No decision content anywhere. Not a shape this pass owns, and not an error: the binder refuses it.
 	if (!ReferencesDecideVar(objective)) {
 		return objective.Copy();
@@ -1336,12 +1345,8 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 	auto result = BuildAdditive(decision_atoms);
 	// A reducer under a Boolean decision takes the VALUE shape, as a comparison does: the value rewrite holds the
 	// reducer in a helper decision, and the product with it is a Boolean product.
-	if (std::any_of(decision_atoms.begin(), decision_atoms.end(),
-	                [&](const Atom &atom) { return atom.scale && ReferencesDecideVar(*atom.scale); })) {
-		auto alias = result->GetAlias();
-		AddDecideTag(alias, VALUE_REWRITE_TAG);
-		result->SetAlias(std::move(alias));
-	}
+	out_value_shape = std::any_of(decision_atoms.begin(), decision_atoms.end(),
+	                              [&](const Atom &atom) { return atom.scale && ReferencesDecideVar(*atom.scale); });
 	// A reducer holding a reducer takes the value rewrite, as in a constraint: the shape is
 	// decided here, once, and the rewrite reads the tag.
 	TagNestedObjectiveReducers(*this, *result, decide_index);
@@ -1428,21 +1433,10 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 	return value ? ScopedShape::VALUE : ScopedShape::AGGREGATE;
 }
 
-CanonicalConstraintClass DecideCanonicalizer::ClassifyCanonicalComparison(const Expression &expr) const {
-	auto &cmp = expr.Cast<BoundComparisonExpression>();
-	if (ReferencesDecideVar(*cmp.right)) {
-		return CanonicalConstraintClass::INVALID;
-	}
-	if (HasDecideTag(cmp.GetAlias(), VALUE_REWRITE_TAG)) {
-		return CanonicalConstraintClass::VALUE;
-	}
-	return ContainsDecisionReducer(*cmp.left) ? CanonicalConstraintClass::AGGREGATE : CanonicalConstraintClass::PER_ROW;
-}
-
 void DecideCanonicalizer::ValidateCanonicalComparison(const BoundComparisonExpression &comparison,
                                                       idx_t source_clause_id,
                                                       const vector<ConstraintSourceInfo> *sources) const {
-	if (ClassifyCanonicalComparison(comparison) == CanonicalConstraintClass::INVALID) {
+	if (ReferencesDecideVar(*comparison.right)) {
 		throw InternalException("DECIDE canonicalizer: a decision survived on the bound side of '%s'",
 		                        comparison.ToString());
 	}
@@ -1486,9 +1480,6 @@ void DecideCanonicalizer::VerifyCanonicalComparison(const BoundComparisonExpress
 		if (atom.placement != Placement::RIGHT) {
 			CanonicalInvariantFailure("C3", "decision-bearing additive term remains on the right", comparison);
 		}
-	}
-	if (ClassifyCanonicalComparison(comparison) == CanonicalConstraintClass::INVALID) {
-		CanonicalInvariantFailure("C5", "comparison is neither a valid per-row nor aggregate constraint", comparison);
 	}
 }
 
@@ -1539,11 +1530,16 @@ void DecideCanonicalizer::VerifyCanonical(const BoundDecideClause &clause) const
 		if (clause.body->GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 			VerifyCanonicalComparison(clause.body->Cast<BoundComparisonExpression>());
 		}
-		auto fixed_point = CanonicalizeClauseBody(*clause.body, clause.scope);
+		auto fixed_point = CanonicalizeClauseBody(*clause.body);
 		if (!CanonicalTreesEqual(*clause.body, *fixed_point)) {
 			CanonicalInvariantFailure("C4/C6/C7",
 			                          "canonicalizing the clause again changes its structure, reducer scale, or tags",
 			                          *clause.body);
+		}
+		auto classified = clause.Copy();
+		ClassifyClause(classified);
+		if (classified.shape == CanonicalConstraintClass::VALUE && clause.shape != CanonicalConstraintClass::VALUE) {
+			CanonicalInvariantFailure("C5", "the clause takes the value shape and is not recorded in it", *clause.body);
 		}
 	} catch (const InternalException &) {
 		throw;
@@ -1554,42 +1550,40 @@ void DecideCanonicalizer::VerifyCanonical(const BoundDecideClause &clause) const
 #endif
 }
 
-unique_ptr<Expression> DecideCanonicalizer::CanonicalizeClauseBody(const Expression &body,
-                                                                   const DecideClauseScope &scope) const {
+unique_ptr<Expression> DecideCanonicalizer::CanonicalizeClauseBody(const Expression &body) const {
 	if (body.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
 		return body.Copy();
 	}
-	auto result = CanonicalizeComparisonInternal(body);
-	// The shape is decided here, once, with the clause's scope, and stamped on the comparison: a clause in the
-	// aggregate shape carries the `by` key its decision reducers share, as later rewrites rebuild the reducers, and
-	// one in the VALUE shape VALUE_REWRITE_TAG (ClassifyCanonicalComparison reads the stamp). `per K:` over a clause
-	// in the aggregate shape adds no row to the model: its rows are one per `by` group of the kept rows, and every
-	// per-K constraint in a group differs only in its bound, which the group's tightest bound covers. The clause
-	// keeps its `per` all the same: it names the classes each group's row stands for, which a diagnosis reports one
-	// by one (language/guide.md §8.1, D28); the linear form reads it as the clause's class key.
-	if (!ReferencesDecideVar(*result->Cast<BoundComparisonExpression>().right)) {
-		idx_t group_key;
-		auto shape = ClassifyScoped(result->Cast<BoundComparisonExpression>(),
-		                            scope.HasPer() ? scope.class_key : DECIDE_ROW_KEY, group_key);
-		if (shape == ScopedShape::UNSUPPORTED) {
-			throw NotImplementedException(*result,
-			                              "AVG in a <> constraint beside another term, or with its own when or per, "
-			                              "is not supported");
-		}
-		idx_t stamped;
-		if (shape == ScopedShape::AGGREGATE && group_key != DConstants::INVALID_INDEX &&
-		    !TryParseGroupKeyTag(result->GetAlias(), stamped)) {
-			auto alias = result->GetAlias();
-			AddDecideTag(alias, MakeGroupKeyTag(group_key));
-			result->SetAlias(std::move(alias));
-		}
-		if (shape == ScopedShape::VALUE && !HasDecideTag(result->GetAlias(), VALUE_REWRITE_TAG)) {
-			auto alias = result->GetAlias();
-			AddDecideTag(alias, VALUE_REWRITE_TAG);
-			result->SetAlias(std::move(alias));
-		}
+	return CanonicalizeComparisonInternal(body);
+}
+
+void DecideCanonicalizer::ClassifyClause(BoundDecideClause &clause) const {
+	clause.shape = CanonicalConstraintClass::INVALID;
+	clause.group_key = DConstants::INVALID_INDEX;
+	if (clause.body->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+		return;
 	}
-	return result;
+	auto &comparison = clause.body->Cast<BoundComparisonExpression>();
+	if (ReferencesDecideVar(*comparison.right)) {
+		return;
+	}
+	// `per K:` over a clause in the aggregate shape adds no row to the model: its rows are one per `by` group of the
+	// kept rows, and every per-K constraint in a group differs only in its bound, which the group's tightest bound
+	// covers. The clause keeps its `per` all the same: it names the classes each group's row stands for, which a
+	// diagnosis reports one by one (language/guide.md §8.1, D28); the linear form reads it as the clause's class key.
+	idx_t group_key;
+	auto shape = ClassifyScoped(comparison, clause.scope.HasPer() ? clause.scope.class_key : DECIDE_ROW_KEY, group_key);
+	if (shape == ScopedShape::UNSUPPORTED) {
+		throw NotImplementedException(comparison,
+		                              "AVG in a <> constraint beside another term, or with its own when or per, "
+		                              "is not supported");
+	}
+	clause.shape = shape == ScopedShape::VALUE       ? CanonicalConstraintClass::VALUE
+	               : shape == ScopedShape::AGGREGATE ? CanonicalConstraintClass::AGGREGATE
+	                                                 : CanonicalConstraintClass::PER_ROW;
+	if (shape == ScopedShape::AGGREGATE) {
+		clause.group_key = group_key;
+	}
 }
 
 //! Whether canonicalization changed each clause: the comparison of `canonical` against the one of `written` of the
@@ -1633,7 +1627,11 @@ void DecideCanonicalizer::CanonicalizeClauses(vector<BoundDecideClause> &clauses
 		NormalizeProductsInPlace(context, decide_index, clause.body);
 	}
 	for (auto &clause : canonical) {
-		clause.body = CanonicalizeClauseBody(*clause.body, clause.scope);
+		const bool classified = clause.shape != CanonicalConstraintClass::INVALID;
+		clause.body = CanonicalizeClauseBody(*clause.body);
+		if (!classified) {
+			ClassifyClause(clause);
+		}
 	}
 	for (auto &clause : canonical) {
 		if (clause.body->GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
@@ -1897,8 +1895,8 @@ void DecideCanonicalizer::BuildObjectiveSignatures(BoundDecideClause &objective,
 	vector<DecideSignatureField> fields;
 	CollectSignatureFields(*objective.body, DConstants::INVALID_INDEX, fields);
 	if (!fields.empty()) {
-		out.objective = AddSignature(out, when, DConstants::INVALID_INDEX, std::move(fields), "the objective",
-		                             DConstants::INVALID_INDEX);
+		objective.scope.signature = AddSignature(out, when, DConstants::INVALID_INDEX, std::move(fields),
+		                                         "the objective", DConstants::INVALID_INDEX);
 	}
 }
 

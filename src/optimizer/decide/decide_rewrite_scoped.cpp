@@ -516,7 +516,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		// A clause in the VALUE shape holds every decision reducer in a helper. In any other shape SUM and AVG stay in
 		// the clause's aggregate row and each MIN or MAX becomes a helper, but for the easy identity, which keeps its
 		// reducer (RewriteMinMax).
-		const bool value_shape = HasDecideTag(expr->GetAlias(), VALUE_REWRITE_TAG);
+		const bool value_shape = clause.shape == CanonicalConstraintClass::VALUE;
 		if (!value_shape && clause.minmax_easy) {
 			return;
 		}
@@ -597,10 +597,13 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		if (value_shape) {
 			HandProductsToBilinear(cmp.left, clause.origin);
 		}
-		// One row per class from here on: the shape tag has done its work.
-		auto alias = cmp.GetAlias();
-		RemoveDecideTag(alias, VALUE_REWRITE_TAG);
-		cmp.SetAlias(std::move(alias));
+		// Helpers stand where the reducers were: the clause goes back through the canonicalizing boundary (a helper
+		// under a sign is spelled as a decision is), and has the shape of what is left, one row per class or per group
+		// of the reducers it keeps. The canonicalizer is made here, to read the helpers' scopes.
+		decide.CanonicalizeClause(optimizer.context, clause);
+		DecideCanonicalizer(optimizer.context, decide.decide_index, decide.bound.variable_scopes,
+		                    decide.bound.keyed_scopes, decide.bound.keys, decide.bound.is_boolean_var)
+		    .ClassifyClause(clause);
 	};
 
 	// The objective is one expression under its sense (`MAXIMIZE b * sum(x)`): a reducer under a Boolean decision
@@ -614,7 +617,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	// definitions. A reducer no decision multiplies, no function reads and none nests in stays in the objective as it
 	// is.
 	auto rewrite_objective = [&](DecideOwnedBody &body) {
-		const bool products = HasDecideTag(body.expr->GetAlias(), VALUE_REWRITE_TAG);
+		const bool products = body.clause->shape == CanonicalConstraintClass::VALUE;
 		auto sites = CollectReducerSites(optimizer.context, booleans, body.expr);
 		DecideReducerPath path;
 		if (body.rows) {
@@ -638,14 +641,19 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		// or a nest may stand under a Boolean factor without the shape tag.
 		HandProductsToBilinear(body.expr, body.Origin());
 	};
+	// The objective goes back through the canonicalizing boundary when a helper or a product's link replaced a part
+	// of it.
+	bool objective_rewritten = false;
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
 		if (body.owner == DecideOwnedBody::Owner::CLAUSE) {
 			rewrite_clause(*body.clause);
 		} else if (body.owner == DecideOwnedBody::Owner::OBJECTIVE) {
+			auto written = body.expr->Copy();
 			rewrite_objective(body);
+			objective_rewritten = !Expression::Equals(*written, *body.expr);
 		}
 	});
-	if (decide.bound.objective.body) {
+	if (objective_rewritten) {
 		decide.SetObjective(optimizer.context, std::move(decide.bound.objective));
 	}
 }

@@ -412,7 +412,7 @@ private:
 			MarkNotProved(ir_node.status);
 		}
 		ReadScope(clause.scope.when.get(), ir_node.scope);
-		if (HasDecideTag(leaf.GetAlias(), VALUE_REWRITE_TAG)) {
+		if (clause.shape == CanonicalConstraintClass::VALUE) {
 			// No rule models the helper decision a reducer's value becomes.
 			MarkNotProved(ir_node.status);
 		}
@@ -427,10 +427,7 @@ private:
 			D_ASSERT(leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON);
 			auto &comparison = leaf.Cast<BoundComparisonExpression>();
 			ir_node.comparison = comparison.type;
-			auto shape = canonicalizer.ClassifyCanonicalComparison(comparison);
-			// The canonicalizer rejected an invalid comparison when it bound the query.
-			D_ASSERT(shape != CanonicalConstraintClass::INVALID);
-			ir_node.aggregate = shape == CanonicalConstraintClass::AGGREGATE;
+			ir_node.aggregate = clause.shape == CanonicalConstraintClass::AGGREGATE;
 			if (ir_node.aggregate) {
 				ReadParts(*comparison.left, ir_node.lhs);
 			} else {
@@ -503,7 +500,7 @@ private:
 			MarkNotProved(objective.status);
 			return;
 		}
-		if (decide.bound.objective_signature != DConstants::INVALID_INDEX) {
+		if (decide.bound.objective.scope.signature != DConstants::INVALID_INDEX) {
 			// The objective is produced once (D72): the operator refuses a second variant of it, which no rule's plan
 			// checks.
 			MarkNotProved(objective.status);

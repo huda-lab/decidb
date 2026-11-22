@@ -257,22 +257,18 @@ string LogicalDecide::GetName() const {
 }
 
 void LogicalDecide::AddClause(ClientContext &context, BoundDecideClause clause) {
+	CanonicalizeClause(context, clause);
+	bound.clauses.push_back(std::move(clause));
+}
+
+void LogicalDecide::CanonicalizeClause(ClientContext &context, BoundDecideClause &clause) {
 	DecideCanonicalizer canonicalizer(context, decide_index, bound.variable_scopes, bound.keyed_scopes, bound.keys,
 	                                  bound.is_boolean_var);
 	vector<BoundDecideClause> canonical;
 	canonical.push_back(std::move(clause));
 	canonicalizer.CanonicalizeClauses(canonical);
 	canonicalizer.VerifyCanonical(canonical[0]);
-	bound.clauses.push_back(std::move(canonical[0]));
-}
-
-void LogicalDecide::CanonicalizeClauses(ClientContext &context) {
-	DecideCanonicalizer canonicalizer(context, decide_index, bound.variable_scopes, bound.keyed_scopes, bound.keys,
-	                                  bound.is_boolean_var);
-	canonicalizer.CanonicalizeClauses(bound.clauses);
-	for (auto &clause : bound.clauses) {
-		canonicalizer.VerifyCanonical(clause);
-	}
+	clause = std::move(canonical[0]);
 }
 
 void LogicalDecide::SetObjective(ClientContext &context, BoundDecideClause objective) {

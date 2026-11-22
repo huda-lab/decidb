@@ -85,7 +85,8 @@
 // Peeling is also where the scale-specific rule "a factor on a reducer must be
 // one value for the whole query" is enforced.
 //
-// SHAPE IS DECIDED AT THIS BOUNDARY. After rebuilding, ClassifyScoped reads the
+// SHAPE IS DECIDED AT THIS BOUNDARY, once for a clause, and stored on it
+// (BoundDecideClause::shape, group_key; ClassifyClause). After rebuilding, ClassifyScoped reads the
 // decision side as one of three shapes: ROWS (no decision reducer: one row per kept
 // row or class), AGGREGATE (decision reducers sharing one `by` key beside query-wide
 // terms: one row per group) or VALUE (a decision reducer beside a per-row or keyed
@@ -159,23 +160,12 @@ struct ExtremumBody {
 };
 ExtremumBody SplitExtremumBody(const Expression &body, idx_t decide_index);
 
-//! The semantic row shape of a canonical DECIDE comparison. VALUE is a comparison whose
-//! decision side mixes a decision reducer with something the aggregate shape cannot hold
-//! -- a per-row or keyed decision, a factor that varies by row, a second `by` key, a
-//! reducer inside another expression: the value rewrite (stage 05) replaces each decision
-//! reducer by a helper decision defined once per `by` group, after which the comparison
-//! is PER_ROW. INVALID means the bound side bears a decision, or ClassifyScoped refused
-//! the shape.
-enum class CanonicalConstraintClass : uint8_t { PER_ROW, AGGREGATE, VALUE, INVALID };
-
 //! What building the variant signatures of the user's clauses writes (LogicalDecide::signatures).
 struct DecideSignatures {
 	//! A relation-qualified reducer over decisions whose body has a field gets a scope of its own, appended here
 	//! (KeyedScopeInfo::signature), and its tag names it.
 	vector<KeyedScopeInfo> &keyed_scopes;
 	vector<DecideSignature> signatures;
-	//! The objective's, or INVALID_INDEX.
-	idx_t objective = DConstants::INVALID_INDEX;
 };
 
 //! What placing the frame selectors of the user's clauses writes (PlaceFrames): each frame's
@@ -242,10 +232,15 @@ public:
 	//! `canonical_differs` whether canonicalization changed that clause (its source clause names it).
 	void CanonicalizeClauses(vector<BoundDecideClause> &clauses, vector<ConstraintSourceInfo> *sources = nullptr) const;
 
-	//! Canonicalize one comparison a function made after the clauses were canonicalized (an ABS envelope, an L0 link,
-	//! a body definition row): the same spelling as a clause, without the shape stamped on a written clause.
-	//! Pure -- `comparison` is untouched.
-	unique_ptr<Expression> CanonicalizeComparison(const Expression &comparison) const;
+	//! Decide the shape of a canonical clause and the `by` key of its aggregate shape, with the clause's scope
+	//! (BoundDecideClause::shape, group_key). CanonicalizeClauses calls it once for a clause; the one pass that
+	//! replaces a clause's reducers by helpers (RewriteScopedReducers) calls it for the clause it leaves.
+	void ClassifyClause(BoundDecideClause &clause) const;
+
+	//! Canonicalize one row a function made after the clauses were canonicalized (an ABS envelope, an L0 link, a
+	//! body definition row): a copy with the same spelling as a clause. Its shape is read off the row, aggregate
+	//! where a decision reducer stands on its decision side: no scope decides it, and no value rewrite follows.
+	BoundDecideClause CanonicalizeFunctionRow(const BoundDecideClause &row) const;
 
 	//! The variant signature of every scoped expression of the canonical clauses with a field
 	//! (language/guide.md §7.1; D70): each `per K:` clause, which names it (DecideClauseScope::signature), and
@@ -255,8 +250,8 @@ public:
 	//! CanonicalizeClauses.
 	void BuildConstraintSignatures(vector<BoundDecideClause> &clauses, DecideSignatures &out) const;
 
-	//! The objective's signature, `out.objective` -- it is produced once (D72), so execution refuses a field with a
-	//! second value -- and its qualified reducers', after CanonicalizeObjective.
+	//! The objective's signature, its `scope.signature` -- it is produced once (D72), so execution refuses a field with
+	//! a second value -- and its qualified reducers', after CanonicalizeObjective.
 	void BuildObjectiveSignatures(BoundDecideClause &objective, DecideSignatures &out) const;
 
 	//! The signature fields `expr` reads (D70, D82, D83), appended to `fields` unless there or held by `key` already: a
@@ -332,11 +327,6 @@ public:
 	//! the body reads has no value on a row whose written key column is NULL, so that column
 	//! is tested too (`scopes` and `keys` name each decision's key).
 	void SkipNullData(Expression &expr, const vector<KeyedScopeInfo> &scopes, const vector<DecideKey> &keys) const;
-
-	//! The shape of an already-canonical comparison, as CanonicalizeClauses decided it with the clause's
-	//! scope and stamped it: VALUE_REWRITE_TAG for the VALUE shape, else AGGREGATE for a reducer on the decision side
-	//! and PER_ROW for none. INVALID for a decision on the bound side.
-	CanonicalConstraintClass ClassifyCanonicalComparison(const Expression &comparison) const;
 
 	//! Assert the structural invariant owned by this boundary. This is deliberately
 	//! non-mutating and throws InternalException: once binding/canonicalization has
@@ -498,14 +488,15 @@ private:
 	unique_ptr<Expression> RebindReducer(const BoundAggregateExpression &from, const string &name,
 	                                     unique_ptr<Expression> child) const;
 	unique_ptr<Expression> CanonicalizeComparisonInternal(const Expression &comparison) const;
+	//! `value_shape`: a reducer stands under a Boolean decision, so the value rewrite holds it in a helper decision.
 	unique_ptr<Expression> CanonicalizeObjectiveInternal(const Expression &objective, double &out_constant_offset,
-	                                                     bool negate) const;
+	                                                     bool negate, bool &value_shape) const;
 
 	void VerifyCanonicalComparison(const BoundComparisonExpression &comparison) const;
 
-	//! The canonical form of a clause's body under `scope`: a comparison canonicalized and its shape stamped, any
-	//! other body (an IN, a placeholder) as it is.
-	unique_ptr<Expression> CanonicalizeClauseBody(const Expression &body, const DecideClauseScope &scope) const;
+	//! The canonical form of a clause's body: a comparison canonicalized, any other body (an IN, a placeholder) as
+	//! it is.
+	unique_ptr<Expression> CanonicalizeClauseBody(const Expression &body) const;
 
 	//! The shape of a comparison's decision side (language/guide.md §6.4): ROWS has no
 	//! decision reducer; AGGREGATE has decision reducers sharing one `by` key under

@@ -1464,6 +1464,17 @@
         "name": "folded_clause_rows",
         "type": "bool",
         "default": "false"
+      },
+      {
+        "id": 115,
+        "name": "shape",
+        "type": "CanonicalConstraintClass"
+      },
+      {
+        "id": 116,
+        "name": "group_key",
+        "type": "idx_t",
+        "default": "DConstants::INVALID_INDEX"
       }
     ],
     "pointer_type": "none"

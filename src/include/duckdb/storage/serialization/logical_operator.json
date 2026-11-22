@@ -1077,9 +1077,8 @@
       {
         "id": 224,
         "name": "objective_signature",
-        "property": "bound.objective_signature",
         "type": "idx_t",
-        "default": "DConstants::INVALID_INDEX"
+        "deleted": true
       },
       {
         "id": 225,

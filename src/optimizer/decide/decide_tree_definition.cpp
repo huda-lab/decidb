@@ -210,7 +210,7 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 			// A MIN or MAX in the constraint, or any reducer the value rewrite holds in a helper decision.
 			const bool extremum_clause = HoldsReducer(expr, decide_index, true);
 			if (!extremum_clause &&
-			    !(HasDecideTag(expr.GetAlias(), VALUE_REWRITE_TAG) && HoldsReducer(expr, decide_index, false))) {
+			    !(body.clause->shape == CanonicalConstraintClass::VALUE && HoldsReducer(expr, decide_index, false))) {
 				return;
 			}
 			auto &comparison = expr.Cast<BoundComparisonExpression>();

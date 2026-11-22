@@ -61,14 +61,41 @@ void DecideOptimizer::OptimizeSubtree(unique_ptr<LogicalOperator> &op, unique_pt
 
 namespace {
 
-//! One optimizer pass under a profile span of its own, so a span times the pass it names.
+//! One optimizer pass under a profile span of its own, so a span times the pass it names. `decide` is the node the
+//! pass leaves, null when the pass may have replaced it.
 template <class PASS>
-void RunPass(const char *name, PASS &&pass) {
+void RunPass(const char *name, const LogicalDecide *decide, PASS &&pass) {
 	DecideProfileScope profile(name);
 	pass();
+#ifdef DEBUG
+	if (decide) {
+		DecideOptimizer::VerifyBoundReads(*decide);
+	}
+#endif
 }
 
 } // namespace
+
+void DecideOptimizer::VerifyBoundReads(const LogicalDecide &decide) {
+	for (auto &clause : decide.bound.clauses) {
+		if (clause.bound_read_shape == CanonicalConstraintClass::INVALID) {
+			continue;
+		}
+		// A clause read in another shape kept its bound as each row holds it, which the aggregate shape's one row per
+		// group cannot state.
+		const bool became_aggregate = clause.shape == CanonicalConstraintClass::AGGREGATE &&
+		                              clause.bound_read_shape != CanonicalConstraintClass::AGGREGATE;
+		// The tightest value of one direction is the loosest of the other; an `=` bound holds one value in each group,
+		// which is the tightest of both.
+		const bool turned = clause.bound_read_shape == CanonicalConstraintClass::AGGREGATE &&
+		                    clause.bound_read_type != ExpressionType::COMPARE_EQUAL &&
+		                    clause.body->type != clause.bound_read_type;
+		if (became_aggregate || turned) {
+			throw InternalException("DECIDE: a rewrite changed the shape or the direction bound reduction read of '%s'",
+			                        clause.body->ToString());
+		}
+	}
+}
 
 void DecideOptimizer::OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOperator> &root) {
 	DecideProfileScope profile("optimizer.decide");
@@ -76,9 +103,9 @@ void DecideOptimizer::OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr
 
 	// The objective's sums of group sums of squares, summed in the other order: their weights are reducers over data
 	// the bound-side evaluator computes.
-	RunPass("optimizer.objective_summation", [&] { SwapObjectiveSummation(decide); });
+	RunPass("optimizer.objective_summation", &decide, [&] { SwapObjectiveSummation(decide); });
 	// Pass 0, on every path: the bound-side evaluator, whose output both the direct-solve rules and the solver read.
-	RunPass("optimizer.rhs_aggregates", [&] { RewriteRhsAggregates(decide); });
+	RunPass("optimizer.rhs_aggregates", &decide, [&] { RewriteRhsAggregates(decide); });
 
 	// How the query is answered is settled here and nowhere else: a direct-solve rule replaces the node, else a solver
 	// is chosen, and with it the formulation. Every pass below decides how to express a construct, and the right
@@ -86,39 +113,39 @@ void DecideOptimizer::OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr
 	// From here it rides the plan (LogicalDecide::solver_backend_name and ::use_native_constructs → PhysicalDecide)
 	// all the way to the solve and to any diagnostic re-solve, so nothing downstream ever decides a second time.
 	bool replaced = false;
-	RunPass("optimizer.choose_answer", [&] { replaced = ChooseDecideAnswer(op, root, optimizer); });
+	RunPass("optimizer.choose_answer", nullptr, [&] { replaced = ChooseDecideAnswer(op, root, optimizer); });
 	if (!replaced) {
 		RewriteForSolver(decide, *root);
 	}
 }
 
 void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &root) {
-	RunPass("optimizer.tag_groups", [&] { TagAtomicRemovalGroups(decide); });
+	RunPass("optimizer.tag_groups", &decide, [&] { TagAtomicRemovalGroups(decide); });
 	// A range over decisions becomes a helper before any rewrite copies it.
-	RunPass("optimizer.frame_ranges", [&] { RewriteFrameRanges(decide); });
+	RunPass("optimizer.frame_ranges", &decide, [&] { RewriteFrameRanges(decide); });
 	// Nested reducers remain in their written positions; the tree lowers them as G nodes beneath their readers.
-	RunPass("optimizer.norm", [&] { RewriteNorm(decide); });
-	RunPass("optimizer.in_domain", [&] { RewriteInDomain(decide); });
+	RunPass("optimizer.norm", &decide, [&] { RewriteNorm(decide); });
+	RunPass("optimizer.in_domain", &decide, [&] { RewriteInDomain(decide); });
 	// McCormick linearization for Boolean × anything bilinear products, the one pass over the bodies as they stand. A
 	// product a later pass exposes is handed to its entry where it appears (RewriteScopedReducers, RewriteAbs).
-	RunPass("optimizer.bilinear", [&] { RewriteBilinear(decide); });
+	RunPass("optimizer.bilinear", &decide, [&] { RewriteBilinear(decide); });
 	// A MIN/MAX in its cheap direction keeps its reducer, tagged, before any pass reads the clause's direction.
-	RunPass("optimizer.minmax", [&] { RewriteMinMax(decide); });
+	RunPass("optimizer.minmax", &decide, [&] { RewriteMinMax(decide); });
 	// Reserve the plan-time columns and F-node specs before later MIN/MAX rewrites and term splitting consume them.
 	// The tree owns the definition functions and emits their E rows when its instances are known.
 	DecideTreeConstruction::PrepareDefinitionFunctions(optimizer.context, decide);
 	// The value rewrite: a VALUE-shape clause's reducers, and every other MIN/MAX, become helper decisions
-	RunPass("optimizer.scoped_reducers", [&] { RewriteScopedReducers(decide); });
+	RunPass("optimizer.scoped_reducers", &decide, [&] { RewriteScopedReducers(decide); });
 	VerifyExtremumBodiesLinear(optimizer.context, decide);
-	RunPass("optimizer.not_equal", [&] { RewriteNotEqual(decide); });
-	RunPass("optimizer.avg", [&] { RewriteAvgToSum(decide); });
+	RunPass("optimizer.not_equal", &decide, [&] { RewriteNotEqual(decide); });
+	RunPass("optimizer.avg", &decide, [&] { RewriteAvgToSum(decide); });
 	// Last of the rewrites that join a helper's readers: each ABS takes its encoding from the push its body's owner
 	// gives it.
-	RunPass("optimizer.abs", [&] { RewriteAbs(decide); });
+	RunPass("optimizer.abs", &decide, [&] { RewriteAbs(decide); });
 	// Must stay last among the rewrites: RewriteInDomain emits a floor-lowering bound
 	// that is itself a singleton-row bound, and every auxiliary variable must exist before the
 	// box is sized.
-	RunPass("optimizer.fold_singleton_rows", [&] { FoldSingletonRows(decide); });
+	RunPass("optimizer.fold_singleton_rows", &decide, [&] { FoldSingletonRows(decide); });
 
 	VerifyNormMarkersLowered(decide);
 }

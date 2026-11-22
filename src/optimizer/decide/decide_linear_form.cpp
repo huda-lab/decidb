@@ -884,8 +884,8 @@ private:
 		switch (expr.GetExpressionClass()) {
 		case ExpressionClass::BOUND_COMPARISON: {
 			auto &written_comp = expr.Cast<BoundComparisonExpression>();
-			unique_ptr<Expression> canonical_envelope;
-			const BoundComparisonExpression *comp = &written_comp;
+			BoundDecideClause canonical_envelope;
+			const BoundDecideClause *canonical = &clause;
 			idx_t abs_aux = DConstants::INVALID_INDEX;
 			idx_t l0_value = DConstants::INVALID_INDEX;
 			if (TryParseAbsFunctionEnvelopeTag(written_comp.GetAlias(), abs_aux) ||
@@ -894,9 +894,10 @@ private:
 				// Function-owned links are generated in their natural form and can put decision terms on both sides.
 				// Canonicalize their linear form like an ordinary constraint, but keep `expr` as the clause identity so
 				// it still joins the root built from the optimizer metadata.
-				canonical_envelope = canonicalizer.CanonicalizeComparison(written_comp);
-				comp = &canonical_envelope->Cast<BoundComparisonExpression>();
+				canonical_envelope = canonicalizer.CanonicalizeFunctionRow(clause);
+				canonical = &canonical_envelope;
 			}
+			const auto *comp = &canonical->body->Cast<BoundComparisonExpression>();
 
 			// Skip comparisons the optimizer already folded into the column box.
 			// Emitting a DecideConstraint here would add num_rows redundant model
@@ -909,7 +910,7 @@ private:
 				break;
 			}
 
-			auto constraint = ReadDecideClauseFacts(context, op, clause, *comp);
+			auto constraint = ReadDecideClauseFacts(context, op, *canonical);
 			Expression *lhs = UnwrapDecideCasts(*comp->left, decide_index);
 
 			if (constraint->was_minmax_easy) {

@@ -42,6 +42,8 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.bound.variable_scopes,
 	                                  decide.bound.keyed_scopes, decide.bound.keys, decide.bound.is_boolean_var);
 
+	// Whether the body in hand had a marker lowered.
+	bool lowered = false;
 	// `origin` is the clause the expression stands in, and `when` the rows that clause keeps.
 	std::function<void(unique_ptr<Expression> &, const DecideRowOrigin &, const Expression *)> rewrite =
 	    [&](unique_ptr<Expression> &expr, const DecideRowOrigin &origin, const Expression *when) {
@@ -130,20 +132,29 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		    count->alias = aggregate.GetAlias();
 		    RemoveDecideTag(count->alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");
 		    expr = std::move(count);
+		    lowered = true;
 		    decide.l0_indicator_functions.push_back(std::move(indicator));
 	    };
 
 	// Lowering swaps a marker for a `SUM` of indicators under the factor the canonicalizer peeled, so each clause is
-	// lowered where it sits and the whole is reinstalled through the canonicalizing boundary.
+	// lowered where it sits, and one a marker was lowered in goes back through the canonicalizing boundary.
+	vector<BoundDecideClause *> rewritten;
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
 		if (body.owner == DecideOwnedBody::Owner::CLAUSE || body.owner == DecideOwnedBody::Owner::OBJECTIVE) {
+			lowered = false;
 			rewrite(body.expr, body.Origin(), body.rows);
+			if (lowered) {
+				rewritten.push_back(body.clause.get());
+			}
 		}
 	});
-	if (decide.bound.objective.body) {
-		decide.SetObjective(optimizer.context, std::move(decide.bound.objective));
+	for (auto clause : rewritten) {
+		if (clause == &decide.bound.objective) {
+			decide.SetObjective(optimizer.context, std::move(decide.bound.objective));
+		} else {
+			decide.CanonicalizeClause(optimizer.context, *clause);
+		}
 	}
-	decide.CanonicalizeClauses(optimizer.context);
 }
 
 void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {

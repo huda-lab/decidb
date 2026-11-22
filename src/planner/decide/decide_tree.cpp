@@ -30,8 +30,8 @@ string DecideTreeReducerName(const BoundAggregateExpression &aggregate) {
 }
 
 unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const LogicalDecide &op,
-                                                   const BoundDecideClause &clause,
-                                                   const BoundComparisonExpression &comparison) {
+                                                   const BoundDecideClause &clause) {
+	auto &comparison = clause.body->Cast<BoundComparisonExpression>();
 	auto facts = make_uniq<DecideConstraint>();
 	facts->comparison_type = comparison.type;
 	facts->rhs_expr = comparison.right->Copy();
@@ -52,14 +52,12 @@ unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const
 	}
 	facts->was_minmax_easy = clause.minmax_easy;
 	facts->scope = clause.scope.Copy();
-	TryParseGroupKeyTag(comparison.alias, facts->group_key);
+	facts->group_key = clause.group_key;
 	DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes,
 	                                  op.bound.keys, op.bound.is_boolean_var);
-	auto shape = canonicalizer.ClassifyCanonicalComparison(comparison);
+	const auto shape = clause.shape;
 	if (shape == CanonicalConstraintClass::INVALID) {
-		throw InternalException("DECIDE constraint reached term extraction with invalid aggregate/per-row "
-		                        "homogeneity: '%s'. Canonical validation must reject this during planning.",
-		                        comparison.ToString());
+		throw InternalException("DECIDE constraint reached term extraction with no shape: '%s'", comparison.ToString());
 	}
 	if (shape == CanonicalConstraintClass::VALUE) {
 		throw InternalException("DECIDE constraint in the VALUE shape reached term extraction: the value "
@@ -239,7 +237,7 @@ public:
 			node.text = op.written_objective.empty() ? Text(*body) : op.written_objective;
 			Gates(index, condition);
 			node.body = Lower(index, *body);
-			UseSignature(node, op.bound.objective_signature);
+			UseSignature(node, op.bound.objective.scope.signature);
 			tree->roots.push_back(index);
 		}
 		// A helper or data check can outlive the reading clause (D88). Preserve
@@ -807,15 +805,16 @@ private:
 		}
 		idx_t l0_function = DConstants::INVALID_INDEX;
 		idx_t definition_function = DConstants::INVALID_INDEX;
-		unique_ptr<Expression> canonical_envelope;
-		const BoundComparisonExpression *row = &comparison;
+		BoundDecideClause canonical_envelope;
+		const BoundDecideClause *canonical = &clause;
 		if (is_abs_envelope || is_l0_link || is_definition) {
 			DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes,
 			                                  op.bound.keys, op.bound.is_boolean_var);
-			canonical_envelope = canonicalizer.CanonicalizeComparison(comparison);
-			row = &canonical_envelope->Cast<BoundComparisonExpression>();
+			canonical_envelope = canonicalizer.CanonicalizeFunctionRow(clause);
+			canonical = &canonical_envelope;
 		}
-		node.facts = ReadDecideClauseFacts(context, op, clause, *row);
+		const auto *row = &canonical->body->Cast<BoundComparisonExpression>();
+		node.facts = ReadDecideClauseFacts(context, op, *canonical);
 		node.comparison_type = row->type;
 		node.folded = clause.folded_bound;
 		node.origin = clause.origin;
@@ -928,8 +927,8 @@ private:
 		} else {
 			tree->roots.push_back(index);
 		}
-		if (canonical_envelope) {
-			retained_function_links.push_back(std::move(canonical_envelope));
+		if (canonical_envelope.body) {
+			retained_function_links.push_back(std::move(canonical_envelope.body));
 		}
 	}
 
