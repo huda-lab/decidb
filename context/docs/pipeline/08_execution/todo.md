@@ -17,17 +17,6 @@ Other documented edge differences remain in `done.md` §1a: the D88 variant-name
 records. Direct-solve rules and DIAGNOSE's separate
 named-column scan also bypass or revisit parts of the normal tree execution; their scope is open.
 
-## EXEC-25 — A BETWEEN that constrains nothing warns once
-
-- **Problem.** With `decide_direct_solve='off'` and no row in a class, `per k: c BETWEEN 0 AND 10` warns twice that
-  `'c BETWEEN 0 AND 10' constrains nothing`, once per bound, and `c + d BETWEEN 0 AND 10` does the same. By stage 05
-  the BETWEEN is two comparisons, and `ReportSkippedInstances` (`physical_decide.cpp`) reports each one, both quoting
-  the written clause.
-- **Change.** The skipped-instance report is made per clause the user wrote (its source clause id), so one written
-  clause gives one warning and one EXPLAIN ANALYZE line.
-- **Done when.** Both spellings warn once; `./test/decide/run_tests.sh -k "constrains_nothing or skipped or
-  a2_keyed"` passes.
-
 ## EXEC-20 — SolverInput is the whole contract of model building
 
 - **Problem.** `physical_decide.cpp` is 2,132 lines, about 425 of them the operator. `FormulateModel`, a second
