@@ -1,147 +1,24 @@
-"""A descent per thread, merged in Combine (``pipeline/08_execution/done.md``): each thread's descent reads its own
-rows, numbered from its first, and DecideDescent::Merge takes it into the operator's at the rows placed before. The
-merged containers are those one descent over every row would fill, so the model and every message are the same.
-
-``SET decide_debug = 'split=n'`` merges every ``n`` rows as a thread of its own would; each case compares a query
-under it with the query read by one descent, and names the part of Merge it reaches. The last tests run on real
-threads: a Parquet file of several row groups, read by four threads, each with a descent of its own.
+"""One descent over the buffered rows (``pipeline/08_execution/todo.md`` EXEC-23): each thread buffers its rows, Combine
+places the buffers one after another, and Finalize routes the whole buffer through one descent, each row numbered by its
+place. The tests run on real threads: a Parquet file of several row groups, read by four threads, whose rows reach the
+buffer in an order that changes from run to run; the answer is the oracle's whatever the order.
 """
 
-import json
 import re
 
 import duckdb
 import pytest
 
-from . import _diagnose_relation
-from ._scope_cases import scope_solver, values  # noqa: F401 -- scope_solver is a fixture
+from ._scope_cases import scope_solver  # noqa: F401 -- scope_solver is a fixture
 from decidb_cli import _RESULT_MODE, _parse_quote_rows, _run
 from solver.types import ObjSense, SolverStatus, VarType
 
-SETUP = "SET threads = 1; SET decide_direct_solve = 'off';\n"
-
-# Row 6's g is NULL: it lies in no class of t.g, and its group of `by (t.g)` in none.
-ROWS = (
-    (1, "a", "k1", 1, 4),
-    (2, "b", "k2", 1, 6),
-    (3, "a", "k1", 2, 1),
-    (4, "c", "k3", 1, 7),
-    (5, "b", "k2", 2, 3),
-    (6, None, "k1", 3, 2),
-)
-SOURCE = f"FROM {values(ROWS, 't', ('id', 'g', 'k', 'period', 'v'))}"
-COLLATED_ROWS = ((1, "b"), (2, "B"), (3, "b"), (4, "c"))
-COLLATED = f"FROM (SELECT id, g COLLATE NOCASE AS g FROM {values(COLLATED_ROWS, 'v', ('id', 'g'))}) t"
-
-#: Each query reaches a part of Merge no other case reaches.
-MODEL_CASES = {
-    # A keyed decision's classes: a later piece finds 'a' and 'b' again, makes 'c' and reads none on row 6
-    # (class_map, known, new or none), and its G a slot in no class there (in_a_class).
-    "keyed-classes": f"""SELECT id, x, y {SOURCE} DECIDE x(INT), per t.g: y(INT)
-        SUCH THAT x <= 9 AND x <= y AND y <= 5 AND per t.g: sum(x) by (t.g) <= 7 MAXIMIZE sum(x) + sum(y) ORDER BY id""",
-    # A set E's instances of a decision per row, rebased by the row, and of a keyed one, by its scope's classes.
-    "a-set-e-of-decisions": f"""SELECT id, x {SOURCE} DECIDE x(INT), per t.g: y(INT)
-        SUCH THAT y <= 3 AND x <= 9 AND per t.id: x + y <= 9 MAXIMIZE sum(x) + sum(y) ORDER BY id""",
-    # An E within a G's slot, found by its enclosing slot and key (group_maps).
-    "a-class-lies-in-the-group-it-feeds": f"""SELECT id, x {SOURCE} DECIDE x(INT)
-        SUCH THAT x <= 9 AND x <= sum(per t.k: t.v) by (t.g) MAXIMIZE sum(t.id * x) ORDER BY id""",
-    # An E of an empty key within a G's slot, one per slot (empty_key_slots, by its enclosing slot).
-    "an-empty-key-in-a-group": f"""SELECT id, x {SOURCE} DECIDE x(INT)
-        SUCH THAT x <= 9 AND x <= sum(per (): t.v) by (t.g) MAXIMIZE sum(x) ORDER BY id""",
-    # A set E reads an O's `else` at the anchor's own row, which is rebased (rebase_read, fallback).
-    "an-else-read-at-its-row": f"""SELECT id, x {SOURCE} DECIDE x(REAL)
-        SUCH THAT x <= 9 AND per t.id: x <= at(previous else 0.5: x) over (t.period within t.k) + 2
-        MAXIMIZE sum(x) ORDER BY id""",
-    # An O two reducers' operands read, whose rows arrive in the slots of both (MIXED_ENCLOSING).
-    "an-o-two-reducers-read": f"""SELECT id, x {SOURCE} DECIDE x(INT)
-        SUCH THAT x <= 9 AND sum(x + max(at(previous: t.v) over (t.period within t.k)) by (t.k)) <= 40
-        MAXIMIZE sum(x) ORDER BY id""",
-    # A collated group's spelling, 'b' in the first piece and 'B' in a later one: the least, folded; 'c' is first
-    # spelled in a later piece (DecideSpelling::Fold).
-    "a-collated-group": f"""SELECT id, x {COLLATED} DECIDE x(BOOL)
-        SUCH THAT per t.g: sum(x) by (t.g) <= 1 MAXIMIZE sum(x) ORDER BY id""",
-    # An F node per class, ABS of a group's sum: an entry per row, each an instance of its own, merged as a G's
-    # entries are (IsSetNode). It was merged as a set E's, whose reads it never recorded, and crashed.
-    "an-f-node-per-class": f"""SELECT id, x {SOURCE} DECIDE x(INT)
-        SUCH THAT x <= 3 AND abs(sum(x) by (t.g) - 3) <= 2 MAXIMIZE sum(x) ORDER BY id""",
-    # A query-wide Boolean times a query-wide sum: an F node of one instance.
-    "a-query-wide-product": f"""SELECT id, x {SOURCE} DECIDE x(INT), per (): b(BOOL)
-        SUCH THAT x <= 3 AND b * sum(x) <= 10 MAXIMIZE sum(x) + 5 * b ORDER BY id""",
-    # A query-wide factor, a scalar subquery's value, read on the input's first row: the first piece's
-    # (MergeDecideDescent).
-    "a-query-wide-factor": f"""SELECT id, x {SOURCE} DECIDE x(INT), per (): c(INT)
-        SUCH THAT x <= 9 AND c <= 3 AND c * (SELECT max(w) FROM (VALUES (4), (7)) s(w)) + sum(x) <= 60
-        MAXIMIZE sum(x) + c ORDER BY id""",
-}
-
-
-def _debug(items):
-    """The setup that sets `decide_debug` to `items`."""
-    return f"{SETUP}SET decide_debug = '{items}';\n"
-
-
-def _containers(cli, sql, items=""):
-    """The descent's containers once every row is read (DecideDescent::Dump), under the `decide_debug` items `items`
-    beside `containers`."""
-    result = cli.execute_raw(_debug(",".join(["containers", items] if items else ["containers"])) + sql)
-    return result.stderr.split("DECIDB_CONTAINERS_BEGIN\n", 1)[1].split("DECIDB_CONTAINERS_END", 1)[0]
-
-
-@pytest.mark.parametrize("sql", list(MODEL_CASES.values()), ids=list(MODEL_CASES))
-def test_merged_descents_fill_the_containers_one_descent_fills(decidb_cli, tmp_path, sql):
-    """Every slot, class, entry, instance, read and routed row, numbered as one descent numbers them, and so the
-    model."""
-    cli = decidb_cli.without_verify_serializer()
-    whole = _containers(cli, sql)
-    model = cli.dump_model(SETUP + sql, tmp_path / "whole.dump")
-    for rows in (1, 2):
-        assert _containers(cli, sql, f"split={rows}") == whole, rows
-        assert cli.dump_model(_debug(f"split={rows}") + sql, tmp_path / f"split{rows}.dump") == model, rows
-
-
-#: An F node holding its definition roots in its own slots, which hold another F: an L0 indicator per class over an
-#: ABS per class. Its slots are merged after those of the node they lie in (merge_after_enclosing); merged first, the
-#: inner F read the outer's slots before they were found, and crashed.
-F_ENCLOSES_F = f"""SELECT id, x, y {SOURCE} DECIDE x(INT), per t.k: y(INT)
-    SUCH THAT x <= 3 AND y <= 3 AND norm(y - 1, 0) <= 1 MAXIMIZE sum(x) + sum(per t.k: y) ORDER BY id"""
-
-
-def test_an_f_node_in_an_f_nodes_slots_merges_as_its_pieces_were_read(decidb_cli, tmp_path):
-    """The inner F is reached along several paths within the outer's slots, so one descent numbers its slots path by
-    path within a piece of rows: merged pieces number them as one descent reading the same pieces does, and the
-    model is the one every row read at once gives."""
-    cli = decidb_cli.without_verify_serializer()
-    model = cli.dump_model(SETUP + F_ENCLOSES_F, tmp_path / "whole.dump")
-    for rows in (1, 2):
-        assert _containers(cli, F_ENCLOSES_F, f"split={rows}") == _containers(cli, F_ENCLOSES_F, f"chunk={rows}"), rows
-        assert cli.dump_model(_debug(f"split={rows}") + F_ENCLOSES_F, tmp_path / f"split{rows}.dump") == model, rows
-
-
-def test_a_collated_group_is_spelled_by_its_least_spelling_in_any_piece(decidb_cli):
-    """The group's first piece spells it 'b', a later one 'B': the message names 'B' (DecideSpelling::Fold of a
-    merged descent's spellings)."""
-    rows = ((1, "b"), (2, "B"), (3, "b"))
-    sql = f"""SELECT id, x FROM (SELECT id, g COLLATE NOCASE AS g FROM {values(rows, 'v', ('id', 'g'))}) t
-        DECIDE x(BOOL) SUCH THAT per t.g: sum(x) >= 4 MAXIMIZE SUM(x)"""
-    found = _diagnose_relation.rows(
-        _diagnose_relation.run(decidb_cli, sql, setup="SET decide_debug = 'split=1';\n", scope="expanded")
-    )
-    assert [row["group"] for row in found if row["edit_source"] == "expanded_group"] == ["t.g = 'B'"], found
-
-
-# ---------------------------------------------------------------------------
-# Real threads
-# ---------------------------------------------------------------------------
-
 #: A scan hands a thread whole row groups, and DuckDB's Parquet writer writes none smaller than 2048 rows: 8400 rows
-#: are five groups, so up to four threads each fill a descent of their own, which Finalize merges.
+#: are five groups, so up to four threads each buffer rows of their own.
 GROUP_ROWS = 2048
 THREAD_ROWS = 8400
 THREADS = 4
 THREAD_SETUP = f"SET threads = {THREADS}; SET decide_direct_solve = 'off';\n"
-#: Runs of a thread case before it fails for want of a merge: on a busy machine one thread can read every row group
-#: before the others start, and that run merges nothing.
-MERGE_RUNS = 5
 
 
 def _thread_table(tmp_path):
@@ -277,11 +154,11 @@ def _abs_under_two_reducers(solver, rows):
             solver.add_constraint(coefficients, "<=", 2500.0 if key == "g2" else 3000.0)
 
 
-#: The shapes the real-thread test runs: name -> (decisions, constraints, the objective's
-#: decision and whether it is weighted by w, the oracle's model). Each reaches a part of Merge that the threads'
-#: descents number differently: a G's slots, a G in a G, an F per class, a keyed decision's classes, a frame's rows, an
-#: F node of a keyed decision, an F under two reducers. Classes are many and small (g1 of 40, g2 of 5, g3 of 4), so
-#: each group of a clause is a few rows.
+#: The shapes the real-thread test runs: name -> (decisions, constraints, the objective's decision and whether it is
+#: weighted by w, the oracle's model). Each reads rows the threads buffered in an order that changes from run to run,
+#: and numbers them by their place in the buffer: a G's slots, a G in a G, an F per class, a keyed decision's classes, a
+#: frame's rows, an F node of a keyed decision, an F under two reducers. Classes are many and small (g1 of 40, g2 of 5,
+#: g3 of 4), so each group of a clause is a few rows.
 THREAD_CASES = {
     "flat-sum": ("x(REAL)", "x <= 10 AND per t.g1: sum(x) by (t.g1) <= 400", ("x", True), _flat_sum),
     "nested-max-in-sum": (
@@ -330,32 +207,22 @@ THREAD_CASES = {
 }
 
 
-def _answer_and_merged_descents(cli, sql):
-    """One run of `sql` under DECIDB_PROFILE: its answer rows, as dicts, and how many descents the operator merged in
-    that run (``execution.descent_parts``): one per thread that read rows."""
-    profiled = cli.with_env({"DECIDB_PROFILE": "1"})
-    argv = profiled._argv("-cmd", f".mode {_RESULT_MODE}", "-c", f"{THREAD_SETUP}{sql}")
-    proc = _run(argv, sql, env=profiled._subprocess_env())
-    parts = []
+def _answer(cli, sql):
+    """One run of `sql` on real threads: its answer rows, as dicts."""
+    argv = cli._argv("-cmd", f".mode {_RESULT_MODE}", "-c", f"{THREAD_SETUP}{sql}")
+    proc = _run(argv, sql, env=cli._subprocess_env())
     for line in proc.stderr.splitlines():
-        if line.startswith("DECIDB_PROFILE: "):
-            event = json.loads(line[len("DECIDB_PROFILE: ") :])
-            if event.get("event") == "counter" and event.get("name") == "execution.descent_parts":
-                parts.append(event["value"])
-        else:
-            assert not line.strip() or line.startswith("Warning:"), proc.stderr
-    assert len(parts) == 1, proc.stderr
+        assert not line.strip() or line.startswith("Warning:"), proc.stderr
     header = re.search(r"^'", proc.stdout, re.MULTILINE)
     table = _parse_quote_rows(proc.stdout[header.start() :])
-    return [dict(zip(table[0], values)) for values in table[1:]], parts[0]
+    return [dict(zip(table[0], values)) for values in table[1:]]
 
 
 @pytest.mark.correctness
 @pytest.mark.parametrize("name", list(THREAD_CASES))
 def test_descents_merged_from_real_threads_reach_the_optimum(decidb_cli, scope_solver, tmp_path, name):
-    """The rows of five row groups are read by threads of their own, each filling a descent, which Finalize merges:
-    within MERGE_RUNS runs one merges more than one descent, and the objective every run's answer reaches is the
-    optimum of the oracle's model."""
+    """The rows of five row groups are read by threads of their own and routed through one descent, each numbered by
+    its place in the buffer: the objective the answer reaches is the optimum of the oracle's model."""
     decisions, constraints, (decision, weighted), build = THREAD_CASES[name]
     source, rows = _thread_table(tmp_path)
     objective = "sum(t.w * {0})" if weighted else "sum({0})"
@@ -376,12 +243,7 @@ def test_descents_merged_from_real_threads_reach_the_optimum(decidb_cli, scope_s
     scope_solver.set_objective(coefficients, ObjSense.MAXIMIZE)
     expected = scope_solver.solve()
     assert expected.status == SolverStatus.OPTIMAL, expected.status
-    # One run gives the answer and the count, so the answer checked last is the merged one.
-    for _ in range(MERGE_RUNS):
-        result, merged = _answer_and_merged_descents(cli, sql)
-        assert [row["id"] for row in result] == [row["id"] for row in rows]
-        reached = sum(weight * answered[decision] for weight, answered in zip(weights, result))
-        assert reached == pytest.approx(expected.objective_value, abs=1e-4, rel=1e-6)
-        if merged > 1:
-            break
-    assert merged > 1, f"none of {MERGE_RUNS} runs merged more than one descent"
+    result = _answer(cli, sql)
+    assert [row["id"] for row in result] == [row["id"] for row in rows]
+    reached = sum(weight * answered[decision] for weight, answered in zip(weights, result))
+    assert reached == pytest.approx(expected.objective_value, abs=1e-4, rel=1e-6)

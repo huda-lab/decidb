@@ -40,14 +40,11 @@ public:
 	}
 
 	mutex lock;
-	//! The tree's descent, the threads' merged (language/guide.md §6.1): the rows are read once, as they arrive, and
-	//! the buffer below is never scanned to evaluate them. Finalize releases it once the evaluation has returned.
+	//! The tree's descent (language/guide.md §6.1): Finalize routes the buffer below through it once, then releases it
+	//! once the evaluation has returned.
 	unique_ptr<DecideDescent> descent;
-	//! Each thread's descent and the row its rows start at, until Finalize merges them into `descent`.
-	vector<pair<unique_ptr<DecideDescent>, idx_t>> descent_parts;
-	idx_t descent_rows = 0;
-	// This collection will hold all the data from the child operator, each thread's rows in the order its descent read
-	// them, placed as the descents merge
+	//! Every row the child operator produced, each thread's rows in the order it received them, placed one thread after
+	//! another as the threads combine; the descent numbers a row by its place here.
 	ColumnDataCollection data;
 
 	const PhysicalDecide &op;

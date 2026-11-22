@@ -58,11 +58,6 @@ DecideDebug ParseDecideDebug(const string &setting) {
 				throw InvalidInputException("decide_debug: chunk must be between 1 and %llu", STANDARD_VECTOR_SIZE);
 			}
 			debug.chunk = count;
-		} else if (name == "split") {
-			if (!ParseCount(value, count) || count == 0) {
-				throw InvalidInputException("decide_debug: split must be a positive row count");
-			}
-			debug.split = count;
 		} else if (name == "inject") {
 			auto parts = StringUtil::Split(value, ':');
 			if (parts.size() != 3 || parts[1] != "data" || !ParseCount(parts[0], count)) {
@@ -93,9 +88,8 @@ static void DecideDebugSetCallback(ClientContext &, SetScope, Value &parameter) 
 void RegisterDecideDebug(DBConfig &config) {
 	config.AddExtensionOption("decide_debug",
 	                          "DECIDE evaluator debugging, a comma list: tree, bodies, containers, values and steps "
-	                          "print the evaluator's dumps to stderr; chunk=N and split=N set the descent's chunk size "
-	                          "and the rows after which a thread's descent is merged; inject=N:data:V stands V in for "
-	                          "the data value of node N",
+	                          "print the evaluator's dumps to stderr; chunk=N sets the descent's chunk size; "
+	                          "inject=N:data:V stands V in for the data value of node N",
 	                          LogicalType::VARCHAR, Value(""), DecideDebugSetCallback);
 }
 

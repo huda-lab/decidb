@@ -33,8 +33,6 @@ struct DecideSpelling {
 	//! sort keys `sort_keys`, empty for a column not collated.
 	void Fold(const vector<Value> &group, const vector<vector<Value>> &spelled, const vector<vector<string>> &sort_keys,
 	          idx_t i);
-	//! Folds another descent's least spellings of the same group.
-	void Fold(const DecideSpelling &other);
 };
 
 //! Columns of values, a row per entry or slot, in chunks of STANDARD_VECTOR_SIZE rows as DuckDB's ColumnDataCollection
@@ -52,20 +50,12 @@ public:
 	//! Copies rows `selection[0, count)` of `source`'s first Types().size() columns after the last row, a string into
 	//! the chunk's own heap: no row refers to `source` afterwards.
 	void Append(DataChunk &source, const SelectionVector &selection, idx_t count);
-	//! Holds `count` rows, those past the last written until CopyRows writes them.
-	void Resize(idx_t count);
-	//! Rows [source_row, source_row + count) of `source` into rows from `target_row`, which lie in one window of this:
-	//! each window is written by one writer at a time.
-	void CopyRows(idx_t target_row, const DecideColumns &source, idx_t source_row, idx_t count);
 	Value GetValue(idx_t column, idx_t row) const;
 	//! The values of row `row`'s columns `begin` to `end`.
 	vector<Value> GetValues(idx_t row, idx_t begin, idx_t end) const;
 	//! The rows from `window * STANDARD_VECTOR_SIZE` on, at most STANDARD_VECTOR_SIZE of them.
 	DataChunk &Window(idx_t window) const {
 		return *chunks[window];
-	}
-	idx_t Windows() const {
-		return chunks.size();
 	}
 
 private:
@@ -166,9 +156,6 @@ struct DecideNodeContainer {
 	//! it, a pair per row for every set E, though only the objective's root reads them yet. Empty for a node per row,
 	//! whose entries are its rows.
 	unsafe_vector<pair<idx_t, idx_t>> routed;
-	//! A set E's, per entry, where its row reads each node it depends on (DecideNode::dependencies, its entry map's
-	//! last columns), so that another descent's entries are found again (DecideDescent::Merge).
-	unsafe_vector<idx_t> reads;
 	DecideNodeGroups groups;
 	DecideNodeTimelines timelines;
 	idx_t rows_in = 0;
@@ -209,14 +196,6 @@ public:
 	//! window or subquery, and no column beyond the input's `width` (plan L2). Run once per query, before any row.
 	static void RequireRowReads(const DecideTree &tree, idx_t width);
 	void Append(DataChunk &chunk, idx_t row_base);
-	//! The descents of `parts`, each of the same tree with the row its rows start at, in the order the rows were
-	//! placed (a descent per thread, each over the rows its thread received), merged into the first: a part's rows are
-	//! rebased; its slots, classes, entries and instances are found again in the merged maps, in the order the part
-	//! made them, which is its rows' order, so they number as one descent over every row would. The maps merge one
-	//! part after another; then each node's entries and routed rows are copied in parallel, a task per window of the
-	//! merged containers.
-	static unique_ptr<DecideDescent> MergeAll(vector<pair<unique_ptr<DecideDescent>, idx_t>> parts,
-	                                          ClientContext &context);
 	void Finish();
 	const vector<DecideNodeContainer> &Containers() const {
 		return containers;
@@ -366,10 +345,6 @@ private:
 	vector<vector<DecisionLayout>> decision_layouts;
 	//! Per keyed scope, each class's layout (decision_layouts).
 	vector<vector<idx_t>> decision_class_layouts;
-	//! Per keyed scope, whether a class was keyed by a decision's instance numbered by this descent alone (Merge).
-	vector<bool> thread_local_classes;
-	//! Per keyed scope, its classes by their layout's types and sort key, built when a merge first needs them (Merge).
-	vector<unordered_map<string, idx_t>> merged_classes;
 	//! Per node, the G or O whose slots its rows arrive in (DecideNodeContainer::parent_slots), INVALID for none and
 	//! MIXED_ENCLOSING for several.
 	vector<idx_t> enclosing;
@@ -379,32 +354,9 @@ private:
 	//! One executor per expression the descent reads, kept across windows as DuckDB's operators keep theirs.
 	unordered_map<const Expression *, unique_ptr<ExpressionExecutor>> executors;
 	bool finished = false;
-	//! Whether another descent was merged in, whose classes the layouts' dictionaries and recorded rows do not hold:
-	//! no row follows.
-	bool merged = false;
 	idx_t active_node = DConstants::INVALID_INDEX;
 	//! A set E's entries of the current window, inserted once every root has descended (DecideNodeContainer::routed).
 	vector<unique_ptr<Pending>> pending;
-	//! What MergeAll copies of a part once every part's maps are merged: where each node's entries and routed rows go,
-	//! and the slots and entries they are found again as.
-	struct MergedPart {
-		DecideDescent *source = nullptr;
-		idx_t offset = 0;
-		vector<unsafe_vector<idx_t>> slot_map;
-		vector<unsafe_vector<idx_t>> entry_map;
-		vector<idx_t> target;
-		vector<idx_t> routed_target;
-	};
-	//! Per node, the entries and routed rows merged parts add after those held.
-	vector<idx_t> planned_entries;
-	vector<idx_t> planned_routed;
-
-	//! Merges `part`'s maps into this one's and plans its copies (MergeAll).
-	void Merge(MergedPart &part);
-	//! The slot `slot` of the G or O `node`'s rows arrive in, in `part`, found again here.
-	idx_t PartParent(const MergedPart &part, idx_t node, idx_t slot) const;
-	//! Copies every merged part's entries and routed rows, in parallel (MergeAll).
-	void CopyMergedParts(vector<MergedPart> &parts, ClientContext &context);
 
 	void Visit(idx_t node, DataChunk &chunk, idx_t row_base, const Reach &incoming);
 	//! The rows of `reaching` each `when` part of `node` keeps, in `own` unless none is written: null once none is

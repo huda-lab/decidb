@@ -39,7 +39,6 @@ STAGES = {
     "plan": ["frontend.physical_decide"],
     "input": ["execution.assemble_input", "execution.sink_append", "execution.sink_combine"],
     "extraction": [
-        "execution.descent_merge",
         "execution.tree_descent",
         "execution.tree_model",
         "execution.formulate",

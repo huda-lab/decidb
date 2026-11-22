@@ -7,7 +7,6 @@
 #include "duckdb/function/create_sort_key.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/config.hpp"
-#include "duckdb/parallel/task_executor.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
@@ -26,8 +25,8 @@ static bool IsScopeNode(const DecideNode &node) {
 //! A set E (p. 110): an E per K or per (), whose entries are its distinct signatures under each slot, numbered as
 //! its instances, with the rows routed to them (InsertDistinct). Every other node -- an E per row, a G, an O, an F --
 //! keeps an entry per row it holds, each an instance of its own; an F's value is read row by row (FunctionAbsence),
-//! as a reducer's or a frame's is. The constructor's maps, Store and Merge all ask this, so a node's entries are laid
-//! out, stored and merged one way.
+//! as a reducer's or a frame's is. The constructor's maps and Store both ask this, so a node's entries are laid out and
+//! stored one way.
 static bool IsSetNode(const DecideNode &node) {
 	return node.kind == DecideNodeKind::SCOPE && node.per != DecideTreePer::ROW;
 }
@@ -217,41 +216,6 @@ void DecideColumns::Append(DataChunk &source, const SelectionVector &selection, 
 	}
 }
 
-void DecideColumns::Resize(idx_t new_count) {
-	D_ASSERT(new_count >= count);
-	if (types.empty()) {
-		count = new_count;
-		return;
-	}
-	for (idx_t window = 0; window * STANDARD_VECTOR_SIZE < new_count; window++) {
-		if (window == chunks.size()) {
-			chunks.push_back(make_uniq<DataChunk>());
-			chunks.back()->Initialize(*allocator, types);
-		}
-		chunks[window]->SetCardinality(
-		    MinValue<idx_t>(STANDARD_VECTOR_SIZE, new_count - window * STANDARD_VECTOR_SIZE));
-	}
-	count = new_count;
-}
-
-void DecideColumns::CopyRows(idx_t target_row, const DecideColumns &source, idx_t source_row, idx_t rows) {
-	if (types.empty()) {
-		return;
-	}
-	auto &target = *chunks[target_row / STANDARD_VECTOR_SIZE];
-	D_ASSERT((target_row + rows - 1) / STANDARD_VECTOR_SIZE == target_row / STANDARD_VECTOR_SIZE);
-	for (idx_t done = 0; done < rows;) {
-		const auto window = (source_row + done) / STANDARD_VECTOR_SIZE;
-		const auto at = (source_row + done) % STANDARD_VECTOR_SIZE;
-		const auto take = MinValue<idx_t>(rows - done, STANDARD_VECTOR_SIZE - at);
-		for (idx_t c = 0; c < types.size(); c++) {
-			VectorOperations::Copy(source.chunks[window]->data[c], target.data[c], at + take, at,
-			                       (target_row + done) % STANDARD_VECTOR_SIZE);
-		}
-		done += take;
-	}
-}
-
 Value DecideColumns::GetValue(idx_t column, idx_t row) const {
 	return chunks[row / STANDARD_VECTOR_SIZE]->GetValue(column, row % STANDARD_VECTOR_SIZE);
 }
@@ -338,8 +302,7 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
       seen(tree.nodes.size()), landed(tree.nodes.size()), decision_groups(tree.keyed_scopes.size()),
       decision_sort_keys(tree.keyed_scopes.size()), decision_rows(tree.keyed_scopes.size()),
       decision_recorded(tree.keyed_scopes.size()), decision_layouts(tree.keyed_scopes.size()),
-      decision_class_layouts(tree.keyed_scopes.size()), thread_local_classes(tree.keyed_scopes.size(), false),
-      merged_classes(tree.keyed_scopes.size()), enclosing(tree.nodes.size(), DConstants::INVALID_INDEX),
+      decision_class_layouts(tree.keyed_scopes.size()), enclosing(tree.nodes.size(), DConstants::INVALID_INDEX),
       spellings(tree.keys.size()) {
 	// The paths that reach each node, roots first: a node reached by one reads each of a window's rows once.
 	vector<idx_t> paths(tree.nodes.size(), 0);
@@ -1138,14 +1101,6 @@ vector<idx_t> DecideDescent::DecisionClasses(idx_t variable, DataChunk &chunk, c
 		DataChunk variants;
 		if (definition != DConstants::INVALID_INDEX) {
 			Signature(definition, chunk, missing, row_base, variants);
-			// A decision of the signature but a query-wide one has an instance this descent numbers alone (Merge).
-			for (auto &field : tree.nodes[definition]->signature) {
-				bool global = false;
-				if (field.kind == DecideSignatureFieldKind::DECISION) {
-					DecisionScope(field.decision, global);
-					thread_local_classes[scope] = thread_local_classes[scope] || !global;
-				}
-			}
 		}
 		auto types = keys.GetTypes();
 		auto signature = variants.GetTypes();
@@ -1258,9 +1213,6 @@ void DecideDescent::InsertDistinct(Pending &batch, idx_t row_base) {
 		container.parent_slots.push_back(batch.rows.parents[i]);
 		container.slots.push_back(batch.slots[i]);
 		container.instances.push_back(instances[k]);
-		for (idx_t d = 0; d < node.dependencies.size(); d++) {
-			container.reads.push_back(FlatVector::GetData<uint64_t>(probe.data[1 + value_columns + d])[i]);
-		}
 	}
 	container.values.Append(batch.values, selection, created.size());
 }
@@ -1379,7 +1331,7 @@ void DecideDescent::Store(idx_t node_index, DataChunk &chunk, const Reach &store
 	}
 	container.rows.insert(container.rows.end(), gathered, gathered + kept_count);
 	// A slot of two nodes' is told apart by neither, and no reader reads it: only a reducer's operand's are, an E
-	// whose rows arrive in its reducer's slots alone. None is kept, and so none is merged (Merge).
+	// whose rows arrive in its reducer's slots alone. None is kept.
 	const auto mixed = enclosing[node_index] == MIXED_ENCLOSING;
 	for (idx_t k = 0; k < kept_count; k++) {
 		gathered[k] = mixed ? DConstants::INVALID_INDEX : stored.parents[kept->get_index(k)];
@@ -1541,7 +1493,7 @@ void DecideDescent::Visit(idx_t node_index, DataChunk &chunk, idx_t row_base, co
 }
 
 void DecideDescent::Append(DataChunk &chunk, idx_t row_base) {
-	if (finished || merged) {
+	if (finished) {
 		throw InternalException("DECIDE tree: a row arrived after top-down construction finished");
 	}
 	Reach rows;
@@ -1600,485 +1552,6 @@ void DecideDescent::Append(DataChunk &chunk, idx_t row_base) {
 		InsertDistinct(*batch, row_base);
 	}
 	pending.clear();
-}
-
-//! Rows `rows` of `source`, ascending, appended to `target` a window at a time.
-static void DescentCopyRows(DecideColumns &target, const DecideColumns &source, const unsafe_vector<idx_t> &rows) {
-	// No column holds a row of a key with none.
-	if (source.Types().empty()) {
-		return;
-	}
-	for (idx_t begin = 0; begin < rows.size();) {
-		const auto window = rows[begin] / STANDARD_VECTOR_SIZE;
-		SelectionVector selection(STANDARD_VECTOR_SIZE);
-		idx_t count = 0;
-		for (; begin < rows.size() && rows[begin] / STANDARD_VECTOR_SIZE == window; begin++) {
-			selection.set_index(count++, rows[begin] % STANDARD_VECTOR_SIZE);
-		}
-		target.Append(source.Window(window), selection, count);
-	}
-}
-
-void DecideSpelling::Fold(const DecideSpelling &other) {
-	// Every slot of a collated key is spelled by the rows that made it (HoldKeyed).
-	D_ASSERT(!other.least.empty());
-	if (least.empty()) {
-		*this = other;
-		return;
-	}
-	for (idx_t c = 0; c < least.size(); c++) {
-		if (!other.least[c].empty() && (least[c].empty() || other.least[c] < least[c])) {
-			least[c] = other.least[c];
-			label[c] = other.label[c];
-		}
-	}
-}
-
-void DecideDescent::Merge(MergedPart &part) {
-	auto &other = *part.source;
-	const auto offset = part.offset;
-	if (finished || other.finished || &tree != &other.tree) {
-		throw InternalException("DECIDE tree: a descent merges another of its tree before either finishes");
-	}
-	// A class is found again by its layout and sort key (class_key), so they may hold no id a thread numbered for
-	// itself (I5): a class made from a definition's signature that reads such an id (DecisionClasses) is not merged.
-	for (idx_t scope = 0; scope < tree.keyed_scopes.size(); scope++) {
-		if (thread_local_classes[scope] || other.thread_local_classes[scope]) {
-			throw InternalException("DECIDE tree: the classes of keyed scope %llu are keyed by ids a thread numbers "
-			                        "for itself, so the threads' descents cannot be merged",
-			                        scope);
-		}
-	}
-	// Its keyed classes take the class of their layout and sort key here, a new one after every class here. A row
-	// is not visited after a merge, so neither the layouts' dictionaries nor the rows recorded hold the merged ones.
-	merged = true;
-	vector<unsafe_vector<idx_t>> class_map(tree.keyed_scopes.size());
-	auto class_key = [](const vector<LogicalType> &types, const string_t &sort_key) {
-		string key;
-		for (auto &type : types) {
-			key += type.ToString() + ",";
-		}
-		key.append(sort_key.GetData(), sort_key.GetSize());
-		return key;
-	};
-	for (idx_t scope = 0; scope < tree.keyed_scopes.size(); scope++) {
-		auto &groups = decision_groups[scope];
-		auto &theirs = other.decision_groups[scope];
-		auto &known = merged_classes[scope];
-		if (known.empty()) {
-			for (idx_t c = 0; c < groups.size(); c++) {
-				auto &types = decision_layouts[scope][decision_class_layouts[scope][c]].types;
-				known.emplace(class_key(types, decision_sort_keys[scope][c]), c);
-			}
-		}
-		auto &map = class_map[scope];
-		map.resize(theirs.size());
-		for (idx_t c = 0; c < theirs.size(); c++) {
-			auto &sort_key = other.decision_sort_keys[scope][c];
-			auto &types = other.decision_layouts[scope][other.decision_class_layouts[scope][c]].types;
-			auto found = known.emplace(class_key(types, sort_key), groups.size());
-			map[c] = found.first->second;
-			if (!found.second) {
-				continue;
-			}
-			groups.parent_slots.push_back(DConstants::INVALID_INDEX);
-			groups.first_rows.push_back(theirs.first_rows[c] + offset);
-			groups.in_a_class.push_back(true);
-			decision_sort_keys[scope].push_back(sort_key.IsInlined() ? sort_key : decision_heap.AddBlob(sort_key));
-		}
-		auto &mapping = decision_rows[scope];
-		D_ASSERT(mapping.size() <= offset);
-		mapping.resize(offset, DConstants::INVALID_INDEX);
-		for (auto found : other.decision_rows[scope]) {
-			mapping.push_back(found == DConstants::INVALID_INDEX ? found : map[found]);
-		}
-	}
-	// Each node's slots, a G's or O's before an E's, whose enclosing slot is a G's or an O's: found by their key -- and
-	// enclosing slot -- as a row of theirs would find them.
-	auto &slot_map = part.slot_map;
-	slot_map.assign(tree.nodes.size(), unsafe_vector<idx_t>());
-	part.entry_map.assign(tree.nodes.size(), unsafe_vector<idx_t>());
-	part.target.assign(tree.nodes.size(), 0);
-	part.routed_target.assign(tree.nodes.size(), 0);
-	auto parent_of = [&](idx_t node, idx_t slot) {
-		return PartParent(part, node, slot);
-	};
-	auto merge_slots = [&](idx_t n) {
-		auto &node = *tree.nodes[n];
-		auto &groups = containers[n].groups;
-		auto &theirs = other.containers[n].groups;
-		if (theirs.per_row) {
-			groups.per_row_slots += theirs.per_row_slots;
-			return;
-		}
-		auto &map = slot_map[n];
-		map.resize(theirs.size());
-		unsafe_vector<idx_t> created;
-		auto create = [&](idx_t slot, idx_t parent) {
-			groups.parent_slots.push_back(parent);
-			groups.first_rows.push_back(theirs.first_rows[slot] + offset);
-			groups.in_a_class.push_back(theirs.in_a_class[slot]);
-			created.push_back(slot);
-		};
-		if (theirs.keys.Types().empty()) {
-			auto &table = empty_key_slots[n];
-			for (idx_t slot = 0; slot < theirs.size(); slot++) {
-				const auto parent = parent_of(n, theirs.parent_slots[slot]);
-				const auto at = parent == DConstants::INVALID_INDEX ? 0 : parent + 1;
-				if (at >= table.size()) {
-					table.resize(at + 1, DConstants::INVALID_INDEX);
-				}
-				if (table[at] == DConstants::INVALID_INDEX) {
-					table[at] = groups.size();
-					create(slot, parent);
-				}
-				map[slot] = table[at];
-			}
-		} else {
-			for (idx_t window = 0; window < theirs.keys.Windows(); window++) {
-				auto &keys = theirs.keys.Window(window);
-				const auto begin = window * STANDARD_VECTOR_SIZE;
-				const auto count = keys.size();
-				unsafe_vector<idx_t> found(count);
-				if (group_maps[n]) {
-					vector<LogicalType> types {LogicalType::UBIGINT};
-					auto key_types = keys.GetTypes();
-					types.insert(types.end(), key_types.begin(), key_types.end());
-					DataChunk probe;
-					probe.InitializeEmpty(types);
-					Vector parents(LogicalType::UBIGINT, count);
-					auto data = FlatVector::GetData<uint64_t>(parents);
-					for (idx_t i = 0; i < count; i++) {
-						data[i] = parent_of(n, theirs.parent_slots[begin + i]);
-					}
-					probe.data[0].Reference(parents);
-					for (idx_t c = 0; c < keys.ColumnCount(); c++) {
-						probe.data[1 + c].Reference(keys.data[c]);
-					}
-					probe.SetCardinality(count);
-					idx_t next = groups.size();
-					group_maps[n]->FindOrCreate(probe, found.data(), next);
-				} else {
-					auto &dictionary = *dictionaries[node.key];
-					unsafe_vector<idx_t> shared_slots(count);
-					dictionary.map->FindOrCreate(keys, shared_slots.data(), dictionary.count);
-					auto &own = own_slots[n];
-					auto next = groups.size();
-					for (idx_t i = 0; i < count; i++) {
-						if (shared_slots[i] >= own.size()) {
-							own.resize(MaxValue<idx_t>(shared_slots[i] + 1, own.size() * 2), DConstants::INVALID_INDEX);
-						}
-						if (own[shared_slots[i]] == DConstants::INVALID_INDEX) {
-							own[shared_slots[i]] = next++;
-						}
-						found[i] = own[shared_slots[i]];
-					}
-				}
-				for (idx_t i = 0; i < count; i++) {
-					if (found[i] == groups.size()) {
-						create(begin + i, parent_of(n, theirs.parent_slots[begin + i]));
-					}
-					map[begin + i] = found[i];
-				}
-			}
-		}
-		DescentCopyRows(groups.keys, theirs.keys, created);
-		if (!theirs.spellings.empty()) {
-			groups.spellings.resize(groups.size());
-			for (idx_t slot = 0; slot < theirs.spellings.size(); slot++) {
-				groups.spellings[map[slot]].Fold(theirs.spellings[slot]);
-			}
-		}
-	};
-	// A node's slots are found after those of the node its rows arrive in (enclosing), whose slots its parents name: a
-	// G's or an O's, merged first, or an F's, which holds its definition roots in its own slots.
-	vector<bool> slots_merged(tree.nodes.size(), false);
-	std::function<void(idx_t)> merge_after_enclosing = [&](idx_t n) {
-		if (slots_merged[n]) {
-			return;
-		}
-		slots_merged[n] = true;
-		const auto arriving = enclosing[n];
-		if (arriving != DConstants::INVALID_INDEX && arriving != MIXED_ENCLOSING) {
-			merge_after_enclosing(arriving);
-		}
-		merge_slots(n);
-	};
-	for (auto scopes : {false, true}) {
-		for (idx_t n = 0; n < tree.nodes.size(); n++) {
-			if (IsScopeNode(*tree.nodes[n]) == scopes) {
-				merge_after_enclosing(n);
-			}
-		}
-	}
-	// Each node's entries, rebased: a set E's found again by their slot, signature, carried columns and reads, a
-	// decision's instance and a read rebased as the slots and classes are.
-	for (idx_t n = 0; n < tree.nodes.size(); n++) {
-		auto &node = *tree.nodes[n];
-		auto &container = containers[n];
-		auto &theirs = other.containers[n];
-		container.rows_in += theirs.rows_in;
-		container.rows_out += theirs.rows_out;
-		for (idx_t k = 0; k < container.when_rows.size(); k++) {
-			container.when_rows[k] += theirs.when_rows[k];
-		}
-		auto &slots = slot_map[n];
-		if (!container.shares_instances) {
-			// Each entry is an instance of its own: copied after the entries held and those of the parts before
-			// (CopyMergedParts).
-			part.target[n] = container.Count() + planned_entries[n];
-			planned_entries[n] += theirs.Count();
-			continue;
-		}
-		const auto signature_columns = signature_types[n].size();
-		const auto value_columns = signature_columns + node.columns.size();
-		const auto reads = node.dependencies.size();
-		// Per decision of the signature, its instance's column and its scope: rebased by the scope's classes, or by
-		// the row for a decision per row. A query-wide decision is no field (DecideTree's sigma).
-		vector<pair<idx_t, idx_t>> instances;
-		idx_t value = 0;
-		for (auto &field : node.signature) {
-			if (field.kind == DecideSignatureFieldKind::DECISION) {
-				bool global;
-				instances.emplace_back(container.layout.signature[value + 1], DecisionScope(field.decision, global));
-				D_ASSERT(!global);
-			}
-			value += DescentSignatureTypes(tree, node, &field).size();
-		}
-		auto rebase_read = [&](idx_t d, idx_t read) {
-			auto &dependency = *tree.nodes[node.dependencies[d]];
-			// An E's rows land nowhere: its read is INVALID.
-			if (read == DConstants::INVALID_INDEX) {
-				return read;
-			}
-			return dependency.fallback ? read + offset : slot_map[node.dependencies[d]][read];
-		};
-		auto types = container.values.Types();
-		vector<LogicalType> probe_types {LogicalType::UBIGINT};
-		probe_types.insert(probe_types.end(), types.begin(), types.begin() + value_columns);
-		probe_types.insert(probe_types.end(), reads, LogicalType::UBIGINT);
-		auto &entry_map = part.entry_map[n];
-		entry_map.resize(theirs.Count());
-		for (idx_t begin = 0; begin < theirs.Count(); begin += STANDARD_VECTOR_SIZE) {
-			const auto count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, theirs.Count() - begin);
-			DataChunk values;
-			if (!types.empty()) {
-				values.InitializeEmpty(types);
-				auto &window = theirs.values.Window(begin / STANDARD_VECTOR_SIZE);
-				for (idx_t c = 0; c < types.size(); c++) {
-					values.data[c].Reference(window.data[c]);
-				}
-			}
-			for (auto &instance : instances) {
-				const auto scope = instance.second;
-				Vector rebased(LogicalType::UBIGINT, count);
-				auto source = FlatVector::GetData<uint64_t>(values.data[instance.first]);
-				auto target = FlatVector::GetData<uint64_t>(rebased);
-				for (idx_t i = 0; i < count; i++) {
-					const auto id = source[i];
-					target[i] = id == DConstants::INVALID_INDEX    ? id
-					            : scope < tree.keyed_scopes.size() ? class_map[scope][id]
-					                                               : id + offset;
-				}
-				values.data[instance.first].Reference(rebased);
-			}
-			if (!types.empty()) {
-				values.SetCardinality(count);
-			}
-			DataChunk probe;
-			probe.InitializeEmpty(probe_types);
-			Vector slot_ids(LogicalType::UBIGINT, count);
-			auto slot_data = FlatVector::GetData<uint64_t>(slot_ids);
-			for (idx_t i = 0; i < count; i++) {
-				slot_data[i] = slots[theirs.slots[begin + i]];
-			}
-			probe.data[0].Reference(slot_ids);
-			for (idx_t c = 0; c < value_columns; c++) {
-				probe.data[1 + c].Reference(values.data[c]);
-			}
-			for (idx_t d = 0; d < reads; d++) {
-				Vector read(LogicalType::UBIGINT, count);
-				auto data = FlatVector::GetData<uint64_t>(read);
-				for (idx_t i = 0; i < count; i++) {
-					data[i] = rebase_read(d, theirs.reads[(begin + i) * reads + d]);
-				}
-				probe.data[1 + value_columns + d].Reference(read);
-			}
-			probe.SetCardinality(count);
-			unsafe_vector<idx_t> entries(count);
-			idx_t next = container.Count();
-			entry_maps[n]->FindOrCreate(probe, entries.data(), next);
-			unsafe_vector<idx_t> created;
-			for (idx_t i = 0; i < count; i++) {
-				entry_map[begin + i] = entries[i];
-				if (entries[i] == container.Count() + created.size()) {
-					created.push_back(i);
-				}
-			}
-			SelectionVector selection(created.size());
-			for (idx_t k = 0; k < created.size(); k++) {
-				selection.set_index(k, created[k]);
-			}
-			DataChunk signatures;
-			signatures.InitializeEmpty(
-			    vector<LogicalType>(probe_types.begin(), probe_types.begin() + 1 + signature_columns));
-			for (idx_t c = 0; c < signatures.ColumnCount(); c++) {
-				signatures.data[c].Slice(probe.data[c], selection, created.size());
-			}
-			signatures.SetCardinality(created.size());
-			if (tree.nodes[n]->merges_classes) {
-				signatures.data[0].Reference(Value::UBIGINT(0));
-			}
-			unsafe_vector<idx_t> instance_ids(created.size());
-			idx_t next_instance = container.instance_entries.size();
-			instance_maps[n]->FindOrCreate(signatures, instance_ids.data(), next_instance);
-			for (idx_t k = 0; k < created.size(); k++) {
-				const auto i = created[k];
-				if (instance_ids[k] == container.instance_entries.size()) {
-					container.instance_entries.push_back(container.Count());
-				}
-				container.rows.push_back(theirs.rows[begin + i] + offset);
-				container.parent_slots.push_back(parent_of(n, theirs.parent_slots[begin + i]));
-				container.slots.push_back(slot_data[i]);
-				container.instances.push_back(instance_ids[k]);
-				for (idx_t d = 0; d < reads; d++) {
-					container.reads.push_back(FlatVector::GetData<uint64_t>(probe.data[1 + value_columns + d])[i]);
-				}
-			}
-			container.values.Append(values, selection, created.size());
-		}
-		part.routed_target[n] = container.routed.size() + planned_routed[n];
-		planned_routed[n] += theirs.routed.size();
-	}
-	// The groups each key's reads spelled, at their rows here.
-	for (idx_t key = 0; key < spellings.size(); key++) {
-		for (auto &bucket : other.spellings[key]) {
-			auto &held = spellings[key][bucket.first];
-			for (auto &spelling : bucket.second) {
-				auto known = std::find_if(held.begin(), held.end(), [&](const KeySpelling &candidate) {
-					return DescentEqual(candidate.group, spelling.group);
-				});
-				if (known == held.end()) {
-					held.push_back(spelling);
-				} else {
-					known->spelling.Fold(spelling.spelling);
-				}
-			}
-		}
-	}
-}
-
-idx_t DecideDescent::PartParent(const MergedPart &part, idx_t node, idx_t slot) const {
-	if (slot == DConstants::INVALID_INDEX) {
-		return slot;
-	}
-	// A node in two nodes' slots keeps none (Store): a slot of its parents is found in one node's slots only (I6).
-	if (enclosing[node] == DConstants::INVALID_INDEX || enclosing[node] == MIXED_ENCLOSING) {
-		throw InternalException("DECIDE tree: node %llu names a parent slot but lies in the slots of no single node",
-		                        node);
-	}
-	return part.slot_map[enclosing[node]][slot];
-}
-
-namespace {
-
-//! One of MergeAll's copies, run by DuckDB's scheduler.
-class DescentCopyTask : public BaseExecutorTask {
-public:
-	DescentCopyTask(TaskExecutor &executor, std::function<void()> copy)
-	    : BaseExecutorTask(executor), copy(std::move(copy)) {
-	}
-
-	void ExecuteTask() override {
-		copy();
-	}
-
-private:
-	std::function<void()> copy;
-};
-
-} // namespace
-
-void DecideDescent::CopyMergedParts(vector<MergedPart> &parts, ClientContext &context) {
-	// Each node's containers take their merged size first, a task per node, so the copies only write: a window of a
-	// node's entries, and a part's routed rows of a set E, each by one task.
-	vector<idx_t> held(tree.nodes.size());
-	vector<idx_t> routed_held(tree.nodes.size());
-	{
-		TaskExecutor sizing(context);
-		for (idx_t n = 0; n < tree.nodes.size(); n++) {
-			auto &container = containers[n];
-			held[n] = container.Count();
-			routed_held[n] = container.routed.size();
-			sizing.ScheduleTask(make_uniq<DescentCopyTask>(sizing, [&, n]() {
-				const auto total = held[n] + planned_entries[n];
-				container.rows.resize(total);
-				container.parent_slots.resize(total);
-				if (!container.groups.per_row) {
-					container.slots.resize(total);
-				}
-				container.values.Resize(total);
-				container.routed.resize(routed_held[n] + planned_routed[n]);
-			}));
-		}
-		sizing.WorkOnTasks();
-	}
-	TaskExecutor executor(context);
-	for (idx_t n = 0; n < tree.nodes.size(); n++) {
-		auto &container = containers[n];
-		const auto total = held[n] + planned_entries[n];
-		for (idx_t window = held[n] / STANDARD_VECTOR_SIZE; window * STANDARD_VECTOR_SIZE < total; window++) {
-			executor.ScheduleTask(make_uniq<DescentCopyTask>(executor, [&, n, window, total]() {
-				const auto low = MaxValue<idx_t>(window * STANDARD_VECTOR_SIZE, held[n]);
-				const auto high = MinValue<idx_t>((window + 1) * STANDARD_VECTOR_SIZE, total);
-				for (auto &part : parts) {
-					auto &theirs = part.source->containers[n];
-					const auto begin = MaxValue<idx_t>(low, part.target[n]);
-					const auto end = MinValue<idx_t>(high, part.target[n] + theirs.Count());
-					for (idx_t e = begin; e < end; e++) {
-						const auto source = e - part.target[n];
-						container.rows[e] = theirs.rows[source] + part.offset;
-						container.parent_slots[e] = PartParent(part, n, theirs.parent_slots[source]);
-						if (!container.groups.per_row) {
-							container.slots[e] = part.slot_map[n][theirs.slots[source]];
-						}
-					}
-					if (begin < end) {
-						container.values.CopyRows(begin, theirs.values, begin - part.target[n], end - begin);
-					}
-				}
-			}));
-		}
-		for (auto &part : parts) {
-			auto &theirs = part.source->containers[n].routed;
-			executor.ScheduleTask(make_uniq<DescentCopyTask>(executor, [&, n]() {
-				auto &map = part.entry_map[n];
-				for (idx_t i = 0; i < theirs.size(); i++) {
-					container.routed[part.routed_target[n] + i] = {theirs[i].first + part.offset,
-					                                               map[theirs[i].second]};
-				}
-			}));
-		}
-	}
-	executor.WorkOnTasks();
-	planned_entries.assign(tree.nodes.size(), 0);
-	planned_routed.assign(tree.nodes.size(), 0);
-}
-
-unique_ptr<DecideDescent> DecideDescent::MergeAll(vector<pair<unique_ptr<DecideDescent>, idx_t>> parts,
-                                                  ClientContext &context) {
-	D_ASSERT(!parts.empty() && parts[0].second == 0);
-	auto merged = std::move(parts[0].first);
-	merged->planned_entries.assign(merged->tree.nodes.size(), 0);
-	merged->planned_routed.assign(merged->tree.nodes.size(), 0);
-	vector<MergedPart> planned(parts.size() - 1);
-	for (idx_t p = 1; p < parts.size(); p++) {
-		planned[p - 1].source = parts[p].first.get();
-		planned[p - 1].offset = parts[p].second;
-		merged->Merge(planned[p - 1]);
-	}
-	merged->CopyMergedParts(planned, context);
-	return merged;
 }
 
 void DecideDescent::Timelines(idx_t node_index) {
@@ -2304,11 +1777,6 @@ string DecideDescent::Dump() const {
 			out << ")";
 			if (node.kind == DecideNodeKind::FRAME) {
 				out << " over=" << container.Order(e).ToString();
-			}
-			for (idx_t d = 0; container.shares_instances && d < node.dependencies.size(); d++) {
-				const auto read = container.reads[e * node.dependencies.size() + d];
-				out << (d ? ", " : " reads=(") << (read == DConstants::INVALID_INDEX ? "-" : std::to_string(read))
-				    << (d + 1 == node.dependencies.size() ? ")" : "");
 			}
 			out << "\n";
 		}

@@ -164,7 +164,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 // Sink (Collecting Data)
 //===--------------------------------------------------------------------===//
 
-//! The chunk to the thread's descent, in pieces of `decide_debug`'s chunk size when one is set.
+//! The chunk to the descent, in pieces of `decide_debug`'s chunk size when one is set.
 static void AppendDecideDescent(DecideDescent &descent, DataChunk &chunk, idx_t row_base, const DecideDebug &debug) {
 	const idx_t chunk_size = debug.chunk == DConstants::INVALID_INDEX ? STANDARD_VECTOR_SIZE : debug.chunk;
 	auto append = [&](DataChunk &piece, idx_t base) {
@@ -192,38 +192,36 @@ static void AppendDecideDescent(DecideDescent &descent, DataChunk &chunk, idx_t 
 	}
 }
 
-//! A thread's rows and its descent over them (language/guide.md §6.1), each row numbered from the thread's first: a
-//! descent per thread, as a hash aggregate builds a table per thread, merged into the operator's in Combine.
+//! One descent over the buffered rows (language/guide.md §6.1), a chunk of the scan at a time, each numbered by the
+//! rows before it.
+static unique_ptr<DecideDescent> RouteDecideRows(const DecideTree &tree, const DecideDebug &debug,
+                                                 ClientContext &context, const ColumnDataCollection &data) {
+	auto descent = make_uniq<DecideDescent>(tree, context);
+	ColumnDataScanState scan;
+	data.InitializeScan(scan);
+	DataChunk chunk;
+	data.InitializeScanChunk(chunk);
+	idx_t row_base = 0;
+	while (data.Scan(scan, chunk)) {
+		AppendDecideDescent(*descent, chunk, row_base, debug);
+		row_base += chunk.size();
+	}
+	return descent;
+}
+
+//! A thread's rows, buffered as they arrive: the descent routes them once Finalize has every thread's, as a hash join
+//! builds its table once the build side is complete.
 class DecideLocalSinkState : public LocalSinkState {
 public:
 	DecideProfileTotals profile_sink {"execution.sink_append"};
 	ColumnDataCollection data;
 	ColumnDataAppendState append_state;
-	unique_ptr<DecideDescent> descent;
-	//! The rows after which the thread's are merged before its input ends: `decide_debug`'s split, which a test sets
-	//! to merge every chunk as a thread of its own would; never otherwise.
-	const idx_t split;
 
 	explicit DecideLocalSinkState(ClientContext &context, const PhysicalDecide &op)
-	    : data(context, op.children[0]->GetTypes()), split(op.debug.split) {
+	    : data(context, op.children[0]->GetTypes()) {
 		data.InitializeAppend(append_state);
 	}
 };
-
-//! A thread's rows placed after those already placed, and its descent kept with the row they start at, which
-//! Finalize merges (DecideDescent::MergeAll).
-static void MergeDecideDescent(DecideGlobalSinkState &gstate, DecideLocalSinkState &lstate) {
-	const auto count = lstate.data.Count();
-	if (count == 0) {
-		return;
-	}
-	lock_guard<mutex> guard(gstate.lock);
-	const auto offset = gstate.data.Count();
-	gstate.data.Combine(lstate.data);
-	lstate.data.InitializeAppend(lstate.append_state);
-	gstate.descent_parts.emplace_back(std::move(lstate.descent), offset);
-	gstate.descent_rows += count;
-}
 
 unique_ptr<GlobalSinkState> PhysicalDecide::GetGlobalSinkState(ClientContext &context) const {
 	// The descent reads only the rows reaching each node (plan L2): checked once, before the first row.
@@ -235,49 +233,20 @@ unique_ptr<LocalSinkState> PhysicalDecide::GetLocalSinkState(ExecutionContext &c
 	return make_uniq_base<LocalSinkState, DecideLocalSinkState>(context.client, *this);
 }
 
-//! Rows `chunk` read by the thread's descent at the rows its buffer gives them, which Combine rebases on the rows
-//! placed before.
-static void SinkDecideRows(const DecideTree &tree, const DecideDebug &debug, ClientContext &context,
-                           DecideGlobalSinkState &gstate, DecideLocalSinkState &lstate, DataChunk &chunk) {
-	const auto row_base = lstate.data.Count();
-	lstate.data.Append(lstate.append_state, chunk);
-	if (!lstate.descent) {
-		lstate.descent = make_uniq<DecideDescent>(tree, context);
-	}
-	AppendDecideDescent(*lstate.descent, chunk, row_base, debug);
-	if (lstate.data.Count() >= lstate.split) {
-		MergeDecideDescent(gstate, lstate);
-	}
-}
-
 SinkResultType PhysicalDecide::Sink(ExecutionContext &context, DataChunk &chunk, OperatorSinkInput &input) const {
 	auto &lstate = input.local_state.Cast<DecideLocalSinkState>();
-	auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
 	DecideProfileSample profile(lstate.profile_sink);
-	// Top-down (language/guide.md §6.1): the thread's descent reads each chunk as it arrives; one split finer than
-	// the chunk reads it a piece at a time, each merged as a thread of its own would be.
-	if (chunk.size() <= lstate.split) {
-		SinkDecideRows(*tree, debug, context.client, gstate, lstate, chunk);
-		return SinkResultType::NEED_MORE_INPUT;
-	}
-	for (idx_t begin = 0; begin < chunk.size(); begin += lstate.split) {
-		const auto count = MinValue<idx_t>(lstate.split, chunk.size() - begin);
-		SelectionVector selection(count);
-		for (idx_t i = 0; i < count; i++) {
-			selection.set_index(i, begin + i);
-		}
-		DataChunk piece;
-		piece.InitializeEmpty(chunk.GetTypes());
-		piece.Slice(chunk, selection, count);
-		SinkDecideRows(*tree, debug, context.client, gstate, lstate, piece);
-	}
+	lstate.data.Append(lstate.append_state, chunk);
 	return SinkResultType::NEED_MORE_INPUT;
 }
 
 SinkCombineResultType PhysicalDecide::Combine(ExecutionContext &context, OperatorSinkCombineInput &input) const {
 	DecideProfileScope profile("execution.sink_combine");
-	MergeDecideDescent(input.global_state.Cast<DecideGlobalSinkState>(),
-	                   input.local_state.Cast<DecideLocalSinkState>());
+	auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
+	auto &lstate = input.local_state.Cast<DecideLocalSinkState>();
+	// The thread's rows placed after those already placed, in the order Finalize routes them.
+	lock_guard<mutex> guard(gstate.lock);
+	gstate.data.Combine(lstate.data);
 	return SinkCombineResultType::FINISHED;
 }
 
@@ -531,13 +500,6 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 	if (num_rows == 0) {
 		return SinkFinalizeType::READY;
 	}
-	// The threads' descents, merged in the order their rows were placed.
-	{
-		DecideProfileScope::Counter("execution.descent_parts", static_cast<double>(gstate.descent_parts.size()));
-		DecideProfileScope merge_scope("execution.descent_merge");
-		gstate.descent = DecideDescent::MergeAll(std::move(gstate.descent_parts), context);
-	}
-
 	// The values each key's groups are named by in messages (D69), one table per naming site.
 	vector<SolverInput::KeyValues> key_values;
 
@@ -587,10 +549,12 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
                                   vector<SolverInput::KeyValues> &key_values, vector<KeyedMapping> &keyed_mappings,
                                   EvaluatedClauses &evaluated) const {
 	auto &descent = gstate.descent;
-	// Top-down: the descent read every chunk as Sink received it, and the buffer is never scanned to evaluate a row.
+	// Top-down: one descent reads the buffer a chunk at a time, each numbered by the rows before it, and the buffer is
+	// never scanned again to evaluate a row.
 	DecideProfileScope phase("execution.tree_descent");
+	gstate.descent = RouteDecideRows(*tree, debug, context, gstate.data);
 	descent->Finish();
-	DecideProfileScope::Counter("execution.descent_rows", static_cast<double>(gstate.descent_rows));
+	DecideProfileScope::Counter("execution.descent_rows", static_cast<double>(gstate.data.Count()));
 	if (debug.bodies) {
 		fprintf(stderr, "DECIDB_BODIES_BEGIN\n%sDECIDB_BODIES_END\n", tree->BodiesToString().c_str());
 	}

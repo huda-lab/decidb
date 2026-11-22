@@ -108,8 +108,8 @@ _VERIFY_SERIALIZER_ENV = "DECIDB_VERIFY_SERIALIZER"
 _DIRECT_SOLVE_ENV = "DECIDB_TEST_DIRECT_SOLVE"
 
 #: Environment variable that sets ``decide_debug`` for every query this wrapper runs, its value the setting (a comma
-#: list, ``decide_debug.cpp``): ``DECIDB_TEST_DECIDE_DEBUG=split=1`` runs the whole suite with every thread's descent
-#: merged after each row. A test that sets ``decide_debug`` itself wins.
+#: list, ``decide_debug.cpp``): ``DECIDB_TEST_DECIDE_DEBUG=chunk=1`` runs the whole suite with the descent reading
+#: one row at a time. A test that sets ``decide_debug`` itself wins.
 _DECIDE_DEBUG_ENV = "DECIDB_TEST_DECIDE_DEBUG"
 
 #: Multiplies the time budgets of the tests (``scaled``), for a binary that runs slower than a release build, such as a

@@ -59,8 +59,6 @@ def test_an_injection_names_a_node_of_the_tree(decidb_cli):
         pytest.param("chunk=-1", "chunk must be between 1 and 2048", id="a-chunk-with-a-sign"),
         pytest.param("chunk=0", "chunk must be between 1 and 2048", id="a-chunk-of-no-rows"),
         pytest.param("chunk=2049", "chunk must be between 1 and 2048", id="a-chunk-past-a-vector"),
-        pytest.param("split=0", "split must be a positive row count", id="a-split-of-no-rows"),
-        pytest.param("split=1234567890123456789", "split must be a positive row count", id="a-split-of-19-digits"),
         pytest.param("inject=1:data", "inject must be node:data:value", id="an-injection-without-a-value"),
         pytest.param("inject=1:text:5", "inject must be node:data:value", id="an-injection-of-no-data"),
         pytest.param("inject=x:data:5", "inject must be node:data:value", id="an-injection-at-no-node"),

@@ -7,9 +7,9 @@
 //===----------------------------------------------------------------------===//
 //
 // The value is a comma list. `tree`, `bodies`, `containers`, `values` and `steps` print the evaluator's dumps to
-// stderr; `chunk=N` and `split=N` set the descent's chunk size and the rows after which a thread's descent is merged
-// (a test merges as a thread of its own would); `inject=N:data:V` stands V in for the data value of node N, which shows
-// a parent reads the bottom-up values. A bad item is refused when the option is set (as `decide_direct_solve` is).
+// stderr; `chunk=N` sets the descent's chunk size; `inject=N:data:V` stands V in for the data value of node N, which
+// shows a parent reads the bottom-up values. A bad item is refused when the option is set (as `decide_direct_solve`
+// is).
 //
 // A Parameter Object: physical planning parses the option once into a DecideDebug that the operator carries, so no
 // stage of the evaluation reads a setting or the environment.
@@ -44,8 +44,6 @@ struct DecideDebug {
 	bool steps = false;
 	//! The descent's chunk size, in rows; INVALID_INDEX for the size of the chunk it is handed.
 	idx_t chunk = DConstants::INVALID_INDEX;
-	//! The rows after which a thread's descent is merged into the operator's; INVALID_INDEX for the end of its input.
-	idx_t split = DConstants::INVALID_INDEX;
 	DecideTreeInjection inject;
 };
 
