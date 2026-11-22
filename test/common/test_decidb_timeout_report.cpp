@@ -1,6 +1,6 @@
 #include "catch.hpp"
 
-#include "duckdb/execution/operator/decide/physical_decide.hpp"
+#include "duckdb/decidb/solver/decide_solve.hpp"
 
 using namespace duckdb;
 

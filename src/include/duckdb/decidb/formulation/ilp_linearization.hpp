@@ -77,6 +77,13 @@ double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox
 //! implied bounds are derived, and needs the VarIndexer for the row to instance map.
 void ResolveLiftedFloors(SolverInput &input, const VarIndexer &indexer, const vector<DecideBoundBox> &boxes);
 
+//! A frame read is its base decision read at another row, so its type and its box are its
+//! base's (SolverInput::frame_reads): every pass that reads a term's box -- a Big-M, a row's
+//! range -- then reads one that holds at every row the read lands on. Called wherever the
+//! boxes are rewritten wholesale: after the floors and implied bounds, and after a diagnosis
+//! widens them.
+void SyncFrameReadBoxes(SolverInput &input);
+
 //! Data-driven implied-bound propagation. For a non-negative `<=`/`=` row the model
 //! emits, Sum_j a_j x_j (<=|=) K with a_j >= 0 and x_j >= 0, each instance satisfies
 //! x_j <= K / a_j (the other non-negative terms only help), where a_j is the

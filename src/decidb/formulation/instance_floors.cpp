@@ -65,4 +65,21 @@ void ResolveLiftedFloors(SolverInput &input, const VarIndexer &indexer, const ve
 	}
 }
 
+//! A frame read is its base decision read at another row, so its type and its box are its
+//! base's (SolverInput::frame_reads): every pass that reads a term's box -- a Big-M, a row's
+//! range -- then reads one that holds at every row the read lands on. Called wherever the
+//! boxes are rewritten wholesale: after the floors and implied bounds, and after a diagnosis
+//! widens them.
+void SyncFrameReadBoxes(SolverInput &input) {
+	for (idx_t i = 0; i < input.frame_reads.size(); i++) {
+		auto read = input.first_frame_read + i;
+		auto base = input.frame_reads[i].base;
+		input.variable_types[read] = input.variable_types[base];
+		input.lower_bounds[read] = input.lower_bounds[base];
+		input.upper_bounds[read] = input.upper_bounds[base];
+		input.rigid_lower_bounds[read] = input.rigid_lower_bounds[base];
+		input.rigid_upper_bounds[read] = input.rigid_upper_bounds[base];
+	}
+}
+
 } // namespace duckdb

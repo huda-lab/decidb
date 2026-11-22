@@ -23,8 +23,8 @@ class DecideGlobalSinkState;
 
 class DecideDescent;
 
-//! The time-limit report's closeness figure: `gap`, a fraction, as a percentage with two significant digits.
-string FormatDecideGapPercent(double gap);
+//! The model input kept under `DIAGNOSE` for the infeasible terminal (decide_diagnostic_terminals.hpp).
+struct ElasticFormulation;
 
 //===--------------------------------------------------------------------===//
 // PhysicalDecide Operator
@@ -291,28 +291,14 @@ private:
 	                             vector<SolverInput::KeyValues> key_values, EvaluatedClauses &evaluated,
 	                             VarIndexer &out_var_indexer) const;
 
-	//! The model input and column space as BuildSolverInput left them — before a single Big-M or
-	//! McCormick constant was derived — plus the scoped bounds the column box enforces
-	//! (`evaluated_singleton_row_constraints`), whose rows only a repair model carries. Retained
-	//! only under `DIAGNOSE`, so the INFEASIBLE terminal can formulate a *second* model
-	//! against the widened box a repair searches in, instead of re-using constants that
-	//! were derived against the narrower box the solved model declares.
-	struct ElasticFormulation {
-		SolverInput input;
-		VarIndexer var_indexer;
-	};
-
-	//! FinalizeSolveResult, solve and readback: build_var_labels, the RouteSolveResult switch and its
-	//! four terminal cases, and the shared success epilogue.
+	//! FinalizeSolveResult, solve and readback: the solve (SolveDecide), the RouteSolveResult switch and its four
+	//! terminal cases, and the shared success epilogue. `elastic` is retained under `DIAGNOSE` only.
 	SinkFinalizeType FinalizeSolveResult(ClientContext &context, DecideGlobalSinkState &gstate,
 	                                     SolverInput &solver_input, VarIndexer &var_indexer,
 	                                     ElasticFormulation *elastic) const;
 
-	//! Formulate the elastic model: widen every loosenable column direction, re-derive
-	//! every constant against that box, and build the solver model from it. `elastic` is
-	//! left untouched — the copy it works on is local.
-	SolverModel FormulateElasticModel(const ElasticFormulation &elastic, VarIndexer &out_var_indexer,
-	                                  vector<string> &out_global_labels) const;
+	//! The label of each decision, and whether it is an auxiliary, for the failure terminals' column provenance.
+	void BuildVarLabels(const SolverInput &solver_input, vector<string> &var_labels, vector<bool> &var_is_aux) const;
 };
 
 } // namespace duckdb
