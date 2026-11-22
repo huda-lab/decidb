@@ -219,7 +219,7 @@ static bool IsBoundAvgAggregate(const Expression &expr) {
 //!
 //! `addends_count` is set where a decision-free addend is part of the value rather than of the bound: inside a MIN or
 //! MAX (canonicalization has already moved the constant addends beside it), and under anything that is not linear in
-//! it: a power, a product of decisions, a norm of order 1, 2 or 'inf'.
+//! it: a power, a product of decisions, a norm of order 1, 2 or 'inf', and a decision-free factor of a product.
 static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoist, idx_t decide_index,
                                       bool addends_count = false) {
 	if (IsBoundL0NormMarker(expr)) {
@@ -282,8 +282,11 @@ static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoi
 				decision_factors += BoundExpressionReferencesDecide(*child, decide_index);
 			}
 			for (const auto &child : func.children) {
+				// A factor that reads no decision is a coefficient: its addends are part of its value, so `x * (w
+				// + 1.5)` is off the lattice, and no offset moves to the bound.
+				const bool coefficient = !BoundExpressionReferencesDecide(*child, decide_index);
 				if (!DecideSideIsWholeNumbered(*child, allow_avg_hoist, decide_index,
-				                               addends_count || decision_factors > 1)) {
+				                               addends_count || decision_factors > 1 || coefficient)) {
 					return false;
 				}
 			}

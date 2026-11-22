@@ -190,16 +190,22 @@ def test_a_boolean_factor_leaves_a_range_over_decisions_pushed_down(decidb_cli_g
 # ---------------------------------------------------------------------------
 
 
-def test_a_strict_bound_on_a_fractional_reducer_is_refused_for_less_than(decidb_cli):
-    """RefuseFractionalStep: the `<` refusal, beside the `>` and `<>` ones the suite pins. It refuses before a backend
-    runs, at the comparison."""
+@pytest.mark.correctness
+def test_a_strict_bound_on_a_reducer_with_a_constant_steps_on_the_decisions(decidb_cli_gurobi):
+    """`sum(y + 0.5) by (id)` is `sum(y) by (id)` and a constant on the bound (CANON-1), so `2 * y < ...` is
+    `y < 0.5`, which only 0 meets. Stepping on the helper's whole value, `y + 0.5`, would leave no row."""
     sql = f"""
         SELECT id, y FROM {_ROWS}
         DECIDE y(INT)
-        SUCH THAT y <= 6 AND y < sum(y + 0.5) by (id)
-        MAXIMIZE SUM(y)"""
-    decidb_cli.assert_error_at(
-        sql, kind="Not implemented Error", at="y < sum(y + 0.5) by (id)", word="'<' compares 'sum(y + 0.5) by (id)'"
+        SUCH THAT y <= 6 AND 2 * y < sum(y + 0.5) by (id)
+        MAXIMIZE SUM(y)
+        ORDER BY id"""
+    _judge(
+        decidb_cli_gurobi,
+        sql,
+        _per_row("y", 6),
+        lambda a: all(2 * a[f"y{i}"] < a[f"y{i}"] + 0.5 for i in range(3)),
+        lambda a: sum(a[f"y{i}"] for i in range(3)),
     )
 
 

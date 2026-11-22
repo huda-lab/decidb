@@ -98,18 +98,36 @@ static unique_ptr<Expression> MultiplyCoefficients(ClientContext &context, const
 // DecideTermSplitter
 //===--------------------------------------------------------------------===//
 
+static const vector<unique_ptr<Expression>> &NoVariables() {
+	static const vector<unique_ptr<Expression>> none;
+	return none;
+}
+
+static const vector<DecideBilinearFunctionGroup> &NoGroups() {
+	static const vector<DecideBilinearFunctionGroup> none;
+	return none;
+}
+
 DecideTermSplitter::DecideTermSplitter(ClientContext &context, const LogicalDecide &decide)
-    : context(context), decide_index(decide.decide_index), decide_variables(decide.decide_variables),
-      bilinear_groups(decide.bilinear_function_groups) {
-	for (idx_t i = 0; i < decide_variables.size(); i++) {
+    : context(context), decide_index(decide.decide_index), variable_count(decide.decide_variables.size()),
+      decide_variables(decide.decide_variables), bilinear_groups(decide.bilinear_function_groups) {
+	for (idx_t i = 0; i < variable_count; i++) {
 		variable_indexes[decide_variables[i]->Cast<BoundColumnRefExpression>().binding] = i;
+	}
+}
+
+DecideTermSplitter::DecideTermSplitter(ClientContext &context, idx_t decide_index, idx_t variable_count)
+    : context(context), decide_index(decide_index), variable_count(variable_count), decide_variables(NoVariables()),
+      bilinear_groups(NoGroups()) {
+	for (idx_t i = 0; i < variable_count; i++) {
+		variable_indexes[ColumnBinding(decide_index, i)] = i;
 	}
 }
 
 bool DecideTermSplitter::ExpandBilinearGroups(const Expression &expr, unique_ptr<Expression> &expanded) const {
 	idx_t definition_aux;
 	if (TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
-		if (definition_aux >= decide_variables.size()) {
+		if (definition_aux >= variable_count) {
 			throw InternalException("DECIDE term splitter: definition function references invalid helper %llu",
 			                        definition_aux);
 		}
@@ -165,7 +183,7 @@ void DecideTermSplitter::ReplaceTaggedFunctions(unique_ptr<Expression> &expressi
 	}
 	idx_t aux_idx;
 	if (TryGetFunctionAuxIndex(*expression, aux_idx)) {
-		if (aux_idx >= decide_variables.size()) {
+		if (aux_idx >= variable_count) {
 			throw InternalException("DECIDE term splitter: function references invalid helper %llu", aux_idx);
 		}
 		const auto type = expression->return_type;
@@ -283,7 +301,7 @@ void DecideTermSplitter::SplitNode(const Expression &expr, int sign, vector<Deci
 	}
 	idx_t aux_idx;
 	if (TryGetFunctionAuxIndex(expr, aux_idx)) {
-		if (aux_idx >= decide_variables.size()) {
+		if (aux_idx >= variable_count) {
 			throw InternalException("DECIDE term splitter: function references invalid helper %llu", aux_idx);
 		}
 		DecideSplitTerm term;

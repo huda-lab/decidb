@@ -432,6 +432,11 @@ private:
 	//! and each constant beside it under the reducer's factor. False, pushing nothing, for any other term.
 	bool DecomposeExtremumAddends(int sign, const Expression &term, const Expression &whole,
 	                              unique_ptr<Expression> &scale, bool divides, vector<Atom> &out) const;
+	//! A SUM or AVG term of a constraint whose body is affine in its decisions and has a data part `e0` (the body with
+	//! every decision set to 0): `sum(e)` is `sum(e - e0)` under the reducer's factor, and `sum(e0)` beside it, which
+	//! stands on the bound side. False, pushing nothing, for any other term.
+	bool DecomposeLinearAddends(Clause clause, int sign, const Expression &term, const Expression &whole,
+	                            unique_ptr<Expression> &scale, bool divides, vector<Atom> &out) const;
 
 	//! The one factor `outer` stands for when applied outside a term already scaled by
 	//! `inner`: `M`, `D` or `M / D`, in the spelling PeelScale emits. Either may be null.

@@ -122,6 +122,9 @@ public:
 	//! Reads the node's decisions and the product groups its optimizer annotated, so no caller can read a group's
 	//! function as opaque.
 	DecideTermSplitter(ClientContext &context, const LogicalDecide &decide);
+	//! Reads a body before the node exists (canonicalization): the `variable_count` decisions of `decide_index`, no
+	//! optimizer annotation.
+	DecideTermSplitter(ClientContext &context, idx_t decide_index, idx_t variable_count);
 
 	//! Read a reducer body or a row-level decision expression into terms, appending to `out` in reading order with
 	//! `sign` applied.
@@ -145,6 +148,7 @@ private:
 
 	ClientContext &context;
 	idx_t decide_index;
+	idx_t variable_count;
 	column_binding_map_t<idx_t> variable_indexes;
 	const vector<unique_ptr<Expression>> &decide_variables;
 	const vector<DecideBilinearFunctionGroup> &bilinear_groups;
