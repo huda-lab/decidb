@@ -1090,6 +1090,12 @@
         "id": 226,
         "name": "value_checks",
         "type": "vector<Expression*>"
+      },
+      {
+        "id": 227,
+        "name": "computed_values",
+        "property": "bound.computed_values",
+        "type": "vector<DecideComputedValue>"
       }
     ]
   },

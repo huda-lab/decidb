@@ -212,7 +212,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	// re-enters through LogicalDecide::SetObjective, so a rewrite that breaks the
 	// canonical form should fail loudly rather than reach the extractor.
 	DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes,
-	                                  op.bound.keys, op.bound.is_boolean_var);
+	                                  op.bound.keys, op.bound.is_boolean_var, op.bound.computed_values);
 	for (auto &clause : op.bound.clauses) {
 		canonicalizer.VerifyCanonical(clause);
 	}

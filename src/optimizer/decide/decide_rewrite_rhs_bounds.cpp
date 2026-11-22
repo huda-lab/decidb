@@ -382,23 +382,20 @@ private:
 
 	//! The reducer's value on a row, given the column that holds its aggregate: NULL on a row whose written `by` column
 	//! is NULL, which is in no group, so the NULL bound skips the row's instance (deck p. 50). The value carries the
-	//! reducer's written text as its name, so every place that quotes a bound still reads `sum(cap) by (g)`; the tag
-	//! keeps a NULL message from naming it as a column.
+	//! reducer's written text as its name, so every place that quotes a bound still reads `sum(cap) by (g)`.
 	unique_ptr<Expression> NamedReducerValue(const BoundAggregateExpression &reducer, idx_t key, ExprPtr column) const {
 		auto result = calc.Out(InKey(key, column));
 		NameAsWritten(*result, reducer);
-		MarkReducerValue(*result);
-		if (in_objective && key == DConstants::INVALID_INDEX) {
+		auto &computed_values = decide.bound.computed_values;
+		if (in_objective && key == DConstants::INVALID_INDEX && !IsDecideQueryWideValue(computed_values, *result)) {
 			// The objective is produced once: a reducer over data with no `by` is one value for the whole query, as a
 			// subquery is, so it may scale a reducer there.
-			MarkDecideQueryWideValue(*result);
+			DecideComputedValue computed;
+			computed.value = result->Copy();
+			computed.query_wide = true;
+			computed_values.push_back(std::move(computed));
 		}
 		return result;
-	}
-
-	//! `value` stands for a recorded reducer and is read whole.
-	static void MarkReducerValue(Expression &value) {
-		MarkDecideValue(value, DecideValueKind::BOUND_REDUCER);
 	}
 
 	//! `value` stands in for `written`, equal to it for the rows it is read on, so it is quoted as `written` is: it
@@ -413,12 +410,13 @@ private:
 	}
 
 	//! `value` on a row in a group of the key `key_index`, `outside` (NULL when null) on a row in none; `value` for the
-	//! whole query.
+	//! whole query. The test only settles which rows are in a group (BoundDecideNullTestExpression): what it reads is
+	//! no field of a signature, the value being its key alone (D70, deck p. 81).
 	ExprPtr InKey(idx_t key_index, ExprPtr value, const ExprPtr &outside = nullptr) const {
 		for (auto &element : DecideKeyElements(decide.bound.keys, key_index)) {
 			if (element.null_mode == DecideKeyNullMode::NO_GROUP) {
-				value = calc.If(calc.IsNull(calc.Of(*element.expression)),
-				                outside ? outside : calc.Constant(Value(value->return_type)), value);
+				value = calc.If(ExprPtr(MakeDecideNullTest(element.expression->Copy())), value,
+				                outside ? outside : calc.Constant(Value(value->return_type)));
 			}
 		}
 		return value;

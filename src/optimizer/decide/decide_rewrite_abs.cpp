@@ -325,7 +325,8 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	// not: solver pressure / direct upper-bounding handles pinning.
 	const auto exact = FindExactAbs(optimizer.context, decide);
 	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.bound.variable_scopes,
-	                                  decide.bound.keyed_scopes, decide.bound.keys, decide.bound.is_boolean_var);
+	                                  decide.bound.keyed_scopes, decide.bound.keys, decide.bound.is_boolean_var,
+	                                  decide.bound.computed_values);
 	// Every body is read on the rows its owner keeps, and a reducer around the ABS narrows them further. A definition
 	// body has left the ordinary clause list, an L0 indicator's reverse link stands beside it, and a reducer value
 	// helper's body belongs to no clause; each still needs the same ABS helpers and envelopes as an ABS written in a

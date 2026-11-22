@@ -93,8 +93,7 @@ private:
 	//! reducer's value (its placeholder, NULL on a row in none of its groups) is its key alone (deck p. 81), so the
 	//! columns of its NULL test are no fields of their own.
 	void AddSignatureFields(const Expression &expr, vector<ExprPtr> &fields) {
-		if (IsDecideValue(expr, DecideValueKind::BOUND_REDUCER)) {
-			AddRecordedKeys(expr, fields);
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_NULL_TEST) {
 			return;
 		}
 		if (!ReadsRecordedReducer(expr)) {

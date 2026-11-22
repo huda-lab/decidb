@@ -223,45 +223,24 @@ string DecideWrittenName(const BoundAggregateExpression &call) {
 //===--------------------------------------------------------------------===//
 // A computed value read whole
 //===--------------------------------------------------------------------===//
-static const char *ValueTag(DecideValueKind kind) {
-	switch (kind) {
-	case DecideValueKind::UNCORRELATED_SUBQUERY:
-		return QUERY_WIDE_VALUE_TAG;
-	case DecideValueKind::CORRELATED_SUBQUERY:
-		return ROW_VARYING_SUBQUERY_TAG;
-	default:
-		return BOUND_REDUCER_TAG;
+bool IsDecideQueryWideValue(const vector<DecideComputedValue> &values, const Expression &expr) {
+	for (auto &known : values) {
+		if (known.query_wide && Expression::Equals(*known.value, expr)) {
+			return true;
+		}
 	}
+	return false;
 }
 
-void MarkDecideValue(Expression &value, DecideValueKind kind) {
-	SetTag(value, ValueTag(kind), true);
-}
-
-bool IsDecideValue(const Expression &expr, DecideValueKind kind) {
-	return HasDecideTag(expr.GetAlias(), ValueTag(kind));
-}
-
-bool IsDecideSubqueryValue(const Expression &expr) {
-	return IsDecideValue(expr, DecideValueKind::UNCORRELATED_SUBQUERY) ||
-	       IsDecideValue(expr, DecideValueKind::CORRELATED_SUBQUERY);
-}
-
-void MarkDecideQueryWideValue(Expression &value) {
-	SetTag(value, QUERY_WIDE_VALUE_TAG, true);
-}
-
-bool IsDecideQueryWideValue(const Expression &expr) {
-	return HasDecideTag(expr.GetAlias(), QUERY_WIDE_VALUE_TAG);
-}
-
-bool DecideHoldsSubqueryValue(const Expression &expr) {
-	if (IsDecideSubqueryValue(expr)) {
-		return true;
+bool DecideHoldsSubqueryValue(const vector<DecideComputedValue> &values, const Expression &expr) {
+	for (auto &known : values) {
+		if (known.subquery && Expression::Equals(*known.value, expr)) {
+			return true;
+		}
 	}
 	bool found = false;
 	ExpressionIterator::EnumerateChildren(
-	    expr, [&](const Expression &child) { found = found || DecideHoldsSubqueryValue(child); });
+	    expr, [&](const Expression &child) { found = found || DecideHoldsSubqueryValue(values, child); });
 	return found;
 }
 

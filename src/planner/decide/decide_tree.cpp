@@ -37,7 +37,7 @@ unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const
 	facts->comparison_type = comparison.type;
 	facts->rhs_expr = comparison.right->Copy();
 	facts->query_wide_bound = clause.query_wide_bound;
-	facts->bound_holds_subquery = DecideHoldsSubqueryValue(*comparison.right);
+	facts->bound_holds_subquery = DecideHoldsSubqueryValue(op.bound.computed_values, *comparison.right);
 	facts->tightest_frame_bound = HasDecideTag(comparison.alias, FRAME_TIGHTEST_BOUND_TAG);
 	facts->origin = clause.origin;
 	if (comparison.type == ExpressionType::COMPARE_NOTEQUAL) {
@@ -57,7 +57,7 @@ unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const
 	facts->scope = clause.scope.Copy();
 	facts->group_key = clause.group_key;
 	DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes,
-	                                  op.bound.keys, op.bound.is_boolean_var);
+	                                  op.bound.keys, op.bound.is_boolean_var, op.bound.computed_values);
 	const auto shape = clause.shape;
 	if (shape == CanonicalConstraintClass::INVALID) {
 		throw InternalException("DECIDE constraint reached term extraction with no shape: '%s'", comparison.ToString());
@@ -810,7 +810,7 @@ private:
 		const BoundDecideClause *canonical = &clause;
 		if (is_abs_envelope || is_l0_link || is_definition) {
 			DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes,
-			                                  op.bound.keys, op.bound.is_boolean_var);
+			                                  op.bound.keys, op.bound.is_boolean_var, op.bound.computed_values);
 			canonical_envelope = canonicalizer.CanonicalizeFunctionRow(clause);
 			canonical = &canonical_envelope;
 		}
@@ -891,7 +891,7 @@ private:
 		    node.facts->defined_var == DConstants::INVALID_INDEX &&
 		    node.facts->scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
 			DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes,
-			                                  op.bound.keys, op.bound.is_boolean_var);
+			                                  op.bound.keys, op.bound.is_boolean_var, op.bound.computed_values);
 			node.merges_classes = canonicalizer.MergesClasses(*row, node.key);
 		}
 		if (!scope.HasPer() && node.facts->scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
@@ -994,8 +994,9 @@ private:
 	}
 
 	//! With `carried`, the columns `expression` reads are carried, and neither they nor its decisions are sigma fields
-	//! (D83). A query-wide value has one value everywhere. A generated NULL test only settles membership: a member
-	//! test, or the test around a bound's reducer value (NamedReducerValue), which is its key alone (D70, deck p. 81).
+	//! (D83). A query-wide value has one value everywhere. A generated NULL test (BoundDecideNullTestExpression) only
+	//! settles membership: a member test, or the test around a recorded reducer's value, which is its key alone (D70,
+	//! deck p. 81).
 	//! A child read adds its key field either way.
 	unique_ptr<Expression> Lower(idx_t owner, const Expression &expression, bool carried = false) {
 		auto &node = *tree->nodes[owner];
@@ -1035,8 +1036,8 @@ private:
 			}
 			return lowered;
 		}
-		carried =
-		    carried || IsDecideQueryWideValue(expression) || IsDecideValue(expression, DecideValueKind::BOUND_REDUCER);
+		carried = carried || IsDecideQueryWideValue(op.bound.computed_values, expression) ||
+		          expression.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_NULL_TEST;
 		auto record = FindRecord(expression);
 		if (record != DConstants::INVALID_INDEX) {
 			return Read(owner, Record(record), expression.return_type, expression.GetAlias());

@@ -1486,6 +1486,32 @@
     "pointer_type": "none"
   },
   {
+    "class": "DecideComputedValue",
+    "includes": [
+      "duckdb/planner/decide/decide_tree_nodes.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "value",
+        "type": "Expression*"
+      },
+      {
+        "id": 101,
+        "name": "query_wide",
+        "type": "bool",
+        "default": "false"
+      },
+      {
+        "id": 102,
+        "name": "subquery",
+        "type": "bool",
+        "default": "false"
+      }
+    ],
+    "pointer_type": "none"
+  },
+  {
     "class": "DecideSignature",
     "includes": [
       "duckdb/planner/operator/decide/logical_decide.hpp"

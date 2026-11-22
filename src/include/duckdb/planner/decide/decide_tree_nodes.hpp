@@ -112,28 +112,29 @@ string DecideWrittenName(const BoundAggregateExpression &call);
 //===--------------------------------------------------------------------===//
 // A computed value read whole
 //===--------------------------------------------------------------------===//
-enum class DecideValueKind : uint8_t {
-	//! A flattened uncorrelated scalar subquery: one value for the whole query. Shape alone cannot tell its column
-	//! from row data once PlanSubqueries has run.
-	UNCORRELATED_SUBQUERY,
-	//! A flattened correlated scalar subquery: a value per row. A diagnostic never quotes DuckDB's placeholder for
-	//! it as user SQL.
-	CORRELATED_SUBQUERY,
-	//! What stands for a reducer the bound-side rewrite recorded: its placeholder column, or the guard over one that
-	//! is NULL outside the reducer's groups. A signature counts it as the reducer's key alone.
-	BOUND_REDUCER
+//! A value the query computes and a clause reads whole, by the expression that reads it (BoundDecide::computed_values).
+//! Shape alone cannot tell it from row data: once PlanSubqueries has run, `(SELECT max(w) FROM p)` is a column like
+//! `weight`. The table holds the fact and DuckDB's passes rebind `value` with the clauses
+//! (BoundDecide::EnumerateExpressions), so a read of the value equals it wherever a rewrite copies it.
+struct DecideComputedValue {
+	//! What a clause reads: the column a flattened scalar subquery became, or the placeholder of a recorded reducer
+	//! (DecideBoundAggregate::column).
+	unique_ptr<Expression> value;
+	//! One value for the whole query: an uncorrelated subquery, and an objective's reducer over data with no `by`. A
+	//! correlated subquery is a value per row.
+	bool query_wide = false;
+	//! A flattened scalar subquery, correlated or not. Its column is the planner's placeholder, not SQL the user can
+	//! edit, so a message about a bound holding one states the evaluated number.
+	bool subquery = false;
+
+	//! Generated from `storage/serialization/nodes.json`.
+	void Serialize(Serializer &serializer) const;
+	static DecideComputedValue Deserialize(Deserializer &deserializer);
 };
 
-void MarkDecideValue(Expression &value, DecideValueKind kind);
-bool IsDecideValue(const Expression &expr, DecideValueKind kind);
-//! Whether `expr` is a flattened scalar subquery, correlated or not.
-bool IsDecideSubqueryValue(const Expression &expr);
-//! Whether `expr` reads one anywhere. Its column is the planner's placeholder, not SQL the user can edit, so a
-//! message about a bound holding one states the evaluated number.
-bool DecideHoldsSubqueryValue(const Expression &expr);
-//! A computed value that is one value for the whole query: an uncorrelated subquery, and an objective's reducer over
-//! data with no `by`.
-void MarkDecideQueryWideValue(Expression &value);
-bool IsDecideQueryWideValue(const Expression &expr);
+//! Whether `expr` is a computed value that is one value for the whole query.
+bool IsDecideQueryWideValue(const vector<DecideComputedValue> &values, const Expression &expr);
+//! Whether `expr` reads a flattened scalar subquery anywhere.
+bool DecideHoldsSubqueryValue(const vector<DecideComputedValue> &values, const Expression &expr);
 
 } // namespace duckdb

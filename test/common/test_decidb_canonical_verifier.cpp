@@ -60,9 +60,10 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 	// The canonicalizer reads the keyed scopes and keys where they are, so they outlive it.
 	duckdb::vector<KeyedScopeInfo> keyed_scopes;
 	duckdb::vector<DecideKey> keys;
+	duckdb::vector<DecideComputedValue> computed_values;
 	DecideCanonicalizer canonicalizer(*con.context, DECIDE_INDEX,
 	                                  {DecideVarScopeInfo::Row(), DecideVarScopeInfo::Row()}, keyed_scopes, keys,
-	                                  duckdb::vector<bool> {false, false});
+	                                  duckdb::vector<bool> {false, false}, computed_values);
 	auto canonical_of = [&](BoundDecideClause clause) {
 		duckdb::vector<BoundDecideClause> clauses;
 		clauses.push_back(std::move(clause));

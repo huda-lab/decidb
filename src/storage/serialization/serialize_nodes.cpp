@@ -38,6 +38,7 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/decide/decide_tree_terms.hpp"
+#include "duckdb/planner/decide/decide_tree_nodes.hpp"
 #include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/parser/decide/parsed_decide.hpp"
 
@@ -497,6 +498,20 @@ DecideClause DecideClause::Deserialize(Deserializer &deserializer) {
 	DecideClause result;
 	deserializer.ReadProperty<DecideScope>(100, "scope", result.scope);
 	deserializer.ReadPropertyWithDefault<unique_ptr<ParsedExpression>>(101, "body", result.body);
+	return result;
+}
+
+void DecideComputedValue::Serialize(Serializer &serializer) const {
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(100, "value", value);
+	serializer.WritePropertyWithDefault<bool>(101, "query_wide", query_wide, false);
+	serializer.WritePropertyWithDefault<bool>(102, "subquery", subquery, false);
+}
+
+DecideComputedValue DecideComputedValue::Deserialize(Deserializer &deserializer) {
+	DecideComputedValue result;
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(100, "value", result.value);
+	deserializer.ReadPropertyWithExplicitDefault<bool>(101, "query_wide", result.query_wide, false);
+	deserializer.ReadPropertyWithExplicitDefault<bool>(102, "subquery", result.subquery, false);
 	return result;
 }
 

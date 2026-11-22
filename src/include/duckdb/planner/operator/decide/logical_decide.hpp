@@ -17,6 +17,7 @@
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/planner/decide/decide_tree_terms.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
+#include "duckdb/planner/decide/decide_tree_nodes.hpp"
 
 namespace duckdb {
 
@@ -379,6 +380,10 @@ struct BoundDecide {
 	//! a `per K:` clause and by KeyedScopeInfo::signature for a reducer's own `per`. Built by the planner, right after
 	//! canonicalization.
 	vector<DecideSignature> signatures;
+
+	//! The computed values the clauses read whole: each flattened scalar subquery, and each reducer over data the
+	//! objective reads as one value. The canonicalizer reads the vector where it is.
+	vector<DecideComputedValue> computed_values;
 
 	//! Every expression held here, each slot once.
 	void EnumerateExpressions(const std::function<void(unique_ptr<Expression> &expression)> &callback);

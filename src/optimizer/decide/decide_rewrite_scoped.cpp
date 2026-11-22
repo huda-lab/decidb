@@ -595,7 +595,8 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		// of the reducers it keeps. The canonicalizer is made here, to read the helpers' scopes.
 		decide.CanonicalizeClause(optimizer.context, clause);
 		DecideCanonicalizer(optimizer.context, decide.decide_index, decide.bound.variable_scopes,
-		                    decide.bound.keyed_scopes, decide.bound.keys, decide.bound.is_boolean_var)
+		                    decide.bound.keyed_scopes, decide.bound.keys, decide.bound.is_boolean_var,
+		                    decide.bound.computed_values)
 		    .ClassifyClause(clause);
 	};
 

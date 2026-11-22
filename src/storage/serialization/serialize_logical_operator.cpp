@@ -394,6 +394,7 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	/* [Deleted] (idx_t) "objective_signature" */
 	serializer.WritePropertyWithDefault<vector<DecideFrameSpec>>(225, "frames", bound.frames);
 	serializer.WritePropertyWithDefault<vector<unique_ptr<Expression>>>(226, "value_checks", value_checks);
+	serializer.WritePropertyWithDefault<vector<DecideComputedValue>>(227, "computed_values", bound.computed_values);
 }
 
 unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserializer) {
@@ -423,6 +424,7 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	deserializer.ReadDeletedProperty<idx_t>(224, "objective_signature");
 	deserializer.ReadPropertyWithDefault<vector<DecideFrameSpec>>(225, "frames", result->bound.frames);
 	deserializer.ReadPropertyWithDefault<vector<unique_ptr<Expression>>>(226, "value_checks", result->value_checks);
+	deserializer.ReadPropertyWithDefault<vector<DecideComputedValue>>(227, "computed_values", result->bound.computed_values);
 	return std::move(result);
 }
 

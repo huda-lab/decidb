@@ -84,39 +84,24 @@ unique_ptr<LogicalOperator> Binder::PlanDecide(BoundSelectNode &statement, uniqu
 	    [&](unique_ptr<Expression> &expression) { PlanSubqueries(expression, root); });
 	is_outside_flattened = outer_flatten_state;
 
-	// Read back what every scalar subquery became. The table-index sets give the
-	// strict canonicalizer its planning-time evidence. The expression tags carry
-	// the same semantic fact with the flattened value so it survives copies and
-	// optimizer-generated re-canonicalization.
-	auto collect_flattened_indexes = [](const vector<SourceSubquerySlot> &slots, unordered_set<idx_t> &out) {
+	// Read back what every scalar subquery became: the value a clause reads in its place, recorded with whether it
+	// is one value for the whole query (BoundDecide::computed_values).
+	auto record_flattened_values = [&](const vector<SourceSubquerySlot> &slots, bool query_wide) {
 		for (auto &entry : slots) {
 			auto *slot = entry.slot;
 			if (!slot || !*slot) {
 				continue;
 			}
-			// Identity, not value: a flattened subquery is the same column whatever
-			// wraps it, so this peels past any cast (see StripCastsForIdentity).
-			const Expression *flat = StripCastsForIdentity(**slot);
-			if (flat->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-				out.insert(flat->Cast<BoundColumnRefExpression>().binding.table_index);
-			}
-		}
-	};
-	unordered_set<idx_t> query_wide_table_indexes;
-	collect_flattened_indexes(uncorrelated_subquery_slots, query_wide_table_indexes);
-
-	auto mark_flattened_values = [](const vector<SourceSubquerySlot> &slots, DecideValueKind kind) {
-		for (auto &entry : slots) {
-			auto *slot = entry.slot;
-			if (!slot || !*slot) {
-				continue;
-			}
-			MarkDecideValue(**slot, kind);
 			(*slot)->SetQueryLocation(entry.location);
+			DecideComputedValue computed;
+			computed.value = (*slot)->Copy();
+			computed.query_wide = query_wide;
+			computed.subquery = true;
+			statement.decide.computed_values.push_back(std::move(computed));
 		}
 	};
-	mark_flattened_values(uncorrelated_subquery_slots, DecideValueKind::UNCORRELATED_SUBQUERY);
-	mark_flattened_values(correlated_subquery_slots, DecideValueKind::CORRELATED_SUBQUERY);
+	record_flattened_values(uncorrelated_subquery_slots, true);
+	record_flattened_values(correlated_subquery_slots, false);
 	// Canonicalization: the single point at which the shape of a user-written
 	// constraint is decided (decision terms left, data right). Runs here rather
 	// than during binding because it needs bound expressions -- a decision
@@ -138,7 +123,7 @@ unique_ptr<LogicalOperator> Binder::PlanDecide(BoundSelectNode &statement, uniqu
 	{
 		DecideCanonicalizer canonicalizer(context, statement.decide_index, statement.decide.variable_scopes,
 		                                  statement.decide.keyed_scopes, statement.decide.keys,
-		                                  statement.decide.is_boolean_var, std::move(query_wide_table_indexes));
+		                                  statement.decide.is_boolean_var, statement.decide.computed_values);
 		canonicalizer.QuoteMessagesWith(message_names);
 		canonicalizer.frames = &statement.decide.frames;
 		// The algebra of every clause, judged once on the one spelling canonicalization wrote.
@@ -154,7 +139,7 @@ unique_ptr<LogicalOperator> Binder::PlanDecide(BoundSelectNode &statement, uniqu
 		}
 		FinalizeConstraintSourceInfo(clauses, statement.decide.constraint_sources, statement.decide.source_text,
 		                             statement.decide.keyed_scopes, statement.decide_index, &statement.decide.keys,
-		                             statement.decide.frames);
+		                             statement.decide.frames, statement.decide.computed_values);
 		auto skip_null_data = [&](unique_ptr<Expression> &expression) {
 			canonicalizer.SkipNullData(*expression, statement.decide.keyed_scopes, statement.decide.keys);
 		};

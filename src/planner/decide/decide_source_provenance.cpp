@@ -664,7 +664,8 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(vector<BoundDecideCl
 void FinalizeConstraintSourceInfo(const vector<BoundDecideClause> &clauses, vector<ConstraintSourceInfo> &sources,
                                   const DecideSourceText &text, const vector<KeyedScopeInfo> &keyed_scopes,
                                   idx_t decide_index, const vector<DecideKey> *keys,
-                                  const vector<DecideFrameSpec> &frames) {
+                                  const vector<DecideFrameSpec> &frames,
+                                  const vector<DecideComputedValue> &computed_values) {
 	RenderContext ctx {text, keyed_scopes, keys};
 	ctx.decide_index = decide_index;
 	ctx.frames = &frames;
@@ -684,7 +685,7 @@ void FinalizeConstraintSourceInfo(const vector<BoundDecideClause> &clauses, vect
 		info.canonical_rhs = RenderSource(*cmp.right, ctx);
 		info.lhs_location = cmp.left->GetQueryLocation();
 		info.canonical_cmp = DecideComparisonOperator(cmp.type);
-		if (!clause.query_wide_bound && !DecideHoldsSubqueryValue(*cmp.right)) {
+		if (!clause.query_wide_bound && !DecideHoldsSubqueryValue(computed_values, *cmp.right)) {
 			info.rhs_kind = ConstraintSourceRhsKind::DATA_EXPRESSION;
 		} else {
 			info.rhs_kind = ConstraintSourceRhsKind::NUMERIC_FALLBACK;

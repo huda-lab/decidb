@@ -263,7 +263,7 @@ void LogicalDecide::AddClause(ClientContext &context, BoundDecideClause clause) 
 
 void LogicalDecide::CanonicalizeClause(ClientContext &context, BoundDecideClause &clause) {
 	DecideCanonicalizer canonicalizer(context, decide_index, bound.variable_scopes, bound.keyed_scopes, bound.keys,
-	                                  bound.is_boolean_var);
+	                                  bound.is_boolean_var, bound.computed_values);
 	vector<BoundDecideClause> canonical;
 	canonical.push_back(std::move(clause));
 	canonicalizer.CanonicalizeClauses(canonical);
@@ -277,7 +277,7 @@ void LogicalDecide::SetObjective(ClientContext &context, BoundDecideClause objec
 		return;
 	}
 	DecideCanonicalizer canonicalizer(context, decide_index, bound.variable_scopes, bound.keyed_scopes, bound.keys,
-	                                  bound.is_boolean_var);
+	                                  bound.is_boolean_var, bound.computed_values);
 	DecideSourceNames names {bound.source_text, bound.keyed_scopes, bound.keys};
 	canonicalizer.QuoteMessagesWith(names);
 	bound.objective = canonicalizer.CanonicalizeObjective(objective, bound.objective_constant_offset);
@@ -287,6 +287,9 @@ void LogicalDecide::SetObjective(ClientContext &context, BoundDecideClause objec
 void BoundDecide::EnumerateExpressions(const std::function<void(unique_ptr<Expression> &expression)> &callback) {
 	for (auto &expr : variables) {
 		callback(expr);
+	}
+	for (auto &computed : computed_values) {
+		callback(computed.value);
 	}
 	for (auto &clause : clauses) {
 		clause.EnumerateExpressions(callback);

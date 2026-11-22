@@ -399,7 +399,8 @@ void decide_rewrite::ScopeRowPerClause(ClientContext &context, LogicalDecide &de
 	}
 	// The row names its key as the key was first written: only a `per` the user wrote stands in the query.
 	DecideCanonicalizer canonicalizer(context, decide.decide_index, decide.bound.variable_scopes,
-	                                  decide.bound.keyed_scopes, decide.bound.keys, decide.bound.is_boolean_var);
+	                                  decide.bound.keyed_scopes, decide.bound.keys, decide.bound.is_boolean_var,
+	                                  decide.bound.computed_values);
 	canonicalizer.frames = &decide.bound.frames;
 	vector<DecideSignatureField> fields;
 	canonicalizer.CollectSignatureFields(*row.body, scope.class_key, fields);

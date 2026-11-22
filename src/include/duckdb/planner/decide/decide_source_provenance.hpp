@@ -44,11 +44,13 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(vector<BoundDecideCl
 
 //! Render each clause's canonical sides after PlanSubqueries and canonicalization. `decide_index` tells a decision
 //! from data: the plan layer reprints the decision structure and quotes the data.
-//! `frames` gives each frame over decisions its spelling (DecideFrameSpec::spelling).
+//! `frames` gives each frame over decisions its spelling (DecideFrameSpec::spelling). `computed_values` tells a bound
+//! holding a flattened subquery, which a message states as its evaluated number.
 void FinalizeConstraintSourceInfo(const vector<BoundDecideClause> &clauses, vector<ConstraintSourceInfo> &sources,
                                   const DecideSourceText &text, const vector<KeyedScopeInfo> &keyed_scopes,
                                   idx_t decide_index, const vector<DecideKey> *keys,
-                                  const vector<DecideFrameSpec> &frames);
+                                  const vector<DecideFrameSpec> &frames,
+                                  const vector<DecideComputedValue> &computed_values);
 
 //! Render one bound expression as the user wrote it.
 //!

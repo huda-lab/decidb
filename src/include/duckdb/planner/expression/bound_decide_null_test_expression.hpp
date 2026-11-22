@@ -16,7 +16,9 @@ namespace duckdb {
 //! the query never wrote, so no render prints it, which drops the reducer's own members only. A Decorator over the
 //! test, as PostgreSQL's RestrictInfo is over a conjunct: it travels in the conjunction wherever the reducer's rows
 //! are copied, executes as the test, and the tree splits it from the written conditions when it is built
-//! (DecideNode::member_tests).
+//! (DecideNode::member_tests). The test around a recorded reducer's value is one too (RhsBoundRewriter::InKey): it
+//! says which rows are in a group of the reducer's key. Either way the test only settles membership, so what it reads
+//! is no field of a signature.
 class BoundDecideNullTestExpression : public Expression {
 public:
 	static constexpr const ExpressionClass TYPE = ExpressionClass::BOUND_DECIDE_NULL_TEST;

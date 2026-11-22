@@ -182,20 +182,11 @@ static vector<idx_t> DecisionKeys(const vector<DecideVarScopeInfo> &variable_sco
 DecideCanonicalizer::DecideCanonicalizer(ClientContext &context, idx_t decide_index,
                                          vector<DecideVarScopeInfo> variable_scopes_p,
                                          const vector<KeyedScopeInfo> &keyed_scopes_p, const vector<DecideKey> &keys_p,
-                                         const vector<bool> &is_boolean)
+                                         const vector<bool> &is_boolean,
+                                         const vector<DecideComputedValue> &computed_values_p)
     : context(context), decide_index(decide_index), variable_scopes(std::move(variable_scopes_p)),
       decision_keys(DecisionKeys(variable_scopes, keyed_scopes_p)), boolean_decisions(is_boolean),
-      keyed_scopes(keyed_scopes_p), keys(keys_p) {
-}
-
-DecideCanonicalizer::DecideCanonicalizer(ClientContext &context, idx_t decide_index,
-                                         vector<DecideVarScopeInfo> variable_scopes_p,
-                                         const vector<KeyedScopeInfo> &keyed_scopes_p, const vector<DecideKey> &keys_p,
-                                         const vector<bool> &is_boolean, unordered_set<idx_t> query_wide_table_indexes)
-    : context(context), decide_index(decide_index), variable_scopes(std::move(variable_scopes_p)),
-      decision_keys(DecisionKeys(variable_scopes, keyed_scopes_p)),
-      query_wide_table_indexes(std::move(query_wide_table_indexes)), judge_column_refs(true),
-      boolean_decisions(is_boolean), keyed_scopes(keyed_scopes_p), keys(keys_p) {
+      keyed_scopes(keyed_scopes_p), keys(keys_p), computed_values(computed_values_p) {
 }
 
 bool DecideCanonicalizer::ReferencesDecideVar(const Expression &expr) const {
@@ -409,19 +400,12 @@ bool DecideCanonicalizer::IsQueryWideConstant(const Expression &expr) const {
 	// BoundColumnRefExpression on a table index of its own.
 	//
 	// So the answer comes from evidence collected before flattening, and the test is
-	// an ALLOW-list: query-wide iff positively marked. Framing it the other way --
+	// an ALLOW-list: query-wide iff listed. Framing it the other way --
 	// "not one of the reduced relation's own bindings" -- reads identically for
 	// `weight` but silently admits a CORRELATED subquery, which also lands on a fresh
 	// table index yet yields a different value per row.
-	if (IsDecideQueryWideValue(expr)) {
+	if (IsDecideQueryWideValue(computed_values, expr)) {
 		return true;
-	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-		if (!judge_column_refs) {
-			return false; // No evidence available: never promote an arbitrary column.
-		}
-		auto &colref = expr.Cast<BoundColumnRefExpression>();
-		return query_wide_table_indexes.find(colref.binding.table_index) != query_wide_table_indexes.end();
 	}
 	if (expr.IsFoldable()) {
 		return true;
@@ -480,7 +464,7 @@ static bool KeyHolds(const vector<DecideKey> &keys, idx_t key, const Expression 
 }
 
 idx_t DecideCanonicalizer::ScopeKeyOf(const Expression &expr, idx_t data_key) const {
-	if (IsDecideQueryWideValue(expr)) {
+	if (IsDecideQueryWideValue(computed_values, expr)) {
 		return DConstants::INVALID_INDEX;
 	}
 	if (!ReferencesDecideVar(expr) && KeyHolds(keys, data_key, expr)) {

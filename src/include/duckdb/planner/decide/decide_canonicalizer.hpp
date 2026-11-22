@@ -197,36 +197,21 @@ public:
 	//! value like any column, so `abs(x - max(t.v) by (t.g))` holds none.
 	bool ContainsDecisionReducer(const Expression &expr) const;
 
-	//! Provenance-only form: no table-index evidence is available, so arbitrary column
-	//! refs are never promoted to query-wide. A value marked query-wide (IsDecideQueryWideValue) is
-	//! still honored. Variable scopes remain available for homogeneity validation.
-	//! Used by LogicalDecide::AddClause for optimizer output.
-	//!
 	//! `is_boolean[i]` says decision column `i` is declared BOOL (LogicalDecide::is_boolean_var), so a constraint may
 	//! multiply a reducer by one: `b * SUM(x)` is a product the value rewrite hands to the Boolean linearization. It
-	//! is required by every constructor: a canonicalizer built without it would refuse `b * SUM(x)` as a product of
+	//! is required: a canonicalizer built without it would refuse `b * SUM(x)` as a product of
 	//! decisions, wherever it classifies a user's clause.
 	//! `keyed_scopes` gives each keyed decision's key (KeyedScopeInfo::key), which decides whether a keyed decision
 	//! beside a reducer is one value per group (ClassifyScoped). `keys` (LogicalDecide::keys) gives each key's
-	//! elements, which decide whether a `per` key holds a value by construction (ScopeKeyOf, the signatures); the
-	//! canonicalizer reads the vector as it is when it asks, so keys added later are seen.
+	//! elements, which decide whether a `per` key holds a value by construction (ScopeKeyOf, the signatures).
+	//! `computed_values` (BoundDecide::computed_values) says which values are one for the whole query
+	//! (IsQueryWideConstant). The test is FAIL-SAFE: anything not listed is treated as row-varying. The reverse
+	//! framing (a deny-list of the relation's own bindings) reads the same for `weight` but silently admits a
+	//! CORRELATED subquery, which also flattens onto a fresh table index while being per-row by construction.
+	//! The canonicalizer reads the three vectors as they are when it asks, so entries added later are seen.
 	DecideCanonicalizer(ClientContext &context, idx_t decide_index, vector<DecideVarScopeInfo> variable_scopes,
 	                    const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> &keys,
-	                    const vector<bool> &is_boolean);
-
-	//! Strict form: `query_wide_table_indexes` are the table indexes that UNCORRELATED
-	//! scalar subqueries flattened into, collected in plan_select_node.cpp at the only
-	//! point where correlation is still visible. A column ref counts as query-wide iff
-	//! its table index is in that set.
-	//!
-	//! The direction matters and is deliberately FAIL-SAFE: anything not positively
-	//! marked is treated as row-varying. The reverse framing (a deny-list of the
-	//! relation's own bindings) reads the same for `weight` but silently admits a
-	//! CORRELATED subquery, which also flattens onto a fresh table index while being
-	//! per-row by construction.
-	DecideCanonicalizer(ClientContext &context, idx_t decide_index, vector<DecideVarScopeInfo> variable_scopes,
-	                    const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> &keys,
-	                    const vector<bool> &is_boolean, unordered_set<idx_t> query_wide_table_indexes);
+	                    const vector<bool> &is_boolean, const vector<DecideComputedValue> &computed_values);
 
 	//! Canonicalize the clauses of SUCH THAT in place: each body, with its clause's scope; a `when` carries no
 	//! algebra and is only rewritten to the one spelling. With `sources`, it reports in each clause's
@@ -288,7 +273,7 @@ public:
 
 	//! True when `expr` evaluates to a single value for the entire query, so it may
 	//! scale a reducer. Constants qualify by folding; a column ref qualifies only by
-	//! being listed in `query_wide_table_indexes`, because after flattening a
+	//! being listed in `computed_values`, because after flattening a
 	//! `(SELECT max(w) FROM p)` is shape-identical to `weight` -- and, importantly, to
 	//! a CORRELATED subquery, which is per-row and must not qualify.
 	bool IsQueryWideConstant(const Expression &expr) const;
@@ -554,12 +539,6 @@ private:
 	//! The key of each decision column's scope (JoinDecideKeys): the empty key for a query-wide decision, its key for
 	//! a keyed one, DECIDE_ROW_KEY for one per row. Missing entries are per row.
 	vector<idx_t> decision_keys;
-	//! Table indexes that uncorrelated scalar subqueries flattened into. Meaningful
-	//! only when `judge_column_refs` is set.
-	unordered_set<idx_t> query_wide_table_indexes;
-	//! False when the pass was given no flattening evidence. In that mode an arbitrary
-	//! column ref is never guessed to be query-wide; only explicit semantic tags qualify.
-	bool judge_column_refs = false;
 	//! See QuoteMessagesWith; null quotes through the bound tree (UserFacingName).
 	optional_ptr<const DecideSourceNames> message_names;
 	//! Which decision columns are declared BOOL, indexed by decide-column index.
@@ -567,6 +546,8 @@ private:
 	//! The keyed scopes and keys (LogicalDecide::keyed_scopes, LogicalDecide::keys), read where they are.
 	const vector<KeyedScopeInfo> &keyed_scopes;
 	const vector<DecideKey> &keys;
+	//! The computed values read whole (BoundDecide::computed_values), read where they are.
+	const vector<DecideComputedValue> &computed_values;
 
 	//! `expr` as a scope refusal quotes it: the text the user wrote for it, parenthesized where it binds looser than
 	//! the operator it is an operand of (`parent_precedence`, as in RenderDecideSource).

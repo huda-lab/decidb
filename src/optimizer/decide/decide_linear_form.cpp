@@ -67,7 +67,7 @@ public:
 	DecideLinearFormBuilder(ClientContext &context, LogicalDecide &op, DecideTreeConstruction &tree)
 	    : context(context), op(op), tree(tree), decide_index(op.decide_index),
 	      canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes, op.bound.keys,
-	                    op.bound.is_boolean_var),
+	                    op.bound.is_boolean_var, op.bound.computed_values),
 	      splitter(context, op) {
 		// A frame's values are columns after the input's (DecideFrameColumn).
 		frame_reads.column_base = op.children.empty() ? 0 : op.children[0]->types.size();
@@ -462,7 +462,6 @@ private:
 		AddDecideTag(name, FRAME_COLUMN_TAG);
 		auto column = make_uniq<BoundReferenceExpression>(std::move(name), marker.return_type,
 		                                                  frame_reads.column_base + slot->second);
-		MarkDecideValue(*column, DecideValueKind::BOUND_REDUCER);
 		// It equals the reducer in value, so a message quotes it as the reducer was written (the location rule).
 		DecideReplaces(*column, marker);
 		return std::move(column);
