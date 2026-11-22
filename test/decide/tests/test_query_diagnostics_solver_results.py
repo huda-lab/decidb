@@ -104,6 +104,20 @@ class TestStructuredSolverResult:
         """HiGHS INFEASIBLE / UNBOUNDED return SolverResult, then operator throws."""
         _assert_friendly_error(decidb_cli_highs, sql, required)
 
+    def test_highs_answers_a_model_with_no_column(self, decidb_cli_highs):
+        """Every decision has no instance, so HiGHS is handed no column and stops before it reads a bound: the model
+        is solved, not a failed solve, as on Gurobi."""
+        sql = """
+            SET decide_direct_solve='off';
+            SELECT id FROM (VALUES (1, NULL::INT, 1.0), (2, NULL::INT, 2.0)) t(id, k, v)
+            DECIDE per t.k: c(REAL)
+            SUCH THAT c <= 10
+            MINIMIZE sum(c * t.v)
+            ORDER BY id
+        """
+        rows, _ = decidb_cli_highs.execute(sql, expect_warnings=("constrains nothing", "is 0 whatever"))
+        assert [int(r[0]) for r in rows] == [1, 2]
+
     @pytest.mark.error
     @pytest.mark.parametrize("sql", [_UNBOUNDED_MILP_SQL, _UNBOUNDED_MILP_MIN_SQL])
     def test_highs_inf_or_unbd_status_9_is_disambiguated(self, decidb_cli_highs, sql):

@@ -629,6 +629,15 @@ SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {
 	//===--------------------------------------------------------------------===//
 
 	HighsModelStatus model_status = highs.getModelStatus();
+	if (model_status == HighsModelStatus::kModelEmpty) {
+		// No column: HiGHS returns before it reads a bound. Every row has no term here (a row that fails with no
+		// term never reaches a session, SolverModel::ProvesInfeasible answers it first), so the empty solution is
+		// optimal, and its objective is 0 before the constant the session adds.
+		SolverResult result;
+		result.status = SolverStatus::OPTIMAL;
+		result.objective_value = 0.0;
+		return result;
+	}
 	if (model_status != HighsModelStatus::kOptimal) {
 		// Map the raw model status to a normalized SolverStatus and return it
 		// (no solution). The operator either surfaces the default error for an
