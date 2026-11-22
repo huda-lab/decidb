@@ -492,7 +492,7 @@ enum class GeneralConstraintKind : uint8_t {
 //! This is the check that a general constraint reaching a backend was declared by
 //! that backend, not the routing table for the whole capability set. The sites that
 //! DECIDE to go native read their flag directly, because they are emitting one
-//! construct and know which one (`physical_decide.cpp`, through NativeConstructPolicy),
+//! construct and know which one (`formulate_model.cpp`, through NativeConstructPolicy),
 //! and one of the three construct flags, `not_equal`, has no GeneralConstraintKind at
 //! all: it is an indicator constraint. So the table covers the general-constraint
 //! subset and says so.
@@ -547,6 +547,9 @@ struct SolverInput {
 	vector<LogicalType> variable_types;
 	vector<double> lower_bounds;
 	vector<double> upper_bounds;
+	//! The name each plan decision was declared with, which a refusal of the formulation quotes. One per plan decision
+	//! (variable `v < first_frame_read`); a frame read is named as its base is (BaseVariable).
+	vector<string> variable_names;
 
 	//! The subset of the column box that no diagnosis will ever open: a variable's
 	//! intrinsic domain (BOOLEAN 0/1, default non-negativity) and nothing else.
@@ -655,6 +658,9 @@ struct SolverInput {
 	vector<BilinearLinkSpec> bilinear_links;
 	//! Every ABS, in the order stage 05 allocated their auxiliaries (innermost first).
 	vector<AbsLinkSpec> abs_links;
+	//! The indicator decisions of `norm(e, 0)` whose Big-M the formulation derives from the box (the binder emitted the
+	//! links `e <= M*z` and `-e <= M*z` with a placeholder on `z`).
+	vector<idx_t> l0_auto_indicators;
 	//! The value rewrite's helper decisions, each with its evaluated definition. Consumed
 	//! (moved into `constraints` or emitted as extremum links) by the formulation pass.
 	vector<ReducerValueLinkSpec> reducer_value_links;
@@ -774,6 +780,13 @@ struct SolverInput {
 	//! case the lowering path filled `constraints` instead.
 	vector<GeneralConstraintSpec> general_constraints;
 
+	//! Stage 05's answer on which constructs the backend states itself and which arrive lowered into rows
+	//! (LogicalDecide::use_native_constructs), and the test-only policy to state a declared construct natively
+	//! wherever it is declared (::force_native_constructs). The formulation reads both and consults no backend
+	//! (NativeConstructPolicy).
+	SolverConstructSupport use_native_constructs;
+	bool force_native_constructs = false;
+
 	// --- Key scopes ---
 
 	//! Keyed mappings: one per KeyedScopeInfo (a `per K:` decision's key, a reducer's
@@ -841,7 +854,7 @@ DecideClauseRef DecideWrittenClause(const SolverInput &input, idx_t source_claus
 //! sites read before, so threading it through changes no constant.
 //!
 //! `OfSolvedModel` is also how the SECOND formulation names its box. A diagnosis widens
-//! the singleton-row bounds and re-runs `PhysicalDecide::FormulateModel` on a copy of the
+//! the singleton-row bounds and re-runs `FormulateModel` on a copy of the
 //! input, so every constant is derived against the box the repair actually searches
 //! rather than inherited from the narrower one. That widening is bounded on purpose: no
 //! finite Big-M dominates an open column, so a fully re-opened box does not lose

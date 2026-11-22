@@ -1,6 +1,7 @@
 add_library_unity(
   duckdb_decidb_formulation
   OBJECT
+  formulate_model.cpp
   ilp_linearization.cpp
   ilp_model_builder.cpp
   instance_floors.cpp

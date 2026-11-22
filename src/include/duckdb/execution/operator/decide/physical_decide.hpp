@@ -291,18 +291,6 @@ private:
 	                             vector<SolverInput::KeyValues> key_values, EvaluatedClauses &evaluated,
 	                             VarIndexer &out_var_indexer) const;
 
-	//! FormulateModel: turn the evaluated clauses into solver rows against `box`
-	//! — the auto-`M` refill, every linearization pass, and the lowering of whatever the
-	//! chosen backend cannot state natively.
-	//!
-	//! A pure function of its arguments: no `ClientContext`, no data scan, no expression
-	//! evaluation. That is what lets it run a second time, on a copy of `input` against a
-	//! widened box, to derive the constants an elastic (infeasibility-repair) model needs
-	//! — see `FormulateElasticModel`. Keep it that way: anything here that reads the data
-	//! instead of `input` belongs in EvaluateTree.
-	void FormulateModel(SolverInput &input, const FormulationBox &box, VarIndexer &var_indexer,
-	                    const EvaluatedClauses &evaluated) const;
-
 	//! The model input and column space as BuildSolverInput left them — before a single Big-M or
 	//! McCormick constant was derived — plus the scoped bounds the column box enforces
 	//! (`evaluated_singleton_row_constraints`), whose rows only a repair model carries. Retained
@@ -318,13 +306,13 @@ private:
 	//! four terminal cases, and the shared success epilogue.
 	SinkFinalizeType FinalizeSolveResult(ClientContext &context, DecideGlobalSinkState &gstate,
 	                                     SolverInput &solver_input, VarIndexer &var_indexer,
-	                                     const EvaluatedClauses &evaluated, ElasticFormulation *elastic) const;
+	                                     ElasticFormulation *elastic) const;
 
 	//! Formulate the elastic model: widen every loosenable column direction, re-derive
 	//! every constant against that box, and build the solver model from it. `elastic` is
 	//! left untouched — the copy it works on is local.
-	SolverModel FormulateElasticModel(const ElasticFormulation &elastic, const EvaluatedClauses &evaluated,
-	                                  VarIndexer &out_var_indexer, vector<string> &out_global_labels) const;
+	SolverModel FormulateElasticModel(const ElasticFormulation &elastic, VarIndexer &out_var_indexer,
+	                                  vector<string> &out_global_labels) const;
 };
 
 } // namespace duckdb
