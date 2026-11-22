@@ -671,10 +671,16 @@ one.
 
 **A link's rows are mechanism.** Every row of a link is `STRUCTURAL`, rigid under DIAGNOSE. A closing row carries the
 Big-M and encodes `z = MIN/MAX(members)`: offered to the elastic engine as a clause the user may edit, its slack would
-be in the auxiliary's units rather than the user's bound's, and `ExtremumLinkSpec` carries no
-source clause for a diagnosis to name it by. The user's clause is the row that reads the helper, which holds the
-bound in the user's own units and carries its source (`../../diagnostics/infeasible/done.md`,
+be in the auxiliary's units rather than the user's bound's. The user's clause is the row that reads the helper, which
+holds the bound in the user's own units and carries its source (`../../diagnostics/infeasible/done.md`,
 "Rigid shapes").
+
+**A helper's rows name the clause that reads the helper.** Every row a helper's definition writes (a link's pin,
+envelope, closing and selector rows, and a SUM or AVG helper's definition row) takes the clause that first reads the
+helper as its origin (`ExtremumLinkSpec::source_clause_id`, `ReducerValueLinkSpec::source_clause_id`), so a refusal of
+one of them, a number too large or HiGHS's load window, names that clause. DIAGNOSE sees nothing new: its removal
+groups key on `removal_group_id`, which these rows never set, its labels skip `STRUCTURAL` rows, and its elastic blocks
+take only `USER_PARAMETER` rows.
 
 **A member becomes a column only when it is not one already** (`ExtremumArgumentColumn`,
 §9a). `MAX(2 * x)` and `MAX(x + 1)` are genuine expressions and earn a column, boxed by

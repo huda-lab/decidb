@@ -208,13 +208,15 @@ tested). Column names are resolved at physical-plan time (`plan_decide.cpp`) in 
 passes, both keyed to chunk indices that survive column pruning. First, names are
 harvested from the DECIDE clause's own `BoundReferenceExpression`s: the constraints and
 the objective (their `when` conditions and `per` keys included), every `by` key, the
-scope checks and helper-decision links. A declaration's key
+scope checks and helper-decision links. The harvest walks the clauses as the query writes them, not the tree's
+row reads (`DecideDescent::RequireRowReads`): a column takes the first spelling the clause text gives it, and the
+tree visits the same references in node order, so the labels `DIAGNOSE` prints could move. A declaration's key
 columns are not harvested — they carry a synthetic placeholder name — and get a name
 only from a clause that reads them or from the back-fill. Second, any still-unnamed slot is
 **back-filled from the names the binder resolved**. Those live on `LogicalDecide`
 as `source_columns`, a vector whose `DecideSourceColumnName` records keep each
 `ColumnBinding` and user-written name together. It is captured in
-`plan_select_node.cpp` by walking `BindContext::GetBindingsList()` — the same table
+`Binder::PlanDecide` by walking `BindContext::GetBindingsList()` — the same table
 name resolution itself used. Every source kind is therefore covered uniformly: a
 base table's catalog names, a `t(a, b, c)` alias list over `(VALUES ...)`, a
 subquery's or a CTE's output names.
@@ -247,7 +249,7 @@ without it the names would pass every test that does not prepare a statement and
 drop on replay. `test_column_names_survive_a_prepared_statement` pins that.
 
 Alongside the names, `plan_decide.cpp` records **which columns the DECIDE clause itself
-references** (`PhysicalDecide::input_column_in_clause`, set by the same first-pass
+references** (`input_column_in_clause` in the operator's `display`, set by the same first-pass
 harvest). That is the signal the rule collapse above uses to prefer an explaining column
 over a coincidental one.
 

@@ -852,7 +852,7 @@ bound it is supposed to widen: `x <= 5` would repair to `x <= 6` on the Big-M pa
 under McCormick, and the reported repair would depend on which solver is installed. `<>`,
 bilinear and `norm` all have encodings of that shape.
 
-So the elastic model is **formulated**: `PhysicalDecide::FormulateElasticModel`
+So the elastic model is **formulated**: `FormulateElasticModel` (`decide_diagnostic_terminals.cpp`)
 takes the model input and column space as PHASE 3a left them — retained under `DIAGNOSE`
 only, before a single constant was derived — widens the box, and runs the same PHASE 3b pass
 (`FormulateModel`) the solved model went through. Every constant is re-derived against the

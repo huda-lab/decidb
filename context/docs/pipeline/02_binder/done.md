@@ -403,7 +403,7 @@ message, naming the column. A subquery inside a clause that is correlated to the
 own rows resolves that column in the DECIDE's binder, so it is not refused.
 
 Correlation is observed later, in
-`plan_select_node.cpp`, at the only point where it is still visible — see
+`Binder::PlanDecide`, at the only point where it is still visible — see
 [`../03_logical_plan/done.md`](../03_logical_plan/done.md).
 
 ### `<`, `>` and `<>`
@@ -538,7 +538,7 @@ binder sees one: the parser builds a frame only inside a DECIDE clause, and an o
 payload is refused as in any clause (*"'o.id' refers to an outer query"*) before an outer query could bind the clause;
 `ExpressionBinder` treats a frame as an internal error.
 
-Planning (`Binder::CreatePlan`, `plan_select_node.cpp`) plans the subqueries of every frame's order key and fallback
+Planning (`Binder::PlanDecide`, `plan_decide.cpp`) plans the subqueries of every frame's order key and fallback
 with the clause's; the canonicalizer then places every frame after canonicalizing the tree (`PlaceFrames`,
 `PlaceObjectiveFrames`), and a frame no walk placed is an internal error.
 

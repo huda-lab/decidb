@@ -77,7 +77,7 @@ WORKLOADS = {
     "variants-10": (
         "x(REAL), per (): s(REAL)",
         "x <= 10 AND s <= 5 AND per t.g1: sum(x) by (t.g1) + t.v * s " "<= {n} / 20",
-        "MAXIMIZE sum(x) + sum(per (): s)",
+        "MAXIMIZE sum(x) + s",
     ),
     "point": ("x(REAL)", f"x <= 10 AND x <= at(previous else 0: x) {TL} + t.w", "MAXIMIZE sum(x)"),
     "range-w1": ("x(REAL)", f"x <= 10 AND x <= sum(from previous to previous else 0: x) {TL} + t.w", "MAXIMIZE sum(x)"),

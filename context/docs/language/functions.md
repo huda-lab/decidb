@@ -73,7 +73,7 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
 - **Subqueries.** Correlated subqueries are decorrelated by DuckDB (`PlanSubqueries`) into per-row values.
   `DecideBinder::BindExpression` refuses a subquery that references a decision (`ExpressionContainsDecideVariable`).
 - **NULL.** A reducer reads its argument as the same SQL aggregate does: it skips a row whose summand is NULL, so
-  `AVG(cap)` and `AVG(w * x)` divide by the rows kept. `DecideCanonicalizer::SkipNullData` (plan_select_node, after
+  `AVG(cap)` and `AVG(w * x)` divide by the rows kept. `DecideCanonicalizer::SkipNullData` (`Binder::PlanDecide`, after
   canonicalization and before any rewrite copies a filter) ANDs a tagged `e IS NOT NULL` into a reducer's filter for
   each data factor of its summand, so the term masks and AVG's row count do the skipping. Where DuckDB's statistics
   prove the factor never NULL, `StatisticsPropagator` folds the test to TRUE (its LOGICAL_DECIDE case, as it folds a

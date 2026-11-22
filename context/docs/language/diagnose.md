@@ -38,6 +38,6 @@ an options syntax DIAGNOSE does not need).
 | Parser | `TransformShowSelect` makes a `ShowRef` with `ShowType::DIAGNOSE`; the existing `'(' VariableShowStmt ')'` production gives `FROM (DIAGNOSE …)` |
 | Binder | `Binder::BindDiagnose` (`bind_showref.cpp`) binds the inner query, requires exactly one `LogicalDecide`, sets `diagnose`, wraps the plan in `LogicalDecideDiagnose` |
 | Logical plan | `LogicalDecide::diagnose` is a property of the statement, never read from a session setting; `LogicalDecideDiagnose` owns the schema |
-| Execution | `PhysicalDecide::diagnose` arms the engines and reports findings instead of raising; `PhysicalDecideDiagnose` emits them |
+| Execution | The tree's `diagnose` flag arms the engines and reports findings instead of raising; `PhysicalDecideDiagnose` emits them |
 
 Tests: `test_diagnose_trigger.py`, `test_query_diagnostics_relation.py::TestDiagnoseRelationShape`.

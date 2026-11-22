@@ -246,10 +246,10 @@ it and no automatic path.
 - **How it travels.** `Binder::BindDiagnose` (`bind_showref.cpp`) binds the inner query
   unchanged, collects the `LogicalDecide` operators in the resulting plan, and sets
   `LogicalDecide::diagnose = true` on the one it requires there to be. `plan_decide.cpp` copies it to
-  `PhysicalDecide::diagnose`. It is a property of the STATEMENT, carried parser → binder
+  the tree's `diagnose`. It is a property of the STATEMENT, carried parser → binder
   → logical plan → stage 08, and never read back out of a setting.
 - **What it arms.** `PhysicalDecide::FinalizeSolveResult` reads the flag once as
-  `diagnosis_armed` and pre-arms the shared diagnosis prep it gates:
+  `diagnosis_armed`, and `SolveDecide` pre-arms the shared diagnosis prep it gates:
   `SolveModelOptions::extract_unbounded_ray`, `SolverInput::diagnose` (the display state of each row is built, and
   data-valued singleton rows stay rows), and retained-model capture. An unprefixed query pays for none of it.
 - **The gate.** The router's classifier takes the armed flag and routes a failure to an
@@ -288,7 +288,7 @@ inline branches in `PhysicalDecide::Finalize`.
   `ThrowDecideSolveError`; success clears the handoff before the operator above emits
   its `feasible` finding.
 - **Infeasible engine:** `DiagnoseInfeasible(const InfeasibleDiagnosisInput&)`
-  carries the repair model `PhysicalDecide::FormulateElasticModel` builds against the
+  carries the repair model `FormulateElasticModel` (`decide_diagnostic_terminals.cpp`) builds against the
   widened column box (the elastic transform `BuildElasticModel` then reshapes it) plus an
   injected `solve_model` callback. Every bound the optimizer folded into a column box
   reaches that model through its own clause's rows. Engine internals are in

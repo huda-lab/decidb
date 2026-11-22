@@ -54,19 +54,22 @@ variable, the finding keeps the ambiguous state.
 
 ## The operator switch (engine selection)
 
-`PhysicalDecide::Finalize` (`physical_decide.cpp`) handles a `TIME_LIMIT` stop first, then calls `RouteSolveResult`
-once and `switch`es on the terminal — the **single** dispatch site:
+`SolveDecide` (`decide_solve.cpp`) handles a `TIME_LIMIT` stop first. `PhysicalDecide::FinalizeSolveResult`
+(`physical_decide.cpp`) then calls `RouteSolveResult` once and `switch`es on the terminal — the **single** dispatch
+site. Each failing terminal's engine call is a function of plain inputs in `decide_diagnostic_terminals.cpp`; the
+operator keeps the switch, the hand-off and the readback:
 
 - `SOLVED` → store the solution and indexer (and `ClearDecideDiagnostic`, so a `DIAGNOSE` above this operator reports
   `feasible`). A `SUBOPTIMAL` result adds the "not proven best" caveat on stderr.
-- `UNBOUNDED` → build the per-variable labels and the categorical-candidate provider, run `DiagnoseUnbounded`, and
+- `UNBOUNDED` → build the per-variable labels; `UnboundedTerminal` builds the categorical-candidate provider over the
+  buffered rows and runs `DiagnoseUnbounded`; and
   `report(...)` the findings; when the engine names no variable, report an `undiagnosed` finding carrying the reason
   (`../unbounded/done.md`).
-- `INFEASIBLE` → normalize a residual `INF_OR_UNBD` to `INFEASIBLE`, formulate the repair model
-  (`FormulateElasticModel`), build the `InfeasibleDiagnosisInput` (that model, its indexer, labels and an injected
-  solve callback), run `DiagnoseInfeasible`, and `report(...)` the findings; when the engine declines, report an
-  `undiagnosed` finding saying whether diagnosis ran out of time or found no loosening that helps. The engine is
-  documented in `../infeasible/done.md`.
+- `INFEASIBLE` → build the per-variable labels; `InfeasibleTerminal` formulates the repair model
+  (`FormulateElasticModel`), builds the `InfeasibleDiagnosisInput` (that model, its indexer, labels and an injected
+  solve callback) and runs `DiagnoseInfeasible`; the operator `report(...)`s the findings; when the engine declines,
+  report an `undiagnosed` finding saying whether diagnosis ran out of time or found no loosening that helps. The engine
+  is documented in `../infeasible/done.md`.
 - `UNDIAGNOSED` → the plain static solver error (`ThrowDecideSolveError`).
 
 `report(...)` is the operator-local lambda that writes a diagnosis to the statement-scoped handoff and sets

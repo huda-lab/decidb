@@ -889,7 +889,7 @@ or debug-only:
 | Cast policy and unwrapping | `src/planner/decide/decide_cast_policy.cpp` |
 | Cast-policy interface | `src/include/duckdb/planner/decide/decide_cast_policy.hpp` |
 | Parsed cast-authorship validator | `src/planner/expression_binder/decide/decide_binder.cpp` |
-| User call site and subquery provenance | `src/planner/binder/query_node/plan_select_node.cpp` |
+| User call site and subquery provenance | `src/planner/binder/query_node/plan_decide.cpp` |
 | Source display capture and rendering | `src/planner/decide/decide_source_provenance.cpp` |
 | Generated-constraint / rewritten-objective entry points | `src/planner/operator/decide/logical_decide.cpp` |
 | Verification at physical-plan entry | `src/execution/physical_plan/plan_decide.cpp` |

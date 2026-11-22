@@ -313,10 +313,10 @@ and gap.
 
 ## 3. `SolveModel`
 
-`SolveModel(input, indexer, backend, options, retained_model, retained_session)` is
-the facade the operator calls. `backend` is passed in, not resolved here, so the
-solver that runs the model is provably the one the rewrites were selected against. In
-order:
+`SolveModel(input, indexer, backend, options, retained_model, retained_session)` is the facade `SolveDecide`
+(`decide_solve.cpp`) calls for the operator; `SolveDecide` also handles a time limit or a Ctrl-C, by the prompt to
+continue on a terminal or the incumbent elsewhere. `backend` is passed in, not resolved here, so the solver that runs
+the model is provably the one the rewrites were selected against. In order:
 
 1. `SolverModel::Build(input, indexer)`. Build proves nothing infeasible itself: an
    inverted column box, a coefficient-free row that fails and an unreachable infinite
@@ -615,18 +615,18 @@ each column value by its 2^e and divides the objective value and the MIP dual bo
 the objective's factor; the MIP gap is relative and unchanged. The objective's constant
 is not part of this: it never reaches a solver (§ 6).
 
-Two rows cannot be placed inside the window at all, and both are refused in SQL terms
-naming the clause as the user wrote it, rather than reaching HiGHS: one whose own
-coefficients span more than the window's ~24 orders of magnitude, and one whose bound
-would have to cross `infinite_bound` to get the coefficients in. An objective whose
-Hessian entries span the window, or whose costs would cross `infinite_cost`, is refused
-the same way, naming the objective. A refusal judges its cause on the row or objective as
-the user wrote it, before any column scale: if that fits, a decision's limit past
-`infinite_bound` is what pushed it out, and the refusal says so instead of quoting the
-scaled entries; if it does not fit, the refusal quotes the coefficients as written. The
-clause shown already names the decisions it holds, so the backend needs no decision names. Scaling gets an extreme
-row *loaded*; it does not make it well-conditioned. A Big-M of 4e15 is numerically
-untrustworthy on any solver, which is a separate concern from whether the API accepts it.
+Two rows cannot be placed inside the window at all, and both are refused in SQL terms naming the clause as the user
+wrote it, rather than reaching HiGHS: one whose own coefficients span more than the window's ~24 orders of magnitude,
+and one whose bound would have to cross `infinite_bound` to get the coefficients in. An objective whose Hessian entries
+span the window, or whose costs would cross `infinite_cost`, is refused the same way, naming the objective. A row a
+rewrite added for a clause (an ABS, a product, a MIN, MAX or reducer helper's definition) names that clause; a row no
+clause claims is one the objective's rewrites added, and names the objective (`ThrowUnscalableRow`,
+`test_a_helper_row_too_far_apart_names_the_clause_that_reads_it`). A refusal judges its cause on the row or objective as
+the user wrote it, before any column scale: if that fits, a decision's limit past `infinite_bound` is what pushed it
+out, and the refusal says so instead of quoting the scaled entries; if it does not fit, the refusal quotes the
+coefficients as written. The clause shown already names the decisions it holds, so the backend needs no decision names.
+Scaling gets an extreme row *loaded*; it does not make it well-conditioned. A Big-M of 4e15 is numerically untrustworthy
+on any solver, which is a separate concern from whether the API accepts it.
 
 The bound is read from the clause's own `rhs`, never inferred from the packed range row.
 The sense decides which side of `row_lower` / `row_upper` carries the limit, and the open

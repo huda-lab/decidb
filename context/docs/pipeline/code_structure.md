@@ -64,12 +64,12 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `planner/expression_binder/decide/decide_objective_binder.cpp` | 02 | Objective and its scope |
 | `planner/expression_binder/decide/decide_declarations_binder.cpp` | 02 | DECIDE declarations and their scopes, the parsed-tree validators (`RefuseQualifiedDecisionReferences` among them), and the `SUCH THAT` / objective binds |
 | `planner/binder/query_node/bind_select_node.cpp` | 02 | Generic SELECT binding. Its DECIDE branch is one `DecideDeclarationsBinder::BindDeclarations()` call |
-| `planner/binder/query_node/plan_select_node.cpp` | 03/04 | Subquery flattening, correlation provenance, the user canonicalization call and the shape check |
+| `planner/binder/query_node/plan_decide.cpp` | 03/04 | `Binder::PlanDecide`, which `CreatePlan(BoundSelectNode &)` calls after the `WHERE`: subquery flattening, correlation provenance, the user canonicalization call and the shape check |
 | `planner/operator/decide/logical_decide.cpp` | 03 | `AddConstraint`, `SetObjective`, EXPLAIN strings |
 | `planner/operator/decide/logical_decide_diagnose.cpp` | 03 | The DIAGNOSE node: EXPLAIN strings and serialization |
 | `planner/decide/decide_canonicalizer.cpp` | 04 | The one shape boundary |
 | `planner/decide/decide_product_form.cpp` | 04 | `NormalizeProducts` and the readers of the product spelling, `DecideDegreeOf` |
-| `planner/decide/decide_shape_check.cpp` | 04 | `DecideShapeCheck`: reads-a-decision, vocabulary, exponents, divisors, `CASE`, degree, frames and the integer step, run once in `plan_select_node.cpp` |
+| `planner/decide/decide_shape_check.cpp` | 04 | `DecideShapeCheck`: reads-a-decision, vocabulary, exponents, divisors, `CASE`, degree, frames and the integer step, run once in `Binder::PlanDecide` |
 | `planner/decide/decide_term_split.cpp` | 04/05 | `DecideTermSplitter` |
 | `planner/decide/decide_reducer_path.cpp` | 04 | The path rule (`DecideReducerPath`, `FindOrCreateDecidePathKey`) |
 | `planner/decide/decide_source_provenance.cpp` | 03 | Source display capture and rendering |
@@ -96,21 +96,23 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `optimizer/statistics/expression/propagate_case.cpp` | 05 | A `CASE` whose `WHEN` checks the statistics prove constant folds, by `CaseSimplificationRule::Simplify`, the fold the rewriter's rule makes; `architecture.md` § 1 |
 | `execution/operator/join/perfect_hash_join_executor.cpp` | 08 | The perfect hash join takes the LEFT and SINGLE joins, with one NULL slot past the build range; `architecture.md` § 1 |
 | `execution/physical_plan/plan_decide.cpp` | 03/08 | Logical → physical, entity key indices, verification |
-| `execution/operator/decide/physical_decide.cpp` | 08 | Extraction, materialization, evaluation, emission, readback |
+| `execution/operator/decide/physical_decide.cpp` | 08 | Materialization, evaluation, emission, assembly, the switch over the solve's outcome, readback |
 | `execution/operator/decide/physical_decide_frames.cpp` | 08 | The frame maps: each frame's timelines and the values it reads |
-| `decidb/formulation/ilp_model_builder.cpp` | 06 | `SolverModel::Build` |
+| `decidb/formulation/formulate_model.cpp` | 06 | `FormulateModel`: the constants and rows against a box, a function of `SolverInput` alone |
+| `decidb/formulation/ilp_model_builder.cpp` | 06 | `SolverModel::Build`: columns, objective, raw rows, clause rows |
 | `decidb/formulation/ilp_linearization.cpp` | 06 | `LowerDecideConstructs`, global-auxiliary allocation |
 | `decidb/formulation/linearization_bigm.cpp` | 06 | Big-M sizing and the per-row range walks |
 | `decidb/formulation/linearization_minmax.cpp` | 06 | MIN/MAX: the extremum link of every helper |
 | `decidb/formulation/linearization_not_equal.cpp` | 06 | `<>` collapse and Big-M disjunction |
 | `decidb/formulation/linearization_bilinear_abs.cpp` | 06 | McCormick and ABS rows |
 | `decidb/formulation/linearization_reducer_value.cpp` | 06 | The value rewrite's helpers: where each is written in (`PlaceHelpers`, `InlineReducerValueLinks`, D89), their boxes and definitions |
+| `decidb/solver/decide_solve.cpp` | 07 | `SolveDecide`: the solve options, the solve, and a time limit's prompt to continue or incumbent |
 | `decidb/solver/ilp_solver.cpp` | 07 | Dispatch, INF_OR_UNBD probe, ray attachment |
 | `decidb/solver/solver_registry.cpp` | 07 | `REGISTERED_BACKENDS` — the one table naming every backend |
 | `decidb/solver/probe_models.cpp` | 07 | Probe models for the diagnostic re-solve and ray-extraction paths |
 | `decidb/gurobi/gurobi_solver.cpp`, `gurobi_loader.cpp` | 07 | Gurobi backend |
 | `decidb/naive/deterministic_naive.cpp` | 07 | HiGHS backend |
-| `decidb/diagnostics/decide_diagnostic*.cpp`, `decide_router.cpp` | — | Diagnostics |
+| `decidb/diagnostics/decide_diagnostic*.cpp`, `decide_router.cpp` | — | Diagnostics; `decide_diagnostic_terminals.cpp` runs an engine for a failing terminal from plain inputs |
 
 ### Grammar (`third_party/libpg_query/`)
 
@@ -290,13 +292,15 @@ a condition as another constraint.
 - **`GetGlobalSinkState()`** — constructs the sink state, which checks each decision's
   folded box against its domain before any data arrives.
 - **`Sink()` / `Combine()`** — materialize into a `ColumnDataCollection`.
-- **`Finalize()`** — entity mappings, coefficient evaluation, model build, solve.
+- **`Finalize()`** — the descent over the buffered rows, the evaluation, assembly, then `FormulateModel` and
+  `SolveDecide`, and a switch over the outcome.
 - **`GetData()`** — readback with type-specific projection.
 
 ### `src/decidb/formulation/ilp_model_builder.cpp` — stage 06
-- **`SolverModel::Build(SolverInput &, const VarIndexer &)`** — three linear
-  constraint paths plus the quadratic builder, then the two native lists
-  (general and indicator constraints) carried across in flat columns. Takes
+- **`SolverModel::Build(SolverInput &, const VarIndexer &)`** — four steps in order:
+  the columns, the objective, the raw rows (a helper's rows ahead of the clause rows that read it), and the clause
+  rows: three linear constraint paths plus the quadratic builder, then the two native lists (general and indicator
+  constraints) carried across in flat columns. Takes
   `SolverInput` by non-const reference so raw global constraints can be moved.
 - **`SolverModel::ModelClass()`** — what the built model demands of a solver; the
   fact stage 05's plan-time prediction is checked against.

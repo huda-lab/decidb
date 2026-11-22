@@ -10,26 +10,37 @@ emitter evaluates its compiled terms into solver-neutral row records.
 depends on the whole dataset, so it must consume its entire input before it can
 produce a row.
 
-**Key source files**: `src/execution/operator/decide/physical_decide.cpp` (`Finalize`, the assembly, formulation,
-solve and readback), `decide_descent.cpp` (top-down), `decide_tree_columns.cpp` (bottom-up), `decide_model_emitter.cpp`
-(what stage 06 reads) and `decide_value_extraction.cpp` (the value checks and the blocks the emitter writes through);
-at plan time `src/planner/decide/decide_tree.cpp` and `decide_tree_compile.cpp` (the tree and its programs).
+**Key source files**: `src/execution/operator/decide/physical_decide.cpp` (`Finalize`, the assembly, the switch over the
+solve's outcome and the readback), `decide_descent.cpp` (top-down), `decide_tree_columns.cpp` (bottom-up),
+`decide_model_emitter.cpp` (what stage 06 reads) and `decide_value_extraction.cpp` (the value checks and the blocks the
+emitter writes through); at plan time `src/planner/decide/decide_tree.cpp` and `decide_tree_compile.cpp` (the tree and
+its programs). Model building, the solve and the diagnoses live with their stages:
+`src/decidb/formulation/formulate_model.cpp` (06), `src/decidb/solver/decide_solve.cpp` (07) and
+`src/decidb/diagnostics/decide_diagnostic_terminals.cpp`.
 **Header**: `src/include/duckdb/execution/operator/decide/physical_decide.hpp`
 
-`Finalize` itself is a short orchestrator; the phases below are private methods
-on `PhysicalDecide`, in call order:
+`Finalize` itself is a short orchestrator; it calls, in order:
 
-| Method | Phase |
+| Function | Phase |
 |---|---|
-| `EvaluateTree` | 1–2 — the evaluation (§1a): the tree's descent, which read each chunk as `Sink` received it (`DecideDescent`), each node's programs over its entries (`DecideTreeColumns`), and the model emitter (`DecideModelEmitter`), which writes the key scopes' classes, the clauses, the objective and the helper decisions' members as stage 06 reads them |
-| `BuildSolverInput` | 3a — assembles `SolverInput`, settles the column box, builds the `VarIndexer` |
-| `FormulateModel` | 3b — derives the constants and emits the rows, against a given box |
-| `FormulateElasticModel` | 3b again, under `DIAGNOSE` only — the same pass against the widened box a repair searches |
-| `FinalizeSolveResult` | 3 — calls `SolveModel`, routes the terminal (`SOLVED`/`UNBOUNDED`/`INFEASIBLE`/`TIME_LIMIT`), and finishes `gstate` |
+| `EvaluateTree` | 1–2 — the evaluation (§1a): the tree's descent over the buffered rows (`DecideDescent`), each node's programs over its entries (`DecideTreeColumns`), and the model emitter (`DecideModelEmitter`), which writes the key scopes' classes, the clauses, the objective and the helper decisions' members as stage 06 reads them |
+| `BuildSolverInput` | 3a — assembles `SolverInput`, everything model building reads, settles the column box, builds the `VarIndexer` |
+| `FormulateModel` (`formulate_model.cpp`) | 3b — derives the constants and emits the rows, against a given box |
+| `FinalizeSolveResult` | 3 — calls `SolveDecide` (`decide_solve.cpp`: the solve, and at a time limit the prompt to continue or the incumbent), switches on the terminal (`SOLVED`/`UNBOUNDED`/`INFEASIBLE`/`UNDIAGNOSED`), and hands the diagnosis off or finishes `gstate` |
+| `UnboundedTerminal`, `InfeasibleTerminal` (`decide_diagnostic_terminals.cpp`) | under `DIAGNOSE` only — the engines a failure runs; the infeasible one formulates the repair model, 3b again against the widened box (`FormulateElasticModel`) |
 
-`EvaluateTree` fills one `EvaluatedClauses`: everything read off the data that a later phase still needs, here the
-filter state of the objective's terms and product groups. Nothing in it depends on a variable bound, so the formulation
-pass runs twice against two boxes from the same evaluated clauses.
+`EvaluateTree` fills one `EvaluatedClauses`, the filter state of the objective's terms and product groups, which
+`BuildSolverInput` reads. `FormulateModel` reads `SolverInput`, the box and the column space and nothing else: the
+declared names, the auto-`M` indicators and the native-construct policy are on `SolverInput`
+(`variable_names`, `l0_auto_indicators`, `use_native_constructs`). Nothing in it depends on a variable bound, so the
+formulation pass runs twice against two boxes from one input.
+
+The operator holds the child plan, the tree, the run's settings (`debug`, `solver_backend_name`, the native-construct
+policy) and `display`, a `DecideDisplay`: what `EXPLAIN` and the messages print (the clauses and the objective as
+bound, the source text, `constraint_sources`, the auxiliary decisions' expressions, the plan-time rewrite accounts)
+and, under `DIAGNOSE`, the input column names. `run_time_accounts` adds what a run counts for `EXPLAIN ANALYZE`.
+Every fact execution reads (the decisions, keys, frames, signatures, singleton-row boxes, domains, the `diagnose`
+flag) is the tree's: `plan_decide.cpp` moves it there from `LogicalDecide`, so the operator holds no second copy.
 
 The blocks the emitter writes through are shared functions (`decide_value_extraction.hpp`), one copy of each rule and
 its message: grouping a clause's kept rows by its shape (`GroupRowsByShape`), skipping a group whose reducer reads no
@@ -44,14 +55,13 @@ AVG-denominator division (`ScaleAvgRows`, `ScaleAvgTerms`) and the tightest fram
 | # | Where | What |
 |---|---|---|
 | 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Read the folded variable box and the tree's lowered clauses |
-| 2 | `Sink` → `DecideDescent` | Materialize every surviving tuple into the thread's `ColumnDataCollection`, and read it top-down as it arrives: each node's `when` parts, keys and σ fields on the rows that reach it, into the thread's containers (§1a) |
-| 2a | `Combine` | Place the thread's rows after those placed before, and keep its descent with the row they start at |
-| 2b | `Finalize` → `DecideDescent::MergeAll` | Merge the threads' descents: their maps in order, their entries in parallel |
-| 3 | `Finalize` → `EvaluateTree` | Settle the containers (`DecideDescent::Finish`: ranks, timelines) |
+| 2 | `Sink` | Materialize every surviving tuple into the thread's `ColumnDataCollection` |
+| 2a | `Combine` | Place the thread's rows after those placed before |
+| 3 | `Finalize` → `EvaluateTree` → `DecideDescent` | Read the buffer top-down, a chunk at a time: each node's `when` parts, keys and σ fields on the rows that reach it, into the containers (§1a); then settle them (`DecideDescent::Finish`: ranks, timelines) |
 | 4 | `EvaluateTree` → `DecideTreeColumns` | Bottom-up: the frames' timelines and columns (§4b), the data checks, each node's programs over its entries, the data reducers' folds |
 | 5 | `EvaluateTree` → `DecideModelEmitter` | The key scopes' classes (§4), the objective produced once (§4a), then the clauses, the objective and the helper decisions' members (§5) |
 | 6 | `Finalize` → `BuildSolverInput` → `FormulateModel` | Assemble `SolverInput` and settle the box, then linearize against it (stage 06) |
-| 7 | `Finalize` → `FinalizeSolveResult` | `SolverModel::Build` → `SolveModel` (stage 07) |
+| 7 | `Finalize` → `FinalizeSolveResult` → `SolveDecide` | `SolverModel::Build` → `SolveModel` (stage 07) |
 | 8 | `GetData` | Project solution values back onto rows |
 
 The sink state is constructed before the first `Sink` call, so step 1 sees no
@@ -72,7 +82,7 @@ its children's containers. Stage 08 does the same:
 | Deck | Stage 08 |
 |---|---|
 | The annotated tree: each node with what it reads per row (pp. 81, 99) | `DecideTree`, built at plan time (below): the E, G and O nodes, each with its `when` parts, key, σ, carried columns and programs |
-| Top-down construction: one pass over the rows (pp. 83-91, 100-105) | `DecideDescent`, in `Sink`, each chunk read as it arrives, a window at a time, by a descent per thread merged in `Combine` |
+| Top-down construction: one pass over the rows (pp. 83-91, 100-105) | `DecideDescent`, in `Finalize`, the buffered rows a chunk and a window at a time, by one descent |
 | A node's container (p. 110) | `DecideNodeContainer`: its entries as columns, its slots found in a `DecideKeyMap` |
 | Bottom-up evaluation (pp. 93-97, 106-108) | `DecideTreeColumns`: each node's programs over its entries, children before parents; then `DecideModelEmitter` writes what stage 06 reads |
 
@@ -95,16 +105,17 @@ no message is built as a column or taken as a minimum.
 a frame or a helper included (R11, D81). The objective's G has no exception of its own. A node that holds rows in no
 class (`DecideNode::holds_rows_in_no_class`, §5.3, D75) keeps holding them.
 
-Each row is read once, as it arrives, and the evaluation has no scan of the buffered input: it fetches its first
-chunk alone, for a value the whole query shares (`execution.descent_rows`, `DECIDB_PROFILE`, counts the rows read). Each thread reads its rows into a descent of its own, as a hash aggregate builds a table per
-thread, and `Finalize` merges them (below). `Combine` places the thread's rows after those placed before and keeps its
-descent; `Finalize` merges every part's maps one after another, a few thousand slots and classes, and then copies each
-node's entries and routed rows in parallel, a task per window of the merged containers (`DecideDescent::MergeAll`,
-`execution.descent_merge`). The copy runs on DuckDB's `TaskExecutor`, whose waiting thread runs tasks until every task has finished, so a task the queue hides for a moment is still run (`pipeline/architecture.md` § Edits to existing DuckDB code). Over 4 million stored rows the query reached its evaluation after 0.14 s on 8 threads
-(0.08 s reading, 0.06 s merging) against 0.31 s on one, in a query whose model and solve took 3.7 s. Until the merge,
-every thread's descent is held, so the peak holds the threads' containers and the merged ones at once. The unbounded
-diagnosis's column groupings (§7b) explain the solved model after the evaluation, and read the named input columns in
-a scan of their own.
+Each row is read once. `Sink` buffers each thread's rows, `Combine` places each thread's buffer after those placed
+before (`ColumnDataCollection::Combine`), and `EvaluateTree` routes the whole buffer through one descent, a chunk at a
+time, each chunk's rows numbered by the rows before it, as a hash join builds its table once its build side is complete
+(`execution.descent_rows`, `DECIDB_PROFILE`, counts the rows read). The evaluation fetches its first chunk alone, for a
+value the whole query shares, and never scans the buffer again. A descent per thread, merged in `Finalize`, would route
+on several threads at the cost of a merge of several hundred lines, so the rows are routed once (**Ruling (owner,
+2026-11-22)**). Against that merge, over a stored table so the scan runs on several threads
+(`context/opa_rewrite/tools/ab_bench.py`), the two lightest workloads spend more outside the solver: `flat-sum` 23 ms at
+1 million rows (12%) and 53 ms at 2 million (14%, 3% of the whole query), `variants-10` 35 ms at 1 million (14%); the
+others move by at most 6%, and peak memory falls by 3 to 8%. The unbounded diagnosis's column groupings (§7b) explain
+the solved model after the evaluation, and read the named input columns in a scan of their own.
 
 ---
 
@@ -135,36 +146,15 @@ a scan of their own.
   read otherwise, and a reducer's over frames its G's fold. What a frame's columns read, its payload, its `else` and a
   range's argument, are programs on its O (`DecideFrameColumnPrograms`), in stage 05's terms. A child a data
   expression reads that has no data value is an internal error.
-- *Top-down* (`decide_descent.hpp`): each thread's descent reads each chunk as `Sink` receives it, and numbers its
-  rows by their places in the thread's buffer; the buffer is never scanned to evaluate a row
-  (`execution.descent_rows` the rows read). `Combine` places the thread's buffer after the rows placed before
-  (`ColumnDataCollection::Combine`), and `Finalize` merges the threads' descents at those rows
-  (`DecideDescent::MergeAll`), the first thread's becoming the operator's: its rows are rebased; its keyed classes are
-  found again by layout and sort key, its slots by key -- and enclosing slot, each node's after those of the node its
-  rows arrive in (a G's, an O's, or an F's, which holds its definition roots in its own slots) -- in the operator's
-  dictionaries, a set E's entries by slot, signature, carried columns and reads (`DecideNodeContainer::reads`), with a
-  decision's instance and a read rebased as the classes, slots and rows are; a collated key's spellings fold into the
-  least. Each is found again in
-  the order the thread made it, which is its rows', so the merged containers number as one descent over every row
-  would. An O two reducers' operands read takes its rows in the slots of both, which no enclosing slot tells apart: its
-  entries keep none once merged, which no reader reads, and a node that names a parent slot in no single node's slots
-  raises an internal error there (`PartParent`). A class's layout and sort key hold no id a thread numbers for itself:
-  a keyed scope whose classes come from a definition's signature that reads a decision other than a query-wide one
-  raises an internal error at the merge (`DecideDescent::Merge`), which no suite query reaches. A set E is an E per K
-  or per () alone (`IsSetNode`): every other node, an F among them, keeps an entry per row it holds, each an instance
-  of its own, and merges as a G's entries do. An F reached along several paths within another F's slots (an L0
-  indicator over an ABS, each per class) numbers its slots path by path within each piece of rows, so its numbering
-  follows how the rows are cut, at chunk size 1 or merged one row at a time alike; the model does not.
-  `decide_debug`'s `split=n` merges every `n` rows as a thread of its own would. `DECIDB_TEST_DECIDE_DEBUG=split=1`
-  (`decidb_cli.py`) sets it for every query of a suite run: a query over thousands of rows then runs out of memory or
-  time, since each piece keeps its key maps' first blocks, about 0.5 MB, so an 8,400-row query holds 4.2 GB against
-  64 MB unsplit. No answer or model differs. Real
-  threads make one piece per thread that reads rows. `test_descent_merge.py` runs eight shapes on real threads (a
-  Parquet file of five row groups of 2,048 rows, the writer's smallest, read on four threads), each running its query
-  until one run merges more than one descent (`execution.descent_parts`), at most five times, since on a busy
-  machine one thread can read every row group, and asserting that every run's answer reaches its solver model's
-  optimum; and four under `split` for what real threads need not reach: a collated key's spellings folding
-  and an F within an F's slots. The descent is a Composite traversal vectorized by
+- *Top-down* (`decide_descent.hpp`): one descent reads the buffered rows in `EvaluateTree`, a chunk at a time, and
+  numbers each row by its place in the buffer; the buffer is never scanned again to evaluate a row
+  (`execution.descent_rows` the rows read). A set E is an E per K or per () alone (`IsSetNode`): every other node, an F
+  among them, keeps an entry per row it holds, each an instance of its own. An F reached along several paths within
+  another F's slots (an L0 indicator over an ABS, each per class) numbers its slots path by path within each chunk, so
+  its numbering follows how the rows are cut, at chunk size 1 or 2,048 alike; the model does not.
+  `test_descent_merge.py` runs eight shapes on real threads (a Parquet file of five row groups of 2,048 rows, the
+  writer's smallest, read on four threads), whose rows reach the buffer in an order that changes from run to run, and
+  asserts that every run's answer reaches its solver model's optimum. The descent is a Composite traversal vectorized by
   selection, as
   DuckDB's filters hand a selection vector on: a window of the input at a time, a node's `when` parts, keys and σ fields
   execute only on the rows that reach it (`Reach`: the rows, and the enclosing slot each arrives in), and each key's
@@ -192,7 +182,7 @@ a scan of their own.
   carried columns and reads, found by one probe of its entries' `DecideKeyMap`, at least one per variant; its instances
   are its distinct (slot, σ). A clause root whose classes agree on everything it reads (`DecideNode::merges_classes`,
   from `DecideCanonicalizer::MergesClasses`) leaves the slot out of the instance key and keeps it in the entry
-  (`InsertDistinct`, `Merge`): its instances are its distinct σ over every class, and a merged instance is named by its
+  (`InsertDistinct`): its instances are its distinct σ over every class, and a merged instance is named by its
   first class. It records each row it keeps with the entry standing for it
   (`DecideNodeContainer::routed`): a pair per kept row, which the objective's root, a grouped or class root and a
   relation-qualified reducer's operand read. A grouped root under `per K:` holds a kept row in no class of K too, in a
@@ -423,8 +413,7 @@ so a test can show a parent reads the bottom-up values; it refuses a node that c
 `test_every_dump_on_leaves_the_answer_as_it_was` (`test_one_pass_execution.py`) runs a shape per printer branch with
 every dump on and compares the answer with the answer with none. No test reads a dump for a node's kind (a Boolean
 product, an L0 indicator or a definition as an F node, ABS reading a reducer's function): their answers have oracle
-tests. Profile counters (`DECIDB_PROFILE`):
-`execution.descent_rows`, `execution.descent_parts` (the descents merged) and `execution.descent_merge`.
+tests. Profile counter (`DECIDB_PROFILE`): `execution.descent_rows`, the rows the descent read.
 
 Finalize releases the descent once `EvaluateTree` returns: what the solve and the output read of the evaluation is
 copied into `EvaluatedClauses` and the global state's fields (a key's group values into `KeyValues::values_of`), so the
@@ -436,8 +425,8 @@ Whether a simple bound (`x <= 10`) becomes a column box or a model row is decide
 at stage 05 — see [`../05_optimizer/done.md`](../05_optimizer/done.md), "Singleton-row
 folding". This stage consumes that decision and does not re-derive it.
 
-The sink state copies `op.singleton_row_boxes` and `op.user_singleton_row_bounds` in its
-constructor. Three consumers read them:
+The tree carries `singleton_row_boxes` and `user_singleton_row_bounds`, copied from `LogicalDecide` when the tree is
+built (`decide_tree.cpp`). Three consumers read them:
 
 - `Finalize` copies each box into `SolverInput` through `EffectiveLower`: a decision
   with no lower bound written takes the default 0 floor, so it is non-negative unless
@@ -493,7 +482,7 @@ one becomes loosenable while the 0/1 domain stays rigid.
 It works on `SolverInput`, before formulation, rather than on a built `SolverModel` —
 that is the whole point. The constants that go stale against a re-opened box (Big-M,
 McCormick) are derived by the formulation pass, so the box has to change *before* that
-pass runs, not after. `PhysicalDecide::FormulateElasticModel` widens the box on a copy of
+pass runs, not after. `FormulateElasticModel` (`decide_diagnostic_terminals.cpp`) widens the box on a copy of
 the retained pre-formulation input and re-runs `FormulateModel` against it, so the
 elastic model's constants describe the box it declares.
 
@@ -527,7 +516,7 @@ and proceeds to the elastic engine, which reports a least-change loosen.
 
 One function states the test and the message (`DecideBoxContradictsDomain` and `DecideDomainRefusal`,
 `common/decide_value_messages.hpp`), and two steps call it. Physical planning checks the box the constant bounds
-fold into (`PhysicalDecide::CheckDecisionDomains`, which fills `PhysicalDecide::domains`): the check reads only the
+fold into (`PhysicalDecide::CheckDecisionDomains`, which fills the tree's `domains`): the check reads only the
 plan, so `EXPLAIN`, `PREPARE` and a query over an empty input raise it as a run does. A constant bound under a `when`, or under a `per` over a written
 column, folds into no box (`../05_optimizer/done.md`, singleton-row folding), so the model emitter checks each row
 such a clause writes (`DecideModelEmitter::CheckDomain`, from `Rows` and, for an easy MIN's or MAX's members, from
@@ -1180,7 +1169,7 @@ clause or objective that reads the helper's column.
 
 ### Assembly and formulation are separate passes
 
-PHASE 3 is two methods, split by *what each one reads* rather than by where it sits
+PHASE 3 is two passes, split by *what each one reads* rather than by where it sits
 in the sequence.
 
 `BuildSolverInput` **assembles**. It moves the evaluated constraints, objective and
@@ -1193,8 +1182,8 @@ exactly once per query, because it is the pass that consumes `gstate`.
 `FormulateModel` **formulates**, against a `FormulationBox` handed to it: the auto-`M`
 refill for L0 links, the ABS / `<>` / bilinear linearizers, the helpers' definitions (every MIN/MAX's extremum link
 among them), and finally `LowerDecideConstructs` for whatever the chosen backend cannot state natively. It touches no
-`ClientContext`, scans no data, and evaluates no expression — it is a pure function of the evaluated clauses plus a
-box.
+`ClientContext`, scans no data, and evaluates no expression — it is a free function of `SolverInput`, a box and the
+column space (`formulate_model.cpp`), and reads no operator field.
 
 That purity is the point. A Big-M or a McCormick envelope is sound only for the box
 it was derived from, and infeasibility diagnosis re-opens that box (see "The elastic
@@ -1302,11 +1291,11 @@ past int32 would otherwise be refused under its internal name).
 
 ## 7b. `DIAGNOSE`: reporting on the run instead of returning it
 
-Two things change when the statement carried the prefix (`PhysicalDecide::diagnose`,
+Two things change when the statement carried the prefix (the tree's `diagnose`,
 copied from `LogicalDecide::diagnose`):
 
 1. **The engines are armed.** `FinalizeSolveResult` reads the flag once as
-   `diagnosis_armed` and turns on the shared pre-solve work the engines need —
+   `diagnosis_armed` and `SolveDecide` turns on the shared pre-solve work the engines need —
    unbounded-ray extraction, tolerating an inverted column box through Build, and
    retaining the built model for the elastic engine. An unprefixed query pays for none of
    it, which is the whole point of the prefix being the trigger.
@@ -1358,7 +1347,7 @@ Each is a guard the type system or a stage boundary needs, or a path only a nond
 | Concern | Location |
 |---|---|
 | Everything above | `src/execution/operator/decide/physical_decide.cpp` |
-| The one pass: the descent, per thread, and its merge | `src/execution/operator/decide/decide_descent.cpp`, `src/include/duckdb/execution/operator/decide/decide_descent.hpp` |
+| The one pass: the descent | `src/execution/operator/decide/decide_descent.cpp`, `src/include/duckdb/execution/operator/decide/decide_descent.hpp` |
 | Operator fields | `src/include/duckdb/execution/operator/decide/physical_decide.hpp` |
 | `DecideTerm`, `DecideConstraint`, `DecideObjective` | `src/include/duckdb/planner/decide/decide_tree_terms.hpp` |
 | The pass that fills them | `src/optimizer/decide/decide_linear_form.cpp` |

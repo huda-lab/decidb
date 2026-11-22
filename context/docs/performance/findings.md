@@ -67,7 +67,7 @@ environment would save under 1 ms a query, so nothing is cached.
 ## Input and extraction
 
 DuckDB operator profiles expose scans, joins, sorting and output-table writing. Per-chunk accumulators measure sink append and solution-to-row mapping without logging every chunk. Sink-combine timing includes its lock wait.
- Finalize spans separate the merge of the threads' descents (`execution.descent_merge`), the descent's routing of the
+ Finalize spans separate the descent's routing of the buffered
 rows (`execution.tree_descent`) and the evaluation of each node's programs into the columns stage 06 reads
 (`execution.tree_model`: the keyed-decision mapping, constraints, objective and the helper decisions' members), then
 `execution.assemble_input` and `execution.formulate`.

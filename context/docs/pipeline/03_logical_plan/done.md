@@ -9,7 +9,8 @@ It contains no solver-specific structures and no execution mechanics.
 
 **Key source files**
 
-- `src/planner/binder/query_node/plan_select_node.cpp` — builds the operator
+- `src/planner/binder/query_node/plan_decide.cpp` — `Binder::PlanDecide` builds the operator;
+  `CreatePlan(BoundSelectNode &)` calls it between the `WHERE` and the aggregates
 - `src/planner/operator/decide/logical_decide.cpp` — the operator itself
 - `src/include/duckdb/planner/operator/decide/logical_decide.hpp` — the metadata contract
 - `src/execution/column_binding_resolver.cpp` — the `LOGICAL_DECIDE` case
@@ -32,7 +33,7 @@ expressions reference them and column-binding resolution has to find them.
 
 ## 2. Subquery planning and correlation provenance
 
-In `plan_select_node.cpp`, and this ordering is load-bearing.
+In `Binder::PlanDecide` (`plan_decide.cpp`), and this ordering is load-bearing.
 
 `PlanSubqueries` flattens scalar subqueries into joins. After flattening, a
 row-varying column, an **uncorrelated** subquery and a **correlated** subquery are
@@ -108,7 +109,7 @@ so repeated appends stay linear rather than quadratic.
 user wrote survives every later optimizer rewrite. A null objective clears the
 field.
 
-Together with the call in `plan_select_node.cpp`, these are the only three places
+Together with the call in `Binder::PlanDecide`, these are the only three places
 `DecideCanonicalizer` runs.
 
 ---
@@ -214,7 +215,7 @@ pruning keeps a key column a declaration alone names (`per region: x`), and bind
 resolution turns it into a chunk position like any other expression. Without that, a key
 column not referenced in `SELECT` / `WHERE` / the clause would be pruned from the scan,
 collapsing distinct entities into whatever grouping happened to survive. Execution reads
-the key's resolved elements directly (`PhysicalDecide::KeyElements`).
+the key's resolved elements directly (`DecideKeyElements` over the tree's `keys`).
 
 A key only a declaration writes names no column for a message: `plan_decide.cpp` names
 the columns a clause writes, a `per K:` key's as written, a `by` key's as it binds, and
@@ -248,7 +249,7 @@ check (the rewrites detach the clause and reinstall it). No query reaches them.
 
 `LogicalDecide::diagnose` is a plain `bool`, set by `Binder::BindDiagnose`
 (`bind_showref.cpp`) when the statement carried the `DIAGNOSE` prefix, and copied to
-`PhysicalDecide::diagnose` at physical planning (`plan_decide.cpp`). It is the ONLY thing
+the tree's `diagnose` at physical planning (`plan_decide.cpp`). It is the ONLY thing
 that arms the diagnostics engines.
 
 Two properties matter, and both are the reason it lives here rather than in a session
@@ -416,15 +417,15 @@ canonicalization and the rewrites reshape. A node with no location (one a rewrit
 its children; an implicit cast takes its child's location, so it quotes as the child does. The rule that keeps a
 location true is Clang's TreeTransform one (`../architecture.md` §3, `DecideReplaces`).
 
-`source_text` (`DecideSourceText`) rides on `LogicalDecide` (serialized) and is copied to `PhysicalDecide`, alongside
-the `constraint_sources` registry that shares the same renderer. A registry entry (`ConstraintSourceInfo`) stores a clause once: its span
-(`location`, the query location of its comparison, a BETWEEN's shared by its two halves), the span of its canonical left
-side (`lhs_location`), the canonical text a plan shows (`canonical_lhs`, `canonical_cmp`, `canonical_rhs`) and
-`canonical_differs`, which the canonicalizer reports (`DecideCanonicalizer::CanonicalizeTree`). The clause as written is
-cut from `DecideSourceText` by `location` where a plan or a message needs it. A clause whose two sides both read a
-decision (`ship <= capacity * open`) keeps `source_lhs` and `source_rhs`, DeciDB's own rendering of the two sides before
-canonicalization merged them, because the clause a repair edits is no text of the query. The span id travels to
-formulation: `source_clause_id` gives a clause-level message its caret (`DecideClauseLocation`,
+`source_text` (`DecideSourceText`) rides on `LogicalDecide` (serialized) and is copied to the operator's `display`,
+alongside the `constraint_sources` registry that shares the same renderer. A registry entry (`ConstraintSourceInfo`)
+stores a clause once: its span (`location`, the query location of its comparison, a BETWEEN's shared by its two halves),
+the span of its canonical left side (`lhs_location`), the canonical text a plan shows (`canonical_lhs`, `canonical_cmp`,
+`canonical_rhs`) and `canonical_differs`, which the canonicalizer reports (`DecideCanonicalizer::CanonicalizeTree`). The
+clause as written is cut from `DecideSourceText` by `location` where a plan or a message needs it. A clause whose two
+sides both read a decision (`ship <= capacity * open`) keeps `source_lhs` and `source_rhs`, DeciDB's own rendering of
+the two sides before canonicalization merged them, because the clause a repair edits is no text of the query. The span
+id travels to formulation: `source_clause_id` gives a clause-level message its caret (`DecideClauseLocation`,
 `DecideClauseErrorInfo`). The objective's `written_objective` is the text cut from the parser's `OBJECTIVE` span; its
 `objective_canonical_differs` still compares two renderings.
 
@@ -440,7 +441,7 @@ for the output itself.
 
 | Concern | Location |
 |---|---|
-| Operator construction, subquery provenance | `src/planner/binder/query_node/plan_select_node.cpp` |
+| Operator construction, subquery provenance | `src/planner/binder/query_node/plan_decide.cpp` |
 | Operator, entry points, EXPLAIN strings | `src/planner/operator/decide/logical_decide.cpp` |
 | Serialization, generated from `logical_operator.json` and `nodes.json` | `src/storage/serialization/serialize_logical_operator.cpp`, `serialize_nodes.cpp` |
 | Metadata contract (every field, documented) | `src/include/duckdb/planner/operator/decide/logical_decide.hpp` |

@@ -83,7 +83,7 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
 - **Factors.** `PeelScale` moves a factor outward onto the reducer and keeps it there to the solver row, so `MIN`/`MAX`
   stay exact under a negative factor. It refuses a decision as the factor and a row-varying factor in the objective.
   Whether a column is query-wide is not a shape question — after flattening, a column, an uncorrelated and a
-  correlated subquery all look alike — so `plan_select_node.cpp` hands the canonicalizer an allow-list of the table
+  correlated subquery all look alike — so `Binder::PlanDecide` hands the canonicalizer an allow-list of the table
   indexes uncorrelated subqueries flattened into. Anything not on it is row-varying. (The reverse test, "not the
   reduced relation's own column", would silently admit a correlated subquery.)
 - **Easy `MIN`/`MAX` absorption.** An easy `max(m) <= K` / `min(m) >= K` with no `when` and no filter, whose member is
