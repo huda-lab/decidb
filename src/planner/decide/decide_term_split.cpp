@@ -99,7 +99,7 @@ static unique_ptr<Expression> MultiplyCoefficients(ClientContext &context, const
 //===--------------------------------------------------------------------===//
 
 DecideTermSplitter::DecideTermSplitter(ClientContext &context, const LogicalDecide &decide)
-    : context(context), decide_index(decide.decide_index), decide_variables(decide.decide_variables),
+    : context(context), decide_index(decide.decide_index), decide_variables(decide.bound.variables),
       bilinear_groups(decide.bilinear_function_groups) {
 	for (idx_t i = 0; i < decide_variables.size(); i++) {
 		variable_indexes[decide_variables[i]->Cast<BoundColumnRefExpression>().binding] = i;

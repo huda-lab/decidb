@@ -81,10 +81,10 @@ void DecideOptimizer::RewriteAvgToSum(LogicalDecide &decide) {
 			RewriteAvgInExpression(body.expr, decide, body.source_alias);
 		}
 	});
-	auto constraints = std::move(decide.decide_constraints);
+	auto constraints = std::move(decide.bound.constraints);
 	decide.AddConstraint(optimizer.context, std::move(constraints));
-	if (decide.decide_objective) {
-		decide.SetObjective(optimizer.context, std::move(decide.decide_objective));
+	if (decide.bound.objective) {
+		decide.SetObjective(optimizer.context, std::move(decide.bound.objective));
 	}
 }
 

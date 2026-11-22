@@ -13,7 +13,6 @@ the owner rules first.
 # Phase 5 — The parser builds the tree
 
 ## 5.1 The tree, one carrier at a time (one lane; the tasks run in this order)
-- [ ] TREE-2 `BoundDecide`, moved whole — pipeline/todo.md § TREE-2
 - [ ] TREE-3 Clause records — pipeline/todo.md § TREE-3
 - [ ] TREE-4 Reducer node and value node — pipeline/todo.md § TREE-4
 - [ ] TREE-5 Frame node — pipeline/todo.md § TREE-5

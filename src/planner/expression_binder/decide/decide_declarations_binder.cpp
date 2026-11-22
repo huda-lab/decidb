@@ -253,40 +253,40 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 		DecideConstraintsBinder decide_constraints_binder(binder, context, decide_variable_names, scalar_variable_names,
 		                                                  &qualifier_context);
 		auto constraints = std::move(decide.constraints);
-		result.decide_constraints = decide_constraints_binder.BindConstraints(constraints);
-		RefuseVolatile(*result.decide_constraints);
-		result.decide_constraint_sources = InitializeConstraintSourceInfo(
-		    *result.decide_constraints, decide.text, keyed_scopes, result.decide_index, &keys, frames);
+		result.decide.constraints = decide_constraints_binder.BindConstraints(constraints);
+		RefuseVolatile(*result.decide.constraints);
+		result.decide.constraint_sources = InitializeConstraintSourceInfo(
+		    *result.decide.constraints, decide.text, keyed_scopes, result.decide_index, &keys, frames);
 	}
 	if (decide.objective.body) {
 		DecideObjectiveBinder decide_objective_binder(binder, context, decide_variable_names, scalar_variable_names,
 		                                              &qualifier_context);
 		decide_objective_binder.decide_sense = decide.sense;
 		auto objective = std::move(decide.objective);
-		result.decide_objective = decide_objective_binder.BindObjective(objective);
-		RefuseVolatile(*result.decide_objective);
+		result.decide.objective = decide_objective_binder.BindObjective(objective);
+		RefuseVolatile(*result.decide.objective);
 	}
 	for (auto &key : keys) {
 		for (auto &element : key.elements) {
 			RefuseVolatile(*element.expression);
 		}
 	}
-	result.decide_text = decide.text;
-	result.decide_sense = decide.sense;
+	result.decide.source_text = decide.text;
+	result.decide.sense = decide.sense;
 	// Update types in bind context to reflect the determined types from DECIDE clause
 	bind_context.GetBindingsList().back()->types = var_types;
 	for (idx_t i = 0; i < var_names.size(); i++) {
 		auto bound_col_ref =
 		    make_uniq<BoundColumnRefExpression>(var_names[i], var_types[i], ColumnBinding(result.decide_index, i));
-		result.decide_variables.push_back(std::move(bound_col_ref));
+		result.decide.variables.push_back(std::move(bound_col_ref));
 	}
-	result.is_boolean_var = is_boolean_var;
+	result.decide.is_boolean_var = is_boolean_var;
 
-	result.decide_keys = std::move(keys);
-	result.decide_frames = std::move(frames);
+	result.decide.keys = std::move(keys);
+	result.decide.frames = std::move(frames);
 
-	result.keyed_scopes = std::move(keyed_scopes);
-	result.variable_scopes = variable_scopes;
+	result.decide.keyed_scopes = std::move(keyed_scopes);
+	result.decide.variable_scopes = variable_scopes;
 }
 
 } // namespace duckdb

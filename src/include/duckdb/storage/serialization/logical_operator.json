@@ -957,21 +957,25 @@
       {
         "id": 201,
         "name": "decide_variables",
+        "property": "bound.variables",
         "type": "vector<Expression*>"
       },
       {
         "id": 202,
         "name": "decide_constraints",
+        "property": "bound.constraints",
         "type": "Expression*"
       },
       {
         "id": 203,
         "name": "written_sense",
+        "property": "bound.sense",
         "type": "DecideSense"
       },
       {
         "id": 204,
         "name": "decide_objective",
+        "property": "bound.objective",
         "type": "Expression*"
       },
       {
@@ -987,21 +991,25 @@
       {
         "id": 207,
         "name": "is_boolean_var",
+        "property": "bound.is_boolean_var",
         "type": "vector<bool>"
       },
       {
         "id": 208,
         "name": "objective_constant_offset",
+        "property": "bound.objective_constant_offset",
         "type": "double"
       },
       {
         "id": 209,
         "name": "variable_scopes",
+        "property": "bound.variable_scopes",
         "type": "vector<DecideVarScopeInfo>"
       },
       {
         "id": 210,
         "name": "keyed_scopes",
+        "property": "bound.keyed_scopes",
         "type": "vector<KeyedScopeInfo>"
       },
       {
@@ -1013,6 +1021,7 @@
       {
         "id": 212,
         "name": "constraint_sources",
+        "property": "bound.constraint_sources",
         "type": "vector<ConstraintSourceInfo>"
       },
       {
@@ -1045,6 +1054,7 @@
       {
         "id": 220,
         "name": "keys",
+        "property": "bound.keys",
         "type": "vector<DecideKey>"
       },
       {
@@ -1055,22 +1065,26 @@
       {
         "id": 222,
         "name": "source_text",
+        "property": "bound.source_text",
         "type": "DecideSourceText"
       },
       {
         "id": 223,
         "name": "signatures",
+        "property": "bound.signatures",
         "type": "vector<DecideSignature>"
       },
       {
         "id": 224,
         "name": "objective_signature",
+        "property": "bound.objective_signature",
         "type": "idx_t",
         "default": "DConstants::INVALID_INDEX"
       },
       {
         "id": 225,
         "name": "frames",
+        "property": "bound.frames",
         "type": "vector<DecideFrameSpec>"
       },
       {

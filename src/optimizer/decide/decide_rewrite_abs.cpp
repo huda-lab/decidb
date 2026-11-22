@@ -153,7 +153,7 @@ static BoxedHelpers FindBoxedHelpers(LogicalDecide &decide) {
 	BoxedHelpers boxed {vector<bool>(decide.reducer_value_links.size(), false),
 	                    vector<bool>(decide.definition_functions.size(), false)};
 	auto binding_of = [&](idx_t var) {
-		return decide.decide_variables[var]->Cast<BoundColumnRefExpression>().binding;
+		return decide.bound.variables[var]->Cast<BoundColumnRefExpression>().binding;
 	};
 	std::function<void(const Expression &)> demand = [&](const Expression &expr) {
 		// A non-linear body stays where it was written, tagged as a read of its definition's helper.
@@ -208,7 +208,7 @@ static BoxedHelpers FindBoxedHelpers(LogicalDecide &decide) {
 //! every reader of the helper reads from both directions.
 static AbsExactSet FindExactAbs(ClientContext &context, LogicalDecide &decide) {
 	AbsExactSet exact;
-	const BooleanDecisions booleans {decide.decide_index, decide.is_boolean_var};
+	const BooleanDecisions booleans {decide.decide_index, decide.bound.is_boolean_var};
 	const auto boxed = FindBoxedHelpers(decide);
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
 		const bool is_boxed = (body.owner == DecideOwnedBody::Owner::DEFINITION && boxed.definitions[body.index]) ||
@@ -224,11 +224,11 @@ static AbsExactSet FindExactAbs(ClientContext &context, LogicalDecide &decide) {
 static DecideClauseRef AbsWrittenClause(const LogicalDecide &decide, const string &clause_alias) {
 	idx_t source_clause_id;
 	if (TryParseSourceClauseTag(clause_alias, source_clause_id) &&
-	    source_clause_id < decide.constraint_sources.size()) {
-		return DecideClauseRefOf(decide.constraint_sources, decide.source_text, source_clause_id);
+	    source_clause_id < decide.bound.constraint_sources.size()) {
+		return DecideClauseRefOf(decide.bound.constraint_sources, decide.bound.source_text, source_clause_id);
 	}
 	if (HasDecideTag(clause_alias, OBJECTIVE_ROW_TAG)) {
-		return DecideClauseRefOf(decide.constraint_sources, decide.source_text, DConstants::INVALID_INDEX);
+		return DecideClauseRefOf(decide.bound.constraint_sources, decide.bound.source_text, DConstants::INVALID_INDEX);
 	}
 	return DecideClauseRef();
 }
@@ -259,8 +259,9 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 		if (term.coefficient) {
 			DecideNameValue(
 			    names, *term.coefficient, term.sign,
-			    RenderDecideSource(*term.coefficient, decide.source_text, decide.keyed_scopes, &decide.keys),
-			    DecideSpanLocation(decide.source_text, DecideUnguarded(*term.coefficient).GetQueryLocation()));
+			    RenderDecideSource(*term.coefficient, decide.bound.source_text, decide.bound.keyed_scopes,
+			                       &decide.bound.keys),
+			    DecideSpanLocation(decide.bound.source_text, DecideUnguarded(*term.coefficient).GetQueryLocation()));
 		}
 	}
 	if (!total) {
@@ -326,8 +327,8 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	// A positive ABS under MINIMIZE, a negative one under MAXIMIZE, and a sound constraint shape (e.g. ABS <= K) are
 	// not: solver pressure / direct upper-bounding handles pinning.
 	const auto exact = FindExactAbs(optimizer.context, decide);
-	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.variable_scopes,
-	                                  decide.keyed_scopes, decide.keys, decide.is_boolean_var);
+	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.bound.variable_scopes,
+	                                  decide.bound.keyed_scopes, decide.bound.keys, decide.bound.is_boolean_var);
 	// Every body is read on the rows its owner keeps, and a reducer around the ABS narrows them further. A definition
 	// body has left the ordinary clause list, an L0 indicator's reverse link stands beside it, and a reducer value
 	// helper's body belongs to no clause; each still needs the same ABS helpers and envelopes as an ABS written in a
@@ -362,7 +363,7 @@ unique_ptr<Expression> decide_rewrite::MakeAbsRow(ClientContext &context, const 
                                                   const LogicalDecide::AbsFunction &function, bool negated) {
 	// `aux >= inner` or `aux >= -inner`, in its natural form, which can leave decisions on both sides. The tree brings
 	// each through the canonical boundary as it does any clause.
-	auto &aux = decide.decide_variables[function.aux_idx]->Cast<BoundColumnRefExpression>();
+	auto &aux = decide.bound.variables[function.aux_idx]->Cast<BoundColumnRefExpression>();
 	unique_ptr<Expression> bound = function.operand->Copy();
 	if (negated) {
 		// `0 - inner`
@@ -452,7 +453,8 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 		function.when = std::move(read_rows);
 		function.scope = aux_scope;
 		function.source_alias = clause_alias;
-		function.written = RenderDecideSource(func, decide.source_text, decide.keyed_scopes, &decide.keys);
+		function.written =
+		    RenderDecideSource(func, decide.bound.source_text, decide.bound.keyed_scopes, &decide.bound.keys);
 		decide.abs_functions.push_back(std::move(function));
 
 		// Preserve ABS(inner) in the clause tree and tag its value-helper mapping for

@@ -69,8 +69,8 @@ idx_t decide_rewrite::AddValueHelper(LogicalDecide &decide, LogicalDecide::Reduc
 	// One instance per class of a scope of its own (KeyedScopeInfo::value_link), which execution builds from the link.
 	KeyedScopeInfo helper_scope = scope;
 	helper_scope.value_link = link_idx;
-	decide.keyed_scopes.push_back(std::move(helper_scope));
-	auto var_scope = DecideVarScopeInfo::Keyed(decide.keyed_scopes.size() - 1);
+	decide.bound.keyed_scopes.push_back(std::move(helper_scope));
+	auto var_scope = DecideVarScopeInfo::Keyed(decide.bound.keyed_scopes.size() - 1);
 	// Whole-numbered when the value is, so a strict bound on a row reading it still steps on the integer lattice.
 	// F6: a diagnosis, and a plan, name the helper by what it holds.
 	LogicalType aux_type = whole ? LogicalType::INTEGER : LogicalType::DOUBLE;
@@ -251,7 +251,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	// It reads the rows its path keeps, grouped by its path key: for a reducer at the top, the clause's kept rows by
 	// its own `by` key.
 	auto rows = path.Rows();
-	const idx_t group_key = FindOrCreateDecidePathKey(path.KeysOf(DecideReducerGroupKey(agg)), decide.keys);
+	const idx_t group_key = FindOrCreateDecidePathKey(path.KeysOf(DecideReducerGroupKey(agg)), decide.bound.keys);
 	auto account_kind = group_key == DConstants::INVALID_INDEX ? LogicalDecide::RewriteAccount::Kind::HELPER
 	                                                           : LogicalDecide::RewriteAccount::Kind::HELPER_PER_GROUP;
 	idx_t link_idx = helpers.Find(agg, rows.get(), group_key, class_key);
@@ -307,7 +307,7 @@ bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_
 	idx_t qualifier;
 	if (!StringUtil::CIEquals(outer.function.name, "sum") || outer.children.size() != 1 ||
 	    DecideReducerGroupKey(outer) != DConstants::INVALID_INDEX ||
-	    !TryParseQualifiedReducerTag(outer.GetAlias(), qualifier) || qualifier >= decide.keyed_scopes.size()) {
+	    !TryParseQualifiedReducerTag(outer.GetAlias(), qualifier) || qualifier >= decide.bound.keyed_scopes.size()) {
 		return false;
 	}
 	auto *body = UnwrapDecideCasts(*outer.children[0], decide.decide_index);
@@ -322,8 +322,8 @@ bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_
 	    TryParseQualifiedReducerTag(inner.GetAlias(), inner_qualifier)) {
 		return false;
 	}
-	auto &by = DecideKeyElements(decide.keys, DecideReducerGroupKey(inner));
-	for (auto &element : DecideKeyElements(decide.keys, decide.keyed_scopes[qualifier].key)) {
+	auto &by = DecideKeyElements(decide.bound.keys, DecideReducerGroupKey(inner));
+	for (auto &element : DecideKeyElements(decide.bound.keys, decide.bound.keyed_scopes[qualifier].key)) {
 		bool in_by = false;
 		for (auto &part : by) {
 			in_by = in_by || part.Grouping().Equals(element.Grouping());
@@ -368,7 +368,7 @@ bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_
 } // namespace
 
 void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
-	if (!decide.decide_objective) {
+	if (!decide.bound.objective) {
 		return;
 	}
 	const idx_t decide_index = decide.decide_index;
@@ -494,9 +494,9 @@ void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 }
 
 void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
-	const BooleanDecisions booleans {decide.decide_index, decide.is_boolean_var};
-	auto names = DecidePlanNames(decide.source_text, decide.keyed_scopes, decide.keys, decide.decide_index,
-	                             decide.aux_var_expressions, decide.frames);
+	const BooleanDecisions booleans {decide.decide_index, decide.bound.is_boolean_var};
+	auto names = DecidePlanNames(decide.bound.source_text, decide.bound.keyed_scopes, decide.bound.keys,
+	                             decide.decide_index, decide.aux_var_expressions, decide.bound.frames);
 	Helpers helpers {optimizer.context, decide, {}, {}};
 
 	// A Boolean factor on a reducer (`b * sum(x)`, canonicalization admits no other decision) is now a product with
@@ -590,7 +590,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 			RefuseFractionalStep(site.slot->get()->Cast<BoundAggregateExpression>(), names, decide.decide_index, cmp,
 			                     cmp.GetQueryLocation().IsValid() || source_clause_id == DConstants::INVALID_INDEX
 			                         ? cmp.GetQueryLocation()
-			                         : decide.constraint_sources[source_clause_id].location);
+			                         : decide.bound.constraint_sources[source_clause_id].location);
 			ReplaceReducer(helpers, names, booleans, path, Helpers::ClassKeyOf(scope), ExtremumPushOf(cmp.type),
 			               source_clause_id, site);
 		}
@@ -645,8 +645,8 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 			rewrite_objective(body);
 		}
 	});
-	if (decide.decide_objective) {
-		decide.SetObjective(optimizer.context, std::move(decide.decide_objective));
+	if (decide.bound.objective) {
+		decide.SetObjective(optimizer.context, std::move(decide.bound.objective));
 	}
 }
 

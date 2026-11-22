@@ -54,8 +54,8 @@ class DirectFrontEnd {
 public:
 	DirectFrontEnd(ClientContext &context_p, LogicalDecide &decide_p)
 	    : context(context_p), decide(decide_p), splitter(context_p, decide_p),
-	      canonicalizer(context_p, decide_p.decide_index, decide_p.variable_scopes, decide_p.keyed_scopes,
-	                    decide_p.keys, decide_p.is_boolean_var) {
+	      canonicalizer(context_p, decide_p.decide_index, decide_p.bound.variable_scopes, decide_p.bound.keyed_scopes,
+	                    decide_p.bound.keys, decide_p.bound.is_boolean_var) {
 	}
 
 	DirectIR Read() {
@@ -63,11 +63,11 @@ public:
 		D_ASSERT(!decide.optimized && !decide.num_auxiliary_vars);
 		DirectIR ir;
 		ir.render = [&decide = decide](const Expression &expr) {
-			return RenderDecideSource(expr, decide.source_text, decide.keyed_scopes, &decide.keys);
+			return RenderDecideSource(expr, decide.bound.source_text, decide.bound.keyed_scopes, &decide.bound.keys);
 		};
 		ir.place = [&decide = decide](const Expression &expr) {
 			// What a NULL guard protects stands in the query, as the render quotes it.
-			return DecideSpanLocation(decide.source_text, DecideUnguarded(expr).GetQueryLocation());
+			return DecideSpanLocation(decide.bound.source_text, DecideUnguarded(expr).GetQueryLocation());
 		};
 		ir.decide_index = decide.decide_index;
 		D_ASSERT(decide.children.size() == 1 && decide.children[0]);
@@ -77,7 +77,7 @@ public:
 		ReadTableFacts(*decide.children[0], ir);
 		// A frame selector reads the row its position selects on a timeline (language/guide.md §5.6), which the
 		// operator computes and no rule's plan reads.
-		if (!decide.frames.empty()) {
+		if (!decide.bound.frames.empty()) {
 			MarkNotProved(ir.status);
 		}
 		ReadDecisions(ir);
@@ -174,19 +174,19 @@ private:
 
 private:
 	void ReadDecisions(DirectIR &ir) const {
-		auto count = decide.decide_variables.size();
+		auto count = decide.bound.variables.size();
 		D_ASSERT(decide.is_boolean_var.size() == count && decide.variable_scopes.size() == count);
 		for (idx_t i = 0; i < count; i++) {
-			auto &variable = decide.decide_variables[i];
+			auto &variable = decide.bound.variables[i];
 			DirectIRDecision decision;
 			decision.name = variable->GetName();
-			decision.declaration = decide.variable_scopes[i].declaration;
+			decision.declaration = decide.bound.variable_scopes[i].declaration;
 			decision.output_type = variable->return_type;
-			decision.scope = decide.variable_scopes[i].scope;
+			decision.scope = decide.bound.variable_scopes[i].scope;
 			if (decision.scope == DecideVarScope::KEYED) {
-				decision.keyed_scope = decide.variable_scopes[i].keyed_scope_idx;
+				decision.keyed_scope = decide.bound.variable_scopes[i].keyed_scope_idx;
 			}
-			if (decide.is_boolean_var[i]) {
+			if (decide.bound.is_boolean_var[i]) {
 				decision.domain = DirectDomain::BOOL;
 			} else if (variable->return_type == LogicalType::DOUBLE) {
 				decision.domain = DirectDomain::REAL;
@@ -199,7 +199,7 @@ private:
 	}
 
 	void ReadKeyedScopes(DirectIR &ir) const {
-		for (auto &scope : decide.keyed_scopes) {
+		for (auto &scope : decide.bound.keyed_scopes) {
 			DirectIRKeyedScope ir_node;
 			// The IR is read before the value rewrite makes its helper scopes; a binder scope's key is columns.
 			D_ASSERT(scope.value_link == DConstants::INVALID_INDEX);
@@ -287,7 +287,7 @@ private:
 	//! The key a reducer groups by, as the plan reads it; false when it reads more than the source.
 	bool ReadKey(idx_t key, vector<DirectKeyElement> &elements) const {
 		D_ASSERT(key < decide.keys.size());
-		for (auto &element : DecideKeyElements(decide.keys, key)) {
+		for (auto &element : DecideKeyElements(decide.bound.keys, key)) {
 			if (!CheckablePredicate(&element.Grouping()) || !CheckablePredicate(element.expression.get())) {
 				return false;
 			}
@@ -407,7 +407,7 @@ private:
 		idx_t source_id;
 		if (TryParseSourceClauseTag(leaf.GetAlias(), source_id)) {
 			D_ASSERT(source_id < decide.constraint_sources.size());
-			ir_node.written = DecideClauseRefOf(decide.constraint_sources, decide.source_text, source_id);
+			ir_node.written = DecideClauseRefOf(decide.bound.constraint_sources, decide.bound.source_text, source_id);
 		} else {
 			MarkNotProved(ir_node.status);
 		}
@@ -453,7 +453,7 @@ private:
 	void ReadConstraints(DirectIR &ir) const {
 		// The parser requires a SUCH THAT clause.
 		D_ASSERT(decide.decide_constraints);
-		ForEachScopedConstraintLeaf(*decide.decide_constraints,
+		ForEachScopedConstraintLeaf(*decide.bound.constraints,
 		                            [&](const Expression &leaf, const DecideEnclosingScope &scope) {
 			                            auto constraint = ReadConstraint(leaf, scope);
 			                            if (scope.per_wrapper) {
@@ -491,19 +491,20 @@ private:
 	}
 
 	void ReadObjective(DirectIRObjective &objective) const {
-		objective.offset = decide.objective_constant_offset;
-		objective.written = DecideClauseRefOf(decide.constraint_sources, decide.source_text, DConstants::INVALID_INDEX);
-		if (!decide.decide_objective) {
+		objective.offset = decide.bound.objective_constant_offset;
+		objective.written =
+		    DecideClauseRefOf(decide.bound.constraint_sources, decide.bound.source_text, DConstants::INVALID_INDEX);
+		if (!decide.bound.objective) {
 			return;
 		}
 		auto index = decide.decide_index;
-		const Expression *body = UnwrapDecideCasts(*decide.decide_objective, index);
+		const Expression *body = UnwrapDecideCasts(*decide.bound.objective, index);
 		if (HoldsValueRewrite(*body)) {
 			// No rule models the helper decision a nested reducer becomes (D81).
 			MarkNotProved(objective.status);
 			return;
 		}
-		if (decide.objective_signature != DConstants::INVALID_INDEX) {
+		if (decide.bound.objective_signature != DConstants::INVALID_INDEX) {
 			// The objective is produced once (D72): the operator refuses a second variant of it, which no rule's plan
 			// checks.
 			MarkNotProved(objective.status);

@@ -197,7 +197,7 @@ unique_ptr<Expression> HelperCondition(const BodySite &site) {
 void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, LogicalDecide &decide) {
 	const idx_t decide_index = decide.decide_index;
 	DecideTermSplitter splitter(context, decide);
-	const BooleanDecisions booleans {decide_index, decide.is_boolean_var};
+	const BooleanDecisions booleans {decide_index, decide.bound.is_boolean_var};
 	vector<BodySite> sites;
 
 	// The objective reads as one minimized expression; a `when` carries no sign, and the `when` keeps the rows its
@@ -262,8 +262,8 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 	}
 
 	using Kind = LogicalDecide::RewriteAccount::Kind;
-	DecideCanonicalizer canonicalizer(context, decide_index, decide.variable_scopes, decide.keyed_scopes, decide.keys,
-	                                  decide.is_boolean_var);
+	DecideCanonicalizer canonicalizer(context, decide_index, decide.bound.variable_scopes, decide.bound.keyed_scopes,
+	                                  decide.bound.keys, decide.bound.is_boolean_var);
 	// The placeholders are appended after both walks, so neither walk sees the structural rows registered here.
 	vector<unique_ptr<Expression>> rows;
 	for (idx_t family = 0; family < families.size(); family++) {
@@ -338,7 +338,7 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 	}
 
 	if (objective_defined) {
-		decide.SetObjective(context, std::move(decide.decide_objective));
+		decide.SetObjective(context, std::move(decide.bound.objective));
 	}
 	for (auto &row : rows) {
 		decide.AddConstraint(context, std::move(row));

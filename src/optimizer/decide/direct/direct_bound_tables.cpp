@@ -28,7 +28,7 @@ public:
 		vector<ExprPtr> keys;
 		vector<unique_ptr<Expression>> source_keys;
 		vector<bool> equal;
-		for (auto &element : DecideKeyElements(decide.keys, record.key)) {
+		for (auto &element : DecideKeyElements(decide.bound.keys, record.key)) {
 			keys.push_back(Over(element.Grouping()));
 			source_keys.push_back(element.Grouping().Copy());
 			// A row whose element is NULL is in no group (D5), unless the element is a column of a relation.
@@ -132,7 +132,7 @@ private:
 				if (known.column.table_index != table) {
 					continue;
 				}
-				for (auto &element : DecideKeyElements(decide.keys, known.key)) {
+				for (auto &element : DecideKeyElements(decide.bound.keys, known.key)) {
 					fields.push_back(Over(element.Grouping()));
 				}
 			}
@@ -150,7 +150,7 @@ private:
 		D_ASSERT(!record.arguments.empty());
 		ExprPtr counted = record.reads ? Over(*record.reads) : nullptr;
 		vector<ExprPtr> classes = keys;
-		for (auto &element : DecideKeyElements(decide.keys, record.class_key)) {
+		for (auto &element : DecideKeyElements(decide.bound.keys, record.class_key)) {
 			classes.push_back(Over(element.Grouping()));
 			// A row whose written `per` column is NULL is in no class, so it is not counted.
 			if (element.null_mode == DecideKeyNullMode::NO_GROUP) {

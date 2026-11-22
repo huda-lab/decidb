@@ -40,8 +40,8 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 
 void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 	idx_t l0_counter = 0;
-	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.variable_scopes,
-	                                  decide.keyed_scopes, decide.keys, decide.is_boolean_var);
+	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.bound.variable_scopes,
+	                                  decide.bound.keyed_scopes, decide.bound.keys, decide.bound.is_boolean_var);
 
 	std::function<void(unique_ptr<Expression> &, const string &, DecideEnclosingScope)> rewrite =
 	    [&](unique_ptr<Expression> &expr, const string &source_alias, DecideEnclosingScope scope) {
@@ -143,18 +143,18 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 			rewrite(body.expr, body.source_alias, body.scope);
 		}
 	});
-	if (decide.decide_objective) {
-		decide.SetObjective(optimizer.context, std::move(decide.decide_objective));
+	if (decide.bound.objective) {
+		decide.SetObjective(optimizer.context, std::move(decide.bound.objective));
 	}
-	auto constraints = std::move(decide.decide_constraints);
+	auto constraints = std::move(decide.bound.constraints);
 	decide.AddConstraint(optimizer.context, std::move(constraints));
 }
 
 void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 	vector<unique_ptr<Expression>> generated;
 	idx_t in_counter = 0;
-	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.variable_scopes,
-	                                  decide.keyed_scopes, decide.keys, decide.is_boolean_var);
+	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.bound.variable_scopes,
+	                                  decide.bound.keyed_scopes, decide.bound.keys, decide.bound.is_boolean_var);
 	// Every row an IN generates keeps its clause's `when` and `per`, and is one row per instance of the indicators'
 	// scope: an indicator is a column defined by the decision and its domain, so it is one per instance of their join.
 	DecideVarScopeInfo scope_of_in;
@@ -192,7 +192,7 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 		    scope_of_in = ScopeOf(decide, canonicalizer, *in.children[0]);
 		    for (idx_t i = 1; i < in.children.size(); i++)
 			    scope_of_in = JoinScopes(scope_of_in, ScopeOf(decide, canonicalizer, *in.children[i]));
-		    if (decide.is_boolean_var[target->binding.column_index] && k == 2) {
+		    if (decide.bound.is_boolean_var[target->binding.column_index] && k == 2) {
 			    double a, b;
 			    if (TryEvaluateFoldableDouble(optimizer.context, *in.children[1], a, FOLD_CATCH_ALL) &&
 			        TryEvaluateFoldableDouble(optimizer.context, *in.children[2], b, FOLD_CATCH_ALL) &&
@@ -257,7 +257,7 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 		    }
 		    expr = MakeTrueExpression(clause_alias);
 	    };
-	rewrite(decide.decide_constraints, DecideEnclosingScope(), string());
+	rewrite(decide.bound.constraints, DecideEnclosingScope(), string());
 	for (auto &constraint : generated)
 		decide.AddConstraint(optimizer.context, std::move(constraint));
 }

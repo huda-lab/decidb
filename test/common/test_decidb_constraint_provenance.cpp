@@ -257,7 +257,7 @@ TEST_CASE("A bound that is one value for the query is quoted by its value, not a
 	                            " MAXIMIZE SUM(x)) q");
 	auto *decide = FindProvenanceDecide(*plan);
 	REQUIRE(decide != nullptr);
-	auto &sources = decide->constraint_sources;
+	auto &sources = decide->bound.constraint_sources;
 	REQUIRE(sources.size() == 4);
 	// A data bound is an expression the user can offset; every other bound is one number.
 	CHECK(sources[0].rhs_kind == ConstraintSourceRhsKind::NUMERIC_FALLBACK);

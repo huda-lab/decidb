@@ -35,11 +35,11 @@ bool IsIntegralColumnType(const LogicalType &type) {
 //! built model is checked (`AssertBackendAcceptsBuiltModel`), as an internal error rather
 //! than a wrong answer.
 bool MayHaveIntegralColumn(const LogicalDecide &op) {
-	for (idx_t var = 0; var < op.decide_variables.size(); var++) {
-		if (op.is_boolean_var[var]) {
+	for (idx_t var = 0; var < op.bound.variables.size(); var++) {
+		if (op.bound.is_boolean_var[var]) {
 			return true;
 		}
-		if (IsIntegralColumnType(op.decide_variables[var]->return_type)) {
+		if (IsIntegralColumnType(op.bound.variables[var]->return_type)) {
 			return true;
 		}
 	}
@@ -129,14 +129,14 @@ struct RefusalText {
 optional_idx FirstQuadraticClauseLocation(const LogicalDecide &op, const DecideTree &tree) {
 	for (auto *constraint : HeldClauses(tree)) {
 		if (!constraint->product_groups.empty()) {
-			return DecideClauseLocation(op.constraint_sources, constraint->origin.source_clause_id);
+			return DecideClauseLocation(op.bound.constraint_sources, constraint->origin.source_clause_id);
 		}
 	}
 	throw InternalException("DECIDE solver gate found no quadratic clause to name");
 }
 
 RefusalText DescribeGap(const LogicalDecide &op, const DecideTree &tree, SolverModelClassGap gap) {
-	const auto objective = DecideObjectiveLocation(op.source_text);
+	const auto objective = DecideObjectiveLocation(op.bound.source_text);
 	switch (gap) {
 	case SolverModelClassGap::QUADRATIC_CONSTRAINTS:
 		return {"squaring or multiplying decisions in a constraint", FirstQuadraticClauseLocation(op, tree)};
@@ -148,8 +148,8 @@ RefusalText DescribeGap(const LogicalDecide &op, const DecideTree &tree, SolverM
 		if (group.weight_sign == 0) {
 			return {"a square scaled by a value whose sign is known only when the query runs", objective};
 		}
-		return {op.written_sense == DecideSense::MAXIMIZE ? "maximizing a squared decision"
-		                                                  : "minimizing a negated squared decision",
+		return {op.bound.sense == DecideSense::MAXIMIZE ? "maximizing a squared decision"
+		                                                : "minimizing a negated squared decision",
 		        objective};
 	}
 	case SolverModelClassGap::MIQP:

@@ -147,14 +147,14 @@ bool AffineFromTerms(Optimizer &optimizer, vector<DecideSplitTerm> &terms, const
 idx_t AddBooleanProduct(LogicalDecide &decide, DecideBilinearFunctionGroup &group, const string &clause_alias,
                         idx_t first, idx_t second) {
 	auto is_bool = [&](idx_t var) {
-		return decide.is_boolean_var[var];
+		return decide.bound.is_boolean_var[var];
 	};
 	const bool both_bool = is_bool(first) && is_bool(second);
 	const idx_t bool_var_idx = is_bool(first) ? first : second;
 	const idx_t other_var_idx = bool_var_idx == first ? second : first;
 
 	// The auxiliary, named by the column it will take.
-	string aux_name = BILINEAR_AUX_NAME_PREFIX + to_string(decide.decide_variables.size()) + "__";
+	string aux_name = BILINEAR_AUX_NAME_PREFIX + to_string(decide.bound.variables.size()) + "__";
 	// Bool×Bool auxiliary is semantically boolean but uses INTEGER type to match
 	// how user BOOLEAN variables are represented (INTEGER with 0/1 bounds).
 	// Using BOOLEAN would cause type-mismatch errors when binding arithmetic.
@@ -164,15 +164,15 @@ idx_t AddBooleanProduct(LogicalDecide &decide, DecideBilinearFunctionGroup &grou
 	// preserves integer-valuedness of the LHS through McCormick linearization,
 	// which matters for the strict-inequality rewrite (`< K → <= K-1`) in
 	// ilp_model_builder.cpp.
-	auto &other_type = decide.decide_variables[other_var_idx]->return_type;
+	auto &other_type = decide.bound.variables[other_var_idx]->return_type;
 	const bool other_is_integer_typed = other_type != LogicalType::DOUBLE;
 	LogicalType aux_type = (both_bool || other_is_integer_typed) ? LogicalType::INTEGER : LogicalType::DOUBLE;
 	// F6: a diagnosis, and a plan, name the auxiliary by the user's product (b * x).
-	string label = "(" + RenderForPlan(*decide.decide_variables[first], decide) + " * " +
-	               RenderForPlan(*decide.decide_variables[second], decide) + ")";
+	string label = "(" + RenderForPlan(*decide.bound.variables[first], decide) + " * " +
+	               RenderForPlan(*decide.bound.variables[second], decide) + ")";
 	// The auxiliary has one instance per instance of the finer of its factors (a query-wide factor has one for all): a
 	// query-wide product is one column and a keyed one a column per key, not a copy per row.
-	auto scope = JoinScopes(decide.variable_scopes[first], decide.variable_scopes[second]);
+	auto scope = JoinScopes(decide.bound.variable_scopes[first], decide.bound.variable_scopes[second]);
 	idx_t aux_idx = AddAuxiliaryDecision(decide, aux_name, aux_type, both_bool, scope, label);
 	// A product takes its factor's sign (`b * x` is x where b = 1, -5 for x >= -5): no default floor of 0. Its
 	// column is floored at the product's range, min(0, the factor's floor) (LinearizeBilinear). An AND of two
@@ -231,7 +231,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 			// Each side is an affine expression in the decisions, and the product distributes over its terms.
 			Affine left, right;
 			auto is_bool = [&](idx_t var) {
-				return decide.is_boolean_var[var];
+				return decide.bound.is_boolean_var[var];
 			};
 			auto has_bool = [&](const Affine &affine) {
 				return std::any_of(affine.terms.begin(), affine.terms.end(),
@@ -291,7 +291,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 				}
 
 				auto column = [&](idx_t var) -> unique_ptr<Expression> {
-					auto &ref = decide.decide_variables[var]->Cast<BoundColumnRefExpression>();
+					auto &ref = decide.bound.variables[var]->Cast<BoundColumnRefExpression>();
 					return make_uniq<BoundColumnRefExpression>(ref.alias, ref.return_type, ref.binding);
 				};
 				// The product's coefficient, its data factors and sign, scales every term.

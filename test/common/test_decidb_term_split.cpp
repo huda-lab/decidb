@@ -40,7 +40,7 @@ struct CanonicalObjective {
 
 //! The terms of the objective's single reducer body.
 duckdb::vector<DecideSplitTerm> SplitObjectiveBody(Connection &con, CanonicalObjective &objective) {
-	auto atoms = ReadCanonicalAtoms(*objective.decide->decide_objective, objective.decide->decide_index);
+	auto atoms = ReadCanonicalAtoms(*objective.decide->bound.objective, objective.decide->decide_index);
 	REQUIRE(atoms.size() == 1);
 	REQUIRE(atoms[0].term->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE);
 	auto &aggregate = atoms[0].term->Cast<BoundAggregateExpression>();
@@ -63,7 +63,7 @@ TEST_CASE("Canonicalization replaces norm with its definition and keeps the writ
 	for (auto &test :
 	     {Case {"norm(x - t, 1)", "sum"}, Case {"norm(x - t, 2)", "sum"}, Case {"norm(x, 'inf')", "max"}}) {
 		CanonicalObjective objective(con, test.objective);
-		auto atoms = ReadCanonicalAtoms(*objective.decide->decide_objective, objective.decide->decide_index);
+		auto atoms = ReadCanonicalAtoms(*objective.decide->bound.objective, objective.decide->decide_index);
 		REQUIRE(atoms.size() == 1);
 		auto &aggregate = atoms[0].term->Cast<BoundAggregateExpression>();
 		REQUIRE(StringUtil::Lower(aggregate.function.name) == test.reducer);
@@ -72,7 +72,7 @@ TEST_CASE("Canonicalization replaces norm with its definition and keeps the writ
 	}
 	// L0 needs indicator variables, so its marker stays for the optimizer.
 	CanonicalObjective l0(con, "norm(x, 0)");
-	auto atoms = ReadCanonicalAtoms(*l0.decide->decide_objective, l0.decide->decide_index);
+	auto atoms = ReadCanonicalAtoms(*l0.decide->bound.objective, l0.decide->decide_index);
 	REQUIRE(atoms.size() == 1);
 	REQUIRE(HasDecideTag(atoms[0].term->GetAlias(), NORM_MARKER_TAG_PREFIX));
 }
@@ -81,7 +81,7 @@ TEST_CASE("Canonical atoms carry the sign and the factor canonicalization left o
 	DuckDB db(nullptr);
 	Connection con(db);
 	CanonicalObjective objective(con, "SUM(w * x) - 2 * SUM(y)");
-	auto atoms = ReadCanonicalAtoms(*objective.decide->decide_objective, objective.decide->decide_index);
+	auto atoms = ReadCanonicalAtoms(*objective.decide->bound.objective, objective.decide->decide_index);
 	REQUIRE(atoms.size() == 2);
 	REQUIRE(atoms[0].sign == 1);
 	REQUIRE(!atoms[0].scaled);

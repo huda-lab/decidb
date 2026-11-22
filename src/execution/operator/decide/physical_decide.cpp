@@ -119,7 +119,22 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 		}
 	}
 	accounts.insert(accounts.end(), run_time_accounts.begin(), run_time_accounts.end());
-	auto result = RenderDecideParams(*tree, display, accounts, tree.get());
+	DecidePlanParams plan {tree->decide_variables,
+	                       tree->num_auxiliary_vars,
+	                       tree->keyed_scopes,
+	                       tree->keys,
+	                       tree->frames,
+	                       tree->written_sense,
+	                       display.decide_index,
+	                       display.source_text,
+	                       display.aux_var_expressions,
+	                       *display.decide_constraints,
+	                       display.constraint_sources,
+	                       display.decide_objective.get(),
+	                       display.written_objective,
+	                       display.canonical_objective,
+	                       display.objective_canonical_differs};
+	auto result = RenderDecideParams(plan, accounts, tree.get());
 	SetEstimatedCardinality(result, estimated_cardinality);
 	return result;
 }

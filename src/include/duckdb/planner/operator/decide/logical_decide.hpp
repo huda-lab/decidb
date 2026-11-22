@@ -316,28 +316,89 @@ struct DecideOwnedBody {
 	DecideEnclosingScope scope;
 };
 
+//! The bound DECIDE part of a query: its decisions, its clauses and what they name. The binder fills it, and it is
+//! moved whole into LogicalDecide.
+struct BoundDecide {
+	// The variables to be decided (e.g., x, y)
+	vector<unique_ptr<Expression>> variables;
+
+	// Per-variable boolean flag: true if the variable was declared IS BOOLEAN.
+	// Indexed by position in decide_variables. Auxiliary variables appended later
+	// should also push_back their boolean status.
+	vector<bool> is_boolean_var;
+
+	//! Per-variable scope assignment (row / keyed / query-wide).
+	//! Defaults to row-scoped; keyed_scope_idx indexes keyed_scopes.
+	vector<DecideVarScopeInfo> variable_scopes;
+
+	//! Every key the clause writes, one entry per set of columns (DecideKey). Scopes,
+	//! reducers' `by`, the `per K:` wrappers and the scope checks index it.
+	vector<DecideKey> keys;
+
+	//! Every key scope: of `per K:` and `sum(T: ...)`, one per key. Empty when no decision
+	//! or reducer is keyed.
+	vector<KeyedScopeInfo> keyed_scopes;
+
+	//! Every frame selector written in the clause, indexed by FRAME_TAG_PREFIX tags.
+	vector<DecideFrameSpec> frames;
+
+	// The bound constraints expression
+	unique_ptr<Expression> constraints;
+
+	//! Stable source display registry, indexed by source_clause_id.
+	vector<ConstraintSourceInfo> constraint_sources;
+
+	//! The bound objective function expression, minimized.
+	unique_ptr<Expression> objective;
+
+	//! The direction the objective was written in (MINIMIZE, MAXIMIZE, or FEASIBILITY for none). Read only by what
+	//! shows the user the objective: a message, EXPLAIN, and a value shown (a timeout's best objective so far,
+	//! DIAGNOSE's achievable objective). Everything else reads `decide_objective`, which is always a minimization
+	//! (DecideCanonicalizer::CanonicalizeObjective): a MAXIMIZE objective is its negation, carried by the sign of each
+	//! term.
+	DecideSense sense = DecideSense::FEASIBILITY;
+
+	// Additive constant peeled from the objective body by
+	// DecideCanonicalizer::CanonicalizeObjective (e.g. the `3` in
+	// `MAXIMIZE SUM(x) + 3`, which is the `-3` of the minimization). It moves no argmax/argmin; it travels to the
+	// solver model's objective constant (SolverModel::obj_constant), so an objective value a solve reports is the
+	// minimized objective's, which a shown value negates for a MAXIMIZE query. SetObjective ADDS
+	// to it, so a later optimizer rewrite cannot discard the user's constant.
+	// Zero when nothing was peeled.
+	double objective_constant_offset = 0.0;
+
+	//! The DECIDE tail as the user wrote it, with where the parser found each expression in it (the Clang
+	//! SourceManager pattern). A bound node's query location names its span; a message cuts the text instead of
+	//! reprinting the node (MSG-1).
+	DecideSourceText source_text;
+
+	//! The variant signature of every scoped expression with a field (D70), indexed by SIGNATURE_TAG_PREFIX on a
+	//! `per K:` wrapper and by KeyedScopeInfo::signature for a reducer's own `per`. Built by the planner, right after
+	//! canonicalization.
+	vector<DecideSignature> signatures;
+
+	//! The objective's signature: it is produced once, so execution refuses a second instance (D72). INVALID_INDEX when
+	//! the objective has no field.
+	idx_t objective_signature = DConstants::INVALID_INDEX;
+
+	//! Every expression held here, each slot once.
+	void EnumerateExpressions(const std::function<void(unique_ptr<Expression> &expression)> &callback);
+};
+
 class LogicalDecide : public LogicalOperator {
 public:
 	static constexpr const LogicalOperatorType TYPE = LogicalOperatorType::LOGICAL_DECIDE;
 
 public:
-	LogicalDecide(idx_t decide_index, vector<unique_ptr<Expression>> decide_variables,
-	              unique_ptr<Expression> decide_constraints, DecideSense written_sense,
-	              unique_ptr<Expression> decide_objective);
+	LogicalDecide(idx_t decide_index, BoundDecide bound);
 
 	LogicalDecide();
 
 	// The table index for the new columns
 	idx_t decide_index;
 
-	// The variables to be decided (e.g., x, y)
-	vector<unique_ptr<Expression>> decide_variables;
-
-	// The bound constraints expression
-	unique_ptr<Expression> decide_constraints;
-
-	//! Stable source display registry, indexed by source_clause_id.
-	vector<ConstraintSourceInfo> constraint_sources;
+	//! The bound DECIDE part, as the binder made it and as the rewrites change it
+	BoundDecide bound;
 
 	//! The objective as WRITTEN and as CANONICALIZED, the objective's counterpart to
 	//! `constraint_sources`. The objective is one side of a comparison with no relation
@@ -352,11 +413,6 @@ public:
 	string canonical_objective;
 	bool objective_canonical_differs = false;
 
-	//! The DECIDE tail as the user wrote it, with where the parser found each expression in it (the Clang
-	//! SourceManager pattern). A bound node's query location names its span; a message cuts the text instead of
-	//! reprinting the node (MSG-1).
-	DecideSourceText source_text;
-
 	//! The user's own name for every column reachable from the DECIDE input, captured
 	//! from the BindContext where name resolution happens. This is the ONLY place the
 	//! user's spelling exists for a source that has no catalog entry: a `t(a, b, c)`
@@ -369,16 +425,6 @@ public:
 	//! serializer carries the record directly.
 	vector<DecideSourceColumnName> source_columns;
 
-	//! The direction the objective was written in (MINIMIZE, MAXIMIZE, or FEASIBILITY for none). Read only by what
-	//! shows the user the objective: a message, EXPLAIN, and a value shown (a timeout's best objective so far,
-	//! DIAGNOSE's achievable objective). Everything else reads `decide_objective`, which is always a minimization
-	//! (DecideCanonicalizer::CanonicalizeObjective): a MAXIMIZE objective is its negation, carried by the sign of each
-	//! term.
-	DecideSense written_sense;
-
-	//! The bound objective function expression, minimized.
-	unique_ptr<Expression> decide_objective;
-
 	//! The `DIAGNOSE` prefix, carried from the statement that was written. True means
 	//! this query was asked to explain its failure: the operator arms the diagnosis
 	//! engines and reports its findings as a relation instead of raising. False — the
@@ -389,22 +435,8 @@ public:
 	//! of a setting; it travels parser → binder → here → PhysicalDecide.
 	bool diagnose = false;
 
-	// Additive constant peeled from the objective body by
-	// DecideCanonicalizer::CanonicalizeObjective (e.g. the `3` in
-	// `MAXIMIZE SUM(x) + 3`, which is the `-3` of the minimization). It moves no argmax/argmin; it travels to the
-	// solver model's objective constant (SolverModel::obj_constant), so an objective value a solve reports is the
-	// minimized objective's, which a shown value negates for a MAXIMIZE query. SetObjective ADDS
-	// to it, so a later optimizer rewrite cannot discard the user's constant.
-	// Zero when nothing was peeled.
-	double objective_constant_offset = 0.0;
-
 	// Number of auxiliary variables at the end of decide_variables (created by binder and optimizer)
 	idx_t num_auxiliary_vars = 0;
-
-	// Per-variable boolean flag: true if the variable was declared IS BOOLEAN.
-	// Indexed by position in decide_variables. Auxiliary variables appended later
-	// should also push_back their boolean status.
-	vector<bool> is_boolean_var;
 
 	//! The intact Boolean-product expressions and the plan-time helper allocation needed by stage 05. Executable
 	//! bilinear links are materialized from these specs as BOOLEAN_PRODUCT F nodes in DecideTree.
@@ -588,36 +620,11 @@ public:
 	//! takes it, since a row in no group is no member, but the domain check reads it as written.
 	vector<UserBoundSpec> member_singleton_row_bounds;
 
-	// --- Key scopes ---
-
-	//! Every key the clause writes, one entry per set of columns (DecideKey). Scopes,
-	//! reducers' `by`, the `per K:` wrappers and the scope checks index it.
-	vector<DecideKey> keys;
-
-	//! Every key scope: of `per K:` and `sum(T: ...)`, one per key. Empty when no decision
-	//! or reducer is keyed.
-	vector<KeyedScopeInfo> keyed_scopes;
-
-	//! Per-variable scope assignment (row / keyed / query-wide).
-	//! Defaults to row-scoped; keyed_scope_idx indexes keyed_scopes.
-	vector<DecideVarScopeInfo> variable_scopes;
-
-	//! Every frame selector written in the clause, indexed by FRAME_TAG_PREFIX tags.
-	vector<DecideFrameSpec> frames;
-
 	//! The run-time requirements of the values the clauses read (language/guide.md §7.3), in the order the solver makes
 	//! them: each a BOOLEAN over the source row and the bounds' columns, true on a row whose value is valid and raising
 	//! on any other. The bound-side rewrite and the ABS rewrite append them (decide_rewrite::AddValueCheck); a direct
 	//! plan makes them on the source rows, and the tree evaluates them on the rows it reads.
 	vector<unique_ptr<Expression>> value_checks;
-
-	//! The variant signature of every scoped expression with a field (D70), indexed by SIGNATURE_TAG_PREFIX on a
-	//! `per K:` wrapper and by KeyedScopeInfo::signature for a reducer's own `per`. Built by the planner, right after
-	//! canonicalization.
-	vector<DecideSignature> signatures;
-	//! The objective's signature: it is produced once, so execution refuses a second instance (D72). INVALID_INDEX when
-	//! the objective has no field.
-	idx_t objective_signature = DConstants::INVALID_INDEX;
 
 	//! The reducers the bounds read from the data, in the order the bound-side rewrite met them. The tree computes each
 	//! on the rows it reads (language/guide.md §6.1); a direct plan builds each as a side table

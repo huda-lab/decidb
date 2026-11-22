@@ -67,7 +67,8 @@ class DecideLinearFormBuilder {
 public:
 	DecideLinearFormBuilder(ClientContext &context, LogicalDecide &op, DecideTreeConstruction &tree)
 	    : context(context), op(op), tree(tree), decide_index(op.decide_index),
-	      canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys, op.is_boolean_var),
+	      canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes, op.bound.keys,
+	                    op.bound.is_boolean_var),
 	      splitter(context, op) {
 		// A frame's values are columns after the input's (DecideFrameColumn).
 		frame_reads.column_base = op.children.empty() ? 0 : op.children[0]->types.size();
@@ -75,7 +76,7 @@ public:
 
 	void Build() {
 		ForEachScopedConstraintLeaf(
-		    *op.decide_constraints,
+		    *op.bound.constraints,
 		    [&](const Expression &leaf, const DecideEnclosingScope &scope) { AnalyzeConstraint(leaf, scope); });
 		// Tree-owned nonlinear definition rows are built beneath their F nodes, while their placeholders preserve the
 		// clause-list position. Lower the retained rows through the same compiler as ordinary clauses.
@@ -112,8 +113,8 @@ public:
 				break;
 			}
 		}
-		if (op.decide_objective) {
-			AnalyzeObjective(op.decide_objective);
+		if (op.bound.objective) {
+			AnalyzeObjective(op.bound.objective);
 		}
 		// The reducers the value rewrite lifted into helper decisions are lowered too; a range frame's helper also
 		// reads its `else`, at the window's anchor.
@@ -240,7 +241,7 @@ private:
 		column.frame = frame;
 		column.value = value ? value->Copy() : nullptr;
 		column.type = value ? value->return_type : LogicalType::BOOLEAN;
-		auto &fallback = op.frames[frame].fallback;
+		auto &fallback = op.bound.frames[frame].fallback;
 		const bool reads_fallback = kind == DecideFrameColumn::Kind::VALUE || kind == DecideFrameColumn::Kind::REDUCED;
 		if (reads_fallback && fallback) {
 			// The binder gave payload and fallback one type (BindDecideFrame): a point's value, a range's reducer
@@ -250,7 +251,7 @@ private:
 			                         : column.type;
 			if (fallback->return_type != payload_type) {
 				throw InternalException("DECIDE: %s reads a payload of type %s and an else of type %s",
-				                        op.frames[frame].text, payload_type.ToString(),
+				                        op.bound.frames[frame].text, payload_type.ToString(),
 				                        fallback->return_type.ToString());
 			}
 			column.fallback = fallback->Copy();
@@ -262,7 +263,7 @@ private:
 	//! The chunk column holding `value` read the way `kind` says for frame `frame`.
 	unique_ptr<Expression> FrameColumnRef(DecideFrameColumn::Kind kind, idx_t frame, const Expression *value) {
 		auto slot = FrameColumnSlot(kind, frame, value);
-		auto name = op.frames[frame].spelling;
+		auto name = op.bound.frames[frame].spelling;
 		AddDecideTag(name, FRAME_COLUMN_TAG);
 		return make_uniq<BoundReferenceExpression>(std::move(name), frame_reads.columns[slot].type,
 		                                           frame_reads.column_base + slot);
@@ -288,13 +289,13 @@ private:
 	//! `else` read at the row itself, its coefficient a FALLBACK column; each times the frame's factor.
 	void AppendFrameTerms(DecideSplitTerm &term, vector<DecideTerm> &out) {
 		auto frame = term.frame;
-		if (frame >= op.frames.size() || !term.coefficient) {
+		if (frame >= op.bound.frames.size() || !term.coefficient) {
 			throw InternalException("DECIDE: a frame marker names no frame of the plan");
 		}
 		// A range over decisions became a helper decision before any rewrite (RewriteFrameRanges).
-		if (op.frames[frame].range) {
+		if (op.bound.frames[frame].range) {
 			throw InternalException("DECIDE: a range frame over decisions reached term extraction: %s",
-			                        op.frames[frame].text);
+			                        op.bound.frames[frame].text);
 		}
 		for (auto &inner : term.inner) {
 			AppendFrameColumnTerm(frame, DecideFrameColumn::Kind::READ, inner, *term.coefficient, term.sign, out);
@@ -313,7 +314,7 @@ private:
 			ThrowOpaqueTerm(inner);
 		}
 		if (inner.degree > 1) {
-			throw InternalException("DECIDE: %s reads a term that is not linear", op.frames[frame].text);
+			throw InternalException("DECIDE: %s reads a term that is not linear", op.bound.frames[frame].text);
 		}
 		// A null coefficient is 1 (DecideSplitTerm): the column reads it as written.
 		if (!inner.coefficient) {
@@ -330,8 +331,8 @@ private:
 	//! Nothing for a frame with none.
 	void AppendFallbackTerms(idx_t frame, const Expression &factor, int sign, vector<DecideTerm> &out) {
 		auto &fallback_decisions = frame_reads.fallback_decisions;
-		fallback_decisions.resize(op.frames.size());
-		auto &spec = op.frames[frame];
+		fallback_decisions.resize(op.bound.frames.size());
+		auto &spec = op.bound.frames[frame];
 		if (!spec.fallback) {
 			return;
 		}
@@ -352,10 +353,10 @@ private:
 	//! (FrameColumnSlot keeps each once).
 	void RecordFallbackColumns() {
 		auto &columns = frame_reads.fallback_columns;
-		columns.assign(op.frames.size(), vector<idx_t>());
-		frame_reads.fallback_decisions.resize(op.frames.size());
+		columns.assign(op.bound.frames.size(), vector<idx_t>());
+		frame_reads.fallback_decisions.resize(op.bound.frames.size());
 		const BoundConstantExpression one(Value::INTEGER(1));
-		for (idx_t f = 0; f < op.frames.size(); f++) {
+		for (idx_t f = 0; f < op.bound.frames.size(); f++) {
 			vector<DecideTerm> terms;
 			AppendFallbackTerms(f, one, 1, terms);
 			for (auto &term : terms) {
@@ -399,12 +400,12 @@ private:
 		if (TryGetDecideFrame(*expr, frame)) {
 			if (FindDecideVariable(*expr) != DConstants::INVALID_INDEX) {
 				throw InternalException("DECIDE: a frame over decisions reached evaluation unextracted: %s",
-				                        op.frames[frame].text);
+				                        op.bound.frames[frame].text);
 			}
 			auto &marker = expr->Cast<BoundAggregateExpression>();
 			// A point reads its payload at one row; a range reduces its payload's values, its `else` read where a
 			// position is missing.
-			auto value = op.frames[frame].range
+			auto value = op.bound.frames[frame].range
 			                 ? FrameColumnRef(DecideFrameColumn::Kind::REDUCED, frame, &marker)
 			                 : FrameColumnRef(DecideFrameColumn::Kind::VALUE, frame, marker.children[0].get());
 			// The marker's parent was bound to the marker's type.
@@ -476,7 +477,7 @@ private:
 	}
 
 	void LowerFramesInPreparedModel() {
-		if (op.frames.empty()) {
+		if (op.bound.frames.empty()) {
 			return;
 		}
 		// Twice: the frames first, then each reducer over data reading one, whose column follows every frame's.
@@ -731,9 +732,9 @@ private:
 	//! key, so a keyed scope with it is a helper's. A decision that has several instances over the kept rows is refused
 	//! when the objective is read (DecideObjectiveTwice).
 	bool IsQueryWideDecision(idx_t var_idx) const {
-		auto &scope = op.variable_scopes[var_idx];
+		auto &scope = op.bound.variable_scopes[var_idx];
 		return scope.IsGlobal() ||
-		       (scope.IsKeyed() && op.keyed_scopes[scope.keyed_scope_idx].key == DConstants::INVALID_INDEX);
+		       (scope.IsKeyed() && op.bound.keyed_scopes[scope.keyed_scope_idx].key == DConstants::INVALID_INDEX);
 	}
 
 	//! Every decision `expr` reads is query-wide: one column each, whichever row reads it.
@@ -1028,9 +1029,9 @@ private:
 				}
 				if (holds_reducer ||
 				    (obj.product_groups.size() != group_before && !ReadsOnlyQueryWideDecisions(expr))) {
-					throw NotImplementedException(expr,
-					                              "'%s' multiplies decisions outside a reducer, which is not supported",
-					                              RenderDecideSource(expr, op.source_text, op.keyed_scopes, &op.keys));
+					throw NotImplementedException(
+					    expr, "'%s' multiplies decisions outside a reducer, which is not supported",
+					    RenderDecideSource(expr, op.bound.source_text, op.bound.keyed_scopes, &op.bound.keys));
 				}
 				continue;
 			}

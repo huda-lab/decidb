@@ -140,7 +140,7 @@ void ColumnBindingResolver::VisitOperator(LogicalOperator &op) {
 
 		// Add DECIDE variables to ignored bindings so they are not resolved to physical
 		// columns: they name the operator's own output, not an input column.
-		for (auto &expr : decide_op.decide_variables) {
+		for (auto &expr : decide_op.bound.variables) {
 			if (expr->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 				ignored_bindings.push_back(expr->Cast<BoundColumnRefExpression>().binding);
 			}

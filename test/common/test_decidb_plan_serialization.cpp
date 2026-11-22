@@ -18,10 +18,10 @@ namespace {
 
 //! The key table came through a round trip whole: every key's text and elements.
 void RequireSameKeys(const LogicalDecide &after, const LogicalDecide &before) {
-	REQUIRE(after.keys.size() == before.keys.size());
-	for (idx_t i = 0; i < before.keys.size(); i++) {
-		auto &key = before.keys[i];
-		auto &copy = after.keys[i];
+	REQUIRE(after.bound.keys.size() == before.bound.keys.size());
+	for (idx_t i = 0; i < before.bound.keys.size(); i++) {
+		auto &key = before.bound.keys[i];
+		auto &copy = after.bound.keys[i];
 		REQUIRE(copy.text == key.text);
 		REQUIRE(copy.written_as_by == key.written_as_by);
 		REQUIRE(copy.elements.size() == key.elements.size());
@@ -35,8 +35,8 @@ void RequireSameKeys(const LogicalDecide &after, const LogicalDecide &before) {
 
 //! The index of the key written as `text`.
 idx_t KeyWritten(const LogicalDecide &decide, const string &text) {
-	for (idx_t i = 0; i < decide.keys.size(); i++) {
-		if (decide.keys[i].text == text) {
+	for (idx_t i = 0; i < decide.bound.keys.size(); i++) {
+		if (decide.bound.keys[i].text == text) {
 			return i;
 		}
 	}
@@ -452,17 +452,17 @@ TEST_CASE("A placed frame survives a serialization round trip", "[decidb]") {
 	                            "MAXIMIZE sum(x)");
 	auto *before = FindDecide(*plan);
 	REQUIRE(before != nullptr);
-	REQUIRE(before->frames.size() == 2);
-	auto &point = before->frames[0];
+	REQUIRE(before->bound.frames.size() == 2);
+	auto &point = before->bound.frames[0];
 	REQUIRE(point.rows != nullptr);
 	REQUIRE(point.timeline_names == duckdb::vector<string> {"site.s_key"});
 	REQUIRE(point.order_name == "site.cap");
 	REQUIRE(point.partition_key != DConstants::INVALID_INDEX);
 	REQUIRE_FALSE(point.partition_subject.empty());
-	auto &reduced = before->frames[1];
+	auto &reduced = before->bound.frames[1];
 	REQUIRE(reduced.timeline_key != DConstants::INVALID_INDEX);
 	bool frame_field = false;
-	for (auto &signature : before->signatures) {
+	for (auto &signature : before->bound.signatures) {
 		for (auto &field : signature.fields) {
 			frame_field = frame_field || (field.kind == DecideSignatureFieldKind::FRAME && field.frame == 0);
 		}
@@ -472,10 +472,10 @@ TEST_CASE("A placed frame survives a serialization round trip", "[decidb]") {
 	auto copied = RoundTrip(con, *plan);
 	auto *after = FindDecide(*copied);
 	REQUIRE(after != nullptr);
-	REQUIRE(after->frames.size() == before->frames.size());
-	for (idx_t i = 0; i < before->frames.size(); i++) {
-		auto &b = before->frames[i];
-		auto &a = after->frames[i];
+	REQUIRE(after->bound.frames.size() == before->bound.frames.size());
+	for (idx_t i = 0; i < before->bound.frames.size(); i++) {
+		auto &b = before->bound.frames[i];
+		auto &a = after->bound.frames[i];
 		REQUIRE(a.from == b.from);
 		REQUIRE(a.from_k == b.from_k);
 		REQUIRE(a.descending == b.descending);
@@ -490,12 +490,12 @@ TEST_CASE("A placed frame survives a serialization round trip", "[decidb]") {
 		REQUIRE(a.partition_key == b.partition_key);
 		REQUIRE(a.partition_subject == b.partition_subject);
 	}
-	REQUIRE(after->signatures.size() == before->signatures.size());
-	for (idx_t i = 0; i < before->signatures.size(); i++) {
-		REQUIRE(after->signatures[i].fields.size() == before->signatures[i].fields.size());
-		for (idx_t j = 0; j < before->signatures[i].fields.size(); j++) {
-			REQUIRE(after->signatures[i].fields[j].kind == before->signatures[i].fields[j].kind);
-			REQUIRE(after->signatures[i].fields[j].frame == before->signatures[i].fields[j].frame);
+	REQUIRE(after->bound.signatures.size() == before->bound.signatures.size());
+	for (idx_t i = 0; i < before->bound.signatures.size(); i++) {
+		REQUIRE(after->bound.signatures[i].fields.size() == before->bound.signatures[i].fields.size());
+		for (idx_t j = 0; j < before->bound.signatures[i].fields.size(); j++) {
+			REQUIRE(after->bound.signatures[i].fields[j].kind == before->bound.signatures[i].fields[j].kind);
+			REQUIRE(after->bound.signatures[i].fields[j].frame == before->bound.signatures[i].fields[j].frame);
 		}
 	}
 }
@@ -514,19 +514,19 @@ TEST_CASE("A placed range frame survives a serialization round trip", "[decidb]"
 	                            "MAXIMIZE sum(x)");
 	auto *before = FindDecide(*plan);
 	REQUIRE(before != nullptr);
-	REQUIRE(before->frames.size() == 2);
-	REQUIRE(before->frames[0].range);
-	REQUIRE(before->frames[0].reducer == "sum");
-	REQUIRE(before->frames[1].reducer == "avg");
-	REQUIRE(before->frames[1].fallback != nullptr);
+	REQUIRE(before->bound.frames.size() == 2);
+	REQUIRE(before->bound.frames[0].range);
+	REQUIRE(before->bound.frames[0].reducer == "sum");
+	REQUIRE(before->bound.frames[1].reducer == "avg");
+	REQUIRE(before->bound.frames[1].fallback != nullptr);
 
 	auto copied = RoundTrip(con, *plan);
 	auto *after = FindDecide(*copied);
 	REQUIRE(after != nullptr);
-	REQUIRE(after->frames.size() == before->frames.size());
-	for (idx_t i = 0; i < before->frames.size(); i++) {
-		auto &b = before->frames[i];
-		auto &a = after->frames[i];
+	REQUIRE(after->bound.frames.size() == before->bound.frames.size());
+	for (idx_t i = 0; i < before->bound.frames.size(); i++) {
+		auto &b = before->bound.frames[i];
+		auto &a = after->bound.frames[i];
 		REQUIRE(a.range == b.range);
 		REQUIRE(a.reducer == b.reducer);
 		REQUIRE(a.from == b.from);
@@ -564,29 +564,30 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 
 	// Keyed scopes and the keys they name, which the previous hand-written serializer
 	// dropped entirely.
-	REQUIRE(after->keyed_scopes.size() == before->keyed_scopes.size());
-	REQUIRE(after->keyed_scopes.size() == 1);
-	REQUIRE(after->keyed_scopes[0].key == before->keyed_scopes[0].key);
-	REQUIRE(after->keyed_scopes[0].scoped_variable_indices == before->keyed_scopes[0].scoped_variable_indices);
-	REQUIRE(!before->keys[before->keyed_scopes[0].key].elements.empty());
+	REQUIRE(after->bound.keyed_scopes.size() == before->bound.keyed_scopes.size());
+	REQUIRE(after->bound.keyed_scopes.size() == 1);
+	REQUIRE(after->bound.keyed_scopes[0].key == before->bound.keyed_scopes[0].key);
+	REQUIRE(after->bound.keyed_scopes[0].scoped_variable_indices ==
+	        before->bound.keyed_scopes[0].scoped_variable_indices);
+	REQUIRE(!before->bound.keys[before->bound.keyed_scopes[0].key].elements.empty());
 	RequireSameKeys(*after, *before);
 
 	// Per-variable scope assignment.
-	REQUIRE(after->variable_scopes.size() == before->variable_scopes.size());
-	for (idx_t i = 0; i < before->variable_scopes.size(); i++) {
-		REQUIRE(after->variable_scopes[i].scope == before->variable_scopes[i].scope);
-		REQUIRE(after->variable_scopes[i].keyed_scope_idx == before->variable_scopes[i].keyed_scope_idx);
+	REQUIRE(after->bound.variable_scopes.size() == before->bound.variable_scopes.size());
+	for (idx_t i = 0; i < before->bound.variable_scopes.size(); i++) {
+		REQUIRE(after->bound.variable_scopes[i].scope == before->bound.variable_scopes[i].scope);
+		REQUIRE(after->bound.variable_scopes[i].keyed_scope_idx == before->bound.variable_scopes[i].keyed_scope_idx);
 	}
 
 	// Display provenance: the span of each clause and of its canonical left side, and the sides canonicalization
 	// merged.
-	REQUIRE(after->constraint_sources.size() == before->constraint_sources.size());
-	REQUIRE(!after->constraint_sources.empty());
+	REQUIRE(after->bound.constraint_sources.size() == before->bound.constraint_sources.size());
+	REQUIRE(!after->bound.constraint_sources.empty());
 	bool saw_written_form = false;
 	bool saw_between_halves = false;
-	for (idx_t i = 0; i < before->constraint_sources.size(); i++) {
-		auto &b = before->constraint_sources[i];
-		auto &a = after->constraint_sources[i];
+	for (idx_t i = 0; i < before->bound.constraint_sources.size(); i++) {
+		auto &b = before->bound.constraint_sources[i];
+		auto &a = after->bound.constraint_sources[i];
 		REQUIRE(a.canonical_lhs == b.canonical_lhs);
 		REQUIRE(a.canonical_rhs == b.canonical_rhs);
 		REQUIRE(a.canonical_cmp == b.canonical_cmp);
@@ -612,19 +613,19 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 	REQUIRE(after->written_objective == before->written_objective);
 	REQUIRE(after->canonical_objective == before->canonical_objective);
 	// The clause as the user wrote it, with the span of each expression in it.
-	REQUIRE(before->source_text.HasText());
-	REQUIRE(!before->source_text.spans.empty());
-	REQUIRE(after->source_text.text == before->source_text.text);
-	REQUIRE(after->source_text.start == before->source_text.start);
-	REQUIRE(after->source_text.tail_start == before->source_text.tail_start);
-	REQUIRE(after->source_text.spans == before->source_text.spans);
-	REQUIRE(after->objective_constant_offset == before->objective_constant_offset);
-	REQUIRE(after->written_sense == before->written_sense);
-	REQUIRE(after->is_boolean_var == before->is_boolean_var);
+	REQUIRE(before->bound.source_text.HasText());
+	REQUIRE(!before->bound.source_text.spans.empty());
+	REQUIRE(after->bound.source_text.text == before->bound.source_text.text);
+	REQUIRE(after->bound.source_text.start == before->bound.source_text.start);
+	REQUIRE(after->bound.source_text.tail_start == before->bound.source_text.tail_start);
+	REQUIRE(after->bound.source_text.spans == before->bound.source_text.spans);
+	REQUIRE(after->bound.objective_constant_offset == before->bound.objective_constant_offset);
+	REQUIRE(after->bound.sense == before->bound.sense);
+	REQUIRE(after->bound.is_boolean_var == before->bound.is_boolean_var);
 	REQUIRE(after->num_auxiliary_vars == before->num_auxiliary_vars);
-	REQUIRE(after->decide_variables.size() == before->decide_variables.size());
-	REQUIRE(after->decide_constraints != nullptr);
-	REQUIRE(after->decide_objective != nullptr);
+	REQUIRE(after->bound.variables.size() == before->bound.variables.size());
+	REQUIRE(after->bound.constraints != nullptr);
+	REQUIRE(after->bound.objective != nullptr);
 }
 
 TEST_CASE("A clause is stored with its span, and the canonicalizer reports whether it changed it", "[decidb]") {
@@ -637,14 +638,14 @@ TEST_CASE("A clause is stored with its span, and the canonicalizer reports wheth
 	                            "MAXIMIZE SUM(ship)");
 	auto *decide = FindDecide(*plan);
 	REQUIRE(decide != nullptr);
-	auto &sources = decide->constraint_sources;
+	auto &sources = decide->bound.constraint_sources;
 	REQUIRE(sources.size() == 4);
 	// The span cuts the clause as written, whatever its canonical form (`50 >= SUM(ship)` is `SUM(ship) <= 50`).
-	REQUIRE(QuoteWrittenClause(sources, 0, decide->source_text) == "SUM(ship) <= 100");
-	REQUIRE(QuoteWrittenClause(sources, 1, decide->source_text) == "50 >= SUM(ship)");
+	REQUIRE(QuoteWrittenClause(sources, 0, decide->bound.source_text) == "SUM(ship) <= 100");
+	REQUIRE(QuoteWrittenClause(sources, 1, decide->bound.source_text) == "50 >= SUM(ship)");
 	// The two halves of a BETWEEN share the BETWEEN's span.
-	REQUIRE(QuoteWrittenClause(sources, 2, decide->source_text) == "ship BETWEEN 1 AND 5");
-	REQUIRE(QuoteWrittenClause(sources, 3, decide->source_text) == "ship BETWEEN 1 AND 5");
+	REQUIRE(QuoteWrittenClause(sources, 2, decide->bound.source_text) == "ship BETWEEN 1 AND 5");
+	REQUIRE(QuoteWrittenClause(sources, 3, decide->bound.source_text) == "ship BETWEEN 1 AND 5");
 	REQUIRE(sources[2].location == sources[3].location);
 	// A clause canonicalization left alone, and one it turned around.
 	REQUIRE(!sources[0].canonical_differs);
@@ -676,8 +677,8 @@ TEST_CASE("Keyed declarations share one scope per key and survive a serializatio
 	auto *before = FindDecide(*plan);
 	REQUIRE(before != nullptr);
 
-	auto &scopes = before->keyed_scopes;
-	auto &vars = before->variable_scopes;
+	auto &scopes = before->bound.keyed_scopes;
+	auto &vars = before->bound.variable_scopes;
 	REQUIRE(scopes.size() == 2);
 	REQUIRE(vars.size() == 6);
 	// Equal keys share one scope, however they are written.
@@ -685,7 +686,7 @@ TEST_CASE("Keyed declarations share one scope per key and survive a serializatio
 	REQUIRE(vars[0].declared_key == "region.r_name, site.cap");
 	REQUIRE(vars[1].declared_key == "site.cap, r_name, r_name");
 	REQUIRE(vars[0].keyed_scope_idx == vars[1].keyed_scope_idx);
-	auto &shared = before->keys[scopes[vars[0].keyed_scope_idx].key];
+	auto &shared = before->bound.keys[scopes[vars[0].keyed_scope_idx].key];
 	REQUIRE(shared.elements.size() == 2);
 	for (auto &element : shared.elements) {
 		REQUIRE(element.null_mode == DecideKeyNullMode::NO_GROUP);
@@ -696,7 +697,7 @@ TEST_CASE("Keyed declarations share one scope per key and survive a serializatio
 	REQUIRE(vars[3].HasDeclaredKey());
 	REQUIRE(vars[2].keyed_scope_idx == vars[3].keyed_scope_idx);
 	REQUIRE(vars[2].keyed_scope_idx != vars[0].keyed_scope_idx);
-	for (auto &element : before->keys[scopes[vars[2].keyed_scope_idx].key].elements) {
+	for (auto &element : before->bound.keys[scopes[vars[2].keyed_scope_idx].key].elements) {
 		REQUIRE(element.null_mode == DecideKeyNullMode::VALUE);
 	}
 	REQUIRE(vars[4].IsGlobal());
@@ -705,16 +706,16 @@ TEST_CASE("Keyed declarations share one scope per key and survive a serializatio
 	auto copied = RoundTrip(con, *plan);
 	auto *after = FindDecide(*copied);
 	REQUIRE(after != nullptr);
-	REQUIRE(after->keyed_scopes.size() == scopes.size());
+	REQUIRE(after->bound.keyed_scopes.size() == scopes.size());
 	for (idx_t i = 0; i < scopes.size(); i++) {
-		REQUIRE(after->keyed_scopes[i].key == scopes[i].key);
+		REQUIRE(after->bound.keyed_scopes[i].key == scopes[i].key);
 	}
 	RequireSameKeys(*after, *before);
-	REQUIRE(after->variable_scopes.size() == vars.size());
+	REQUIRE(after->bound.variable_scopes.size() == vars.size());
 	for (idx_t i = 0; i < vars.size(); i++) {
-		REQUIRE(after->variable_scopes[i].scope == vars[i].scope);
-		REQUIRE(after->variable_scopes[i].keyed_scope_idx == vars[i].keyed_scope_idx);
-		REQUIRE(after->variable_scopes[i].declared_key == vars[i].declared_key);
+		REQUIRE(after->bound.variable_scopes[i].scope == vars[i].scope);
+		REQUIRE(after->bound.variable_scopes[i].keyed_scope_idx == vars[i].keyed_scope_idx);
+		REQUIRE(after->bound.variable_scopes[i].declared_key == vars[i].declared_key);
 	}
 }
 
@@ -729,8 +730,8 @@ TEST_CASE("A column written beside its relation keeps the written column's NULL 
 	                            "DECIDE per region, r_name: g(INT) SUCH THAT g <= 1 MAXIMIZE SUM(g)");
 	auto *before = FindDecide(*plan);
 	REQUIRE(before != nullptr);
-	REQUIRE(before->keyed_scopes.size() == 1);
-	auto &key = before->keys[before->keyed_scopes[0].key];
+	REQUIRE(before->bound.keyed_scopes.size() == 1);
+	auto &key = before->bound.keys[before->bound.keyed_scopes[0].key];
 	REQUIRE(key.elements.size() == 2);
 	idx_t written = 0;
 	for (auto &element : key.elements) {
@@ -880,25 +881,25 @@ TEST_CASE("Scoped clauses keep their by keys, signatures and objective mark thro
 	auto *before = FindDecide(*plan);
 	REQUIRE(before != nullptr);
 	// The clause's `per r_name` and its `by (r_name)` are one key.
-	REQUIRE(before->keys.size() == 3);
-	REQUIRE(KeyWritten(*before, "region") == before->keyed_scopes[0].key);
-	REQUIRE(before->keys[KeyWritten(*before, "site.r_key")].Names() == duckdb::vector<string> {"site.r_key"});
-	REQUIRE(before->signatures.size() == 2);
-	auto &clause = before->signatures[0];
+	REQUIRE(before->bound.keys.size() == 3);
+	REQUIRE(KeyWritten(*before, "region") == before->bound.keyed_scopes[0].key);
+	REQUIRE(before->bound.keys[KeyWritten(*before, "site.r_key")].Names() == duckdb::vector<string> {"site.r_key"});
+	REQUIRE(before->bound.signatures.size() == 2);
+	auto &clause = before->bound.signatures[0];
 	REQUIRE(clause.key == KeyWritten(*before, "r_name"));
 	REQUIRE(clause.text == "per r_name");
 	REQUIRE(clause.rows);
 	REQUIRE(clause.fields.size() == 1);
 	REQUIRE(clause.fields[0].kind == DecideSignatureFieldKind::VALUE);
 	REQUIRE(clause.fields[0].text == "cap");
-	auto &reducer = before->signatures[1];
-	REQUIRE(reducer.key == before->keyed_scopes[0].key);
+	auto &reducer = before->bound.signatures[1];
+	REQUIRE(reducer.key == before->bound.keyed_scopes[0].key);
 	REQUIRE(reducer.fields.size() == 1);
 	REQUIRE(reducer.fields[0].kind == DecideSignatureFieldKind::DECISION);
-	REQUIRE(before->keyed_scopes.size() == 2);
-	REQUIRE(before->keyed_scopes[1].key == before->keyed_scopes[0].key);
-	REQUIRE(before->keyed_scopes[1].signature == 1);
-	REQUIRE(before->objective_signature == DConstants::INVALID_INDEX);
+	REQUIRE(before->bound.keyed_scopes.size() == 2);
+	REQUIRE(before->bound.keyed_scopes[1].key == before->bound.keyed_scopes[0].key);
+	REQUIRE(before->bound.keyed_scopes[1].signature == 1);
+	REQUIRE(before->bound.objective_signature == DConstants::INVALID_INDEX);
 
 	auto copied = RoundTrip(con, *plan);
 	auto *after = FindDecide(*copied);
@@ -907,10 +908,10 @@ TEST_CASE("Scoped clauses keep their by keys, signatures and objective mark thro
 	auto same = [](const duckdb::unique_ptr<Expression> &a, const duckdb::unique_ptr<Expression> &b) {
 		return a ? (b && a->Equals(*b)) : !b;
 	};
-	REQUIRE(after->signatures.size() == before->signatures.size());
-	for (idx_t i = 0; i < before->signatures.size(); i++) {
-		auto &signature = before->signatures[i];
-		auto &copy = after->signatures[i];
+	REQUIRE(after->bound.signatures.size() == before->bound.signatures.size());
+	for (idx_t i = 0; i < before->bound.signatures.size(); i++) {
+		auto &signature = before->bound.signatures[i];
+		auto &copy = after->bound.signatures[i];
 		REQUIRE(same(copy.rows, signature.rows));
 		REQUIRE(copy.key == signature.key);
 		REQUIRE(copy.text == signature.text);
@@ -924,11 +925,11 @@ TEST_CASE("Scoped clauses keep their by keys, signatures and objective mark thro
 			REQUIRE(copy.fields[f].text == signature.fields[f].text);
 		}
 	}
-	REQUIRE(after->objective_signature == before->objective_signature);
-	REQUIRE(after->keyed_scopes.size() == before->keyed_scopes.size());
-	for (idx_t i = 0; i < before->keyed_scopes.size(); i++) {
-		REQUIRE(after->keyed_scopes[i].key == before->keyed_scopes[i].key);
-		REQUIRE(after->keyed_scopes[i].signature == before->keyed_scopes[i].signature);
+	REQUIRE(after->bound.objective_signature == before->bound.objective_signature);
+	REQUIRE(after->bound.keyed_scopes.size() == before->bound.keyed_scopes.size());
+	for (idx_t i = 0; i < before->bound.keyed_scopes.size(); i++) {
+		REQUIRE(after->bound.keyed_scopes[i].key == before->bound.keyed_scopes[i].key);
+		REQUIRE(after->bound.keyed_scopes[i].signature == before->bound.keyed_scopes[i].signature);
 	}
 }
 
@@ -943,7 +944,7 @@ TEST_CASE("A key that holds a keyed decision's own key gives the decision no sig
 		                            clause + " MAXIMIZE sum(x)");
 		auto *decide = FindDecide(*plan);
 		REQUIRE(decide != nullptr);
-		for (auto &signature : decide->signatures) {
+		for (auto &signature : decide->bound.signatures) {
 			for (auto &field : signature.fields) {
 				if (field.kind == DecideSignatureFieldKind::DECISION) {
 					return true;
@@ -972,7 +973,7 @@ TEST_CASE("A key gives no signature field to a value or a by key it holds by con
 		auto *decide = FindDecide(*plan);
 		REQUIRE(decide != nullptr);
 		duckdb::vector<DecideSignatureFieldKind> kinds;
-		for (auto &signature : decide->signatures) {
+		for (auto &signature : decide->bound.signatures) {
 			for (auto &field : signature.fields) {
 				kinds.push_back(field.kind);
 			}

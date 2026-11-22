@@ -22,20 +22,6 @@ order, one at a time. Rules for every one of them:
   `ExpressionIterator::EnumerateChildren`, a case in `LogicalOperatorVisitor::VisitExpression`, `IsFoldable()`
   false, and copy, equality, hash and generated serialization.
 
-## TREE-2 — `BoundDecide`, moved whole
-
-- **Problem.** The bound DECIDE data is 13 fields of `BoundSelectNode` (`bound_select_node.hpp:57`), copied one by
-  one into `LogicalDecide` (`binder/query_node/plan_decide.cpp:219`). Its expressions are listed by hand in two
-  places: `LogicalDecide::EnumerateExpressions` (`logical_decide.cpp:290`) and the binder's `PlanSubqueries`
-  (`plan_decide.cpp:83`).
-- **Change.** One struct `BoundDecide` (design.md § 3.2.2) holds the decisions and their scopes, keys, keyed
-  scopes, frames, the constraints as they are today, their sources, the objective, sense, constant offset, source
-  text and signatures. The binder fills it and it is moved into `LogicalDecide`, which keeps `decide_index`,
-  `optimized`, the solver choice, `value_checks`, `bound_aggregates` and the rewrites' tables. `BoundDecide` has
-  one `EnumerateExpressions`; both hand lists call it. A move only.
-- **Done when.** Goldens identical; the serializer mode and `unittest "[decidb]"` pass; `BoundSelectNode` holds one
-  DECIDE member.
-
 ## TREE-3 — Clause records
 
 - **Problem.** The constraints are one AND expression. A clause's scope is a tagged wrapper above it
@@ -53,7 +39,6 @@ order, one at a time. Rules for every one of them:
   canonicalization, stop and report which fact it relied on. Bound reduction records the direction and shape it
   relied on, and a debug build checks that record in `RunPass` (`decide_optimizer.cpp:66`). `EXPLAIN` and
   `DIAGNOSE` print from the records. `DecideEnclosingScope` goes.
-- **Needs.** TREE-2.
 - **Done when.** Goldens identical, `EXPLAIN` text included; the DIAGNOSE tests, the serializer mode and the direct
   matrix pass; the 14 tags design.md § 3.5 lists for TREE-3 are named nowhere; no `BoundConjunctionExpression`
   joins clauses.

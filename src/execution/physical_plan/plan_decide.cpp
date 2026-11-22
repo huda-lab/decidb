@@ -211,14 +211,14 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	// for the same reason the constraints are: every rewrite that touches it now
 	// re-enters through LogicalDecide::SetObjective, so a rewrite that breaks the
 	// canonical form should fail loudly rather than reach the extractor.
-	if (op.decide_constraints || op.decide_objective) {
-		DecideCanonicalizer canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys,
-		                                  op.is_boolean_var);
-		if (op.decide_constraints) {
-			canonicalizer.VerifyCanonical(*op.decide_constraints);
+	if (op.bound.constraints || op.bound.objective) {
+		DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes,
+		                                  op.bound.keys, op.bound.is_boolean_var);
+		if (op.bound.constraints) {
+			canonicalizer.VerifyCanonical(*op.bound.constraints);
 		}
-		if (op.decide_objective) {
-			canonicalizer.VerifyCanonicalObjective(*op.decide_objective);
+		if (op.bound.objective) {
+			canonicalizer.VerifyCanonicalObjective(*op.bound.objective);
 		}
 	}
 	// Lower the verified clauses into the tree's terms. The pass itself is
@@ -248,24 +248,24 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	auto child_plan = CreatePlan(*op.children[0]);
 	// What the tree's construction read of the LogicalDecide is read; each fact the plan states moves in, so the tree
 	// is its one home.
-	tree->decide_variables = std::move(op.decide_variables);
+	tree->decide_variables = std::move(op.bound.variables);
 	tree->num_auxiliary_vars = op.num_auxiliary_vars;
-	tree->is_boolean_var = std::move(op.is_boolean_var);
-	tree->objective_constant_offset = op.objective_constant_offset;
-	tree->signatures = std::move(op.signatures);
-	tree->objective_signature = op.objective_signature;
-	tree->frames = std::move(op.frames);
+	tree->is_boolean_var = std::move(op.bound.is_boolean_var);
+	tree->objective_constant_offset = op.bound.objective_constant_offset;
+	tree->signatures = std::move(op.bound.signatures);
+	tree->objective_signature = op.bound.objective_signature;
+	tree->frames = std::move(op.bound.frames);
 	tree->diagnose = op.diagnose;
 	auto decide_op = make_uniq<PhysicalDecide>(op.types, op.estimated_cardinality, std::move(child_plan));
 	auto &display = decide_op->display;
 	display.decide_index = op.decide_index;
-	display.decide_constraints = std::move(op.decide_constraints);
-	display.decide_objective = std::move(op.decide_objective);
-	display.constraint_sources = std::move(op.constraint_sources);
+	display.decide_constraints = std::move(op.bound.constraints);
+	display.decide_objective = std::move(op.bound.objective);
+	display.constraint_sources = std::move(op.bound.constraint_sources);
 	display.written_objective = std::move(op.written_objective);
 	display.canonical_objective = std::move(op.canonical_objective);
 	display.objective_canonical_differs = op.objective_canonical_differs;
-	display.source_text = std::move(op.source_text);
+	display.source_text = std::move(op.bound.source_text);
 	display.aux_var_expressions = std::move(op.aux_var_expressions);
 	display.rewrite_accounts = std::move(op.rewrite_accounts);
 	decide_op->debug = GetDecideDebug(context);

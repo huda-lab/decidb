@@ -370,58 +370,58 @@ unique_ptr<LogicalOperator> LogicalCrossProduct::Deserialize(Deserializer &deser
 void LogicalDecide::Serialize(Serializer &serializer) const {
 	LogicalOperator::Serialize(serializer);
 	serializer.WritePropertyWithDefault<idx_t>(200, "decide_index", decide_index);
-	serializer.WritePropertyWithDefault<vector<unique_ptr<Expression>>>(201, "decide_variables", decide_variables);
-	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(202, "decide_constraints", decide_constraints);
-	serializer.WriteProperty<DecideSense>(203, "written_sense", written_sense);
-	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(204, "decide_objective", decide_objective);
+	serializer.WritePropertyWithDefault<vector<unique_ptr<Expression>>>(201, "decide_variables", bound.variables);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(202, "decide_constraints", bound.constraints);
+	serializer.WriteProperty<DecideSense>(203, "written_sense", bound.sense);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(204, "decide_objective", bound.objective);
 	serializer.WritePropertyWithDefault<bool>(205, "diagnose", diagnose);
 	serializer.WritePropertyWithDefault<idx_t>(206, "num_auxiliary_vars", num_auxiliary_vars);
-	serializer.WritePropertyWithDefault<vector<bool>>(207, "is_boolean_var", is_boolean_var);
-	serializer.WriteProperty<double>(208, "objective_constant_offset", objective_constant_offset);
-	serializer.WritePropertyWithDefault<vector<DecideVarScopeInfo>>(209, "variable_scopes", variable_scopes);
-	serializer.WritePropertyWithDefault<vector<KeyedScopeInfo>>(210, "keyed_scopes", keyed_scopes);
+	serializer.WritePropertyWithDefault<vector<bool>>(207, "is_boolean_var", bound.is_boolean_var);
+	serializer.WriteProperty<double>(208, "objective_constant_offset", bound.objective_constant_offset);
+	serializer.WritePropertyWithDefault<vector<DecideVarScopeInfo>>(209, "variable_scopes", bound.variable_scopes);
+	serializer.WritePropertyWithDefault<vector<KeyedScopeInfo>>(210, "keyed_scopes", bound.keyed_scopes);
 	/* [Deleted] (vector<unique_ptr<Expression>>) "entity_key_expressions" */
-	serializer.WritePropertyWithDefault<vector<ConstraintSourceInfo>>(212, "constraint_sources", constraint_sources);
+	serializer.WritePropertyWithDefault<vector<ConstraintSourceInfo>>(212, "constraint_sources", bound.constraint_sources);
 	serializer.WritePropertyWithDefault<string>(213, "written_objective", written_objective);
 	serializer.WritePropertyWithDefault<string>(214, "canonical_objective", canonical_objective);
 	/* [Deleted] (vector<string>) "source_fragments" */
 	serializer.WritePropertyWithDefault<vector<DecideSourceColumnName>>(216, "source_columns", source_columns);
 	/* [Deleted] (bool) "scoped_objective" */
-	serializer.WritePropertyWithDefault<vector<DecideKey>>(220, "keys", keys);
+	serializer.WritePropertyWithDefault<vector<DecideKey>>(220, "keys", bound.keys);
 	serializer.WritePropertyWithDefault<bool>(221, "objective_canonical_differs", objective_canonical_differs);
-	serializer.WriteProperty<DecideSourceText>(222, "source_text", source_text);
-	serializer.WritePropertyWithDefault<vector<DecideSignature>>(223, "signatures", signatures);
-	serializer.WritePropertyWithDefault<idx_t>(224, "objective_signature", objective_signature, DConstants::INVALID_INDEX);
-	serializer.WritePropertyWithDefault<vector<DecideFrameSpec>>(225, "frames", frames);
+	serializer.WriteProperty<DecideSourceText>(222, "source_text", bound.source_text);
+	serializer.WritePropertyWithDefault<vector<DecideSignature>>(223, "signatures", bound.signatures);
+	serializer.WritePropertyWithDefault<idx_t>(224, "objective_signature", bound.objective_signature, DConstants::INVALID_INDEX);
+	serializer.WritePropertyWithDefault<vector<DecideFrameSpec>>(225, "frames", bound.frames);
 	serializer.WritePropertyWithDefault<vector<unique_ptr<Expression>>>(226, "value_checks", value_checks);
 }
 
 unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserializer) {
 	auto result = duckdb::unique_ptr<LogicalDecide>(new LogicalDecide());
 	deserializer.ReadPropertyWithDefault<idx_t>(200, "decide_index", result->decide_index);
-	deserializer.ReadPropertyWithDefault<vector<unique_ptr<Expression>>>(201, "decide_variables", result->decide_variables);
-	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(202, "decide_constraints", result->decide_constraints);
-	deserializer.ReadProperty<DecideSense>(203, "written_sense", result->written_sense);
-	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(204, "decide_objective", result->decide_objective);
+	deserializer.ReadPropertyWithDefault<vector<unique_ptr<Expression>>>(201, "decide_variables", result->bound.variables);
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(202, "decide_constraints", result->bound.constraints);
+	deserializer.ReadProperty<DecideSense>(203, "written_sense", result->bound.sense);
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(204, "decide_objective", result->bound.objective);
 	deserializer.ReadPropertyWithDefault<bool>(205, "diagnose", result->diagnose);
 	deserializer.ReadPropertyWithDefault<idx_t>(206, "num_auxiliary_vars", result->num_auxiliary_vars);
-	deserializer.ReadPropertyWithDefault<vector<bool>>(207, "is_boolean_var", result->is_boolean_var);
-	deserializer.ReadProperty<double>(208, "objective_constant_offset", result->objective_constant_offset);
-	deserializer.ReadPropertyWithDefault<vector<DecideVarScopeInfo>>(209, "variable_scopes", result->variable_scopes);
-	deserializer.ReadPropertyWithDefault<vector<KeyedScopeInfo>>(210, "keyed_scopes", result->keyed_scopes);
+	deserializer.ReadPropertyWithDefault<vector<bool>>(207, "is_boolean_var", result->bound.is_boolean_var);
+	deserializer.ReadProperty<double>(208, "objective_constant_offset", result->bound.objective_constant_offset);
+	deserializer.ReadPropertyWithDefault<vector<DecideVarScopeInfo>>(209, "variable_scopes", result->bound.variable_scopes);
+	deserializer.ReadPropertyWithDefault<vector<KeyedScopeInfo>>(210, "keyed_scopes", result->bound.keyed_scopes);
 	deserializer.ReadDeletedProperty<vector<unique_ptr<Expression>>>(211, "entity_key_expressions");
-	deserializer.ReadPropertyWithDefault<vector<ConstraintSourceInfo>>(212, "constraint_sources", result->constraint_sources);
+	deserializer.ReadPropertyWithDefault<vector<ConstraintSourceInfo>>(212, "constraint_sources", result->bound.constraint_sources);
 	deserializer.ReadPropertyWithDefault<string>(213, "written_objective", result->written_objective);
 	deserializer.ReadPropertyWithDefault<string>(214, "canonical_objective", result->canonical_objective);
 	deserializer.ReadDeletedProperty<vector<string>>(215, "source_fragments");
 	deserializer.ReadPropertyWithDefault<vector<DecideSourceColumnName>>(216, "source_columns", result->source_columns);
 	deserializer.ReadDeletedProperty<bool>(219, "scoped_objective");
-	deserializer.ReadPropertyWithDefault<vector<DecideKey>>(220, "keys", result->keys);
+	deserializer.ReadPropertyWithDefault<vector<DecideKey>>(220, "keys", result->bound.keys);
 	deserializer.ReadPropertyWithDefault<bool>(221, "objective_canonical_differs", result->objective_canonical_differs);
-	deserializer.ReadProperty<DecideSourceText>(222, "source_text", result->source_text);
-	deserializer.ReadPropertyWithDefault<vector<DecideSignature>>(223, "signatures", result->signatures);
-	deserializer.ReadPropertyWithExplicitDefault<idx_t>(224, "objective_signature", result->objective_signature, DConstants::INVALID_INDEX);
-	deserializer.ReadPropertyWithDefault<vector<DecideFrameSpec>>(225, "frames", result->frames);
+	deserializer.ReadProperty<DecideSourceText>(222, "source_text", result->bound.source_text);
+	deserializer.ReadPropertyWithDefault<vector<DecideSignature>>(223, "signatures", result->bound.signatures);
+	deserializer.ReadPropertyWithExplicitDefault<idx_t>(224, "objective_signature", result->bound.objective_signature, DConstants::INVALID_INDEX);
+	deserializer.ReadPropertyWithDefault<vector<DecideFrameSpec>>(225, "frames", result->bound.frames);
 	deserializer.ReadPropertyWithDefault<vector<unique_ptr<Expression>>>(226, "value_checks", result->value_checks);
 	return std::move(result);
 }

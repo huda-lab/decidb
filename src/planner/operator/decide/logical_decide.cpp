@@ -143,12 +143,8 @@ vector<string> DecideKey::Names() const {
 	return names;
 }
 
-LogicalDecide::LogicalDecide(idx_t decide_index, vector<unique_ptr<Expression>> decide_variables,
-                             unique_ptr<Expression> decide_constraints, DecideSense written_sense,
-                             unique_ptr<Expression> decide_objective)
-    : LogicalOperator(LogicalOperatorType::LOGICAL_DECIDE), decide_index(decide_index),
-      decide_variables(std::move(decide_variables)), decide_constraints(std::move(decide_constraints)),
-      written_sense(written_sense), decide_objective(std::move(decide_objective)) {
+LogicalDecide::LogicalDecide(idx_t decide_index, BoundDecide bound_p)
+    : LogicalOperator(LogicalOperatorType::LOGICAL_DECIDE), decide_index(decide_index), bound(std::move(bound_p)) {
 }
 
 LogicalDecide::LogicalDecide() : LogicalOperator(LogicalOperatorType::LOGICAL_DECIDE) {
@@ -237,7 +233,7 @@ vector<ColumnBinding> LogicalDecide::GetColumnBindings() {
 	// Auxiliary vars (e.g. from ABS linearization) must be visible for column binding
 	// resolution in constraint/objective expressions. The projection above prunes them.
 	auto result = children[0]->GetColumnBindings();
-	for (idx_t i = 0; i < decide_variables.size(); i++) {
+	for (idx_t i = 0; i < bound.variables.size(); i++) {
 		result.emplace_back(decide_index, i);
 	}
 	return result;
@@ -247,8 +243,8 @@ void LogicalDecide::ResolveTypes() {
 	types = children[0]->types;
 	// Include ALL decide variable types (user + auxiliary).
 	// Auxiliary vars are pruned by the projection operator above.
-	for (idx_t i = 0; i < decide_variables.size(); i++) {
-		types.push_back(decide_variables[i]->return_type);
+	for (idx_t i = 0; i < bound.variables.size(); i++) {
+		types.push_back(bound.variables[i]->return_type);
 	}
 }
 
@@ -261,42 +257,76 @@ string LogicalDecide::GetName() const {
 }
 
 void LogicalDecide::AddConstraint(ClientContext &context, unique_ptr<Expression> constraint) {
-	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes, keyed_scopes, keys, is_boolean_var);
+	DecideCanonicalizer canonicalizer(context, decide_index, bound.variable_scopes, bound.keyed_scopes, bound.keys,
+	                                  bound.is_boolean_var);
 	auto canonical = canonicalizer.CanonicalizeTree(*constraint);
 	canonicalizer.VerifyCanonical(*canonical);
 
-	if (!decide_constraints) {
-		decide_constraints = std::move(canonical);
+	if (!bound.constraints) {
+		bound.constraints = std::move(canonical);
 	} else {
 		auto conj = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		conj->children.push_back(std::move(decide_constraints));
+		conj->children.push_back(std::move(bound.constraints));
 		conj->children.push_back(std::move(canonical));
-		decide_constraints = std::move(conj);
+		bound.constraints = std::move(conj);
 	}
 }
 
 void LogicalDecide::SetObjective(ClientContext &context, unique_ptr<Expression> objective) {
 	if (!objective) {
-		decide_objective = nullptr;
+		bound.objective = nullptr;
 		return;
 	}
-	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes, keyed_scopes, keys, is_boolean_var);
-	DecideSourceNames names {source_text, keyed_scopes, keys};
+	DecideCanonicalizer canonicalizer(context, decide_index, bound.variable_scopes, bound.keyed_scopes, bound.keys,
+	                                  bound.is_boolean_var);
+	DecideSourceNames names {bound.source_text, bound.keyed_scopes, bound.keys};
 	canonicalizer.QuoteMessagesWith(names);
-	decide_objective = canonicalizer.CanonicalizeObjective(*objective, objective_constant_offset);
-	canonicalizer.VerifyCanonicalObjective(*decide_objective);
+	bound.objective = canonicalizer.CanonicalizeObjective(*objective, bound.objective_constant_offset);
+	canonicalizer.VerifyCanonicalObjective(*bound.objective);
+}
+
+void BoundDecide::EnumerateExpressions(const std::function<void(unique_ptr<Expression> &expression)> &callback) {
+	for (auto &expr : variables) {
+		callback(expr);
+	}
+	if (constraints) {
+		callback(constraints);
+	}
+	if (objective) {
+		callback(objective);
+	}
+	// A key's columns are live even where no clause reads them: a decision keyed by a
+	// column the query never mentions still needs it in the scan.
+	for (auto &key : keys) {
+		for (auto &element : key.elements) {
+			callback(element.expression);
+			if (element.collated) {
+				callback(element.collated);
+			}
+		}
+	}
+	// A frame's `within` key is an entry of `keys`, enumerated with them.
+	for (auto &frame : frames) {
+		for (auto *expr : {&frame.fallback, &frame.order, &frame.rows}) {
+			if (*expr) {
+				callback(*expr);
+			}
+		}
+	}
+	for (auto &signature : signatures) {
+		if (signature.rows) {
+			callback(signature.rows);
+		}
+		for (auto &field : signature.fields) {
+			if (field.value) {
+				callback(field.value);
+			}
+		}
+	}
 }
 
 void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Expression> *)> &callback) {
-	for (auto &expr : decide_variables) {
-		callback(&expr);
-	}
-	if (decide_constraints) {
-		callback(&decide_constraints);
-	}
-	if (decide_objective) {
-		callback(&decide_objective);
-	}
+	bound.EnumerateExpressions([&](unique_ptr<Expression> &expression) { callback(&expression); });
 	// The value rewrite lifts each reducer it replaces out of the constraint and objective trees, so visiting them
 	// above no longer reaches it.
 	for (auto &link : reducer_value_links) {
@@ -314,36 +344,8 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 			}
 		}
 	}
-	// A key's columns are live even where no clause reads them: a decision keyed by a
-	// column the query never mentions still needs it in the scan.
-	for (auto &key : keys) {
-		for (auto &element : key.elements) {
-			callback(&element.expression);
-			if (element.collated) {
-				callback(&element.collated);
-			}
-		}
-	}
-	// A frame's `within` key is an entry of `keys`, enumerated with them.
-	for (auto &frame : frames) {
-		for (auto *expr : {&frame.fallback, &frame.order, &frame.rows}) {
-			if (*expr) {
-				callback(expr);
-			}
-		}
-	}
 	for (auto &check : value_checks) {
 		callback(&check);
-	}
-	for (auto &signature : signatures) {
-		if (signature.rows) {
-			callback(&signature.rows);
-		}
-		for (auto &field : signature.fields) {
-			if (field.value) {
-				callback(&field.value);
-			}
-		}
 	}
 	for (auto &aggregate : bound_aggregates) {
 		for (auto &argument : aggregate.arguments) {
@@ -438,10 +440,10 @@ static void EnumerateClauseLeaves(unique_ptr<Expression> &slot, DecideEnclosingS
 
 void LogicalDecide::EnumerateBodies(const std::function<void(DecideOwnedBody &)> &callback) {
 	using Owner = DecideOwnedBody::Owner;
-	if (decide_objective) {
+	if (bound.objective) {
 		// A `when` or `per` wrapper carries no sign: the body is its first child. The objective is minimized, which
 		// pushes a positive term down.
-		auto *slot = &decide_objective;
+		auto *slot = &bound.objective;
 		DecideEnclosingScope scope;
 		string source_alias = OBJECTIVE_ROW_TAG;
 		while ((*slot)->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
@@ -460,8 +462,8 @@ void LogicalDecide::EnumerateBodies(const std::function<void(DecideOwnedBody &)>
 		body.scope = scope;
 		callback(body);
 	}
-	if (decide_constraints) {
-		EnumerateClauseLeaves(decide_constraints, DecideEnclosingScope(), string(), Owner::CLAUSE,
+	if (bound.constraints) {
+		EnumerateClauseLeaves(bound.constraints, DecideEnclosingScope(), string(), Owner::CLAUSE,
 		                      DConstants::INVALID_INDEX, callback);
 	}
 	// A definition stands apart from the clause list; `t >= q` holds the body down, `t <= q` up, `t = q` neither.
@@ -502,7 +504,22 @@ vector<ColumnBinding> LogicalDecide::SourceBindings() {
 }
 
 InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
-	auto result = RenderDecideParams(*this, *this, rewrite_accounts, nullptr);
+	DecidePlanParams plan {bound.variables,
+	                       num_auxiliary_vars,
+	                       bound.keyed_scopes,
+	                       bound.keys,
+	                       bound.frames,
+	                       bound.sense,
+	                       decide_index,
+	                       bound.source_text,
+	                       aux_var_expressions,
+	                       *bound.constraints,
+	                       bound.constraint_sources,
+	                       bound.objective.get(),
+	                       written_objective,
+	                       canonical_objective,
+	                       objective_canonical_differs};
+	auto result = RenderDecideParams(plan, rewrite_accounts, nullptr);
 	SetParamsEstimatedCardinality(result);
 	return result;
 }

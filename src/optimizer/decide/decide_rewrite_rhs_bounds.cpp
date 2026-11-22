@@ -66,8 +66,8 @@ class RhsBoundRewriter {
 public:
 	RhsBoundRewriter(Optimizer &optimizer_p, LogicalDecide &decide_p)
 	    : optimizer(optimizer_p), decide(decide_p), calc(optimizer_p.context),
-	      canonicalizer(optimizer_p.context, decide_p.decide_index, decide_p.variable_scopes, decide_p.keyed_scopes,
-	                    decide_p.keys, decide_p.is_boolean_var) {
+	      canonicalizer(optimizer_p.context, decide_p.decide_index, decide_p.bound.variable_scopes,
+	                    decide_p.bound.keyed_scopes, decide_p.bound.keys, decide_p.bound.is_boolean_var) {
 	}
 
 	void Run() {
@@ -216,7 +216,7 @@ private:
 			return;
 		}
 		D_ASSERT(class_key < decide.keys.size());
-		for (auto &element : decide.keys[class_key].elements) {
+		for (auto &element : decide.bound.keys[class_key].elements) {
 			if (element.null_mode == DecideKeyNullMode::NO_GROUP) {
 				auto value = calc.Of(*bound);
 				auto none = calc.Constant(Value(value->return_type));
@@ -269,10 +269,10 @@ private:
 			// Only the optimizer's helper decisions have scopes over a link, and they are made after this pass.
 			D_ASSERT(decide.keyed_scopes[scope_idx].value_link == DConstants::INVALID_INDEX);
 			record.counts_classes = true;
-			record.class_key = decide.keyed_scopes[scope_idx].key;
+			record.class_key = decide.bound.keyed_scopes[scope_idx].key;
 		}
 		vector<const Expression *> keys;
-		for (auto &element : DecideKeyElements(decide.keys, record.key)) {
+		for (auto &element : DecideKeyElements(decide.bound.keys, record.key)) {
 			keys.push_back(&element.Grouping());
 		}
 		const auto key = record.key;
@@ -304,7 +304,7 @@ private:
 		record.key = PathKeyOf(reducer, path);
 		idx_t scope_idx;
 		if (TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx)) {
-			record.class_key = decide.keyed_scopes[scope_idx].key;
+			record.class_key = decide.bound.keyed_scopes[scope_idx].key;
 		}
 		record.text = Written(reducer);
 		auto alias = MakeFrameAggregateTag(decide.frame_aggregates.size());
@@ -328,8 +328,8 @@ private:
 				return known.column;
 			}
 		}
-		record.column =
-		    ColumnBinding(optimizer.binder.GenerateTableIndex(), DecideKeyElements(decide.keys, record.key).size());
+		record.column = ColumnBinding(optimizer.binder.GenerateTableIndex(),
+		                              DecideKeyElements(decide.bound.keys, record.key).size());
 		decide.bound_aggregates.push_back(std::move(record));
 		return decide.bound_aggregates.back().column;
 	}
@@ -410,7 +410,7 @@ private:
 	//! `value` on a row in a group of the key `key_index`, `outside` (NULL when null) on a row in none; `value` for the
 	//! whole query.
 	ExprPtr InKey(idx_t key_index, ExprPtr value, const ExprPtr &outside = nullptr) const {
-		for (auto &element : DecideKeyElements(decide.keys, key_index)) {
+		for (auto &element : DecideKeyElements(decide.bound.keys, key_index)) {
 			if (element.null_mode == DecideKeyNullMode::NO_GROUP) {
 				value = calc.If(calc.IsNull(calc.Of(*element.expression)),
 				                outside ? outside : calc.Constant(Value(value->return_type)), value);
@@ -476,7 +476,7 @@ private:
 		// The key's columns as the query writes them, each once, with their value on the row.
 		vector<string> names;
 		vector<ExprPtr> values;
-		for (auto &element : DecideKeyElements(decide.keys, by)) {
+		for (auto &element : DecideKeyElements(decide.bound.keys, by)) {
 			if (std::find(names.begin(), names.end(), element.name) == names.end()) {
 				names.push_back(element.name);
 				values.push_back(calc.Of(*element.expression));
@@ -495,11 +495,11 @@ private:
 		if (TryGetDecideFrame(bound, frame)) {
 			// `first` or `last` reads one row of each timeline, so one value in a group that lies in one timeline:
 			// every element of the timeline key is part of the group key.
-			auto &spec = decide.frames[frame];
+			auto &spec = decide.bound.frames[frame];
 			if (spec.Relative()) {
 				return false;
 			}
-			for (auto &element : DecideKeyElements(decide.keys, spec.timeline_key)) {
+			for (auto &element : DecideKeyElements(decide.bound.keys, spec.timeline_key)) {
 				if (std::none_of(keys.begin(), keys.end(),
 				                 [&](const Expression *key) { return key->Equals(element.Grouping()); })) {
 					return false;
@@ -544,7 +544,7 @@ private:
 	//! Where a message about the expression at `location` points: the span the query text holds for it, none for a
 	//! location in a table macro's tail.
 	optional_idx SpanOf(optional_idx location) const {
-		return DecideSpanLocation(decide.source_text, location);
+		return DecideSpanLocation(decide.bound.source_text, location);
 	}
 
 	//! The check of a `value` its `role` refuses -- a NaN bound, a coefficient that is not finite --: the row raises,
@@ -573,7 +573,7 @@ private:
 	//! into `keys` (FindOrCreateDecidePathKey); INVALID_INDEX for the whole query.
 	idx_t PathKeyOf(const BoundAggregateExpression &reducer, const DecideReducerPath &path) const {
 		const auto own = GroupKeyIndex(reducer);
-		return path.keys.empty() ? own : FindOrCreateDecidePathKey(path.KeysOf(own), decide.keys);
+		return path.keys.empty() ? own : FindOrCreateDecidePathKey(path.KeysOf(own), decide.bound.keys);
 	}
 
 	//! The key a reducer or bound groups by (an index into `keys`); INVALID_INDEX for the whole query.
@@ -587,7 +587,7 @@ private:
 
 	vector<const Expression *> GroupKeyOf(const Expression &tagged) const {
 		vector<const Expression *> keys;
-		for (auto &element : DecideKeyElements(decide.keys, GroupKeyIndex(tagged))) {
+		for (auto &element : DecideKeyElements(decide.bound.keys, GroupKeyIndex(tagged))) {
 			keys.push_back(&element.Grouping());
 		}
 		return keys;
@@ -619,14 +619,14 @@ private:
 	}
 
 	string Written(const Expression &expr) const {
-		return RenderDecideSource(expr, decide.source_text, decide.keyed_scopes, &decide.keys);
+		return RenderDecideSource(expr, decide.bound.source_text, decide.bound.keyed_scopes, &decide.bound.keys);
 	}
 
 	//! The first frame selector `expr` holds, as written; empty for none.
 	string FrameText(const Expression &expr) const {
 		idx_t frame;
 		if (TryGetDecideFrame(expr, frame)) {
-			return frame < decide.frames.size() ? decide.frames[frame].text : Written(expr);
+			return frame < decide.bound.frames.size() ? decide.bound.frames[frame].text : Written(expr);
 		}
 		string text;
 		ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {

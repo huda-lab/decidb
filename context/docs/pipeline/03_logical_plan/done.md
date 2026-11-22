@@ -13,6 +13,15 @@ It contains no solver-specific structures and no execution mechanics.
   `CreatePlan(BoundSelectNode &)` calls it between the `WHERE` and the aggregates
 - `src/planner/operator/decide/logical_decide.cpp` — the operator itself
 - `src/include/duckdb/planner/operator/decide/logical_decide.hpp` — the metadata contract
+
+**`BoundDecide`** (`logical_decide.hpp`) is the bound DECIDE part of a query: the decisions (`variables`,
+`is_boolean_var`, `variable_scopes`), `keys`, `keyed_scopes`, `frames`, `constraints` with their
+`constraint_sources`, `objective`, `sense`, `objective_constant_offset`, `source_text`, `signatures` and
+`objective_signature`. The binder fills `BoundSelectNode::decide`, `Binder::PlanDecide` canonicalizes it in place and
+moves it whole into `LogicalDecide::bound`. The operator keeps what is its own beside it: `decide_index`, the
+objective's texts, `source_columns`, `optimized`, the solver choice and the tables the rewrites fill.
+`BoundDecide::EnumerateExpressions` is the one list of its expressions; subquery planning (`PlanSubqueries`) and
+`LogicalDecide::EnumerateExpressions` both call it.
 - `src/execution/column_binding_resolver.cpp` — the `LOGICAL_DECIDE` case
 - `src/execution/physical_plan/plan_decide.cpp` — logical → physical
 
@@ -228,19 +237,19 @@ names.
 expression-holding fields **explicitly** rather than calling
 `VisitOperatorExpressions`, because DECIDE variables must be shielded from
 resolution via `ignored_bindings`; it visits every field through
-`LogicalDecide::EnumerateExpressions`, the one list of them: `decide_variables`,
-`decide_constraints`, `decide_objective`, `reducer_value_links` (body, own `when`, clause `when`),
-`keys`, `frames` (order key, fallback, rows), `value_checks`, `signatures` (rows, fields' values).
+`LogicalDecide::EnumerateExpressions`, the one list of them: `bound` (`variables`, `constraints`, `objective`, `keys`,
+`frames` with order key, fallback and rows, `signatures` with rows and fields' values), `reducer_value_links` (body,
+own `when`, clause `when`) and `value_checks`.
 
 **Any new field holding expressions that execution will evaluate must be added to
 `EnumerateExpressions`.** An optimizer rewrite that moves subexpressions out of
-`decide_objective` into a side vector (`reducer_value_links` is one)
+`bound.objective` into a side vector (`reducer_value_links` is one)
 otherwise silently opts them out, and the operator then reads a logical index as a
 chunk position. A single-table source hides the bug entirely, because the two
 indexings coincide there; it surfaces only once a join reorders columns.
 
 Arms kept as guards (BLOAT-28): `DecideSourceColumnKey`'s `slot >= column_ids.size()` (a scan with no column ids
-answers the binding `(table_index, 0)`, which names no column) and `EnumerateExpressions`' null `decide_constraints`
+answers the binding `(table_index, 0)`, which names no column) and `EnumerateExpressions`' null `constraints`
 check (the rewrites detach the clause and reinstall it). No query reaches them.
 
 ---

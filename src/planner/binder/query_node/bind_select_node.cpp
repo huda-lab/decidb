@@ -420,7 +420,7 @@ static void RefuseDecisionInWhere(const Expression &expr, const BoundSelectNode 
 		if (colref.binding.table_index == node.decide_index) {
 			throw BinderException(
 			    expr, "%s",
-			    DecisionInDataMessage(node.decide_variables[colref.binding.column_index]->GetAlias(), "WHERE"));
+			    DecisionInDataMessage(node.decide.variables[colref.binding.column_index]->GetAlias(), "WHERE"));
 		}
 		return;
 	}

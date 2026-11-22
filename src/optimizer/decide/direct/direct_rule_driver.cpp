@@ -249,9 +249,9 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	for (auto &binding : output_bindings) {
 		prunable_sources.push_back(DirectCanSkipSourceOutput(source, binding) ? 1 : 0);
 	}
-	for (idx_t i = 0; i < decide.decide_variables.size(); i++) {
+	for (idx_t i = 0; i < decide.bound.variables.size(); i++) {
 		output_bindings.emplace_back(decide.decide_index, i);
-		output_types.push_back(decide.decide_variables[i]->return_type);
+		output_types.push_back(decide.bound.variables[i]->return_type);
 	}
 	D_ASSERT(output_bindings == decide.GetColumnBindings());
 	// A stored source carries its row id as one more source column, so a column the rule never uses can be read again

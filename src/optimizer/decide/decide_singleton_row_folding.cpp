@@ -201,7 +201,7 @@ static unique_ptr<Expression> ReadAsRow(const ExpressionBuilder &calc, const Log
 			    by_key_only = !filter;
 			    // A row in no group of the reducer's `by` key, a NULL in a column the user wrote (language/guide.md
 			    // §5.2), is no member, as a row its filter leaves out is none.
-			    for (auto &element : DecideKeyElements(decide.keys, key)) {
+			    for (auto &element : DecideKeyElements(decide.bound.keys, key)) {
 				    if (element.null_mode == DecideKeyNullMode::NO_GROUP) {
 					    auto member = filter ? calc.Of(*filter) : calc.Bool(true);
 					    filter = calc.Out(calc.If(calc.IsNull(calc.Of(element.Grouping())), calc.Bool(false), member));
@@ -300,7 +300,7 @@ bool DecideReadSingletonRow(ClientContext &context, const LogicalDecide &decide,
 			return false;
 		}
 	}
-	auto type_id = decide.decide_variables[out.var_idx]->return_type.id();
+	auto type_id = decide.bound.variables[out.var_idx]->return_type.id();
 	bool whole = type_id == LogicalTypeId::INTEGER || type_id == LogicalTypeId::BIGINT;
 	// A strict bound steps onto the whole numbers (`x < 10` admits 9). The binder refuses one on a REAL, which has no
 	// such step (DecideShapeCheck::CheckIntegerStep).
@@ -430,7 +430,7 @@ void DecideOptimizer::FoldSingletonRowsInClause(Expression &expr, const DecideEn
 	// the clause (language/guide.md §6.2), which a box on the whole column would give it. The clause stays a row, which
 	// the row's class decides.
 	if (scope.per_wrapper) {
-		auto &elements = DecideKeyElements(decide.keys, scope.PerKey());
+		auto &elements = DecideKeyElements(decide.bound.keys, scope.PerKey());
 		if (std::any_of(elements.begin(), elements.end(), [](const DecideKeyElement &element) {
 			    return element.null_mode == DecideKeyNullMode::NO_GROUP;
 		    })) {
@@ -475,7 +475,7 @@ void DecideOptimizer::FoldSingletonRowsInClause(Expression &expr, const DecideEn
 	// recorded. Only a recorded bound is loosened by a diagnosis, and a clause is one
 	// knob per kept row or class in an expanded diagnosis (D28), which one column
 	// bound cannot say, so a recorded one is flattened for the repair model too.
-	bool is_boolean = decide.is_boolean_var[bound.var_idx];
+	bool is_boolean = decide.bound.is_boolean_var[bound.var_idx];
 	bool restates_domain = is_boolean && bound.lower_value <= 0.0 && bound.upper_value >= 1.0;
 	if (!restates_domain) {
 		decide.user_singleton_row_bounds.push_back({bound.var_idx, bound.sense, bound.written_k, origin});
@@ -487,7 +487,7 @@ void DecideOptimizer::FoldSingletonRowsInClause(Expression &expr, const DecideEn
 void DecideOptimizer::FoldSingletonRows(LogicalDecide &decide) {
 	// Sized here rather than at construction so every auxiliary variable created by the
 	// preceding passes is already counted.
-	idx_t num_decide_vars = decide.decide_variables.size();
+	idx_t num_decide_vars = decide.bound.variables.size();
 	decide.singleton_row_boxes.assign(num_decide_vars, DecideBoundBox());
 	decide.user_singleton_row_bounds.clear();
 	decide.member_singleton_row_bounds.clear();
@@ -507,7 +507,7 @@ void DecideOptimizer::FoldSingletonRows(LogicalDecide &decide) {
 	// `x <= 1` is already treated as a harmless no-op against the intrinsic box, so
 	// seeding it changes nothing about how a written bound is recorded.
 	for (idx_t i = 0; i < num_decide_vars; i++) {
-		if (decide.is_boolean_var[i]) {
+		if (decide.bound.is_boolean_var[i]) {
 			decide.singleton_row_boxes[i].upper = 1.0;
 			// The floor is just as rigid. A written lower bound only ever raises it (`max`), so `x >= -3`
 			// leaves the box at [0,1] and a bound that cannot hold (`x >= 2`, `x <= -1`) inverts it, which

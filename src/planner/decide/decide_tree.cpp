@@ -55,8 +55,8 @@ unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const
 	facts->was_minmax_easy = HasDecideTag(comparison.alias, MINMAX_EASY_REWRITE_TAG);
 	facts->scope = DecideClauseScope(scope);
 	TryParseGroupKeyTag(comparison.alias, facts->group_key);
-	DecideCanonicalizer canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys,
-	                                  op.is_boolean_var);
+	DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes,
+	                                  op.bound.keys, op.bound.is_boolean_var);
 	auto shape = canonicalizer.ClassifyCanonicalComparison(comparison);
 	if (shape == CanonicalConstraintClass::INVALID) {
 		throw InternalException("DECIDE constraint reached term extraction with invalid aggregate/per-row "
@@ -86,10 +86,11 @@ unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const
 			if (field.kind != DecideSignatureFieldKind::DECISION) {
 				continue;
 			}
-			const auto &variable =
-			    field.decision < op.variable_scopes.size() ? op.variable_scopes[field.decision] : DecideVarScopeInfo();
+			const auto &variable = field.decision < op.bound.variable_scopes.size()
+			                           ? op.bound.variable_scopes[field.decision]
+			                           : DecideVarScopeInfo();
 			const bool keyed = variable.IsKeyed() || (variable.scope == DecideVarScope::INLINED &&
-			                                          variable.keyed_scope_idx < op.keyed_scopes.size());
+			                                          variable.keyed_scope_idx < op.bound.keyed_scopes.size());
 			per_row = per_row || (!variable.IsGlobal() && !keyed);
 		}
 		if (!per_row) {
@@ -141,12 +142,12 @@ class DecideTreeBuilder {
 public:
 	DecideTreeBuilder(ClientContext &context, const LogicalDecide &op) : context(context), op(op) {
 		tree = make_uniq<DecideTree>();
-		tree->written_sense = op.written_sense;
-		tree->variable_scopes = op.variable_scopes;
-		tree->keyed_scopes = op.keyed_scopes;
-		tree->value_nodes.assign(op.decide_variables.size(), DConstants::INVALID_INDEX);
-		tree->definition_nodes.resize(op.decide_variables.size());
-		tree->qualified_operands.assign(op.keyed_scopes.size(), DConstants::INVALID_INDEX);
+		tree->written_sense = op.bound.sense;
+		tree->variable_scopes = op.bound.variable_scopes;
+		tree->keyed_scopes = op.bound.keyed_scopes;
+		tree->value_nodes.assign(op.bound.variables.size(), DConstants::INVALID_INDEX);
+		tree->definition_nodes.resize(op.bound.variables.size());
+		tree->qualified_operands.assign(op.bound.keyed_scopes.size(), DConstants::INVALID_INDEX);
 		tree->singleton_row_boxes = op.singleton_row_boxes;
 		tree->user_singleton_row_bounds = op.user_singleton_row_bounds;
 		tree->signed_helper_vars = op.signed_helper_vars;
@@ -154,7 +155,7 @@ public:
 			bindings = op.children[0]->GetColumnBindings();
 		}
 		tree->input_column_count = bindings.size();
-		for (auto &key : op.keys) {
+		for (auto &key : op.bound.keys) {
 			DecideKey copy;
 			copy.text = key.text;
 			copy.written_as_by = key.written_as_by;
@@ -169,7 +170,7 @@ public:
 			tree->keys.push_back(std::move(copy));
 		}
 		link_nodes.assign(op.reducer_value_links.size(), DConstants::INVALID_INDEX);
-		frame_nodes.assign(op.frames.size(), DConstants::INVALID_INDEX);
+		frame_nodes.assign(op.bound.frames.size(), DConstants::INVALID_INDEX);
 		record_nodes.assign(op.bound_aggregates.size(), DConstants::INVALID_INDEX);
 		tree->frame_aggregate_nodes.assign(op.frame_aggregates.size(), DConstants::INVALID_INDEX);
 	}
@@ -192,9 +193,9 @@ public:
 			node.body = Lower(index, *check);
 			tree->roots.push_back(index);
 		}
-		if (op.decide_constraints) {
-			ForEachScopedConstraintLeaf(*op.decide_constraints, [&](const Expression &expression,
-			                                                        const DecideEnclosingScope &scope) {
+		if (op.bound.constraints) {
+			ForEachScopedConstraintLeaf(*op.bound.constraints, [&](const Expression &expression,
+			                                                       const DecideEnclosingScope &scope) {
 				if (expression.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 					Root(expression.Cast<BoundComparisonExpression>(), scope);
 				} else if (expression.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
@@ -247,8 +248,8 @@ public:
 				                            });
 			}
 		}
-		if (op.decide_objective) {
-			const Expression *body = op.decide_objective.get();
+		if (op.bound.objective) {
+			const Expression *body = op.bound.objective.get();
 			const Expression *condition = nullptr;
 			if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 				auto &wrapper = body->Cast<BoundConjunctionExpression>();
@@ -265,7 +266,7 @@ public:
 			node.text = op.written_objective.empty() ? Text(*body) : op.written_objective;
 			Gates(index, condition);
 			node.body = Lower(index, *body);
-			UseSignature(node, op.objective_signature);
+			UseSignature(node, op.bound.objective_signature);
 			tree->roots.push_back(index);
 		}
 		// A helper or data check can outlive the reading clause (D88). Preserve
@@ -319,13 +320,13 @@ public:
 	void PrepareBilinearFunctions() {
 		for (auto &group : op.bilinear_function_groups) {
 			for (auto &product : group.products) {
-				if (product.aux_idx >= op.decide_variables.size() ||
-				    product.first_var_idx >= op.decide_variables.size() ||
-				    product.second_var_idx >= op.decide_variables.size()) {
+				if (product.aux_idx >= op.bound.variables.size() ||
+				    product.first_var_idx >= op.bound.variables.size() ||
+				    product.second_var_idx >= op.bound.variables.size()) {
 					throw InternalException("DECIDE tree: bilinear function references an invalid decision");
 				}
 				const auto is_boolean = [&](idx_t var) {
-					return var < op.is_boolean_var.size() && op.is_boolean_var[var];
+					return var < op.bound.is_boolean_var.size() && op.bound.is_boolean_var[var];
 				};
 				const auto bool_var =
 				    is_boolean(product.first_var_idx) ? product.first_var_idx : product.second_var_idx;
@@ -348,7 +349,7 @@ public:
 				if (product.aux_idx < tree->variable_scopes.size()) {
 					auto &variable_scope = tree->variable_scopes[product.aux_idx];
 					if (variable_scope.IsKeyed() || variable_scope.scope == DecideVarScope::INLINED) {
-						if (variable_scope.keyed_scope_idx >= op.keyed_scopes.size()) {
+						if (variable_scope.keyed_scope_idx >= op.bound.keyed_scopes.size()) {
 							if (variable_scope.scope != DecideVarScope::INLINED ||
 							    variable_scope.keyed_scope_idx != DConstants::INVALID_INDEX) {
 								throw InternalException("DECIDE tree: product helper %llu has an invalid keyed scope",
@@ -356,7 +357,7 @@ public:
 							}
 						} else {
 							node.per = DecideTreePer::KEY;
-							node.key = op.keyed_scopes[variable_scope.keyed_scope_idx].key;
+							node.key = op.bound.keyed_scopes[variable_scope.keyed_scope_idx].key;
 						}
 					} else if (variable_scope.IsGlobal()) {
 						node.per = DecideTreePer::ONE;
@@ -375,8 +376,8 @@ public:
 				continue;
 			}
 			vector<unique_ptr<Expression>> children;
-			children.push_back(op.decide_variables[node.product_bool_var]->Copy());
-			children.push_back(op.decide_variables[node.product_other_var]->Copy());
+			children.push_back(op.bound.variables[node.product_bool_var]->Copy());
+			children.push_back(op.bound.variables[node.product_other_var]->Copy());
 			auto body = DecideRebindOperator(context, "*", std::move(children));
 			node.body = Lower(function, *body);
 		}
@@ -386,7 +387,7 @@ public:
 	//! stage-05 rewrites can prepare nested ABS and product functions; stage 06 evaluates them as child roots.
 	void PrepareL0IndicatorFunctions() {
 		for (auto &indicator : op.l0_indicator_functions) {
-			if (indicator.value_var >= op.decide_variables.size() || indicator.links.size() != 3) {
+			if (indicator.value_var >= op.bound.variables.size() || indicator.links.size() != 3) {
 				throw InternalException("DECIDE tree: malformed L0 indicator function");
 			}
 			auto index = NewNode(DecideNodeKind::FUNCTION);
@@ -400,7 +401,7 @@ public:
 			if (indicator.value_var < tree->variable_scopes.size()) {
 				auto &variable_scope = tree->variable_scopes[indicator.value_var];
 				if (variable_scope.IsKeyed() || variable_scope.scope == DecideVarScope::INLINED) {
-					if (variable_scope.keyed_scope_idx >= op.keyed_scopes.size()) {
+					if (variable_scope.keyed_scope_idx >= op.bound.keyed_scopes.size()) {
 						if (variable_scope.scope != DecideVarScope::INLINED ||
 						    variable_scope.keyed_scope_idx != DConstants::INVALID_INDEX) {
 							throw InternalException("DECIDE tree: L0 indicator %llu has an invalid keyed scope",
@@ -408,7 +409,7 @@ public:
 						}
 					} else {
 						node.per = DecideTreePer::KEY;
-						node.key = op.keyed_scopes[variable_scope.keyed_scope_idx].key;
+						node.key = op.bound.keyed_scopes[variable_scope.keyed_scope_idx].key;
 					}
 				} else if (variable_scope.IsGlobal()) {
 					node.per = DecideTreePer::ONE;
@@ -456,7 +457,7 @@ public:
 	void RegisterDefinitionFunctions() {
 		for (auto &definition : op.definition_functions) {
 			const auto value_var = definition.value_var;
-			if (value_var >= op.decide_variables.size() || !definition.body) {
+			if (value_var >= op.bound.variables.size() || !definition.body) {
 				throw InternalException("DECIDE tree: nonlinear body definition has no valid helper or source body");
 			}
 			auto index = NewNode(DecideNodeKind::FUNCTION);
@@ -480,7 +481,7 @@ public:
 			if (value_var < tree->variable_scopes.size()) {
 				auto &variable_scope = tree->variable_scopes[value_var];
 				if (variable_scope.IsKeyed() || variable_scope.scope == DecideVarScope::INLINED) {
-					if (variable_scope.keyed_scope_idx >= op.keyed_scopes.size()) {
+					if (variable_scope.keyed_scope_idx >= op.bound.keyed_scopes.size()) {
 						if (variable_scope.scope != DecideVarScope::INLINED ||
 						    variable_scope.keyed_scope_idx != DConstants::INVALID_INDEX) {
 							throw InternalException("DECIDE tree: body helper %llu has an invalid keyed scope",
@@ -488,7 +489,7 @@ public:
 						}
 					} else {
 						node.per = DecideTreePer::KEY;
-						node.key = op.keyed_scopes[variable_scope.keyed_scope_idx].key;
+						node.key = op.bound.keyed_scopes[variable_scope.keyed_scope_idx].key;
 					}
 				} else if (variable_scope.IsGlobal()) {
 					node.per = DecideTreePer::ONE;
@@ -520,7 +521,7 @@ public:
 
 	unique_ptr<Expression> MakeDefinitionExpression(const LogicalDecide::DefinitionFunction &definition) const {
 		const auto &body = *definition.body;
-		auto left = BoundCastExpression::AddCastToType(context, op.decide_variables[definition.value_var]->Copy(),
+		auto left = BoundCastExpression::AddCastToType(context, op.bound.variables[definition.value_var]->Copy(),
 		                                               body.return_type);
 		auto row = make_uniq<BoundComparisonExpression>(definition.relation, std::move(left), body.Copy());
 		auto alias = row->GetAlias();
@@ -539,14 +540,14 @@ public:
 			wrapper->alias = WHEN_FILTER_TAG;
 			result = std::move(wrapper);
 		}
-		if (definition.value_var < op.variable_scopes.size()) {
-			auto &scope = op.variable_scopes[definition.value_var];
+		if (definition.value_var < op.bound.variable_scopes.size()) {
+			auto &scope = op.bound.variable_scopes[definition.value_var];
 			if (scope.IsGlobal() || scope.IsKeyed()) {
 				auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 				wrapper->children.push_back(std::move(result));
 				wrapper->alias = PER_CLASS_TAG;
 				if (scope.IsKeyed()) {
-					AddDecideTag(wrapper->alias, MakePerKeyTag(op.keyed_scopes[scope.keyed_scope_idx].key));
+					AddDecideTag(wrapper->alias, MakePerKeyTag(op.bound.keyed_scopes[scope.keyed_scope_idx].key));
 				}
 				result = std::move(wrapper);
 			}
@@ -580,14 +581,14 @@ public:
 		if (aux < tree->variable_scopes.size()) {
 			auto &variable_scope = tree->variable_scopes[aux];
 			if (variable_scope.IsKeyed() || variable_scope.scope == DecideVarScope::INLINED) {
-				if (variable_scope.keyed_scope_idx >= op.keyed_scopes.size()) {
+				if (variable_scope.keyed_scope_idx >= op.bound.keyed_scopes.size()) {
 					if (variable_scope.scope != DecideVarScope::INLINED ||
 					    variable_scope.keyed_scope_idx != DConstants::INVALID_INDEX) {
 						throw InternalException("DECIDE tree: ABS helper %llu has an invalid keyed scope", aux);
 					}
 				} else {
 					node.per = DecideTreePer::KEY;
-					node.key = op.keyed_scopes[variable_scope.keyed_scope_idx].key;
+					node.key = op.bound.keyed_scopes[variable_scope.keyed_scope_idx].key;
 				}
 			} else if (variable_scope.IsGlobal()) {
 				node.per = DecideTreePer::ONE;
@@ -668,18 +669,19 @@ private:
 	vector<unique_ptr<Expression>> retained_function_links;
 
 	string Text(const Expression &expression) const {
-		return RenderDecideSource(expression, DecidePlanNames(op.source_text, op.keyed_scopes, op.keys, op.decide_index,
-		                                                      op.aux_var_expressions, op.frames));
+		return RenderDecideSource(expression,
+		                          DecidePlanNames(op.bound.source_text, op.bound.keyed_scopes, op.bound.keys,
+		                                          op.decide_index, op.aux_var_expressions, op.bound.frames));
 	}
 
 	//! How a message names a root, as it names a row (DecideWrittenClause): by the clause it comes from as the user
 	//! wrote it (QuoteWrittenClause), and a row no clause claims, which a rewrite added for the objective, by the
 	//! objective.
 	string RootText(idx_t source) const {
-		if (source < op.constraint_sources.size()) {
-			return QuoteWrittenClause(op.constraint_sources, source, op.source_text);
+		if (source < op.bound.constraint_sources.size()) {
+			return QuoteWrittenClause(op.bound.constraint_sources, source, op.bound.source_text);
 		}
-		return DecideWrittenObjective(op.written_sense, op.written_objective);
+		return DecideWrittenObjective(op.bound.sense, op.written_objective);
 	}
 
 	unique_ptr<Expression> Resolve(const Expression &expression) const {
@@ -793,11 +795,11 @@ private:
 			}
 			return;
 		}
-		if (signature >= op.signatures.size()) {
+		if (signature >= op.bound.signatures.size()) {
 			throw InternalException("DECIDE tree has invalid signature %llu", signature);
 		}
 		node.signature.clear();
-		for (auto &field : op.signatures[signature].fields) {
+		for (auto &field : op.bound.signatures[signature].fields) {
 			auto copy = CopyField(field);
 			if (copy.value) {
 				auto record = FindRecord(*copy.value);
@@ -855,7 +857,7 @@ private:
 		const bool is_definition = HasDecideTag(comparison.GetAlias(), BODY_DEFINITION_TAG);
 		idx_t definition_value = DConstants::INVALID_INDEX;
 		if (is_definition && (!TryParseDecideIndexTag(comparison.GetAlias(), DEFINES_TAG_PREFIX, definition_value) ||
-		                      definition_value >= op.decide_variables.size())) {
+		                      definition_value >= op.bound.variables.size())) {
 			throw InternalException("DECIDE tree: nonlinear body definition has no valid helper variable");
 		}
 		idx_t l0_function = DConstants::INVALID_INDEX;
@@ -863,8 +865,8 @@ private:
 		unique_ptr<Expression> canonical_envelope;
 		const BoundComparisonExpression *row = &comparison;
 		if (is_abs_envelope || is_l0_link || is_definition) {
-			DecideCanonicalizer canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys,
-			                                  op.is_boolean_var);
+			DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes,
+			                                  op.bound.keys, op.bound.is_boolean_var);
 			canonical_envelope = canonicalizer.CanonicalizeComparison(comparison);
 			row = &canonical_envelope->Cast<BoundComparisonExpression>();
 		}
@@ -944,8 +946,8 @@ private:
 		    node.facts->kind == ConstraintKind::USER_PARAMETER &&
 		    node.facts->defined_var == DConstants::INVALID_INDEX &&
 		    node.facts->scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
-			DecideCanonicalizer canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.keys,
-			                                  op.is_boolean_var);
+			DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes,
+			                                  op.bound.keys, op.bound.is_boolean_var);
 			node.merges_classes = canonicalizer.MergesClasses(*row, node.key);
 		}
 		if (!scope.per_wrapper && node.facts->scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
@@ -1129,7 +1131,8 @@ private:
 					}
 				}
 				node.decision_value = true;
-				if (!carried && (variable >= op.variable_scopes.size() || !op.variable_scopes[variable].IsGlobal())) {
+				if (!carried &&
+				    (variable >= op.bound.variable_scopes.size() || !op.bound.variable_scopes[variable].IsGlobal())) {
 					DecideSignatureField field;
 					field.kind = DecideSignatureFieldKind::DECISION;
 					field.decision = variable;
@@ -1207,9 +1210,9 @@ private:
 		idx_t qualifier;
 		const bool qualified = TryParseQualifiedReducerTag(aggregate.GetAlias(), qualifier) ||
 		                       TryParseDecideIndexTag(aggregate.GetAlias(), TREE_REDUCER_SCOPE_TAG_PREFIX, qualifier);
-		if (qualified && qualifier < op.keyed_scopes.size()) {
+		if (qualified && qualifier < op.bound.keyed_scopes.size()) {
 			node.qualifier_scope = qualifier;
-			entry.key = op.keyed_scopes[qualifier].key;
+			entry.key = op.bound.keyed_scopes[qualifier].key;
 			entry.per = entry.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
 			// The reducer's terms are read on every row its `when` keeps, and its qualifier keeps no value of a row
 			// in no class: such a row still lies in its group.
@@ -1227,7 +1230,7 @@ private:
 			// bound definition (SIGN for L0 can hide a NaN).
 			node.body = Lower(operand, *norm_body);
 		}
-		if (qualified && qualifier < op.keyed_scopes.size()) {
+		if (qualified && qualifier < op.bound.keyed_scopes.size()) {
 			Qualified(operand, qualifier);
 		}
 		return index;
@@ -1237,7 +1240,7 @@ private:
 	//! split by the values its body reads (D70, D71), the keyed mapping of the qualifier's scope
 	//! (DecideModelEmitter::SignatureMapping), whichever reducer it is, a written one or a helper's.
 	void Qualified(idx_t operand, idx_t scope) {
-		UseSignature(*tree->nodes[operand], op.keyed_scopes[scope].signature);
+		UseSignature(*tree->nodes[operand], op.bound.keyed_scopes[scope].signature);
 		tree->qualified_operands[scope] = operand;
 	}
 
@@ -1286,14 +1289,14 @@ private:
 		auto &entry = *tree->nodes[operand];
 		entry.text = node.text + " operand";
 		Gates(operand, link.filter.get());
-		if (link.qualifier_scope_idx < op.keyed_scopes.size()) {
-			entry.key = op.keyed_scopes[link.qualifier_scope_idx].key;
+		if (link.qualifier_scope_idx < op.bound.keyed_scopes.size()) {
+			entry.key = op.bound.keyed_scopes[link.qualifier_scope_idx].key;
 			entry.per = entry.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
 		}
 		if (link.inner_expr) {
 			entry.body = Lower(operand, *link.inner_expr);
 		}
-		if (link.qualifier_scope_idx < op.keyed_scopes.size()) {
+		if (link.qualifier_scope_idx < op.bound.keyed_scopes.size()) {
 			Qualified(operand, link.qualifier_scope_idx);
 		}
 		return index;
@@ -1336,7 +1339,7 @@ private:
 	}
 
 	idx_t Frame(idx_t frame_index, const Expression *marker, const Expression *payload = nullptr) {
-		if (frame_index >= op.frames.size()) {
+		if (frame_index >= op.bound.frames.size()) {
 			throw InternalException("DECIDE tree references invalid frame %llu", frame_index);
 		}
 		if (frame_nodes[frame_index] != DConstants::INVALID_INDEX) {
@@ -1345,7 +1348,7 @@ private:
 		auto index = NewNode(DecideNodeKind::FRAME);
 		frame_nodes[frame_index] = index;
 		auto &node = *tree->nodes[index];
-		auto &frame = op.frames[frame_index];
+		auto &frame = op.bound.frames[frame_index];
 		node.frame = frame_index;
 		node.key = frame.timeline_key;
 		// An anchor whose `within` column is NULL lies in no timeline, so it reads no value (D75): the O holds it in a

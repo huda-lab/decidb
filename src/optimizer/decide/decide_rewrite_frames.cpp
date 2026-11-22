@@ -38,7 +38,7 @@ namespace {
 //! The frame `expr` is the marker of, when it is a range over decisions; else INVALID_INDEX.
 idx_t RangeOverDecisions(const LogicalDecide &decide, const Expression &expr) {
 	idx_t frame;
-	if (!TryGetDecideFrame(expr, frame) || frame >= decide.frames.size() || !decide.frames[frame].range ||
+	if (!TryGetDecideFrame(expr, frame) || frame >= decide.bound.frames.size() || !decide.bound.frames[frame].range ||
 	    !BoundExpressionReferencesDecide(expr, decide.decide_index)) {
 		return DConstants::INVALID_INDEX;
 	}
@@ -63,7 +63,7 @@ bool HoldsRangeOverDecisions(const LogicalDecide &decide, const Expression &expr
 //! norm, which pins its helper from both sides (D79).
 void CollectRangeSigns(ClientContext &context, const LogicalDecide &decide, unique_ptr<Expression> &expr,
                        unordered_map<const Expression *, int> &signs) {
-	const BooleanDecisions booleans {decide.decide_index, decide.is_boolean_var};
+	const BooleanDecisions booleans {decide.decide_index, decide.bound.is_boolean_var};
 	PolarityHolds holds = [&](const Expression &node) {
 		return HoldsRangeOverDecisions(decide, node);
 	};
@@ -100,9 +100,9 @@ void CollectRangeSigns(ClientContext &context, const LogicalDecide &decide, uniq
 void PointsInQuadraticTermsAsRanges(ClientContext &context, LogicalDecide &decide, Expression &expr, bool quadratic) {
 	idx_t frame;
 	if (TryGetDecideFrame(expr, frame)) {
-		if (quadratic && frame < decide.frames.size() && !decide.frames[frame].range &&
+		if (quadratic && frame < decide.bound.frames.size() && !decide.bound.frames[frame].range &&
 		    BoundExpressionReferencesDecide(expr, decide.decide_index)) {
-			auto &spec = decide.frames[frame];
+			auto &spec = decide.bound.frames[frame];
 			spec.range = true;
 			spec.reducer = "sum";
 			spec.to = spec.from;
@@ -145,7 +145,7 @@ public:
 		}
 		auto sign = signs.find(slot.get());
 		const auto push = sign == signs.end() ? ExtremumPush::NONE : ExtremumPushOf(outer, sign->second);
-		auto &spec = decide.frames[frame];
+		auto &spec = decide.bound.frames[frame];
 		if (spec.reducer == "count") {
 			throw InternalException("DECIDE: a count over decisions reached the range rewrite: %s", spec.text);
 		}
@@ -197,7 +197,7 @@ private:
 void DecideOptimizer::RewriteFrameRanges(LogicalDecide &decide) {
 	using Owner = DecideOwnedBody::Owner;
 	auto &context = optimizer.context;
-	if (!decide.frames.empty()) {
+	if (!decide.bound.frames.empty()) {
 		decide.EnumerateBodies([&](DecideOwnedBody &body) {
 			if (body.owner == Owner::CLAUSE || body.owner == Owner::OBJECTIVE) {
 				PointsInQuadraticTermsAsRanges(context, decide, *body.expr, false);
@@ -205,7 +205,7 @@ void DecideOptimizer::RewriteFrameRanges(LogicalDecide &decide) {
 		});
 	}
 	bool any = false;
-	for (auto &frame : decide.frames) {
+	for (auto &frame : decide.bound.frames) {
 		any = any || frame.range;
 	}
 	if (!any) {
@@ -243,7 +243,7 @@ void DecideOptimizer::RewriteFrameRanges(LogicalDecide &decide) {
 		lifter.Lift(comparison.left, ExtremumPushOf(comparison.type), source_clause_id, signs);
 	});
 	if (lifted_objective) {
-		decide.SetObjective(context, std::move(decide.decide_objective));
+		decide.SetObjective(context, std::move(decide.bound.objective));
 	}
 }
 

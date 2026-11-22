@@ -201,20 +201,20 @@ void decide_rewrite::MarkFormulationConstraint(Expression &expr, const string &s
 
 idx_t decide_rewrite::AddAuxiliaryDecision(LogicalDecide &decide, const string &name, const LogicalType &type,
                                            bool is_boolean, DecideVarScopeInfo scope, const string &label) {
-	idx_t var_idx = decide.decide_variables.size();
-	decide.decide_variables.push_back(
+	idx_t var_idx = decide.bound.variables.size();
+	decide.bound.variables.push_back(
 	    make_uniq<BoundColumnRefExpression>(name, type, ColumnBinding(decide.decide_index, var_idx)));
 	decide.num_auxiliary_vars++;
-	decide.is_boolean_var.push_back(is_boolean);
-	if (decide.variable_scopes.size() != var_idx) {
+	decide.bound.is_boolean_var.push_back(is_boolean);
+	if (decide.bound.variable_scopes.size() != var_idx) {
 		throw InternalException(
 		    "DECIDE: %llu scopes for %llu decisions; the binder promises one scope per decision and "
 		    "every rewrite adds a scope with its decision",
-		    decide.variable_scopes.size(), var_idx);
+		    decide.bound.variable_scopes.size(), var_idx);
 	}
-	decide.variable_scopes.push_back(scope);
+	decide.bound.variable_scopes.push_back(scope);
 	if (scope.IsKeyed()) {
-		decide.keyed_scopes[scope.keyed_scope_idx].scoped_variable_indices.push_back(var_idx);
+		decide.bound.keyed_scopes[scope.keyed_scope_idx].scoped_variable_indices.push_back(var_idx);
 	}
 	decide.aux_var_expressions.emplace_back(var_idx, label);
 	return var_idx;
@@ -239,8 +239,8 @@ DecideVarScopeInfo decide_rewrite::ScopeOf(const LogicalDecide &decide, const De
 			// group of its path key or per window of its frame (AddValueHelper), so what is computed from its value
 			// has an instance per group, not per row: a row's instance would make each row a variant of a scope
 			// reading it (`sum(per t.g: abs(avg(...)))`).
-			return var_idx < decide.variable_scopes.size() ? decide.variable_scopes[var_idx]
-			                                               : DecideVarScopeInfo::Row();
+			return var_idx < decide.bound.variable_scopes.size() ? decide.bound.variable_scopes[var_idx]
+			                                                     : DecideVarScopeInfo::Row();
 		}
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
@@ -272,7 +272,7 @@ DecideVarScopeInfo decide_rewrite::ScopeOf(const LogicalDecide &decide, const De
 }
 
 unique_ptr<Expression> decide_rewrite::MakeDecisionRef(const LogicalDecide &decide, idx_t var_idx) {
-	auto &ref = decide.decide_variables[var_idx]->Cast<BoundColumnRefExpression>();
+	auto &ref = decide.bound.variables[var_idx]->Cast<BoundColumnRefExpression>();
 	return make_uniq<BoundColumnRefExpression>(ref.GetName(), ref.return_type, ref.binding);
 }
 
@@ -285,13 +285,15 @@ void decide_rewrite::ReplaceWithDecision(ClientContext &context, const LogicalDe
 string decide_rewrite::RenderForPlan(const Expression &expr, const LogicalDecide &decide) {
 	// The labels of the auxiliaries earlier passes made, so a construct over one prints
 	// it as what it stands for rather than by its internal name.
-	return RenderDecideSource(expr, DecidePlanNames(decide.source_text, decide.keyed_scopes, decide.keys,
-	                                                decide.decide_index, decide.aux_var_expressions, decide.frames));
+	return RenderDecideSource(expr,
+	                          DecidePlanNames(decide.bound.source_text, decide.bound.keyed_scopes, decide.bound.keys,
+	                                          decide.decide_index, decide.aux_var_expressions, decide.bound.frames));
 }
 
 idx_t decide_rewrite::SourceClauseOf(const Expression &comparison, const LogicalDecide &decide) {
 	idx_t source_id;
-	if (!TryParseSourceClauseTag(comparison.GetAlias(), source_id) || source_id >= decide.constraint_sources.size()) {
+	if (!TryParseSourceClauseTag(comparison.GetAlias(), source_id) ||
+	    source_id >= decide.bound.constraint_sources.size()) {
 		throw InternalException("DECIDE: a comparison carries no source clause");
 	}
 	return source_id;
@@ -380,7 +382,7 @@ void DecideOptimizer::TagAtomicRemovalGroups(LogicalDecide &decide) {
 	// The clause a leaf belongs to, named by its first source id: a BETWEEN is one clause of two leaves, which
 	// diagnosis removes together or not at all.
 	auto clause_of = [&](const Expression &node) {
-		return WrittenClauseId(decide.constraint_sources, SourceClauseOf(node, decide));
+		return WrittenClauseId(decide.bound.constraint_sources, SourceClauseOf(node, decide));
 	};
 	std::set<idx_t> removable_clauses;
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
@@ -445,9 +447,9 @@ unique_ptr<Expression> decide_rewrite::ScopeRowPerClause(ClientContext &context,
 	if (!scope.per_wrapper) {
 		return ScopeHelperRow(std::move(row), scope.Condition());
 	}
-	DecideCanonicalizer canonicalizer(context, decide.decide_index, decide.variable_scopes, decide.keyed_scopes,
-	                                  decide.keys, decide.is_boolean_var);
-	canonicalizer.frames = &decide.frames;
+	DecideCanonicalizer canonicalizer(context, decide.decide_index, decide.bound.variable_scopes,
+	                                  decide.bound.keyed_scopes, decide.bound.keys, decide.bound.is_boolean_var);
+	canonicalizer.frames = &decide.bound.frames;
 	vector<DecideSignatureField> fields;
 	canonicalizer.CollectSignatureFields(*row, scope.PerKey(), fields);
 	row = ScopeHelperRow(std::move(row), scope.Condition());
@@ -455,9 +457,9 @@ unique_ptr<Expression> decide_rewrite::ScopeRowPerClause(ClientContext &context,
 	auto wrapper = make_uniq<BoundConjunctionExpression>(scope.per_wrapper->type);
 	auto alias = scope.per_wrapper->GetAlias();
 	idx_t written;
-	string text = "per " + DecideKeyText(decide.keys, scope.PerKey());
+	string text = "per " + DecideKeyText(decide.bound.keys, scope.PerKey());
 	if (TryParseSignatureTag(alias, written)) {
-		text = decide.signatures[written].text;
+		text = decide.bound.signatures[written].text;
 		RemoveDecideTag(alias, MakeSignatureTag(written));
 	}
 	if (!fields.empty()) {
@@ -467,8 +469,8 @@ unique_ptr<Expression> decide_rewrite::ScopeRowPerClause(ClientContext &context,
 		signature.fields = std::move(fields);
 		signature.text = std::move(text);
 		TryParseSourceClauseTag(source_alias, signature.source_clause_id);
-		decide.signatures.push_back(std::move(signature));
-		AddDecideTag(alias, MakeSignatureTag(decide.signatures.size() - 1));
+		decide.bound.signatures.push_back(std::move(signature));
+		AddDecideTag(alias, MakeSignatureTag(decide.bound.signatures.size() - 1));
 	}
 	wrapper->alias = std::move(alias);
 	wrapper->children.push_back(std::move(row));
@@ -484,7 +486,7 @@ unique_ptr<Expression> decide_rewrite::ScopeRowPerInstance(const LogicalDecide &
 	// (RewriteFrameRanges): a row of it stays one per row, each reading its window's instance, and the rows of one
 	// window say the same.
 	if (scope.IsKeyed()) {
-		auto link = decide.keyed_scopes[scope.keyed_scope_idx].value_link;
+		auto link = decide.bound.keyed_scopes[scope.keyed_scope_idx].value_link;
 		if (link != DConstants::INVALID_INDEX && decide.reducer_value_links[link].frame != DConstants::INVALID_INDEX) {
 			return row;
 		}
@@ -493,7 +495,7 @@ unique_ptr<Expression> decide_rewrite::ScopeRowPerInstance(const LogicalDecide &
 	wrapper->children.push_back(std::move(row));
 	wrapper->alias = PER_CLASS_TAG;
 	if (scope.IsKeyed()) {
-		AddDecideTag(wrapper->alias, MakePerKeyTag(decide.keyed_scopes[scope.keyed_scope_idx].key));
+		AddDecideTag(wrapper->alias, MakePerKeyTag(decide.bound.keyed_scopes[scope.keyed_scope_idx].key));
 	}
 	return std::move(wrapper);
 }

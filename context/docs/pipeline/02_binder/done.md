@@ -469,7 +469,7 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 | `per K: C` | a `PER_CLASS_TAG` wrapper `[C]` tagged `__per_key_<i>__` with K's entry of the key table (no tag for `per ()`, which has no entry), its location the `per`'s, where the parser kept the key as written |
 | `when c per K: C` | a `PER_CLASS_TAG` wrapper around the `WHEN_FILTER_TAG` one `[C, c]`, tagged with K |
 | `per row: C`, `agg(per row: e)`, `per row: x(TYPE)` | nothing: the default written out (`DecidePer::ROW`); a `per row:` clause binds to its body, which keeps its own query location |
-| `agg(...) by (G)` | the aggregate tagged `__group_key_<i>__`, naming `BoundSelectNode::decide_keys[i]`, whose `written_as_by` is set; `by ()` adds nothing |
+| `agg(...) by (G)` | the aggregate tagged `__group_key_<i>__`, naming `BoundSelectNode::decide.keys[i]`, whose `written_as_by` is set; `by ()` adds nothing |
 | `agg(when c: e)` | the aggregate's `filter` (§3) |
 | `agg(per K': e)` | a `__qualified_by_<i>__` tag on an exact key scope (§3) |
 | `MAXIMIZE when c: E` | a WHEN wrapper over the objective |
