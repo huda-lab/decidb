@@ -232,12 +232,7 @@ inline bool TryParseDecideIndexTag(const string &alias, const string &prefix, id
 //! reducer (D81).
 static constexpr const char *WHEN_FILTER_TAG = "__when_filter__";
 
-//! Tag used by the parser to mark the colon form, `sum(D: expr)`: children[0] is the
-//! aggregate, children[1..] the relation names before the colon. The binder consumes
-//! and discards it, folding the resolved relations into the tag below.
-static constexpr const char *QUALIFIED_REDUCER_TAG = "__qualified_reducer__";
-
-//! Tag prefix recording a reducer's own key, `sum(per K: e)` or `SUM(D: e)` (on
+//! Tag prefix recording a reducer's own key, `sum(per K: e)` (on
 //! BoundAggregateExpression.alias). Format: "__qualified_by_<keyed_scope_idx>__" — the
 //! index is into LogicalDecide::keyed_scopes, whose entry supplies the classes
 //! the reducer takes one value from. The scope may have no variable declared on it.
@@ -578,8 +573,8 @@ inline bool TryParseAbsFunctionEnvelopeTag(const string &alias, idx_t &var_idx) 
 	       TryParseDecideIndexTag(alias, ABS_FUNCTION_NEG_TAG_PREFIX, var_idx);
 }
 
-//! The name prefixes a rewrite gives a helper decision it adds (AddAuxiliaryDecision), and the names the parser gives a
-//! part of a clause it sets aside while it converts a removed spelling. Each is the opening of a name `<prefix><n>__`.
+//! The name prefixes a rewrite gives a helper decision it adds (AddAuxiliaryDecision). Each is the opening of a name
+//! `<prefix><n>__`.
 //! They are tags in a decision's or a column's name, so DecideNameContainsTag refuses a user name that holds one.
 //! A helper's origin is read from them until the helper carries it as a field (R20).
 //! The 0/1 indicator of an L0 count: the one whose big-M the optimizer picks, and the one whose big-M is written.
@@ -598,7 +593,6 @@ static constexpr const char *VALUE_LINK_NAME_PREFIX = "__value_";
 
 //! Every DECIDE tag above, the one list DecideNameContainsTag reads. A constant added above is added here.
 static constexpr const char *DECIDE_TAGS[] = {WHEN_FILTER_TAG,
-                                              QUALIFIED_REDUCER_TAG,
                                               QUALIFIED_REDUCER_SCOPE_TAG_PREFIX,
                                               SCOPE_WHEN_TAG,
                                               SCOPE_PER_TAG,

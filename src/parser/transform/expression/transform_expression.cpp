@@ -70,7 +70,6 @@ static int DecideBindingOf(const duckdb_libpgquery::PGNode &node) {
 		// A call written as one, and DECIDE's markers for the scope and `by` of a reducer, are whole.
 		case PG_AEXPR_NULLIF:
 		case AEXPR_PAREN:
-		case PG_AEXPR_QUALIFIED_REDUCER:
 		case PG_AEXPR_SCOPE_WHEN:
 		case PG_AEXPR_SCOPE_PER:
 		case PG_AEXPR_SCOPE_PER_ROW:

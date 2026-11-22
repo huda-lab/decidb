@@ -11,8 +11,8 @@
 namespace duckdb {
 
 //! The transformer writes each construct as an operator function named by a tag (transform_operator.cpp): the
-//! body or call is children[0]; a `when` holds its condition in children[1]; a `per`, a `by` and a relation prefix
-//! hold their key in children[1..]. With both a `when` and a `per`, the `per` is the outer one.
+//! body or call is children[0]; a `when` holds its condition in children[1]; a `per` and a `by` hold their key in
+//! children[1..]. With both a `when` and a `per`, the `per` is the outer one.
 static bool IsDecideMarker(const ParsedExpression &expr, const char *tag) {
 	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
 		return false;
@@ -104,18 +104,6 @@ DecideByView ReadDecideBy(const ParsedExpression &expr) {
 	return by;
 }
 
-bool IsDecideRelationPrefix(const ParsedExpression &expr) {
-	return IsDecideMarker(expr, QUALIFIED_REDUCER_TAG);
-}
-
-DecideRelationPrefixView ReadDecideRelationPrefix(const ParsedExpression &expr) {
-	auto &marker = Marker(expr);
-	DecideRelationPrefixView prefix;
-	prefix.call = &marker.children[0];
-	prefix.relations = MarkerKey(marker);
-	return prefix;
-}
-
 DecideDeclarationView ReadDecideDeclaration(const ParsedExpression &declaration) {
 	// The grammar builds a declaration as `name = 'type_marker'` (typed_decide_variable), the name a column
 	// reference, under a `per` or `per row` scope when the declaration has one.
@@ -185,9 +173,6 @@ const ParsedExpression &UnwrapReducerMarkers(const ParsedExpression &expr) {
 	const ParsedExpression *result = &expr;
 	if (IsDecideBy(*result)) {
 		result = ReadDecideBy(*result).call->get();
-	}
-	if (IsDecideRelationPrefix(*result)) {
-		result = ReadDecideRelationPrefix(*result).call->get();
 	}
 	return *result;
 }

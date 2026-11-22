@@ -665,7 +665,7 @@ def test_generated_column_is_not_a_key_column(decidb_cli, tmp_path):
 
 @pytest.mark.correctness
 def test_per_decision_in_a_qualified_reducer_answers(decidb_cli, scope_solver):
-    """``SUM(D: capacity * open)`` with `open` per D is ``sum(per D: ...)`` (S4): each
+    """``SUM(per D: capacity * open)`` with `open` per D is ``sum(per D: ...)`` (S4): each
     depot's capacity counts once, so D2 and D3 fit under 50 together."""
     model = ScopedModel(_joined(), [Decision("open", DEPOT_COLUMNS, VarType.BINARY, ub=1.0)])
     clauses = [
@@ -679,7 +679,7 @@ def test_per_decision_in_a_qualified_reducer_answers(decidb_cli, scope_solver):
         f"""
         SELECT shipmentID, open {_from()}
         DECIDE per D: open(BOOL)
-        SUCH THAT SUM(D: capacity * open) <= 50
+        SUCH THAT SUM(per D: capacity * open) <= 50
         MAXIMIZE SUM(open)
         ORDER BY shipmentID""",
     )

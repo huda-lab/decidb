@@ -586,7 +586,7 @@ produces them, and why it cannot live here, is
 ## 4. PHASE 1.5 — keyed mappings
 
 For each `KeyedScopeInfo` — a keyed decision's key (`per K: x`), a reducer's own `per`
-or colon form (`sum(per K: e)`, `SUM(D: e)`), a helper decision's `by` key — before
+(`sum(per K: e)`), a helper decision's `by` key — before
 coefficient evaluation:
 
 1. Read the scope's key in the descent, which reads every row for a declared decision's
@@ -969,10 +969,10 @@ sum(when active: x * a) by (grp) + sum(when priority: x * b) by (grp) <= 10
 one row, over the rows either keeps. A group where `priority` keeps no row has no row:
 its second reducer is NULL there.
 
-### A reducer's own `per`, and `SUM(D: e)`
+### A reducer's own `per`
 
-`sum(per K: e)` asks for one contribution per **class** of `K`, and the colon form `SUM(D: e)` is `sum(per D: e)` with
-`K` every column of `D`; a join repeats each class once per matching row. De-duplication (`FirstOfEachInstance`) keeps
+`sum(per K: e)` asks for one contribution per **class** of `K`, and in `sum(per D: e)`
+`K` is every stored column of `D`; a join repeats each class once per matching row. De-duplication (`FirstOfEachInstance`) keeps
 the first row of each class among the rows the reducer reads — the kept rows its own `when` keeps — and zeroes the rest.
 A reducer whose body reads more than the key holds has a variant scope of its own (D71), so its classes are the key's
 split by the body's values: every row of a kept identity carries the same value, and whichever row is kept gives the

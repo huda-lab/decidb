@@ -2,7 +2,7 @@
 
 The grammar has only the current syntax: an old spelling is a syntax error at the token the grammar cannot place,
 or, for a declaration, the error the current grammar gives a name with no type. The neighbours of the old forms
-that stay are checked here too: `scalar` as a name, the colon form, and a relation-qualified name.
+that stay are checked here too: `scalar` as a name and a relation-qualified name.
 """
 
 import pytest
@@ -29,9 +29,6 @@ def _query(declarations="x(INT)", clauses="x <= cap", objective="MAXIMIZE SUM(x)
         pytest.param(_query(clauses="x <= cap AND SUM(x) <= 4 PER g"), "PER g", id="PER-after-a-constraint"),
         pytest.param(_query(clauses="x <= cap AND SUM(x) <= 5 WHEN g = 'A'"), "WHEN g", id="WHEN-after-a-constraint"),
         pytest.param(_query(clauses="x <= cap AND SUM(x) WHEN (g = 'A') <= 5"), "WHEN (g", id="WHEN-after-a-reducer"),
-        pytest.param(
-            _query(clauses="x <= cap AND SUM(t: x) WHEN (g = 'A') <= 5"), "WHEN (g", id="WHEN-after-a-colon-reducer"
-        ),
         pytest.param(_query(objective="MAXIMIZE SUM(x) WHEN g = 'A'"), "WHEN g", id="WHEN-after-the-objective"),
         pytest.param(_query(objective="MAXIMIZE SUM(x) PER g"), "PER g", id="PER-after-the-objective"),
     ],
@@ -123,12 +120,6 @@ def test_scalar_stays_a_name(decidb_cli):
     assert decidb_cli.execute(_query("scalar(INT)", "scalar <= cap", "MAXIMIZE SUM(scalar)", "id, scalar"))[0]
 
 
-def test_colon_form_inside_a_plain_subquery_is_named(decidb_cli):
-    """The colon form is a spelling only for a DECIDE clause's own reducers."""
-    sql = _query(clauses="x <= cap AND x <= (SELECT SUM(u: cap) FROM (VALUES (1, 'A')) u(cap, g))")
-    decidb_cli.assert_error_at(sql, kind="Not implemented Error", at="SUM(u: cap)", word="'SUM(u: cap)'")
-
-
 def test_qualified_names_that_are_not_decisions_still_bind(decidb_cli):
     """A struct field or a relation's column named like a decision is data."""
     sql = f"""SELECT id, open FROM (SELECT *, {{'open': cap}} AS s FROM (VALUES (1, 3), (2, 5)) v(id, cap)) t
@@ -136,9 +127,7 @@ def test_qualified_names_that_are_not_decisions_still_bind(decidb_cli):
     assert decidb_cli.execute(sql)[0] == decidb_cli.execute(sql.replace("t.s.open", "cap").replace("s.open", "cap"))[0]
 
 
-def test_colon_form_stays(decidb_cli):
-    """`SUM(D: e)` is the same as `sum(per D: e)`."""
-    assert (
-        decidb_cli.execute(_query(clauses="x <= cap AND SUM(t: x) <= 8"))[0]
-        == decidb_cli.execute(_query(clauses="x <= cap AND sum(per t: x) <= 8"))[0]
-    )
+def test_a_relation_before_a_colon_is_a_syntax_error(decidb_cli):
+    """A reducer over a relation's classes is written `sum(per t: x)`; `SUM(t: x)` is no syntax."""
+    sql = _query(clauses="x <= cap AND SUM(t: x) <= 8")
+    decidb_cli.assert_error_at(sql, kind="Parser Error", at=": x", word="syntax error")

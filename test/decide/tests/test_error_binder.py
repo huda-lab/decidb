@@ -1191,30 +1191,6 @@ class TestBinderRefusalBranches:
         _branch_refusal(decidb_cli, f"SUCH THAT x <= 3 AND SUM({argument}) <= 30 MAXIMIZE SUM(x)", message)
 
     @pytest.mark.parametrize(
-        "constraint, message",
-        [
-            # A colon form over a function that is no reducer, then a reducer that cannot be qualified, and over a
-            # reducer that fails to bind.
-            ("abs(t: x) <= 5", At("Binder Error", "abs(t: x)")),
-            ("SUM(x) + count(t: w) <= 30", At("Binder Error", "count(t: w)")),
-            ("count(t: x) <= 5", At("Not implemented Error", "count(")),
-            # The relation of the decisions.
-            ("sum(decide_variables: x) <= 5", At("Binder Error", "decide_variables")),
-        ],
-    )
-    def test_colon_form(self, decidb_cli, constraint, message):
-        _branch_refusal(decidb_cli, f"SUCH THAT x <= 3 AND {constraint} MAXIMIZE SUM(x)", message)
-
-    @pytest.mark.error_parser
-    def test_a_qualified_name_before_a_colon_is_a_parser_error(self, decidb_cli):
-        """A reducer's qualifier is one name per relation: a qualified name is refused where it is written."""
-        decidb_cli.assert_error_at(
-            f"{_BRANCH_ROWS}DECIDE x(INT) SUCH THAT x <= 3 AND sum(t.u: x) <= 5 MAXIMIZE SUM(x)",
-            kind="Parser Error",
-            at="t.u",
-        )
-
-    @pytest.mark.parametrize(
         "key, message",
         [
             # Three names that name no relation (RelationAlias's catalog.schema.alias case), and five that are a

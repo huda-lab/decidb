@@ -359,7 +359,7 @@ assertion, ASan or UBSan report. It is the baseline for every direct-solve task 
   and the `IN` rewrite catch everything; direct rules pass `DIRECT_CONSTANT` or `DIRECT_FINITE_CONSTANT`.
 - **The bound-side rewrite is the one evaluator of a data bound** (`decide_rewrite_rhs_bounds.cpp`,
   `RewriteRhsAggregates`, called by `DecideOptimizer::OptimizeDecide` before the direct rules, in every mode). Every
-  reducer over data on the right side of a clause (`COUNT`, `MIN`, `MAX`, `SUM`, `AVG`, a written norm, a keyed or colon
+  reducer over data on the right side of a clause (`COUNT`, `MIN`, `MAX`, `SUM`, `AVG`, a written norm, a keyed
   reducer) becomes a placeholder column of the DECIDE source, recorded on the node (`LogicalDecide::bound_aggregates`;
   equal reducers share one). The path that answers the node builds each record as a side table of the source reader
   (`DirectAddBoundTables`, `DirectSourceReader::AddSideTable`): the same DuckDB aggregate over another read of the
@@ -368,7 +368,7 @@ assertion, ASan or UBSan report. It is the baseline for every direct-solve task 
   it back by the key with a SINGLE join that compares each key element as the class key does (above): with `=` for a
   written column, whose NULL puts a row in no group (D5), so the row has no table row and reads NULL; with IS NOT
   DISTINCT FROM for a column of a relation, where a NULL is a group. This is how DuckDB decorrelates a scalar subquery
-  (FlattenDependentJoins). A keyed or colon reducer counts each class of its key once: an aggregate per group, class and
+  (FlattenDependentJoins). A keyed reducer counts each class of its key once: an aggregate per group, class and
   the body's signature fields takes each instance's body (`ARBITRARY` over rows that agree: a nested reducer is a field
   by its key and data by each column it reads, so two groups whose reducers hold one value are two instances, D70, D71,
   D83), and the reducer runs over the instances of each group. On a row whose written `by` column is NULL the column is NULL, so the instance is skipped (D5),

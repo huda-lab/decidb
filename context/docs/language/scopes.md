@@ -43,8 +43,7 @@ the clause the user wrote.
 - **Reducers.** `DecideBinder::BindScopedReducer` puts the inner `when` on `BoundAggregateExpression::filter` and tags
   an inner `per` with its key scope (`MakeQualifiedReducerTag`). `BindReducerBy` registers the `by` key in
   `LogicalDecide::keys` (one entry per key; keys compare as sets, a key holding a subquery by its text,
-  `FindOrCreateDecideKey`) and tags the reducer `MakeGroupKeyTag`. `BindQualifiedReducer` binds the colon form onto the
-  same key scope as `sum(per D: e)`; a message quotes it as written and EXPLAIN's layers print `sum(per D: e)`. Tags are
+  `FindOrCreateDecideKey`) and tags the reducer `MakeGroupKeyTag`. Tags are
   composable (`AddDecideTag`, `HasDecideTag`), because a keyed `AVG` is tagged by the binder and again by the AVG→SUM
   rewrite.
 - **Objective.** `DecideObjectiveBinder::BindScopedObjective` wraps a front `when` the same way; `per ()` adds
@@ -130,11 +129,11 @@ In `src/execution/operator/decide/` (the tree: `decide_descent.cpp`, `decide_tre
   `DecideGroupClassSets` lists the classes a model row stands for (DIAGNOSE's `group` column).
 - The model emitter's keyed mappings give every row its class's solver column, for keyed decisions and for helpers;
   the objective's signature must have one variant (D72).
-- An inner `per` (or colon form) keeps one row per class in each group, among the rows the reducer reads: its operand
+- An inner `per` keeps one row per class in each group, among the rows the reducer reads: its operand
   holds one entry per class, and the reducer reads each one's first row (`FirstOfEachInstance`). AVG's denominator then
   counts classes without special code. A reducer whose body has a field keeps one row per variant of each class: its own
   keyed scope numbers the rows by key and signature (D71), so every row it keeps stands for rows that read the same
-  value. The mask is per term, so `SUM(D: a * open) + sum(b * ship)` de-duplicates only the first.
+  value. The mask is per term, so `sum(per D: a * open) + sum(b * ship)` de-duplicates only the first.
 - The tree's term records (`decide_tree_terms.hpp`) carry a clause's scope as one `DecideClauseScope` — `when`,
   `per` (`PerRole`: `NONE`, `ONE_ROW_PER_CLASS`, `NAMES_CLASSES`) and `class_key` — embedded in `DecideConstraint`
   (beside its `group_key`), and on `DecideObjective` as `when_condition`; an objective

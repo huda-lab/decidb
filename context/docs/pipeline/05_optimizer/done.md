@@ -401,7 +401,7 @@ across any of that:
 | `reduction` | A reducer term and a row-invariant one are summed differently downstream |
 | `filter` | The reducer's own `when`. `sum(when a: x)` and `sum(when b: x)` are one column over two row sets |
 | `avg_scale` | AVG divides by the group's row count; merging before that scaling applies the division to both |
-| `qualifier_scope_idx` | Selects a de-duplication mask (the reducer's own `per`, or `SUM(D: ...)`) — again a statement about which rows contribute |
+| `qualifier_scope_idx` | Selects a de-duplication mask (the reducer's own `per`) — again a statement about which rows contribute |
 | `frame_read` | `x - at(previous: x) over (...)` names one decision at two rows |
 
 Constants (`INVALID_INDEX`) are left alone: a fixed offset folded into the RHS is

@@ -85,14 +85,13 @@ are columns, decisions, reducers and frames.
 | `DecideScope` | struct | `when`; `per` as written: absent, `row`, `()`, or a key list | `__scope_when__`, `__scope_per__`, `__scope_per_row__` calls; "one child means `per ()`" |
 | `DecideDeclaration` | struct | name, type (INT, REAL, BOOL), its `per`, location | a comparison of the name with a string constant (`'integer_variable'`) |
 | `DecideClause` | struct | `DecideScope`, body, location | one item of the AND expression |
-| `DecideReducerExpression` | `ParsedExpression` | function name, arguments, the operand's `DecideScope`, `by` (absent, `()`, or a key list) | `__reducer_by__`, `__qualified_reducer__`, a scope marker as a call's first argument |
+| `DecideReducerExpression` | `ParsedExpression` | function name, arguments, the operand's `DecideScope`, `by` (absent, `()`, or a key list) | `__reducer_by__`, a scope marker as a call's first argument |
 | `DecideFrameExpression` | `ParsedExpression` | as today | — |
 
 `SelectNode` holds `vector<DecideDeclaration>`, `vector<DecideClause>`, the objective as one `DecideClause` with its
 sense, and the source text.
 
-- `sum(D, T: e)` is the operand's `per` with a key of relations; it has no field of its own.
-- A reducer node is made only where DECIDE syntax is written (a scope inside the call, a `by`, a relation prefix).
+- A reducer node is made only where DECIDE syntax is written (a scope inside the call, a `by`).
   A plain `sum(x)` stays a `FunctionExpression`, and the binder makes a bound reducer of both, because whether a
   name is an aggregate is the catalog's to say.
 - Each class follows `DecideFrameExpression`, which has every piece: copy, equality, hash, `ToString`, generated
@@ -232,7 +231,7 @@ The steps run in order, one at a time: each touches files the next one touches.
 
 | Task | Carrier | Stages touched | Deletes |
 |---|---|---|---|
-| TREE-1 | Parser nodes (§ 3.2.1) | 01, 02 | 5 parser tags, `decide_parsed_markers`, the string-typed declarator |
+| TREE-1 | Parser nodes (§ 3.2.1) | 01, 02 | 4 parser tags, `decide_parsed_markers`, the string-typed declarator |
 | TREE-2 | `BoundDecide`, moved whole | 02, 03, planning | the field-by-field copies at each hop |
 | TREE-3 | Clause records | 02–05, planning, 08's readers, direct front end, EXPLAIN, DIAGNOSE | the AND tree, its wrappers, `constraint_sources`, 14 tags |
 | TREE-4 | Reducer node and value node | 02–05, DuckDB's statistics pass, planning, 08's readers, direct front end | 15 tags; `norm` as a patched SUM |
@@ -268,7 +267,7 @@ goes with the later one.
 
 | Gone after | Tags | Home |
 |---|---|---|
-| TREE-1 | `SCOPE_WHEN`, `SCOPE_PER`, `SCOPE_PER_ROW`, `REDUCER_BY`, `QUALIFIED_REDUCER` | `DecideScope`, `DecideReducerExpression` |
+| TREE-1 | `SCOPE_WHEN`, `SCOPE_PER`, `SCOPE_PER_ROW`, `REDUCER_BY` | `DecideScope`, `DecideReducerExpression` |
 | TREE-3 | `WHEN_FILTER`, `PER_CLASS`, `PER_KEY_`, `SIGNATURE_` | the clause's scope |
 | TREE-3 | `SOURCE_CLAUSE_`, `REMOVAL_GROUP_`, `BETWEEN_LOWER`, `BETWEEN_UPPER`, `STRUCTURAL_CONSTRAINT`, `DEFINES_`, `OBJECTIVE_ROW` | the clause's origin |
 | TREE-3 | `MINMAX_EASY_REWRITE`, `SINGLETON_ROW_BOUND`, `SINGLETON_ROW_CLAUSE_ROWS` | clause fields |

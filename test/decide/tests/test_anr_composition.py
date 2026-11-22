@@ -779,7 +779,7 @@ class TestComposition:
                  {values(warehouses, 'W', ('product', 'warehouse'))} USING (product)
             DECIDE per T: x(INT)
             SUCH THAT x <= T.v + 3 AND at(previous: x) over (T.period within T.product) <= x
-            MAXIMIZE sum(T: x) ORDER BY T.product, T.period, W.warehouse"""
+            MAXIMIZE sum(per T: x) ORDER BY T.product, T.period, W.warehouse"""
         joined = [
             {"product": p, "period": t, "v": v, "warehouse": w} for p, t, v in periods for q, w in warehouses if q == p
         ]

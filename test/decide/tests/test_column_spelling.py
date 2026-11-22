@@ -65,10 +65,10 @@ def test_each_clause_keeps_its_own_spelling_of_a_key(decidb_cli):
     sql = (
         "SELECT x FROM (VALUES (1, 'E', 5), (2, 'W', 6)) D(d, region, cost) "
         "DECIDE x(INT) SUCH THAT x >= 0 AND sum(x) by (D.d, D.region, D.cost) <= 7 AND sum(x) by (D) <= 9 "
-        "AND SUM(D: D.cost * x) <= 40 AND sum(per D.d, D.region, D.cost: x) <= 30 MAXIMIZE sum(x)"
+        "AND SUM(per D: D.cost * x) <= 40 AND sum(per D.d, D.region, D.cost: x) <= 30 MAXIMIZE sum(x)"
     )
     plan = _packed(decidb_cli.execute_raw(f"{_OFF}EXPLAIN {sql}").stdout)
-    for text in ("sum(x)by(D.d,D.region,D.cost)<=7", "sum(x)by(D)<=9", "SUM(D:D.cost*x)<=40"):
+    for text in ("sum(x)by(D.d,D.region,D.cost)<=7", "sum(x)by(D)<=9", "SUM(perD:D.cost*x)<=40"):
         assert text in plan, plan
 
 

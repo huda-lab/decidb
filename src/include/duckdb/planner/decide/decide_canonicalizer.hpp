@@ -548,7 +548,7 @@ private:
 	//! `per row`, which no frame's timeline can span.
 	void PlaceFramesIn(const Expression &expr, const DecideReducerPath &path, const FramePerKey *per,
 	                   DecideFramePlacement &placement) const;
-	//! The key of a reducer's own `per` (or of the colon form), when it has one.
+	//! The key of a reducer's own `per`, when it has one.
 	bool ReducerPerKey(const BoundAggregateExpression &reducer, const vector<KeyedScopeInfo> &keyed_scopes,
 	                   FramePerKey &out) const;
 

@@ -118,7 +118,7 @@ def test_figure1_paper_query_matches_published_output(decidb_cli, oracle_solver)
             ship BETWEEN 0 AND capacity * open AND
             per depotID: sum(ship) by (depotID) <= stock AND
             when priority = 'critical' per regionID: sum(ship) by (regionID) >= demand
-        MINIMIZE SUM(unit_cost * ship) + SUM(D: opening_cost * open)
+        MINIMIZE SUM(unit_cost * ship) + SUM(per D: opening_cost * open)
     """
     rows, cols = decidb_cli.execute(query)
     ri, oi, si = cols.index("routeID"), cols.index("open"), cols.index("ship")

@@ -168,7 +168,7 @@ one group at a time. No test asserts an answer its docstring derives.
   no decision (D5);
   both clause orders; several declarators, each with its own key; qualified key names
   and the kept side of a `USING` column; result types; EXPLAIN; every key error; a
-  keyed decision inside a colon-form reducer and beside a reducer. Oracle, dump and
+  keyed decision inside a reducer with its own relation key and beside a reducer. Oracle, dump and
   pinned messages.
 - **`test_scope_generation.py`** — `[when c] [per K]: C`. One constraint per class
   (`per ()` one; `per row` or none, one per kept row); an unused `per` builds the bare
@@ -189,9 +189,8 @@ one group at a time. No test asserts an answer its docstring derives.
   `test_a_square_in_a_grouped_reducer`) and dump.
 - **`test_scope_reducer_inner.py`** — `agg([when c] [per K]: e)`. The inner `when`
   filters its own reducer only; an inner `per` counts each class once, from its first
-  kept row; the colon form `SUM(D: e)` builds the model of `sum(per D: e)` and takes a
-  `by`; inner `per ()`; AVG divides by the values it receives; MAX is unaffected by an
-  inner `per`; an inner key reads one value per variant of its classes (D71), and the colon form
+  kept row; an inner `per` takes a `by`; inner `per ()`; AVG divides by the values it receives; MAX is unaffected by an
+  inner `per`; an inner key reads one value per variant of its classes (D71), and an inner relation key
   reads a per-row decision once per row; a `when` in front leaves out the groups it keeps no row
   of. Oracle, dump and pinned messages.
 - **`test_scope_objective.py`** — `MAXIMIZE|MINIMIZE [when c] [per ()]: E`. An omitted
@@ -348,7 +347,7 @@ one group at a time. No test asserts an answer its docstring derives.
   declaration with no type is refused at its name. A removed form written after a clause that already has a scope in
   front is a plain syntax error. A relation-qualified reference to a decision is an unknown column, and in `when`,
   `per` and `by` the data-only message; a struct field or column named like a decision still binds. `scalar` is an
-  ordinary name and the colon form stays.
+  ordinary name, and a relation before a colon in a reducer is a syntax error.
 
 - **`test_anr_oracle_selfcheck.py`** — the ANR evaluator against five independent
   readings: the deck's and the rulings' hand computations (every case's instances,
@@ -368,7 +367,7 @@ one group at a time. No test asserts an answer its docstring derives.
   (`../language/errors.md`, `decisions.md` R13), at the token the grammar cannot place; a declaration with no type is
   `decision 'x' has no type` at its name. A relation-qualified reference to a decision is an ordinary unknown column,
   and is refused with the data-only message inside `when`, `per` and `by`; a struct field or column named like a
-  decision still binds. `scalar` is an ordinary name and the colon form stays.
+  decision still binds. `scalar` is an ordinary name, and a relation before a colon in a reducer is a syntax error.
 - **The leak guard.** The runner calls `_output_helpers.assert_no_internal_leak` on every query: an INTERNAL error or an
   internal `__tag__` in the output fails the test, unless the `__name__` is text the query itself contains.
   `test_error_time_limit.py` and `test_query_diagnostics_slow.py` start the CLI with `subprocess` directly and bypass

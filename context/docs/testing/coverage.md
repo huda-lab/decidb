@@ -30,7 +30,7 @@ orders" and `../language/guide.md` §1.
   (throughout), `per (): cap(INT)` (`test_scalar_declaration_in_split_slot`, one
   shared value across rows) and `per n: keep(BOOL)`
   (`test_keyed_declaration_in_split_slot`, one value per nation across the
-  join's repeated rows, with a colon-form reducer `SUM(n: keep)`).
+  join's repeated rows, with a relation-keyed reducer `SUM(per n: keep)`).
 - **The `in_decide_clause` lexer flag is cleared between the slots**:
   `test_case_when_in_join_on_between_slots` and
   `test_case_when_in_where_between_slots`. This is the split order's hazard:
@@ -68,7 +68,7 @@ declare variables either before `FROM` or with `SUCH THAT`, not in both slots.
 | split order | per-row declaration | ✓ |
 | split order | keyed declaration (`per n: x`) | ✓ |
 | split order | query-wide declaration (`per (): x`) | ✓ |
-| split order | colon-form reducer `SUM(n: ...)` | ✓ |
+| split order | relation-keyed reducer `SUM(per n: ...)` | ✓ |
 | split order | `CASE WHEN` in an intervening `JOIN ... ON` | ✓ |
 | split order | `CASE WHEN` in an intervening `WHERE` | ✓ |
 | split order | `EXPLAIN` | ✓ |
@@ -288,7 +288,7 @@ pre-`FROM` declaration position.
 | query-wide | additive beside a reducer (`MINIMIZE 2*cap - SUM(x)`) | ✓ |
 | query-wide | JOIN source | ✓ |
 | query-wide | split clause order | ✓ (`test_clause_order.py`) |
-| query-wide | colon-form reducer | ✓ when weighted by the relation's data; a bare row-invariant body is rejected |
+| query-wide | relation-keyed reducer | ✓ when weighted by the relation's data; a bare row-invariant body is rejected |
 | query-wide | empty input | ✓ |
 | query-wide | ABS (per-row constraint) | ✓ |
 | query-wide | quadratic constraint (QCQP, Gurobi) | ✓ |
@@ -300,19 +300,20 @@ pre-`FROM` declaration position.
 | query-wide | `norm(...)` (L1, desugars to `SUM(ABS(...))`) | ✓ |
 | query-wide | quadratic objective (`SUM(POWER(...))`) | ✓ |
 
-## Relation-qualified reducers
+## A reducer's own relation key
 
 Tests live in `test/decide/tests/test_qualified_reducer.py`, plus
 `test_clause_order.py::test_keyed_declaration_in_split_slot` for a
 qualified reducer in the split clause order.
 
-`SUM(D: expr)` reduces over `D`'s tuple identities instead of over join-result
-rows: it means `sum(per D: expr)`, one value per variant of each class of `D`'s
-columns (D71): a body that reads more than `D` holds reads one value per distinct
-value of what it reads. Semantics: `../language/functions.md` and
+`sum(per D: expr)` reduces over `D`'s tuple identities instead of over join-result
+rows: one value per variant of each class of `D`'s
+columns (D71). A body that reads more than `D` holds reads one value per distinct
+value of what it reads. The docs call it a qualified reducer and `D` its qualifier.
+Semantics: `../language/functions.md` and
 `../language/scopes.md`; syntax: `../language/guide.md`
-§5.1. The equivalence with `sum(per D: e)` is pinned in `test_scope_reducer_inner.py`
-and `test_scope_old_forms.py::test_colon_form_stays`.
+§5.3. A relation before a colon with no `per` is a syntax error
+(`test_scope_old_forms.py::test_a_relation_before_a_colon_is_a_syntax_error`).
 
 The fixture is `customer JOIN nation`, where the join repeats each nation once
 per customer and nations have unequal customer counts — that inequality is what
@@ -334,20 +335,20 @@ makes the row-weighted and identity-weighted optima diverge.
 - **Constraint position** (`test_qualified_reducer_in_constraint`,
   oracle-verified).
 - **Under a `per` key** (`test_qualified_reducer_with_per`,
-  `per n.n_nationkey: sum(n: ...) by (n.n_nationkey) <= 8`): de-duplication runs
+  `per n.n_nationkey: sum(per n: ...) by (n.n_nationkey) <= 8`): de-duplication runs
   inside each `by` group; every class holds one nation, so its charge is that
   nation's cost, counted once.
 - **Mixed qualified and unqualified reducers in one objective**
   (`test_mixed_qualified_and_unqualified_objective`, oracle-verified): pins that
   the mask is per *term*, not per clause.
 - **Hard-direction MIN / MAX with a qualifier**:
-  `test_qualified_hard_max_objective` (`MAXIMIZE MAX(n: ...)`, the Big-M
-  direction) and `test_qualified_hard_min_constraint` (`MIN(n: ...) <= K`). The
+  `test_qualified_hard_max_objective` (`MAXIMIZE MAX(per n: ...)`, the Big-M
+  direction) and `test_qualified_hard_min_constraint` (`MIN(per n: ...) <= K`). The
   easy directions emit no auxiliaries; these confirm that de-duplication cannot
   move an extremum under the Big-M encoding either, where the mask and the
   indicator rows meet.
 - **The objective's `when` composed with the qualifier**
-  (`MAXIMIZE when c: sum(n: ...)`):
+  (`MAXIMIZE when c: sum(per n: ...)`):
   `test_qualified_reducer_with_aggregate_local_when_in_objective` uses nations 5
   and 14, whose row counts invert the ranking (identity weights 5 and 14, row
   weights 45 and 28), so a dropped qualifier changes *which nation is chosen*,
@@ -364,26 +365,26 @@ makes the row-weighted and identity-weighted optima diverge.
 - **Composed MIN/MAX keeps the qualifier**
   (`test_composed_minmax_preserves_the_qualifier`,
   `test_composed_minmax_preserves_the_qualifier_in_a_constraint`): adding
-  `+ MAX(...)` to a clause holding `SUM(D: ...)` must not change what the qualifier
+  `+ MAX(...)` to a clause holding `SUM(per D: ...)` must not change what the qualifier
   means. Both use the inverting 5/14 fixture, so a dropped qualifier changes the
   chosen nation (objective) or empties the selection (constraint).
 - **A composite qualifier weights differently from both alternatives**
   (`test_three_relation_composite_qualifier_differs_from_single_and_unqualified`,
-  oracle-verified): a customer/orders/lineitem chain where `sum(c, o: ...)`,
-  `sum(c: ...)` and the unqualified `sum(...)` weight the same decision by distinct
+  oracle-verified): a customer/orders/lineitem chain where `sum(per c, o: ...)`,
+  `sum(per c: ...)` and the unqualified `sum(...)` weight the same decision by distinct
   order count, by 1, and by lineitem row count respectively — each checked against
   its own independent oracle model. A two-relation fixture cannot tell these apart, which is
   why this one needs three.
 - **Naming every relation the query joins is a no-op**
   (`test_two_relation_composite_qualifier_equals_unqualified_when_query_has_only_those_two_relations`):
-  with no third, unnamed relation left to fan out, `SUM(D, T: expr)` and the
+  with no third, unnamed relation left to fan out, `SUM(per D, T: expr)` and the
   unqualified `SUM(expr)` agree row for row.
 - **A query-wide decision inside a qualified reducer is weighted and de-duplicated**
   (`test_qualified_reducer_scalar_times_entity_data_is_weighted_and_deduplicated`,
-  oracle-verified): `SUM(n: (n_nationkey + 1) * cap)` over `customer JOIN nation`
+  oracle-verified): `SUM(per n: (n_nationkey + 1) * cap)` over `customer JOIN nation`
   weights `cap` by the sum over *distinct* nations, not over join-result rows.
 - **A qualified reducer as a bound** (`test_qualified_reducer_as_a_bound`,
-  `SUM(n: keepN) <= SUM(n: n_nationkey) / 25`): the qualifier de-duplicates the
+  `SUM(per n: keepN) <= SUM(per n: n_nationkey) / 25`): the qualifier de-duplicates the
   bound side too.
 - **Rejections** (error tier). At bind time: an unknown relation name, including one
   inside a multi-relation list
@@ -404,7 +405,7 @@ makes the row-weighted and identity-weighted optima diverge.
 - `test_composed_minmax_preserves_the_qualifier` and
   `…_in_a_constraint` guard the qualifier on the composed path:
   `ComposedMinMaxTerm::qualifier_scope_idx` carries it, and without it
-  `SUM(D: ...) + MAX(...)` falls back to row semantics. Objective and constraint are
+  `SUM(per D: ...) + MAX(...)` falls back to row semantics. Objective and constraint are
   separate code paths, hence two tests.
 
 ### Feature interactions covered

@@ -122,7 +122,7 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   `MIN` and `MAX` work there as well as `SUM`/`AVG`: `sum(x * price) <= min(price) * 4`,
   `sum(x) by (g) <= count(*) by (g)`. A bound reducer's own `when` narrows only itself. The single implementation is
   `RewriteRhsAggregates`: each bound reducer becomes a DuckDB window column partitioned by its `by` key over the kept
-  rows (a keyed or colon reducer counts the first row of each class via `ROW_NUMBER`). So the solver and direct solve
+  rows (a keyed reducer counts the first row of each class via `ROW_NUMBER`). So the solver and direct solve
   read one number computed in DuckDB's own types, and nothing is computed on a dropped row. `AVG` on a bound keeps its
   fractional value: the AVG→SUM rewrite skips an `AVG` with no decision. Tests: `test_cons_rhs_aggregate.py`.
 - **`AVG`.** Binding keeps `AVG` (and its `DOUBLE` type, so a fractional bound survives coercion). The optimizer
@@ -139,13 +139,10 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   one exists and a general constraint where none does; the choice is made once per site at execution
   (`NativeConstructPolicy`), and both paths reach the same optimum. Classification and scaffolding:
   `RewriteMinMaxConstraints` (`decide_rewrite_minmax.cpp`).
-- **The colon form.** `SUM(D: e)` binds onto the exact key scope `sum(per D: e)` uses, so the two share one
-  `KeyedMapping` and one de-duplication mask, and read one value per variant of each tuple alike (D71). A composite qualifier's key is every named
-  relation's stored columns, sorted by binding, so order does not matter. The grammar reads the qualifier as an
-  argument list and checks its shape in the C action, because `sum(D, T: e)` and `sum(a, b)` share a prefix LALR(1)
-  cannot split at the comma. Parse node `PG_AEXPR_QUALIFIED_REDUCER` → `QUALIFIED_REDUCER_TAG`
-  (`transform_operator.cpp`). A query-wide decision inside is allowed unless it is the whole body. Tests:
-  `test_qualified_reducer.py`.
+- **A reducer's own relation key.** `sum(per D: e)` binds onto an exact key scope on `D`'s stored columns, with one
+  `KeyedMapping` and one de-duplication mask, and reads one value per variant of each tuple (D71). A key of several
+  relations (`sum(per D, T: e)`) is every named relation's stored columns, sorted by binding, so order does not
+  matter. A query-wide decision inside is allowed unless it is the whole body. Tests: `test_qualified_reducer.py`.
 
 ## Scalar functions and operators
 

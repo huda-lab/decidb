@@ -44,7 +44,7 @@ struct DecideTerm {
 	//! INVALID_INDEX for one group.
 	idx_t avg_group_key = DConstants::INVALID_INDEX;
 	LinearTermReduction reduction = LinearTermReduction::NONE;
-	//! Keyed scope this term's reducer is qualified by (`sum(D: ...)`), or
+	//! Keyed scope this term's reducer is qualified by (`sum(per D: ...)`), or
 	//! INVALID_INDEX for an unqualified reducer. Indexes keyed_scopes /
 	//! keyed_mappings; coefficient evaluation keeps one row per tuple identity
 	//! of that relation and zeroes the duplicates the join introduced.
@@ -87,7 +87,7 @@ struct DecideProductGroup {
 	int weight_sign = 1;
 	unique_ptr<Expression> filter; // the reducer's own `when`
 	bool avg_scale = false;        // the group came from AVG and needs 1/N scaling
-	//! Keyed scope the group's reducer is qualified by (`sum(D: ...)`), or INVALID_INDEX, as for DecideTerm.
+	//! Keyed scope the group's reducer is qualified by (`sum(per D: ...)`), or INVALID_INDEX, as for DecideTerm.
 	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
 	//! As DecideTerm::qualifier_reducer.
 	idx_t qualifier_reducer = DConstants::INVALID_INDEX;

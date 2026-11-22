@@ -12,10 +12,10 @@
  *   empty (SELECT 1 DECIDE x(INT) SUCH THAT ...), and both derivations build
  *   the identical PGDecideClause via makeDecideClause(), so bison's default
  *   shift is correct and the resolution is not load-bearing.
- * The WHEN_DECIDE conflicts are resolved explicitly: the empty
- * within_group_clause and the plain relation-qualified reducer use
- * DECIDE_ITEM precedence, below both DECIDE WHEN tokens, so the parser shifts
- * WHEN. They are keyed on tokens base_yylex() emits only inside DECIDE.
+ * The WHEN_DECIDE conflict is resolved explicitly: the empty
+ * within_group_clause uses DECIDE_ITEM precedence, below both DECIDE WHEN
+ * tokens, so the parser shifts WHEN. It is keyed on tokens base_yylex() emits
+ * only inside DECIDE.
  * PER and the reducer's BY reach the grammar as DECIDE-only tokens too, so
  * neither can be read as an identifier.
  */

@@ -30,7 +30,7 @@ Conventions that apply to every row:
 | IR | Intermediate representation: a neutral form of the program that later passes read instead of the source tree | Compiler texts (front end, IR, back end) | `DirectIR`, `DirectIRDecision`, `DirectIRConstraint`, `DirectIRObjective`, `DirectIRScope`, `FindDirectIRInput`; variables `ir`, `ir_node`; test helpers `QueryIR`, `IRQuery`; `direct_ir.cpp`; `direct_solve/architecture/ir.md` |
 | front end | The pass that reads the source tree and builds the IR; the only code that knows `LogicalDecide`'s layout | Compiler texts | `DirectFrontEnd` |
 | conservative analysis | An analysis that reports only what it can prove, and "not proved" for anything else, so a wrong rewrite cannot follow from it | Static analysis (soundness) | `DirectAnalysisStatus` with `PROVED` / `NOT_PROVED`; `MarkNotProved` |
-| reducer | An aggregate function (`SUM`, `AVG`, `MIN`, `MAX`, `COUNT`) applied over DECIDE variables; DECIDE's name for it, so it is never confused with a SQL aggregate over data | DeciDB term | `DirectReducer`, the S1 rule's `Reducer`, `QUALIFIED_REDUCER_TAG` (`__qualified_reducer__`), `ContainsReducer`, `ReadReducer`, `DecideBinder::BindAggregate`, `RhsBoundRewriter::MakeReducerColumn`, `testing/coverage.md#relation-qualified-reducers` |
+| reducer | An aggregate function (`SUM`, `AVG`, `MIN`, `MAX`, `COUNT`) applied over DECIDE variables; DECIDE's name for it, so it is never confused with a SQL aggregate over data | DeciDB term | `DirectReducer`, the S1 rule's `Reducer`, `ContainsReducer`, `ReadReducer`, `DecideBinder::BindAggregate`, `RhsBoundRewriter::MakeReducerColumn`, `testing/coverage.md#a-reducers-own-relation-key` |
 | singleton-row bound | A constraint on one variable, folded into that variable's bounds before the model is built | Presolve (Andersen & Andersen 1995; Achterberg et al. 2020) | `FoldSingletonRows`, `DecideFoldSingletonRow`, `DecideReadSingletonRow`, `DecideSingletonRow`, `DecideWrittenBox`, `FoldSingletonRowsInExpression`, `singleton_row_boxes`, `user_singleton_row_bounds`, `SINGLETON_ROW_BOUND_TAG`, phase `optimizer.fold_singleton_rows` |
 | fixed variable | A decision whose value the problem fixes before optimizing | Optimization texts | `ProveFixedVariables`, `FixedTerms`, `SourceFixedValue`, `SourceBooleanFixedValue` |
 
@@ -111,9 +111,8 @@ value. Classes without code take the name in docs only until their code exists.
 A few names stay as they are because renaming them would break something or because the word means something else there.
 
 - **Serialized names.** The plan serializer's property `"proof"` (id 209, `direct_result_adapter.cpp`; the field behind it
-  is `condition`), the extension name `decidb_direct_solve_result_v4` (`DIRECT_RESULT_EXTENSION`), and the parser tag
-  string `__qualified_reducer__` (`QUALIFIED_REDUCER_TAG`), which a saved view stores. Renaming any of them would stop
-  older plans or database files from reading back.
+  is `condition`) and the extension name `decidb_direct_solve_result_v4` (`DIRECT_RESULT_EXTENSION`). Renaming either
+  would stop older plans or database files from reading back.
 - **Oracle cache keys.** A Python test's cached oracle answer is keyed on its node id and its function's source, so
   outside the direct-solve suites some test function and class names, parameter ids, and strings inside oracle test
   bodies keep older wording. In `test_direct_user_facing.py` the same holds for

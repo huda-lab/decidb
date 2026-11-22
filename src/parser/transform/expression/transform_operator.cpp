@@ -221,8 +221,6 @@ unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgque
 	}
 	// DeciDB: the constraint or reducer in children[0], its WHEN condition, PER columns
 	// or qualifying relations after it (see common/enums/decide.hpp for each tag).
-	case duckdb_libpgquery::PG_AEXPR_QUALIFIED_REDUCER:
-		return decide_marker(QUALIFIED_REDUCER_TAG);
 	case duckdb_libpgquery::PG_AEXPR_SCOPE_WHEN:
 		return decide_marker(SCOPE_WHEN_TAG);
 	case duckdb_libpgquery::PG_AEXPR_SCOPE_PER:

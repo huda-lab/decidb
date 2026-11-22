@@ -1291,7 +1291,7 @@ def test_extension_registration_preserves_binder_errors(decidb_cli):
     sql = """
         SELECT x FROM (
             FROM (VALUES (1,2),(2,9)) n(id,score)
-            DECIDE x(BOOL) SUCH THAT SUM(m: x)<=1 MAXIMIZE SUM(score*x)
+            DECIDE x(BOOL) SUCH THAT SUM(per m: x)<=1 MAXIMIZE SUM(score*x)
         ) q
     """
     for mode in ("off", "require"):

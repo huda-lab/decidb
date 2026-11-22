@@ -122,7 +122,7 @@ Grouped by who writes it:
 `written_sense`, `decide_objective`, `is_boolean_var`,
 `variable_scopes`, `keys`, `keyed_scopes`, `constraint_sources`. `keys` is the one
 key table (`DecideKey`): every key the clauses write -- a declaration's `per K:`, a
-reducer's own `per K'` and the colon form `SUM(D: …)`, a reducer's `by (G)`, a
+reducer's own `per K'`, a reducer's `by (G)`, a
 constraint's `per K:` and a nested reducer's path key -- is one entry, and keys with
 the same elements share it, whichever spelling wrote them (`FindOrCreateDecideKey`
 compares elements as a set). An entry holds the key as first written and its elements
@@ -358,8 +358,7 @@ assertions select one complete build when verifier paths append equivalent copie
 `GetName()` returns `"DECIDE"`. `ParamsToString()` builds the structured plan
 output, using `CollectDecideExpressionStrings` to print every clause in one style
 (D32): each clause as typed, the `when` and `per` wrappers as one qualifier in front (`when c per K:`), and the
-defaults `per row:` and `by ()` not printed (`../../language/explain.md`, Rendering). The colon form prints as
-`sum(per D: x)` in the canonical and rewritten layers (D38). A nested reducer prints as written,
+defaults `per row:` and `by ()` not printed (`../../language/explain.md`, Rendering). A nested reducer prints as written,
 `outer(per k: inner(e) by (k))`, a `when` in front of it, each key as written: `RenderDecidePerKey` cuts the key from
 `DecideSourceText` at the `per` wrapper's location. A row the solver receives is left out where it reads as
 the clause above it. The renderers read the clause

@@ -225,9 +225,6 @@ static PGNode *makeDecideFrameOver(PGNode *order, bool descending, bool cyclic, 
 static PGNode *makeDecideFramePoint(PGList *point, PGNode *fallback, PGNode *payload, PGNode *over, int location);
 static PGNode *makeDecideFrameRange(PGList *funcname, PGList *from, PGList *to, int every, PGNode *fallback,
 									bool all, PGList *args, PGNode *over, int location);
-static PGNode *makeQualifiedReducer(PGList *funcname, PGList *qualifier, PGList *args,
-									int location, YYLTYPE qualifier_span,
-									int colon_location, core_yyscan_t yyscanner);
 static bool decideSpells(const char *name, const char *word);
 static PGTypeName *makeDecideVariableType(const char *name, int location, core_yyscan_t yyscanner);
 static PGNode *makeAndExpr(PGNode *lexpr, PGNode *rexpr, int location);

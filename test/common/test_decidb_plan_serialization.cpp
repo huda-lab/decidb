@@ -131,8 +131,8 @@ TEST_CASE("Parsed DECIDE statements survive ToString and binary round trips", "[
 	    "SUCH THAT when a > 0 per a, t.b: SUM(x) by (a, t.b) <= 2 AND x BETWEEN 0 AND 2",
 	    // A reducer's own when and per, and the one- and many-relation colon forms.
 	    "SELECT a, b, x FROM data D CROSS JOIN other T DECIDE per D: x(INT) "
-	    "SUCH THAT SUM(when a > 0 per D: x) + AVG(D, T: x) <= 10 "
-	    "MAXIMIZE when b = 2: SUM(D: x)",
+	    "SUCH THAT SUM(when a > 0 per D: x) + AVG(per D, T: x) <= 10 "
+	    "MAXIMIZE when b = 2: SUM(per D: x)",
 	    // The objective's when, the two-level form, and NORM.
 	    "SELECT a, b, x FROM t DECIDE x(REAL) "
 	    "SUCH THAT norm(x - a, 1) <= (SELECT 3) "
@@ -176,7 +176,7 @@ TEST_CASE("Parsed DECIDE scope spellings survive ToString and binary round trips
 	    // Scopes inside reducers, BY with an expression, the colon form with BY, and a
 	    // scoped objective.
 	    "SELECT a FROM t DECIDE x(INT) "
-	    "SUCH THAT SUM(when a > 0 per t: x) BY (a, b + 1) <= 2 AND AVG(D: x) BY () <= 3 "
+	    "SUCH THAT SUM(when a > 0 per t: x) BY (a, b + 1) <= 2 AND AVG(per D: x) BY () <= 3 "
 	    "MAXIMIZE when a = 1 per (): SUM(x) BY ()",
 	    // The split clause order, DIAGNOSE, and names that are keywords inside DECIDE.
 	    "DIAGNOSE SELECT a DECIDE per \"per\": x(INT) FROM t "
@@ -918,7 +918,7 @@ TEST_CASE("A key gives no signature field to a value or a by key it holds by con
 	// A reducer's own key: its body's decision per row is a field either way, its data only where the key does not
 	// hold it.
 	REQUIRE(fields("sum(per cap: cap * x) <= 60") == Kinds {DecideSignatureFieldKind::DECISION});
-	REQUIRE(fields("sum(site: cap * x) <= 60") == Kinds {DecideSignatureFieldKind::DECISION});
+	REQUIRE(fields("sum(per site: cap * x) <= 60") == Kinds {DecideSignatureFieldKind::DECISION});
 	REQUIRE(fields("sum(per r_name: cap * x) <= 60") ==
 	        Kinds {DecideSignatureFieldKind::VALUE, DecideSignatureFieldKind::DECISION});
 }

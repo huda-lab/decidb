@@ -75,7 +75,7 @@ struct DirectKeyElement {
 };
 
 //! A relation whose tuples carry one identity: a table-scoped declaration (`T.x`) or a reducer qualifier
-//! (`SUM(D: e)`).
+//! (`sum(per D: e)`).
 struct DirectIRKeyedScope {
 	//! The identity key, one element per column: a column element has no class on a NULL, a column a relation element
 	//! stands for takes NULL as a value (`DirectKeyElement::no_group`).
@@ -125,7 +125,7 @@ struct DirectPart {
 	vector<DirectKeyElement> by;
 	//! The reducer's own `when` (`sum(when c: x)`).
 	unique_ptr<Expression> filter;
-	//! Keyed scope the reducer is qualified by (`SUM(D: e)`), or INVALID_INDEX.
+	//! Keyed scope the reducer is qualified by (`sum(per D: e)`), or INVALID_INDEX.
 	idx_t qualifier = DConstants::INVALID_INDEX;
 	//! The body's terms.
 	vector<DecideSplitTerm> terms;

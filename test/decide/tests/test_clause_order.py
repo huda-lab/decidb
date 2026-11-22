@@ -195,8 +195,8 @@ def test_keyed_declaration_in_split_slot(decidb_cli, perf_tracker):
         FROM customer c
         JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND c.c_custkey <= 200
-        SUCH THAT SUM(n: keep) <= 2
-        MAXIMIZE SUM(n: n.n_nationkey * keep)
+        SUCH THAT SUM(per n: keep) <= 2
+        MAXIMIZE SUM(per n: n.n_nationkey * keep)
     """
     )
     assert len(rows) > 0

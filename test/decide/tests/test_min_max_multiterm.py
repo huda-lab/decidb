@@ -873,15 +873,15 @@ def test_per_sum_outer_max_inner_additive_coefficient(decidb_cli, duckdb_conn, o
 @pytest.mark.min_max
 @pytest.mark.correctness
 def test_a_composed_clause_reads_each_tuple_of_a_qualified_reducer_once(decidb_cli, oracle_solver):
-    """`sum(d: x) + max(d: x) <= 25` over a join that repeats depot `a` on two rows: the depots' x, one per depot, is
+    """`sum(per d: x) + max(per d: x) <= 25` over a join that repeats depot `a` on two rows: the depots' x, one per depot, is
     read once each by both reducers (the join's duplicate row of `a` is dropped from the max as from the sum)."""
     sql = """
         SELECT id, x
         FROM (VALUES (1, 'a'), (2, 'a'), (3, 'b')) t(id, g)
         JOIN (VALUES ('a', 10), ('b', 20)) d(g, cap) USING (g)
         DECIDE per d: x(REAL)
-        SUCH THAT x <= d.cap AND sum(d: x) + max(d: x) <= 25
-        MAXIMIZE sum(d: x)
+        SUCH THAT x <= d.cap AND sum(per d: x) + max(per d: x) <= 25
+        MAXIMIZE sum(per d: x)
         ORDER BY id"""
     oracle_solver.create_model("composed_qualified_reducer")
     for name, cap in (("x_a", 10.0), ("x_b", 20.0), ("m", None)):

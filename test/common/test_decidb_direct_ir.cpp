@@ -390,7 +390,7 @@ TEST_CASE("Direct-solve IR models reducers, filters, qualifiers, scales and norm
 	Connection con(db);
 	QueryIR query(con, IRQuery("per t: x(INT), y(INT)",
 	                           "AVG(y) <= 2 AND MIN(y) >= 0 AND MAX(y) <= 3 AND SUM(when flag: y) <= 2 AND "
-	                           "SUM(t: x) <= 4 AND 2 * SUM(y) <= 9 AND norm(y, 0) <= 2 AND "
+	                           "SUM(per t: x) <= 4 AND 2 * SUM(y) <= 9 AND norm(y, 0) <= 2 AND "
 	                           "norm(y - cap, 1) <= 5",
 	                           "MINIMIZE SUM(w*y)"));
 	auto &constraints = query.ir.constraints;

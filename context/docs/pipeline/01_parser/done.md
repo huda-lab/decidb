@@ -89,8 +89,7 @@ decide_by     ::= BY_DECIDE '(' ')' | BY_DECIDE '(' expr_list ')'
   `decide_scope ':' decide_item_expr` or the bare `decide_item_expr`. A
   `decide_scope ':'` may also precede the first argument of a function call
   (`func_name '(' decide_scope ':' func_arg_list ')'`), and `decide_per ':'` a
-  declared name. `decide_by` may follow a `func_application`, a scoped call, or the
-  colon form.
+  declared name. `decide_by` may follow a `func_application` or a scoped call.
 - The scope is carried through the grammar as a `PGDecideScope` (`parsenodes.hpp`)
   and folded by `applyDecideScope` (`grammar.cpp`) into `PG_AEXPR_SCOPE_WHEN`
   (`lexpr` body, `rexpr` condition) inside `PG_AEXPR_SCOPE_PER` (`lexpr` body,
@@ -111,16 +110,6 @@ decide_by     ::= BY_DECIDE '(' ')' | BY_DECIDE '(' expr_list ')'
   constraints and `per g: A AND B` scopes only `A`, but below the comparison
   operators and the DECIDE `WHEN` tokens, so the body keeps its SQL expression shape.
   No parsed-tree association repair is needed.
-
-### The colon form
-
-`SUM(D: e)` and `SUM(D, T: e)` are `func_name '(' func_arg_list ':' func_arg_list ')'`,
-built by `makeQualifiedReducer` into `PG_AEXPR_QUALIFIED_REDUCER`. The qualifier is
-read as a `func_arg_list` because `sum(D, T: e)` and `sum(a, b)` share a prefix
-LALR(1) cannot tell apart at the comma; the decision moves to `:` versus `)` after a
-completed list, which is conflict-free. Every element must be a bare relation name, and
-the whole list travels as one `PGList`; the binder resolves what it means
-(`../02_binder/done.md`, "Relation-qualified reducers").
 
 ### Frame selectors
 
@@ -154,10 +143,9 @@ decide_frame_over   ::= OVER_DECIDE '(' a_expr opt_asc_desc [IDENT] [WITHIN_DECI
 from the optional declaration slot, one per `simple_select` alternative. They are
 reachable only when `from_clause` and `where_clause` are both empty, and both
 derivations build the same node, so bison's default shift is not load-bearing.
-The `WHEN_DECIDE` conflicts — the empty `within_group_clause` and the plain colon
-form — are resolved explicitly by `DECIDE_ITEM` precedence, below both DECIDE `WHEN`
-tokens, so the parser shifts `WHEN`; they are keyed on tokens `base_yylex` emits only
-inside DECIDE. `PER` and a reducer's `BY` reach the grammar as DECIDE-only tokens, so
+The `WHEN_DECIDE` conflict of the empty `within_group_clause` is resolved explicitly by
+`DECIDE_ITEM` precedence, below both DECIDE `WHEN` tokens, so the parser shifts `WHEN`;
+it is keyed on tokens `base_yylex` emits only inside DECIDE. `PER` and a reducer's `BY` reach the grammar as DECIDE-only tokens, so
 neither can be read as an identifier there. The frame selector productions add no
 conflict: `AT_DECIDE`, `OVER_DECIDE` and `WITHIN_DECIDE` are DECIDE-only tokens too, and
 a range is told from a call by the `FROM` after its `(`.
@@ -278,9 +266,8 @@ node, or a list) the children after it — into a tagged `FunctionExpression` wi
 | `PG_AEXPR_SCOPE_PER` | `FunctionExpression(SCOPE_PER_TAG, [body, key...])` |
 | `PG_AEXPR_SCOPE_PER_ROW` | `FunctionExpression(SCOPE_PER_ROW_TAG, [body])` |
 | `PG_AEXPR_REDUCER_BY` | `FunctionExpression(REDUCER_BY_TAG, [reducer, key...])` |
-| `PG_AEXPR_QUALIFIED_REDUCER` | `FunctionExpression(QUALIFIED_REDUCER_TAG, [aggregate, relation...])` |
 
-All five reach the binder, which binds every one into the bound tree's own
+All four reach the binder, which binds every one into the bound tree's own
 wrappers and tags (`../02_binder/done.md` §4a).
 
 **Source spans.** The grammar wraps every expression of a DECIDE clause in one decorator reduction
@@ -327,7 +314,7 @@ formulation after types, scopes, and DuckDB coercions are known.
 ## 5. Statement rendering and parsed serialization
 
 The parsed tree stores DECIDE syntax as private structure: a variable declaration is
-a comparison against a type-marker string, and a scope, a `by` and the colon form are
+a comparison against a type-marker string, and a scope and a `by` are
 tagged `FunctionExpression`s. Those encodings are for the parser and binder, not SQL
 users.
 
@@ -335,8 +322,8 @@ users.
 `PER (): x(REAL)` and `PER ROW: x(BOOL)`, renders the top-level constraint list without
 generic SQL parentheses that the DECIDE grammar cannot accept, and restores objective
 direction. `FunctionExpression::ToString()` restores the scope `WHEN condition PER key:
-body` (WHEN first, as written, although PER is the outer tag), `PER ROW: body`,
-`reducer BY (key)` and `SUM(D, T: expression)` wherever those tags occur inside a larger
+body` (WHEN first, as written, although PER is the outer tag), `PER ROW: body`
+and `reducer BY (key)` wherever those tags occur inside a larger
 expression. Ordinary parsed functions keep DuckDB's generic renderer.
 `SelectNode::decide_sense` defaults to `FEASIBILITY` and `decide_text` to empty, and
 `query_node.json` gives both that default, so they are written only for a DECIDE query
@@ -353,7 +340,7 @@ Parsed-statement binary serialization is exercised separately from logical-plan
 serialization. The regression matrix in
 `test/common/test_decidb_plan_serialization.cpp` covers every variable type and
 declaration scope, both clause orders, a constraint's `when` with a multi-column `per`
-and a `by`, a reducer's own `when` and `per`, the one- and many-relation colon forms,
+and a `by`, a reducer's own `when` and `per` with one relation and with several in its key,
 the objective's `when` and nested form, `NORM`, `IN`, scalar subqueries, quoted
 identifiers and `DIAGNOSE`. It checks reparsed equality, stable rendering, and binary
 `SelectStatement` round trips; a second case does the same for the scope grammar in
@@ -397,7 +384,7 @@ Non-DECIDE queries retain DuckDB's existing parsed-result comparison.
 | DECIDE `WHEN`, `PER`, `BY`, `AT`, `OVER` and `WITHIN` lexer gating | `third_party/libpg_query/src_backend_parser_parser.cpp` (`base_yylex`), state in `include/parser/gramparse.hpp` |
 | Frame carrier and helpers | `parsenodes.hpp` (`PGDecideFrame`), `grammar/grammar.cpp` (`makeDecideFrameOver`, `makeDecideFramePoint`, `makeDecideFrameRange`) |
 | Frame parsed expression and its transform | `src/parser/expression/decide_frame_expression.cpp`, `src/parser/transform/expression/transform_decide_frame.cpp` |
-| Scope carrier and helpers | `third_party/libpg_query/include/nodes/parsenodes.hpp` (`PGDecideScope`), `grammar/grammar.cpp` (`makeDecideScope`, `applyDecideScope`, `makeQualifiedReducer`) |
+| Scope carrier and helpers | `third_party/libpg_query/include/nodes/parsenodes.hpp` (`PGDecideScope`), `grammar/grammar.cpp` (`makeDecideScope`, `applyDecideScope`) |
 | Source spans (one per expression of the clause, a `per`/`by` key, a BETWEEN's halves, the objective) | `grammar/grammar.cpp` (`noteDecideExpr`, `noteDecideParen`, `noteDecideReducerKey`, `noteDecideSpan`), called from the `a_expr` and `b_expr` decorator reductions in `select.y`; the roles are `PGDecideSpanRole` and `DecideSpanRole`, and `language/explain.md` describes how they are used |
 | Span keyed by query location, with its `DecideBinding` | `src/parser/transform/expression/transform_expression.cpp` (the interceptor `Transformer::TransformExpression`), `transform_select_node.cpp` (assembles `DecideSourceText`) |
 | Clause → `SelectNode` | `src/parser/transform/statement/transform_select_node.cpp` |

@@ -136,7 +136,7 @@ Invalid Input Error: 'D.region' in by (D.region) takes more than one value over 
 
 # reducer: by on the kept colon form, which reads one value per variant as sum(per D: e) does (S4, D71)
 query I
-SELECT SUM(ship) FROM (SELECT shipmentID, ship FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT) SUCH THAT SUM(D: ship) by (D.region) <= 100 MAXIMIZE SUM(ship));
+SELECT SUM(ship) FROM (SELECT shipmentID, ship FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT) SUCH THAT SUM(per D: ship) by (D.region) <= 100 MAXIMIZE SUM(ship));
 ----
 200
 
@@ -399,7 +399,7 @@ SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per depotID: su
 
 # declarations scoped by a relation and by the whole query
 query III
-SELECT shipmentID, ship, open FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT), per D: open(BOOL), per (): cap(REAL) SUCH THAT SUM(D: opening_cost * open) <= 15 AND ship <= 10 * open AND ship <= cap AND cap <= 8 MAXIMIZE SUM(ship) ORDER BY shipmentID;
+SELECT shipmentID, ship, open FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT), per D: open(BOOL), per (): cap(REAL) SUCH THAT SUM(per D: opening_cost * open) <= 15 AND ship <= 10 * open AND ship <= cap AND cap <= 8 MAXIMIZE SUM(ship) ORDER BY shipmentID;
 ----
 1	8	1
 2	8	1

@@ -13,7 +13,7 @@ choose a solver formulation.
   clause binders (`BindDeclarations`; the DECIDE section of `BindSelectNode` in
   `bind_select_node.cpp` only calls it)
 - `src/planner/expression_binder/decide/decide_binder.cpp` — shared DECIDE expression
-  rules: reducers, the colon form, a reducer's own scope and `by`, key scopes, and where
+  rules: reducers, a reducer's own scope and `by`, key scopes, and where
   `when`, `per` and `by` may stand
 - `src/planner/expression_binder/decide/decide_constraints_binder.cpp` — `SUCH THAT`
 - `src/planner/expression_binder/decide/decide_objective_binder.cpp` — `MAXIMIZE` / `MINIMIZE`
@@ -76,8 +76,7 @@ a relation element stands for, `NO_GROUP` for one written on its own).
 A keyed decision points at an `KeyedScopeInfo`: the key, the decisions it keys
 (`scoped_variable_indices`), and `value_link`, which only stage 05 sets, on a helper
 decision's scope. One scope exists per key, whichever spelling names it: a declaration's
-`per K`, a reducer's own `per K` and the colon form `SUM(D: e)` (§3) all go through
-`FindOrCreateKeyScope` or, for the colon form's relation list, `FindOrCreateScope`.
+`per K` and a reducer's own `per K` (§3) both go through `FindOrCreateKeyScope`.
 
 ### Keyed declarations
 
@@ -271,34 +270,29 @@ reducer counts once. `per row` adds nothing. A `by` after the reducer is
 
 ### Relation-qualified reducers
 
-`DecideBinder::BindQualifiedReducer` binds the colon form `SUM(D: expr)` as `sum(per D: expr)` (../../language/guide.md
-§5.1): each listed relation must be a relation of the FROM clause, its stored columns form the key
-(`AddRelationColumns`), and `FindOrCreateScope` — shared with `FindOrCreateKeyScope` — finds or creates the key's scope,
-so `SUM(D: e)` and `sum(per D: e)` share one scope and one tag (`__qualified_by_<i>__`, appended to the aggregate's
-alias). A message quotes the colon form as written; EXPLAIN reprints the reducer, so it shows `sum(per D: e)` (D38).
+A reducer whose own key names a relation, `sum(per D: expr)` (../../language/guide.md §5.3), is a relation-qualified
+reducer. The relation's stored columns form the key (`AddRelationColumns`), and `FindOrCreateKeyScope` finds or creates
+the key's scope, whose index the tag `__qualified_by_<i>__` on the aggregate's alias carries.
 Nothing is checked against the body at bind time: a body that reads more than `D` holds -- a column of another
-relation, a per-row decision -- is one value per variant of each tuple (D71), which the signature of stage 04 records,
-as for `per`. Refused at bind time: a qualifier that is not a relation name, a relation not in the FROM clause, a
-qualifier on anything but `SUM`, `AVG`, `MIN`, `MAX` or `norm`, and on the decision side a body of query-wide decisions
-alone (`BindAggregate`, as for any reducer). `norm` binds as a `SUM` marker, so `norm(D: e, p)` carries the tag
-like `SUM(D: e)`; stage 04's definition of orders 1, 2 and `'inf'` and stage 05's L0 lowering keep the alias, so every
-order reads each row of `D` once.
+relation, a per-row decision -- is one value per variant of each tuple (D71), which the signature of stage 04 records.
+Refused at bind time: a key element that is not a column or a relation of the FROM clause, and on the decision side a
+body of query-wide decisions alone (`BindAggregate`, as for any reducer).
 
-A reducer may name more than one relation, `SUM(D, T: expr)`. The key is every named
+A key may name more than one relation, `sum(per D, T: expr)`. The key is every named
 relation's stored columns, so a row is a duplicate only when it repeats on **every**
 named relation's key at once. Concretely: naming a relation removes the fan-out it
 would otherwise contribute; a relation left unnamed still contributes its fan-out,
 uncollapsed.
 
 One consequence: naming every relation a query joins is a no-op. With exactly two relations
-in the query, `SUM(D, T: expr)`
-and unqualified `SUM(expr)` are the same reducer, because the composite key
+in the query, `sum(per D, T: expr)`
+and unqualified `sum(expr)` are the same reducer, because the composite key
 already *is* the join-result row — there is no third, unnamed relation left to
 contribute fan-out for the qualifier to collapse. The two forms only diverge
 once a relation is left out of the list while still appearing in the join.
 
-The key is a set of columns, sorted by binding, so `SUM(D, T: ...)`, `SUM(T, D: ...)`
-and `sum(per D, T: ...)` share one scope and one `KeyedMapping`.
+The key is a set of columns, sorted by binding, so `sum(per D, T: ...)` and `sum(per T, D: ...)`
+share one scope and one `KeyedMapping`.
 
 ---
 
@@ -476,7 +470,7 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 | `per row: C`, `agg(per row: e)`, `per row: x(TYPE)` | nothing: the default written out (`SCOPE_PER_ROW_TAG`, peeled) |
 | `agg(...) by (G)` | the aggregate tagged `__group_key_<i>__`, naming `BoundSelectNode::decide_keys[i]`, whose `written_as_by` is set; `by ()` adds nothing |
 | `agg(when c: e)` | the aggregate's `filter` (§3) |
-| `agg(per K': e)`, `SUM(D: e)` | a `__qualified_by_<i>__` tag on an exact key scope; the colon form shares the scope of `per D` (§3) |
+| `agg(per K': e)` | a `__qualified_by_<i>__` tag on an exact key scope (§3) |
 | `MAXIMIZE when c: E` | a WHEN wrapper over the objective |
 | `outer(per k: inner(e) by (k))` | a nested reducer like any other (D81): `outer` qualified by k, `inner` tagged with its `by` |
 
@@ -491,8 +485,7 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
   name wins); any other element binds as data. Equal key sets share one entry of the key
   table, with every other key of those elements: equal as bound expressions, or, for a key
   holding a subquery, written alike — a bound subquery equals nothing, not even itself.
-- `BindScopedReducer` peels the inner `per`/`when` (§3); `SUM(D: e)` is `sum(per D: e)`
-  (`BindQualifiedReducer`, §3) and may take a `by`.
+- `BindScopedReducer` peels the inner `per`/`when` (§3); the reducer may take a `by`.
 - `BindScopedObjective`: `per ()` adds nothing; a `when` wraps the body. A nested reducer
   binds as in a constraint. A decision outside the objective's
   reducers binds: a query-wide one is one column, and any other must have one instance

@@ -868,34 +868,6 @@ makeDecideFrameRange(PGList *funcname, PGList *from, PGList *to, int every, PGNo
 	return over;
 }
 
-/*
- * DeciDB: a relation-qualified reducer, sum(D: expr) or sum(D, T: expr). Every
- * item of the qualifier must be a bare relation name, one identifier; the binder resolves them.
- */
-static PGNode *
-makeQualifiedReducer(PGList *funcname, PGList *qualifier, PGList *args,
-					 int location, YYLTYPE qualifier_span, int colon_location,
-					 core_yyscan_t yyscanner)
-{
-	PGListCell *lc;
-
-	foreach(lc, qualifier)
-	{
-		PGNode *name = (PGNode *) lfirst(lc);
-
-		if (!IsA(name, PGColumnRef) || list_length(((PGColumnRef *) name)->fields) != 1 ||
-			!IsA((PGNode *) linitial(((PGColumnRef *) name)->fields), PGString))
-			ereport(ERROR,
-					(errcode(PG_ERRCODE_SYNTAX_ERROR),
-					 errmsg("'%s' before ':' in a reducer is not a relation",
-							decideQueryText(qualifier_span.start, qualifier_span.end, yyscanner)),
-					 parser_errposition(qualifier_span.start)));
-	}
-	return (PGNode *) makeSimpleAExpr(PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer",
-									  (PGNode *) makeFuncCall(funcname, args, location),
-									  (PGNode *) qualifier, colon_location);
-}
-
 static PGNode *
 makeAndExpr(PGNode *lexpr, PGNode *rexpr, int location)
 {

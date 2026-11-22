@@ -77,7 +77,7 @@ no location: it prints its operator and quotes its children, never an ancestor's
 and comments verbatim) before it reprints anything, and parenthesizes the cut by its own binding, so `(a + b) * c`
 keeps its parentheses and `a + b * c` gains none. A message and a `DIAGNOSE` repair quote every located node. The
 canonical and rewritten layers quote every located subtree that reads no decision and reprint the decision structure,
-which canonicalization and the rewrites reshape: the colon form prints as `sum(per D: e)` there (D38). A reprinted node
+which canonicalization and the rewrites reshape. A reprinted node
 prints its operator and quotes its children; a cast with no location is display noise and prints as its child. The
 canonical layer prints the respelled product, and a message never searches for the other layer's text. A reprinted
 call prints the name the user wrote, which the binder keeps in a tag when it renames an alias to its primary
@@ -90,7 +90,7 @@ prints functions in call form, and keeps pipeline tags in aliases that `GetName(
 **The style** (D32): quoted text as typed, in the user's case; a reprinted node (a rewritten row, the decision structure
 of a layer) with reducers, `norm` and keywords in lower case; the `when c per K:` qualifier in front; a
 reducer's own scope inside it and its `by (G)` after it; keys as written (`per D.depotID`), never as binding indexes;
-the defaults `per row:` and `by ()` not printed; the colon form kept as `sum(D: e)` (D38); a nested reducer printed
+the defaults `per row:` and `by ()` not printed; a nested reducer printed
 as written, its own scope and `by` at every level.
 
 **Casts by location.** A cast the user wrote has its own span, so it is quoted with the expression around it:

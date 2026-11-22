@@ -293,14 +293,14 @@ def test_a_view_is_a_relation_of_keys(decidb_cli, oracle_solver):
 @pytest.mark.correctness
 def test_table_macro_parameters_in_scopes_keep_the_written_scopes_out_of_the_source_text(decidb_cli, oracle_solver):
     """A macro argument in the DECIDE tail leaves the tail with no source text, so the scopes' keys, conditions and
-    `by` keys are rendered from the parsed tree: a `when` and `per` before a constraint, a `by`, the colon form and an
+    `by` keys are rendered from the parsed tree: a `when` and `per` before a constraint, a `by`, a reducer's own `per` and an
     objective's `when` all run their text-less branch here."""
     rows, cols = decidb_cli.without_verify_serializer().execute(
         f"""
         CREATE TEMP MACRO scoped(lim, lim2) AS TABLE
             SELECT id, x FROM {_TABLE} DECIDE x(INT)
             SUCH THAT x <= cap AND when b > 1 per cap: SUM(x) <= lim
-                AND SUM(x) by (b) <= lim2 AND SUM(t: x) <= 100
+                AND SUM(x) by (b) <= lim2 AND SUM(per t: x) <= 100
             MAXIMIZE when b > 0: SUM(x * cap);
         FROM scoped(2, 3);
     """

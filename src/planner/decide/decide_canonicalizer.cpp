@@ -1925,7 +1925,7 @@ void DecideCanonicalizer::SignQualifiedReducers(Expression &expr, const DecideRe
 	    reducer.children.empty() || !ReferencesDecideVar(reducer)) {
 		return;
 	}
-	// The reducer's own `per K'` -- or `D` of the colon form `SUM(D: e)` -- hands it one value per class and signature
+	// The reducer's own `per K'` hands it one value per class and signature
 	// of its body (D70, D71), over the rows its `when` keeps.
 	auto key = out.keyed_scopes[scope_idx].key;
 	vector<DecideSignatureField> fields;

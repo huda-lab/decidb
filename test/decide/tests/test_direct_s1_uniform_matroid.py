@@ -1654,7 +1654,7 @@ def test_s1_reducer_bound_reads_infinity_like_the_solver(decidb_cli, name):
 # without a `when` of its own, is a window column of the source (H-19, H-20) and is exact, so it moved to
 # `S1_REDUCER_NOW_APPLIED` below.
 S1_REDUCER_DECLINED = {
-    "sum_qualified_by_its_relation": ("INTEGER", ("1", "2", "3"), "SUM(t: v)"),
+    "sum_qualified_by_its_relation": ("INTEGER", ("1", "2", "3"), "SUM(per t: v)"),
 }
 
 

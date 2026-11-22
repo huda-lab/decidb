@@ -522,7 +522,7 @@ private:
 	//!   name one column over two row sets; merging them would apply one mask to both.
 	//! - `avg_scale` divides by the group's row count, so an AVG term and a SUM term
 	//!   are not summable before that scaling happens.
-	//! - `qualifier_scope_idx` selects a de-duplication mask (`sum(D: ...)`), and
+	//! - `qualifier_scope_idx` selects a de-duplication mask (`sum(per D: ...)`), and
 	//!   `qualifier_reducer` distinguishes occurrences that reuse that scope.
 	//!
 	//! Constants (`INVALID_INDEX`) are deliberately left alone: they are a fixed
@@ -626,7 +626,7 @@ private:
 	// Reducer metadata and peeled scales
 	//===------------------------------------------------------------------===//
 
-	//! Keyed scope a reducer is qualified by (`sum(D: ...)`), read back from the tag the
+	//! Keyed scope a reducer is qualified by (`sum(per D: ...)`), read back from the tag the
 	//! binder stamped on the aggregate; INVALID_INDEX when the reducer is unqualified.
 	static idx_t QualifierScopeOf(const BoundAggregateExpression &agg) {
 		idx_t scope_idx = DConstants::INVALID_INDEX;

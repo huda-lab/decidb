@@ -144,9 +144,6 @@ static void ValidateNoScopeSpelling(const ParsedExpression &expr, const DecideSo
 	if (IsDecideBy(expr)) {
 		throw NotImplementedException(expr, "'%s' inside a subquery is not supported", "by");
 	}
-	if (IsDecideRelationPrefix(expr)) {
-		throw NotImplementedException(expr, "'%s' inside a subquery is not supported", DecideWrittenSql(expr, text));
-	}
 	EnumerateChildrenAndSubqueries(expr, [&](const ParsedExpression &child) { ValidateNoScopeSpelling(child, text); });
 }
 
@@ -332,7 +329,7 @@ static void ValidateScopePlacement(const ParsedExpression &expr, ScopePlacement 
 	}
 	if (IsDecideBy(expr)) {
 		auto by = ReadDecideBy(expr);
-		if (!TakesReducerBy(UnwrapReducerMarkers(**by.call))) {
+		if (!TakesReducerBy(**by.call)) {
 			throw BinderException(expr, "by (...) does not follow a reducer");
 		}
 		for (auto &element : by.key) {
@@ -848,46 +845,6 @@ static BoundAggregateExpression *GetBoundAggregate(Expression &expr) {
 	                                                                     : nullptr;
 }
 
-BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr, idx_t depth) {
-	auto &ctx = *qualifier_context;
-	// The grammar makes the prefix a list of single names (makeQualifiedReducer), one or more.
-	auto prefix = ReadDecideRelationPrefix(qualified_expr);
-	vector<string> relations;
-	for (auto &relation : prefix.relations) {
-		relations.push_back(relation->Cast<ColumnRefExpression>().GetColumnName());
-	}
-	auto relation_list = StringUtil::Join(relations, ", ");
-
-	KeyColumns key;
-	for (idx_t i = 0; i < relations.size(); i++) {
-		ErrorData binding_error;
-		auto binding = binder.bind_context.GetBinding(relations[i], binding_error);
-		if (!binding || binding->index == ctx.decide_index) {
-			auto &qualifier = *prefix.relations[i];
-			return BindResult(BinderException(qualifier, "'%s' is not a relation of the FROM clause",
-			                                  DecideWrittenSql(qualifier, ctx.source_text)));
-		}
-		AddRelationColumns(*binding, key);
-	}
-	// `SUM(D, T: e)` is `sum(per D, T: e)` (language/guide.md §5.1): the same exact scope, so the same
-	// classes and the same variant signature (D70).
-	auto scope_idx = FindOrCreateScope(FindOrCreateDecideKey(KeyElements(context, key), relation_list, *ctx.keys),
-	                                   *ctx.keyed_scopes);
-
-	auto aggregate_result = BindExpression(*prefix.call, depth);
-	if (aggregate_result.HasError()) {
-		return aggregate_result;
-	}
-	auto aggregate_expr = std::move(aggregate_result.expression);
-	auto *aggregate = GetBoundAggregate(*aggregate_expr);
-	if (!aggregate || !IsDecideAggregateName(StringUtil::Lower(aggregate->function.name))) {
-		return BindResult(BinderException(qualified_expr, "'%s' cannot be qualified by a relation",
-		                                  DecideWrittenSql(qualified_expr, ctx.source_text)));
-	}
-	AddDecideTag(aggregate->alias, MakeQualifiedReducerTag(scope_idx));
-	return BindResult(std::move(aggregate_expr));
-}
-
 case_insensitive_set_t DecisionNames(const case_insensitive_map_t<idx_t> &variables) {
 	case_insensitive_set_t names;
 	for (auto &variable : variables) {
@@ -1179,9 +1136,6 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
 	auto &expr = *expr_ptr;
 	auto &function = expr.Cast<FunctionExpression>();
-	if (IsDecideRelationPrefix(expr)) {
-		return BindQualifiedReducer(function, depth);
-	}
 	// `by (key)` and a scope in front of a reducer's argument. ValidateDecideScopeSpellings
 	// has already refused both on anything but SUM, AVG, MIN and MAX.
 	if (IsDecideBy(expr)) {

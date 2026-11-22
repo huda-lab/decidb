@@ -52,7 +52,7 @@ struct DecideKeyElement {
 
 //! A grouping key: the expressions whose values decide which rows share a class. Every
 //! key the clause writes is one entry of LogicalDecide::keys -- a declaration's `per K:`,
-//! a reducer's own `per K'` and the colon form `SUM(D: e)`, a reducer's `by (key)`, a
+//! a reducer's own `per K'`, a reducer's `by (key)`, a
 //! constraint's `per K:` and a nested reducer's path key -- and keys with the same columns
 //! share it, whichever spelling wrote them. A relation element (`per D`) stands for every
 //! column D stores. The empty key (`per ()`, `by ()`) is no entry: INVALID_INDEX, one
@@ -85,7 +85,7 @@ const vector<DecideKeyElement> &DecideKeyElements(const vector<DecideKey> &keys,
 string DecideKeyText(const vector<DecideKey> &keys, idx_t key);
 
 //! The classes some decisions are keyed by: one decision instance per class of `key`.
-//! A declaration's `per K:` and a reducer's own `per K'` (or `SUM(D: e)`, whose classes
+//! A declaration's `per K:` and a reducer's own `per K'` (whose classes
 //! a reducer counts once) each make one; scopes on the same key share it.
 struct KeyedScopeInfo {
 	//! Index into LogicalDecide::keys.

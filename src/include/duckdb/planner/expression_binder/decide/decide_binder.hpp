@@ -69,7 +69,7 @@ idx_t BindKey(ClientContext &context, Binder &binder, const DecideKeyView &key,
               const case_insensitive_set_t &decision_names, const string &key_text, const DecideSourceText *text,
               vector<DecideKey> &keys);
 
-//! What a reducer's own key (`sum(per K: e)`, `SUM(D: e)`) and `by` need in order to
+//! What a reducer's own key (`sum(per K: e)`) and `by` need in order to
 //! resolve. Owned by the declarations binder, which is still filling `keyed_scopes` when
 //! the constraint and objective binders run; the binders hold a pointer so a reducer can
 //! add a key-only scope to the same list.
@@ -176,9 +176,6 @@ protected:
 	bool IsDataOperand(const ParsedExpression &expr) const;
 
 	BindResult BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) override;
-	//! Binds the colon form `agg(D, T: expr)` as `agg(per D, T: expr)` (language/guide.md §5.1): the
-	//! relations' stored columns as an exact key scope and the tag of that scope.
-	BindResult BindQualifiedReducer(FunctionExpression &qualified_expr, idx_t depth);
 	//! Binds `agg([when c] [per K]: e)`: `agg(e)` with `c` as the aggregate's filter and
 	//! `K` as the key it keeps one row of each class by (an exact key scope, tagged like a
 	//! qualifier; `per ()` is the empty key).

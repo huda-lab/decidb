@@ -6,7 +6,7 @@ class of the inner `per` -- per distinct value of what the body reads, each read
 first row the `when` keeps (D70, D71) -- then the aggregate. The inner `when` filters its
 own reducer only; `AVG` divides by the values it receives; `MIN`/`MAX` are unaffected by
 an inner `per`. A reducer with no row for some group of the kept rows has no value there
-(D68). The colon form `SUM(D: e)` is `sum(per D: e)` and reads the same values (S4).
+(D68).
 
 Optima are judged against `_scope_oracle.ScopedModel`; model shapes against
 DECIDB_DUMP_MODEL.
@@ -14,7 +14,6 @@ DECIDB_DUMP_MODEL.
 
 import pytest
 
-from ._brute_force import judge, optimum
 from ._scope_cases import (  # noqa: F401
     DEPOT_COLUMNS,
     DEPOTS,
@@ -99,38 +98,15 @@ def test_inner_per_charges_a_depot_once_across_its_shipments(decidb_cli, scope_s
 
 
 @pytest.mark.correctness
-def test_inner_per_matches_the_colon_form(decidb_cli, tmp_path):
-    """`sum(per D: e)` is `SUM(D: e)` (D1): the same model."""
-
-    def query(clause):
-        return f"""
-            SELECT shipmentID, ship {from_clause()}
-            DECIDE ship(INT), per D: open(BOOL)
-            SUCH THAT ship <= S.demand * open AND {clause}
-            MAXIMIZE SUM(ship)"""
-
-    colon = decidb_cli.dump_model(query("SUM(D: capacity * open) <= 60"), tmp_path / "colon.dump")
-    assert colon == decidb_cli.dump_model(query("sum(per D: D.capacity * open) <= 60"), tmp_path / "per.dump")
-
-
-@pytest.mark.correctness
-def test_the_colon_form_takes_a_by(decidb_cli, tmp_path):
-    """`SUM(D: e) by (Γ)` reads its `by` group: the model of `sum(per D: e) by (Γ)`, which opens D2 and D3 alone."""
-
-    def query(clause):
-        return f"""
-            SELECT shipmentID, open {from_clause()}
-            DECIDE ship(INT), per D: open(BOOL)
-            SUCH THAT ship <= S.demand * open AND {clause}
-            MAXIMIZE SUM(ship)
-            ORDER BY shipmentID"""
-
-    colon = query("SUM(D: capacity * open) by (D.region) <= 50")
-    dump = decidb_cli.dump_model(colon, tmp_path / "colon.dump")
-    assert dump == decidb_cli.dump_model(
-        query("sum(per D: D.capacity * open) by (D.region) <= 50"), tmp_path / "per.dump"
-    )
-    assert [opened for _, opened in decidb_cli.execute(colon)[0]] == [0, 0, 1, 1, 1]
+def test_an_inner_per_takes_a_by(decidb_cli):
+    """`sum(per D: e) by (Γ)` reads its `by` group, which opens D2 and D3 alone."""
+    sql = f"""
+        SELECT shipmentID, open {from_clause()}
+        DECIDE ship(INT), per D: open(BOOL)
+        SUCH THAT ship <= S.demand * open AND sum(per D: capacity * open) by (D.region) <= 50
+        MAXIMIZE SUM(ship)
+        ORDER BY shipmentID"""
+    assert [opened for _, opened in decidb_cli.execute(sql)[0]] == [0, 0, 1, 1, 1]
 
 
 @pytest.mark.correctness
@@ -265,91 +241,6 @@ def test_a_when_in_front_leaves_the_groups_it_keeps_no_row_of_out(decidb_cli):
     assert [ship for _, ship, _ in rows] == [10, 20, 30, 3, 25]
 
 
-def _per_depot(result) -> dict:
-    """The one value `open` shows on every row of each depot."""
-    values = {}
-    for row in result:
-        assert values.setdefault(row["depotID"], row["open"]) == row["open"], f"one depot, two values: {result}"
-    return values
-
-
-_DEPOT_DOMAINS = {depot[0]: range(6) for depot in DEPOTS}
-_ROWS_PER_DEPOT = {depot[0]: sum(1 for s in SHIPMENTS if s[1] == depot[0]) for depot in DEPOTS}
-
-
-@pytest.mark.correctness
-@pytest.mark.parametrize(
-    "cli_fixture, clause, objective, feasible, value, maximize",
-    [
-        pytest.param(
-            cli,
-            "per (): norm(D: open, 'inf') <= 1",
-            "MAXIMIZE SUM(D: open)",
-            lambda a: max(a.values()) <= 1,
-            lambda a: sum(a.values()),
-            True,
-            id=f"inf-{cli}",
-        )
-        for cli in ("decidb_cli_gurobi", "decidb_cli_highs")
-    ]
-    + [
-        pytest.param(
-            cli,
-            "norm(D: open, 0) <= 2",
-            "MAXIMIZE SUM(D: open)",
-            lambda a: sum(1 for v in a.values() if v) <= 2,
-            lambda a: sum(a.values()),
-            True,
-            id=f"zero-{cli}",
-        )
-        for cli in ("decidb_cli_gurobi", "decidb_cli_highs")
-    ]
-    + [
-        pytest.param(
-            cli,
-            "open <= 5",
-            "MAXIMIZE SUM(D: 4 * open) - norm(D: 3 * open - 6, 1)",
-            lambda a: True,
-            lambda a: sum(4 * v - abs(3 * v - 6) for v in a.values()),
-            True,
-            id=f"objective-{cli}",
-        )
-        for cli in ("decidb_cli_gurobi", "decidb_cli_highs")
-    ]
-    + [
-        # A square of a decision in a constraint needs Gurobi.
-        pytest.param(
-            "decidb_cli_gurobi",
-            "when NOT S.priority: norm(D: open, 2) <= 2",
-            "MAXIMIZE SUM(D: open)",
-            lambda a: a["D1"] ** 2 + a["D2"] ** 2 <= 2,
-            lambda a: sum(a.values()),
-            True,
-            id="under-a-when",
-        )
-    ],
-)
-def test_norm_with_a_relation_qualifier_reads_each_depot_once(
-    request, cli_fixture, clause, objective, feasible, value, maximize
-):
-    """`norm(D: e, p)` is the norm over D's rows, each depot once, as `SUM(D: e)` is. D1 and
-    D2 have two shipments each: counting their rows would change the optimum of orders 0, 1 and
-    2; 'inf' reads a largest value, which a repeated row leaves alone. The `when` keeps D1 and
-    D2 only, so D3 is free."""
-    assert _ROWS_PER_DEPOT == {"D1": 2, "D2": 2, "D3": 1}
-    cli = request.getfixturevalue(cli_fixture)
-    result = answer(
-        cli,
-        f"""
-        SELECT shipmentID, depotID, open {from_clause()}
-        DECIDE per D: open(INT)
-        SUCH THAT open <= 5 AND {clause}
-        {objective}
-        ORDER BY shipmentID""",
-    )
-    assert judge(_per_depot(result), feasible, value) == optimum(_DEPOT_DOMAINS, feasible, value, maximize)
-
-
 @pytest.mark.error
 @pytest.mark.error_binder
 @pytest.mark.parametrize(
@@ -365,10 +256,10 @@ def test_inner_scope_errors(decidb_cli, clause, at):
 
 
 @pytest.mark.correctness
-def test_the_colon_form_reads_a_per_row_decision_once_per_row(decidb_cli, scope_solver):
-    """D71: `ship` is per row, so each row of a D tuple is a variant of its own and `SUM(D:
-    ship)` is every row's ship, as without the qualifier: East ships 75 within 80."""
-    sql = _open_query("SUM(D: ship) by (D.region) <= 80")
+def test_an_inner_relation_key_reads_a_per_row_decision_once_per_row(decidb_cli, scope_solver):
+    """D71: `ship` is per row, so each row of a D tuple is a variant of its own and `SUM(per D:
+    ship)` is every row's ship, as without the `per`: East ships 75 within 80."""
+    sql = _open_query("SUM(per D: ship) by (D.region) <= 80")
     model = ScopedModel(joined(), SHIP_OPEN)
     total = Reduce("sum", lambda r: {"ship": 1}, per=DEPOT_COLUMNS, by=("region",))
     clauses = [SHIP_IF_OPEN, Scoped((total,), "<=", (lambda r: {CONSTANT: 80},))]

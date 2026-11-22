@@ -2,8 +2,7 @@
 classes, and a class whose rows differ in what the body reads -- a tuple term (a bound, a
 factor on a reducer), a decision outside reducers, a reducer's `by` key -- is one
 instance per distinct combination of those values, each generated at its first row. An
-inner `per` key, and the relations of a colon form, hand their reducer one value per
-variant the same way (D71).
+inner `per` key hands its reducer one value per variant the same way (D71).
 
 Each case runs on data where the key fixes every value (one variant per class) and on
 data where it does not, and is judged by `_scope_oracle.ScopedModel`. The objective is

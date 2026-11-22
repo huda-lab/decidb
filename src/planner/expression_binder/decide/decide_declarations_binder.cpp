@@ -249,7 +249,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 			scalar_variable_names.insert(var_names[v]);
 		}
 	}
-	// What a relation-qualified reducer needs to resolve `sum(D: ...)`. The binders
+	// What a relation-qualified reducer needs to resolve `sum(per D: ...)`. The binders
 	// may append a key-only keyed scope to `keyed_scopes`, which is why this runs
 	// before the vector is moved onto the operator below.
 	DecideQualifierContext qualifier_context;

@@ -102,9 +102,7 @@ keeps ([guide.md §5.5](guide.md#55-reducers-inside-reducers--the-path-rule)).
 | An unknown key element | Binder | `'depot' is not a column or a relation of the FROM clause` | the element |
 | `rowid` or a generated column in a key | Binder | `'g.b' is not a stored column` | the element |
 | An unqualified `FULL OUTER JOIN USING` column in a key | Binder | `'depotID' is merged by FULL OUTER JOIN USING` | the element |
-| A colon form naming a relation not in `FROM` | Binder | `'X' is not a relation of the FROM clause` | the qualifier |
-| A relation qualifier on a call that is not a reducer | Binder | `'q' cannot be qualified by a relation` | the call |
-| A scope or the colon form inside an ordinary subquery written in a clause | NI | `'q' inside a subquery is not supported` | the scope |
+| A scope inside an ordinary subquery written in a clause | NI | `'q' inside a subquery is not supported` | the scope |
 | **D80** `norm` inside a reducer, a reducer inside `norm` | Binder | `norm inside a reducer is not allowed` · `a reducer inside norm is not allowed` | the call |
 
 ### Frames

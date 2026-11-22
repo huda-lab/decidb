@@ -279,7 +279,7 @@ static string ByText(const BoundAggregateExpression &agg, const RenderContext &c
 }
 
 //! A reducer reprinted: `sum(when c per K: e) by (g)`, for a reducer with no span and, in a plan layer, for one that
-//! reads a decision (a plan reprints decision structure). The colon form `SUM(D: e)` reprints as `sum(per D: e)`.
+//! reads a decision (a plan reprints decision structure).
 static string RenderReducer(const BoundAggregateExpression &agg, const string &body, const RenderContext &ctx) {
 	string scope;
 	if (agg.filter) {

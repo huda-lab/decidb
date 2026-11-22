@@ -24,7 +24,7 @@ order, one at a time. Rules for every one of them:
 
 ## TREE-1 — Parser nodes
 
-- **Problem.** The parser writes `when`, `per`, `per row`, `by` and the relation prefix as operator
+- **Problem.** The parser writes `when`, `per`, `per row` and `by` as operator
   `FunctionExpression`s named by a tag (`transform_operator.cpp:92`), a declaration as a comparison of the name
   with a string constant (`grammar.cpp:664`), and every constraint as one AND. The binder reads meaning from a
   marker's name, its child count and its child positions (`decide_parsed_markers.cpp`,
@@ -37,8 +37,7 @@ order, one at a time. Rules for every one of them:
   `IsDecideAggregateName` moves to the binder, its only caller.
 - **Done when.** Goldens identical; the serializer mode passes; a C++ test round-trips each new class (parse,
   print, parse; copy, equality, serialization); `test/decidb/test_scope_parser.test` passes; no code names
-  `SCOPE_WHEN_TAG`, `SCOPE_PER_TAG`, `SCOPE_PER_ROW_TAG`, `REDUCER_BY_TAG`, `QUALIFIED_REDUCER_TAG` or
-  `IsDecideMarker`.
+  `SCOPE_WHEN_TAG`, `SCOPE_PER_TAG`, `SCOPE_PER_ROW_TAG`, `REDUCER_BY_TAG` or `IsDecideMarker`.
 
 ## TREE-2 — `BoundDecide`, moved whole
 

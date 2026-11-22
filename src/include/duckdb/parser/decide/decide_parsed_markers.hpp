@@ -14,7 +14,7 @@
 namespace duckdb {
 
 //! What the parser writes for a DECIDE clause, read through the functions here: a scope in front of a body
-//! (`when c:`, `per K:`, `per row:`), a reducer's `by (K)`, a reducer's relation prefix (`sum(D, T: e)`), a
+//! (`when c:`, `per K:`, `per row:`), a reducer's `by (K)`, a
 //! declaration and the list of constraints. No other code reads how the parser spells them.
 
 //! How a `per` is written.
@@ -32,7 +32,7 @@ enum class DecidePer : uint8_t {
 //! The type a declaration gives its decision.
 enum class DecideVariableType : uint8_t { REAL, INT, BOOL };
 
-//! The elements of a key as written: a `per` key, a `by` key, a relation prefix.
+//! The elements of a key as written: a `per` key or a `by` key.
 class DecideKeyView {
 public:
 	DecideKeyView() : first(nullptr), count(0) {
@@ -87,12 +87,6 @@ struct DecideByView {
 	DecideKeyView key;
 };
 
-//! `sum(D, T: e)`: the call without its prefix, and the relations named in front of the colon.
-struct DecideRelationPrefixView {
-	unique_ptr<ParsedExpression> *call = nullptr;
-	DecideKeyView relations;
-};
-
 //! One declaration, `[per K:] name(TYPE)`.
 struct DecideDeclarationView {
 	string name;
@@ -115,11 +109,6 @@ bool IsDecideBy(const ParsedExpression &expr);
 //! The parts of `expr` (IsDecideBy).
 DecideByView ReadDecideBy(const ParsedExpression &expr);
 
-//! `sum(D, T: e)`.
-bool IsDecideRelationPrefix(const ParsedExpression &expr);
-//! The parts of `expr` (IsDecideRelationPrefix).
-DecideRelationPrefixView ReadDecideRelationPrefix(const ParsedExpression &expr);
-
 //! The parts of one declaration of a DECIDE.
 DecideDeclarationView ReadDecideDeclaration(const ParsedExpression &declaration);
 
@@ -136,7 +125,7 @@ bool IsScopedReducerCall(const ParsedExpression &expr);
 //! `count` (D34, D35).
 bool TakesReducerBy(const ParsedExpression &expr);
 
-//! The call under a reducer's `by` and relation prefix.
+//! The call under a reducer's `by`, else `expr` itself.
 const ParsedExpression &UnwrapReducerMarkers(const ParsedExpression &expr);
 
 //! `text` without the one pair of parentheses that encloses all of it, else `text` itself.

@@ -64,7 +64,7 @@ Each fact has one home. Other documents link to it instead of restating it.
   [functions.md](language/functions.md), [problem_types.md](language/problem_types.md). **How a stage implements it**
   is in that stage's `done.md`.
 - **Why the language works as it does** is in [language/decisions.md](language/decisions.md); code and tests cite it by
-  number (D1, S3).
+  number (D2, S3).
 - **Constraint and objective shape** (where a term may sit) is in
   [pipeline/04_canonicalizer/done.md](pipeline/04_canonicalizer/done.md) only.
 - **Open work** is in the `todo.md` of the folder that owns the behavior. A defect no single stage owns is in

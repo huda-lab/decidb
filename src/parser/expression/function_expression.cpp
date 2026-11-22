@@ -35,59 +35,6 @@ FunctionExpression::FunctionExpression(const string &function_name, vector<uniqu
                          std::move(order_bys), distinct, is_operator, export_state_p) {
 }
 
-//! A relation-qualified reducer is represented by a parser-only operator whose first
-//! child is the real aggregate and whose remaining children are relation names. Render
-//! the aggregate's complete DuckDB function surface, inserting the qualifier before
-//! its arguments, rather than exposing the private marker as a function call.
-static string QualifiedReducerToString(const FunctionExpression &wrapper) {
-	auto prefix = ReadDecideRelationPrefix(wrapper);
-	if (prefix.relations.empty() || (*prefix.call)->GetExpressionClass() != ExpressionClass::FUNCTION) {
-		throw InternalException("DECIDE qualified-reducer marker has an invalid parsed shape");
-	}
-	auto &aggregate = (*prefix.call)->Cast<FunctionExpression>();
-	string result;
-	if (!aggregate.catalog.empty()) {
-		result += KeywordHelper::WriteOptionallyQuoted(aggregate.catalog) + ".";
-	}
-	if (!aggregate.schema.empty()) {
-		result += KeywordHelper::WriteOptionallyQuoted(aggregate.schema) + ".";
-	}
-	result += KeywordHelper::WriteOptionallyQuoted(aggregate.function_name) + "(";
-	result += prefix.relations.ToString() + ": ";
-	if (aggregate.distinct) {
-		result += "DISTINCT ";
-	}
-	for (idx_t i = 0; i < aggregate.children.size(); i++) {
-		if (i > 0) {
-			result += ", ";
-		}
-		auto &child = aggregate.children[i];
-		result += child->GetAlias().empty()
-		              ? child->ToString()
-		              : StringUtil::Format("%s := %s", SQLIdentifier(child->GetAlias()), child->ToString());
-	}
-	if (aggregate.order_bys && !aggregate.order_bys->orders.empty()) {
-		if (aggregate.children.empty()) {
-			result += ") WITHIN GROUP (";
-		}
-		result += " ORDER BY ";
-		for (idx_t i = 0; i < aggregate.order_bys->orders.size(); i++) {
-			if (i > 0) {
-				result += ", ";
-			}
-			result += aggregate.order_bys->orders[i].ToString();
-		}
-	}
-	result += ")";
-	if (aggregate.filter) {
-		result += " FILTER (WHERE " + aggregate.filter->ToString() + ")";
-	}
-	if (aggregate.export_state) {
-		result += " EXPORT_STATE";
-	}
-	return result;
-}
-
 string FunctionExpression::ToString() const {
 	// DeciDB: the parser's markers print as the DECIDE syntax they stand for.
 	if (IsDecideScope(*this)) {
@@ -97,9 +44,6 @@ string FunctionExpression::ToString() const {
 	if (IsDecideBy(*this)) {
 		auto by = ReadDecideBy(*this);
 		return (*by.call)->ToString() + " BY (" + by.key.ToString() + ")";
-	}
-	if (IsDecideRelationPrefix(*this)) {
-		return QualifiedReducerToString(*this);
 	}
 	return ToString<FunctionExpression, ParsedExpression>(*this, catalog, schema, function_name, is_operator, distinct,
 	                                                      filter.get(), order_bys.get(), export_state, true);

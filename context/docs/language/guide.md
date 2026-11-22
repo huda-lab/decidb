@@ -60,7 +60,6 @@ constraint  ::= [scope ':'] comparison             -- AND separates constraints;
 objective   ::= (MAXIMIZE | MINIMIZE) [scope ':'] expression     -- per must be '()' or absent
 scope       ::= ['when' condition] ['per' key]                   -- at least one of the two
 reducer     ::= agg '(' [scope ':'] expression ')' ['by' '(' [expression, ...] ')']
-              | agg '(' relation, ... ':' expression ')' ['by' ...]   -- the colon form, §5.1
 agg         ::= SUM | AVG | MIN | MAX              -- norm(e, p) and count(*) take a by, no scope
 key         ::= '(' ')'  |  'row'  |  element (',' element)*
 element     ::= column | relation                  -- a relation stands for all its stored columns
@@ -122,7 +121,7 @@ A declarator without `per` makes one decision per **result row**. Over a join, e
 
 **Reducers count result rows**, whatever the decision's key, as SQL does over a join. If a nurse appears in 5 rows
 (one per shift), an unscoped `sum` reads her decision 5 times. To count each class once, give the reducer its own
-`per` (§5.3) or use the colon form (§5.1):
+`per` (§5.3):
 
 ```sql
 SELECT n.name, s.shift_date, keepN
@@ -367,7 +366,7 @@ Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver s
   way. `=` refuses a bound that genuinely varies, since two different numbers cannot both be *the* sum. `<>` keeps
   every value as its own exclusion.
 - **`norm(e, p)`** is an L_p term with a user-supplied weight (`MINIMIZE SUM(cost*x) + 0.5 * norm(x - base, 1)`). It
-  takes a `when`/`per` in front of its clause and a `by`, but no scope inside and no colon form:
+  takes a `when`/`per` in front of its clause and a `by`, but no scope inside:
 
   | `p` | Means | Class |
   |---|---|---|
@@ -386,28 +385,6 @@ Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver s
   a term of degree above 2 is refused (*"function 'sqrt' over a decision is not supported"*, *"a term of degree 3 is not
   supported"*). Each message points at the term. Any function,
   operator or `CASE` over data only is a per-row coefficient.
-
-### 5.1 The colon form — `SUM(D: e)`
-
-`agg(Rel[, Rel, ...]: e) [by (Γ)]` means `agg(per Rel[, ...]: e)` (§5.3): the reducer reads one term per tuple of the
-named relations instead of one per result row.
-
-```sql
-SELECT routeID, depotID, open, ship
-DECIDE per D: open(BOOL), ship(INT)
-FROM Depots D JOIN Routes T USING (depotID)
-SUCH THAT ship <= capacity * open AND SUM(ship) >= 300
-MINIMIZE SUM(unit_cost * ship) + SUM(D: opening_cost * open);   -- each depot's cost once
-```
-
-- **Identity is the tuple, not the value**: two depots with equal cost are two terms (this is not `SUM(DISTINCT …)`).
-- **Scope is the surviving rows**: join, `WHERE` and `when` decide which tuples contribute.
-- **One value per variant of each tuple** (D71, §7.1): a body that reads only the named relations' columns and
-  decisions keyed by them is one value per tuple. A column of an unnamed relation, or a per-row decision, takes several
-  values in a tuple, and each is a value of its own: `SUM(D: T.unit_cost * ship)` reads every route of a depot.
-- **`AVG(D: e)`** divides by the number of classes. **`MIN`/`MAX`** are unaffected.
-- **Several relations** (`SUM(D, T: e)`): the identity is the concatenation of their keys. Naming a relation removes
-  its fan-out; an unnamed one keeps its fan-out. Naming every joined relation is a no-op. Order does not matter.
 
 ### 5.2 `by (Γ)` — which rows a reducer reads
 
@@ -447,6 +424,10 @@ sum(when S.priority per D: D.opening_cost * open)   -- filter, then each remaini
   `sum(per D: D.opening_cost + T.unit_cost * ship)` over a depot with two routes reads two values — the opening cost
   twice — because each route's `unit_cost` and per-row `ship` are a variant. `EXPLAIN ANALYZE` prints the count under
   the clause (§9): *"↳ sum(per D: ...): 3 values from 2 classes, one per distinct (T.unit_cost, ship) within a class"*.
+- **Identity is the class, not the value**: two depots with equal cost are two terms (this is not `SUM(DISTINCT …)`).
+- **`avg(per K': e)`** divides by the number of values the reducer reads. **`MIN`/`MAX`** are unaffected.
+- **Several relations** (`sum(per D, T: e)`): the identity is the concatenation of their keys. Naming a relation
+  removes its fan-out; an unnamed one keeps its fan-out. Naming every joined relation is a no-op. Order does not matter.
 - **A reducer with no row in a group is NULL** (D68), so that group's constraint is skipped; the other reducers of
   the clause do not save it. Written in front, the condition leaves the same depots out:
 
@@ -765,8 +746,7 @@ A `per` key splits the kept rows into classes, and each class is generated once 
 - every reducer's **`by` key**, by value: each group a class reads is a variant.
 
 Each variant is generated at its first kept row, which stands for the variant's rows: they agree on everything the
-body reads. An inner `per` key, and the relations of a colon form, hand their reducer one value per variant of each of
-its classes the same way (D71, §5.3).
+body reads. An inner `per` key hands its reducer one value per variant of each of its classes the same way (D71, §5.3).
 
 - **Where the key fixes every one of them**, each class has one variant and the model is one constraint per class
   (deck p. 39). A value the key's own columns hold (one of them, or a function of them), a decision keyed on them and a

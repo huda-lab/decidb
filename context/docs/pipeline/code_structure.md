@@ -59,7 +59,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 |---|---|---|
 | `parser/decide/decide_parsed_markers.cpp` | 01 | The parsed-marker predicates, shared by the binder |
 | `parser/expression/decide_frame_expression.cpp` | 01 | A frame selector's parsed form: equality, copy, its text and serialization |
-| `planner/expression_binder/decide/decide_binder.cpp` | 02 | Shared DECIDE expression rules, reducers, the colon form, a reducer's own scope and `by`, key scopes, where `when` / `per` / `by` may stand, the integrality gate |
+| `planner/expression_binder/decide/decide_binder.cpp` | 02 | Shared DECIDE expression rules, reducers, a reducer's own scope and `by`, key scopes, where `when` / `per` / `by` may stand, the integrality gate |
 | `planner/expression_binder/decide/decide_constraints_binder.cpp` | 02 | `SUCH THAT` |
 | `planner/expression_binder/decide/decide_objective_binder.cpp` | 02 | Objective and its scope |
 | `planner/expression_binder/decide/decide_declarations_binder.cpp` | 02 | DECIDE declarations and their scopes, the parsed-tree validators (`RefuseQualifiedDecisionReferences` among them), and the `SUCH THAT` / objective binds |
@@ -138,7 +138,6 @@ classDiagram
         +BindExpression()
         +BindAggregate()
         +BindFunction()
-        +BindQualifiedReducer()
         +BindScopedReducer()
         +BindReducerBy()
     }
@@ -226,7 +225,7 @@ classDiagram
 - **`ValidateDecideScopeSpellings()`** — where `when`, `per` and `by` may stand.
 - **`FindOrCreateKeyScope()`** — the one key scope per set of key columns.
 - **`ValidateDecideNoExplicitDecisionCasts()`** — the cast authorship boundary.
-- **`BindQualifiedReducer()` / `BindScopedReducer()` / `BindReducerBy()`**.
+- **`BindScopedReducer()` / `BindReducerBy()`**.
 
 ### `src/planner/decide/decide_canonicalizer.cpp` — stage 04
 - **`CanonicalizeTree()` / `CanonicalizeObjective()`** — pure; a comparison is canonicalized inside the tree.
@@ -327,8 +326,7 @@ a condition as another constraint.
 
 ## 4. Keyed variables end to end
 
-`per K: x(TYPE)` from the grammar to readback. A reducer's own `per K'` and the colon
-form `SUM(D: e)` use the same key scopes; only a declaration owns solver columns.
+`per K: x(TYPE)` from the grammar to readback. A reducer's own `per K'` uses the same key scopes; only a declaration owns solver columns.
 
 | Struct | Where | What |
 |---|---|---|

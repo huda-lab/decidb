@@ -20,7 +20,7 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
 - **Bounds read from the kept rows:** `COUNT(*)`, `COUNT`, `MIN`, `MAX`, `SUM` and `AVG` of a numeric source expression on
   the right of a count bound, alone or inside `+ - * / //` and other arithmetic (`SUM(x) <= COUNT(*) / 2`,
   `>= COUNT(*) * 0.1`, `<= MIN(cap)`, `>= MAX(lo) / 2`, `<= SUM(cap)`), with or without a `when` of its own
-  (`<= sum(when f: 1)`, `<= min(when cap > 1: cap)`), a written norm and a keyed or colon reducer. Every reducer, and the
+  (`<= sum(when f: 1)`, `<= min(when cap > 1: cap)`), a written norm and a keyed reducer. Every reducer, and the
   tightest value of a per-row bound in its group, reaches S1 as a source column the bound-side rewrite built (`../../framework/done.md`). S1 has no reader of its own for a reducer. The value is DuckDB's, in its own types: `SUM` over any numeric type is
   exact, a bound of `COUNT(*) * 0.57` over 100 rows is exactly 57, and over the `BIGINT` values 2^60, 1, -2^60
   `SUM(cap)` is 1. `COUNT(*)` counts the rows the clause's `when` keeps; a `when` inside the left-hand sum

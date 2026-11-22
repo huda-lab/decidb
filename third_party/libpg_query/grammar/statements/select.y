@@ -214,7 +214,7 @@ typed_decide_variable:
 				}
 		;
 
-/* List of typed variables: "x IS INTEGER, y IS BOOLEAN" */
+/* The declarators of a DECIDE: "x(INT), per K: y(BOOL)" */
 typed_decide_variable_list:
 			typed_decide_variable
 				{ $$ = list_make1($1); }
@@ -3081,31 +3081,6 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 					linitial($5) = applyDecideScope($3, (PGNode *) linitial($5));
 					$$ = (PGNode *) makeSimpleAExpr(
 						PG_AEXPR_REDUCER_BY, "reducer_by", (PGNode *) makeFuncCall($1, $5, @1), (PGNode *) $7, @7);
-				}
-			| func_name '(' func_arg_list ':' func_arg_list ')'		%prec DECIDE_ITEM
-				{
-					/* DeciDB: relation-qualified reducer, sum(D: expr) or, qualified by
-					 * several relations at once, sum(D, T: expr).
-					 *
-					 * The qualifier is parsed as a func_arg_list rather than as a
-					 * dedicated name list on purpose. `sum(D, T: e)` and `sum(a, b)`
-					 * share a prefix that LALR(1) cannot tell apart at the comma, so
-					 * both sides are read as argument lists and the qualifier's shape
-					 * is checked here instead of in the grammar. The decision point
-					 * moves to ':' vs ')' after a completed func_arg_list, which is
-					 * conflict-free. Every item in the list must be a bare relation
-					 * name; the whole list travels as one PGList (cast to PGNode*) rather than
-					 * being unpacked here, so the binder sees the full qualifier set.
-					 */
-					noteDecideSpan(yyscanner, @4.start, PG_DECIDE_SPAN_PER, @3);
-					$$ = makeQualifiedReducer($1, $3, $5, @1, @3, @4, yyscanner);
-				}
-			| func_name '(' func_arg_list ':' func_arg_list ')' decide_by
-				{
-					/* DeciDB: the colon form with BY, sum(D: expr) BY (key) */
-					noteDecideSpan(yyscanner, @7.start, PG_DECIDE_SPAN_PER, @3);
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_REDUCER_BY, "reducer_by",
-						makeQualifiedReducer($1, $3, $5, @1, @3, @4, yyscanner), (PGNode *) $7, @7);
 				}
 			| AT_DECIDE '(' decide_frame_point ':' a_expr ')' decide_frame_over
 				{

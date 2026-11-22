@@ -7,7 +7,6 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 
 | # | Decision |
 |---|---|
-| D1 | `SUM(D: e)` means `sum(per D: e)` (S4) |
 | D2 | The nested objective is written `outer(per k: inner(e) by (k))` |
 | D3 | The clause shapes support `SUM`, `AVG`, `MIN` and `MAX` |
 | D5 | A NULL in a written key column (a declaration's `per`, a constraint's `per`, `by`, a `per` inside a reducer) puts the row in no class or group of that key, as SQL's `=` has it (deck p. 30). The row keeps every other key's groups. A keyed decision has no value on that row: the output is NULL, a reducer skips it, an unreduced use skips the instance. A relation element (`per D`) compares NULL as a value. SQL's `GROUP BY` keeps NULL as one group; DECIDE does not, because a limit for an unknown group means nothing (owner, 2026-10-27/28) |
@@ -27,7 +26,6 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D35 | `norm(e, p)` takes a `by` |
 | D36 | A removed objective form (a flat `MIN`/`MAX`/`AVG` or an outer `AVG` with `PER`) is an ordinary syntax error (R13) |
 | D37 | A removed spelling is an ordinary syntax error: no message names a replacement, and no code recognizes an old spelling (R13) |
-| D38 | The colon form takes an exact key on `D`'s stored columns, one value per variant of each tuple (D71) and a keyed decision inside it, and echoes as written |
 | D40 | `OR` between constraints is refused; a data-only reducer on the decision side is refused with a message; no internal name appears in "reads no decision" |
 | D41 | An easy `min(x) >= K` / `max(x) <= K` means `x >= K` / `x <= K` on every row it reads; with no `when` and no reducer filter it is absorbed into the decision's box, so a negative `K` makes `x` signed. A constant lower bound replaces the default floor of 0 on the rows it keeps: every row without a `when` or a reducer filter, and only the kept rows or members with one (the other rows keep 0). A keyed or query-wide decision takes the replaced floor when any row it reads is kept. The bound is read by value: any affine or scaled spelling with a constant other side (`min(x) - 1 >= K - 1`, `2 * min(x) >= 2K`, `-min(x) <= -K`) is absorbed like the literal one, and so is a member scaled or shifted by constants (`max(-x) <= 2` is `x >= -2`, `max(2 * x) <= -10` is `x <= -5`) |
 | D43 | A decision is referenced by its bare name. In a `when`, `per` or `by`, `D.x` for a `FROM` relation `D` that has no column `x` is refused at bind time (*"'D.open' is a decision, which when, per and by cannot read"*); elsewhere it is an ordinary column name and the SQL binder reads it |
@@ -50,7 +48,7 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D68 | An empty group skips its constraint (deck p. 56): a reducer over no rows is NULL, and a NULL that reaches the comparison skips the instance. A `when` that keeps no row yields no constraint; a group in which some reducer reads no row yields none; an objective term over no rows is dropped. `count(*)` over no rows is 0, as in SQL (owner, 2026-10-28) |
 | D69 | A key groups rows under its column's collation, as `GROUP BY` does (`PushCollation` on each key element): `per K:` classes, `by` groups, bound-side reducers and keyed decisions alike. A label quotes the group's least raw spelling, so it does not depend on row order (owner, 2026-10-27) |
 | D70 | Variant signatures replace the determination errors (deck pp. 34–40): a scoped expression is one instance per class and distinct value of its tuple terms, its decisions' instances and its reducers' `by` keys, in constraints and reducer operands (owner, 2026-10-28) |
-| D71 | An inner `per` and the colon form follow D70 too: a tuple whose body varies is one value per variant, which `EXPLAIN ANALYZE` counts |
+| D71 | An inner `per` follows D70 too: a tuple whose body varies is one value per variant, which `EXPLAIN ANALYZE` counts |
 | D72 | The objective is produced once (deck p. 62): a second variant is an error saying it would be produced more than once |
 | D73 | A position a frame reads — a point's selected one, each one a range visits — holds one signature of the payload, as the deck's frame container holds one per position (p. 110; owner, 2026-11-05): each column the payload reads, by value (NULL a value), and each decision it reads, by instance, whatever its coefficient. Rows of one position with two signatures are an error naming the position, though they would read one value (`a + b` over (1, 2) and (2, 1)) or one linear form (`0 * x`); rows with one are read once, a range's included |
 | D74 | A frame's order key orders peers as `ORDER BY` does, NULL where `default_null_order` puts it |
@@ -80,7 +78,6 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | S1 | `per row` is accepted as the written-out default |
 | S2 | Decisions are referenced by bare name (D43) |
 | S3 | With no `per`, a constraint is per row, so `sum(x) <= cap` takes the tightest `cap`; with an explicit `per`, each value of a varying bound is a variant (D70), the tightest again |
-| S4 | `SUM(D: e)` reads the same values as `sum(per D: e)` |
 | S6 | `per (a, b):` is refused with a message; parentheses mean only `per ()` |
 | S7 | Inside a DECIDE clause, `when`, `per` and `by` after a `)` are keywords; a column with such a name is quoted there |
 | S8 | `per` keys are columns and relations; expressions are allowed only in `by` |

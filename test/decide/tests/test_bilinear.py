@@ -2140,7 +2140,7 @@ def test_a_product_in_a_helpers_scope_links_only_the_groups_it_has(decidb_cli_gu
 @pytest.mark.bilinear
 @pytest.mark.correctness
 def test_bilinear_objective_of_a_qualified_reducer_counts_each_tuple_once(decidb_cli_gurobi, oracle_solver):
-    """`sum(d: x * y)` over a join that repeats depot `a` on two rows reads the product of each depot once: x and y at
+    """`sum(per d: x * y)` over a join that repeats depot `a` on two rows reads the product of each depot once: x and y at
     their cap 4 for both depots, 16 + 16. A repeated `a` would count its product twice."""
     sql = """
         SELECT id, x, y
@@ -2148,7 +2148,7 @@ def test_bilinear_objective_of_a_qualified_reducer_counts_each_tuple_once(decidb
         JOIN (VALUES ('a', 10), ('b', 20)) d(g, cap) USING (g)
         DECIDE per d: x(INT), per d: y(INT)
         SUCH THAT x <= 4 AND y <= 4
-        MAXIMIZE sum(d: x * y)
+        MAXIMIZE sum(per d: x * y)
         ORDER BY id"""
     oracle_solver.create_model("bilinear_qualified_reducer")
     for name in ("x_a", "y_a", "x_b", "y_b"):

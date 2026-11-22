@@ -153,7 +153,7 @@ def test_qualified_and_unqualified_diverge(decidb_cli, duckdb_conn, oracle_solve
         )
         return oracle_solver.solve().objective_value
 
-    qualified, _ = decidb_cli.execute(template.format(reducer="n: (n.n_nationkey + 1) * keepN"))
+    qualified, _ = decidb_cli.execute(template.format(reducer="per n: (n.n_nationkey + 1) * keepN"))
     unqualified, _ = decidb_cli.execute(template.format(reducer="(n.n_nationkey + 1) * keepN"))
 
     q_keep = _keep_by_nation(qualified, 1, 2)
@@ -183,10 +183,10 @@ def test_qualified_and_unqualified_diverge(decidb_cli, duckdb_conn, oracle_solve
 
 @pytest.mark.correctness
 def test_three_relation_composite_qualifier_differs_from_single_and_unqualified(decidb_cli, duckdb_conn, oracle_solver):
-    """`sum(c,o: ...)` over a customer/orders/lineitem chain. The composite
+    """`sum(per c,o: ...)` over a customer/orders/lineitem chain. The composite
     qualifier's tuple identity is (customer, order): it collapses only the fan-out
     lineitem (unnamed) contributes, keeping every distinct order a customer has —
-    unlike `sum(c: ...)` (collapses all the way to one term per customer) and the
+    unlike `sum(per c: ...)` (collapses all the way to one term per customer) and the
     unqualified form (one term per join row, i.e. per lineitem). The two-relation
     case above cannot tell these apart; three relations can (batch E1)."""
     nation_key = _pick_chain_nation(duckdb_conn)
@@ -202,7 +202,7 @@ def test_three_relation_composite_qualifier_differs_from_single_and_unqualified(
         JOIN lineitem l ON l.l_orderkey = o.o_orderkey
         WHERE c.c_nationkey = {nation_key}
         DECIDE per c: keepC(BOOL)
-        SUCH THAT SUM(c: keepC) >= 10
+        SUCH THAT SUM(per c: keepC) >= 10
         MINIMIZE SUM({reducer})
     """
 
@@ -218,11 +218,11 @@ def test_three_relation_composite_qualifier_differs_from_single_and_unqualified(
     # A customer's objective weight of 1e6 or more is a number of the model the solver is handed.
     large = lambda weight: any(abs(weight(ck)) >= 1e6 for ck in custkeys)  # noqa: E731
     single, _ = decidb_cli.execute(
-        template.format(nation_key=nation_key, reducer="c: c.c_acctbal * keepC"),
+        template.format(nation_key=nation_key, reducer="per c: c.c_acctbal * keepC"),
         expect_number_range=large(lambda ck: acctbal[ck]),
     )
     composite, _ = decidb_cli.execute(
-        template.format(nation_key=nation_key, reducer="c,o: c.c_acctbal * keepC"),
+        template.format(nation_key=nation_key, reducer="per c,o: c.c_acctbal * keepC"),
         expect_number_range=large(lambda ck: acctbal[ck] * order_count[ck]),
     )
     unqualified, _ = decidb_cli.execute(
@@ -263,7 +263,7 @@ def test_three_relation_composite_qualifier_differs_from_single_and_unqualified(
 
 @pytest.mark.correctness
 def test_qualified_avg_denominator_is_distinct_entities(decidb_cli, duckdb_conn, oracle_solver):
-    """`AVG(n: cost * keepN)` averages over nations; the unqualified form averages
+    """`AVG(per n: cost * keepN)` averages over nations; the unqualified form averages
     over join rows, so the two scale differently."""
     sql = """
         SELECT c.c_custkey, n.n_nationkey, keepN
@@ -271,7 +271,7 @@ def test_qualified_avg_denominator_is_distinct_entities(decidb_cli, duckdb_conn,
         WHERE n.n_regionkey = 0
         DECIDE per n: keepN(BOOL)
         SUCH THAT SUM(keepN * c.c_acctbal) >= 700000
-        MINIMIZE AVG(n: (n.n_nationkey + 1) * keepN)
+        MINIMIZE AVG(per n: (n.n_nationkey + 1) * keepN)
     """
     result, _ = decidb_cli.execute(sql)
     keep = _keep_by_nation(result, 1, 2)
@@ -326,7 +326,7 @@ def test_qualified_minmax(decidb_cli, duckdb_conn, agg, sense):
         SUCH THAT SUM(keepN) >= 1
         {sense} {agg}({reducer})
     """
-    qualified, _ = decidb_cli.execute(template.format(sense=sense, agg=agg, reducer="n: n.n_nationkey * keepN"))
+    qualified, _ = decidb_cli.execute(template.format(sense=sense, agg=agg, reducer="per n: n.n_nationkey * keepN"))
     unqualified, _ = decidb_cli.execute(template.format(sense=sense, agg=agg, reducer="n.n_nationkey * keepN"))
 
     nation_ids = [
@@ -363,7 +363,7 @@ def test_qualified_reducer_in_constraint(decidb_cli, duckdb_conn, oracle_solver)
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
         DECIDE per n: keepN(BOOL)
-        SUCH THAT SUM(n: (n.n_nationkey + 1) * keepN) <= 20
+        SUCH THAT SUM(per n: (n.n_nationkey + 1) * keepN) <= 20
         MAXIMIZE SUM(keepN * c.c_acctbal)
     """
     result, _ = decidb_cli.execute(sql)
@@ -412,7 +412,7 @@ def test_qualified_reducer_with_per(decidb_cli, duckdb_conn):
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
         DECIDE per n: keepN(BOOL)
-        SUCH THAT per n.n_nationkey: sum(n: (n.n_nationkey + 1) * keepN) by (n.n_nationkey) <= 8
+        SUCH THAT per n.n_nationkey: sum(per n: (n.n_nationkey + 1) * keepN) by (n.n_nationkey) <= 8
         MAXIMIZE SUM(keepN * c.c_acctbal)
     """
     result, _ = decidb_cli.execute(sql)
@@ -442,7 +442,7 @@ def test_mixed_qualified_and_unqualified_objective(decidb_cli, duckdb_conn, orac
         WHERE n.n_regionkey = 0
         DECIDE per n: keepN(BOOL)
         SUCH THAT SUM(keepN) >= 3
-        MINIMIZE SUM(n: 1000 * keepN) + SUM(keepN * c.c_acctbal)
+        MINIMIZE SUM(per n: 1000 * keepN) + SUM(keepN * c.c_acctbal)
     """
     result, _ = decidb_cli.execute(sql)
     keep = _keep_by_nation(result, 1, 2)
@@ -474,7 +474,7 @@ def test_mixed_qualified_and_unqualified_objective(decidb_cli, duckdb_conn, orac
 # ---------------------------------------------------------------------------
 # Test 7b: A scalar decision multiplied by the qualified relation's own data
 # (batch D). The body is not row-invariant -- `n.n_nationkey` varies per
-# nation -- so `SUM(n: (nationkey+1) * cap)` is legal and means
+# nation -- so `SUM(per n: (nationkey+1) * cap)` is legal and means
 # `(sum over distinct nations of nationkey+1) * cap`, charged once per nation
 # and not once per customer row.
 # ---------------------------------------------------------------------------
@@ -484,7 +484,7 @@ def test_mixed_qualified_and_unqualified_objective(decidb_cli, duckdb_conn, orac
 def test_qualified_reducer_scalar_times_entity_data_is_weighted_and_deduplicated(
     decidb_cli, duckdb_conn, oracle_solver
 ):
-    """D1: `SUM(n: (nationkey+1) * cap)` charges each nation's weight once, not
+    """D1: `SUM(per n: (nationkey+1) * cap)` charges each nation's weight once, not
     once per customer row -- the qualifier's de-duplication applies to a scalar's
     term exactly as it does to an entity-scoped one."""
     sql = """
@@ -492,7 +492,7 @@ def test_qualified_reducer_scalar_times_entity_data_is_weighted_and_deduplicated
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
         DECIDE per (): cap(INT)
-        SUCH THAT SUM(n: (n.n_nationkey + 1) * cap) <= 300
+        SUCH THAT SUM(per n: (n.n_nationkey + 1) * cap) <= 300
         MAXIMIZE cap
     """
     result, _ = decidb_cli.execute(sql)
@@ -529,7 +529,7 @@ _REJECT_BASE = """
 
 @pytest.mark.correctness
 def test_two_relation_composite_qualifier_equals_unqualified_when_query_has_only_those_two_relations(decidb_cli):
-    """`sum(n,c: ...)` is now legal (batch E). Its composite tuple identity is the
+    """`sum(per n,c: ...)` is now legal (batch E). Its composite tuple identity is the
     concatenation of n's and c's own keys — which, in a query joining only n and c,
     *is* the join-result row, so de-duplication is a no-op and the composite form
     must match the unqualified form exactly. (Batch E1: the paper's own two-relation
@@ -544,7 +544,7 @@ def test_two_relation_composite_qualifier_equals_unqualified_when_query_has_only
         SUCH THAT SUM(keepN * c.c_acctbal) >= 700000
         MINIMIZE SUM({reducer})
     """
-    composite, _ = decidb_cli.execute(template.format(reducer="n,c: n.n_nationkey * keepN"))
+    composite, _ = decidb_cli.execute(template.format(reducer="per n,c: n.n_nationkey * keepN"))
     unqualified, _ = decidb_cli.execute(template.format(reducer="n.n_nationkey * keepN"))
 
     # The same rows, not just the same objective: every (customer, nation) row keeps
@@ -554,11 +554,11 @@ def test_two_relation_composite_qualifier_equals_unqualified_when_query_has_only
 
 @pytest.mark.error_binder
 def test_unknown_relation_in_multi_relation_qualifier_rejected(decidb_cli):
-    """`sum(n,bogus: ...)`: the same rejection as the single-relation case, pointing at the unresolvable
+    """`sum(per n,bogus: ...)`: the same rejection as the single-relation case, pointing at the unresolvable
     relation."""
     decidb_cli.assert_error_at(
         _REJECT_BASE.format(
-            extra_decls="", constraint="SUM(keepN) <= 5", objective="SUM(n,bogus: n.n_nationkey * keepN)"
+            extra_decls="", constraint="SUM(keepN) <= 5", objective="SUM(per n,bogus: n.n_nationkey * keepN)"
         ),
         kind="Binder Error",
         at="bogus",
@@ -567,7 +567,7 @@ def test_unknown_relation_in_multi_relation_qualifier_rejected(decidb_cli):
 
 @pytest.mark.correctness
 def test_foreign_column_inside_qualified_reducer_is_one_value_per_variant(decidb_cli, duckdb_conn):
-    """D71: a customer's balance varies within a nation, so `SUM(n: c.c_acctbal * keepN)`
+    """D71: a customer's balance varies within a nation, so `SUM(per n: c.c_acctbal * keepN)`
     reads one value per distinct balance of each nation -- `SUM(DISTINCT c_acctbal)`, as
     DuckDB computes it -- and the minimum keeps every nation whose sum is negative."""
     weights = dict(
@@ -580,7 +580,7 @@ def test_foreign_column_inside_qualified_reducer_is_one_value_per_variant(decidb
         ).fetchall()
     )
     result, _ = decidb_cli.execute(
-        _REJECT_BASE.format(extra_decls="", constraint="SUM(keepN) <= 5", objective="SUM(n: c.c_acctbal * keepN)")
+        _REJECT_BASE.format(extra_decls="", constraint="SUM(keepN) <= 5", objective="SUM(per n: c.c_acctbal * keepN)")
     )
     keep = _keep_by_nation(result, nation_col=1, keep_col=2)
     reached = sum(weights[nation] * kept for nation, kept in keep.items())
@@ -590,14 +590,14 @@ def test_foreign_column_inside_qualified_reducer_is_one_value_per_variant(decidb
 @pytest.mark.correctness
 def test_row_scoped_decision_inside_qualified_reducer_is_one_value_per_row(decidb_cli):
     """A row-scoped decision is one instance per joined row, so each row of a nation is a
-    variant of its own (D71) and `SUM(n: ...)` reads what the unqualified form reads."""
+    variant of its own (D71) and `SUM(per n: ...)` reads what the unqualified form reads."""
     query = (
         _REJECT_BASE.replace("keepN\n", "keepN, y\n").format(
             extra_decls=", y(INT)", constraint="y <= 5", objective="{objective}"
         )
         + "ORDER BY c.c_custkey"
     )
-    qualified, _ = decidb_cli.execute(query.format(objective="SUM(n: n.n_nationkey * keepN - y)"))
+    qualified, _ = decidb_cli.execute(query.format(objective="SUM(per n: n.n_nationkey * keepN - y)"))
     unqualified, _ = decidb_cli.execute(query.format(objective="SUM(n.n_nationkey * keepN - y)"))
     assert qualified == unqualified
     assert all(int(row[3]) == 5 for row in qualified)
@@ -612,7 +612,7 @@ def test_query_wide_decision_alone_inside_qualified_reducer_rejected(decidb_cli)
     see test_qualified_reducer_scalar_times_entity_data_is_weighted_and_deduplicated)."""
     with pytest.raises(DeciDBCliError, match="query-wide decision"):
         decidb_cli.execute(
-            _REJECT_BASE.format(extra_decls=", per (): cap(INT)", constraint="cap <= 5", objective="SUM(n: cap)")
+            _REJECT_BASE.format(extra_decls=", per (): cap(INT)", constraint="cap <= 5", objective="SUM(per n: cap)")
         )
 
 
@@ -620,7 +620,7 @@ def test_query_wide_decision_alone_inside_qualified_reducer_rejected(decidb_cli)
 def test_unknown_relation_qualifier_rejected(decidb_cli):
     decidb_cli.assert_error_at(
         _REJECT_BASE.format(
-            extra_decls="", constraint="SUM(keepN) <= 5", objective="SUM(supplier: n.n_nationkey * keepN)"
+            extra_decls="", constraint="SUM(keepN) <= 5", objective="SUM(per supplier: n.n_nationkey * keepN)"
         ),
         kind="Binder Error",
         at="supplier",
@@ -640,7 +640,7 @@ def test_unknown_relation_qualifier_rejected(decidb_cli):
 @pytest.mark.min_max
 @pytest.mark.correctness
 def test_qualified_hard_max_objective(decidb_cli, duckdb_conn):
-    """`MAXIMIZE MAX(n: ...)` — the Big-M direction.
+    """`MAXIMIZE MAX(per n: ...)` — the Big-M direction.
 
     `done.md` claims MIN/MAX are unaffected by de-duplication because every row
     of an identity carries the same value. That reasoning should survive the
@@ -652,10 +652,10 @@ def test_qualified_hard_max_objective(decidb_cli, duckdb_conn):
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND n.n_nationkey > 0
         DECIDE per n: keepN(BOOL)
-        SUCH THAT SUM(n: keepN) <= 2
+        SUCH THAT SUM(per n: keepN) <= 2
         MAXIMIZE MAX({reducer})
     """
-    qualified, _ = decidb_cli.execute(template.format(reducer="n: n.n_nationkey * keepN"))
+    qualified, _ = decidb_cli.execute(template.format(reducer="per n: n.n_nationkey * keepN"))
     unqualified, _ = decidb_cli.execute(template.format(reducer="n.n_nationkey * keepN"))
 
     nation_ids = [
@@ -683,14 +683,14 @@ def test_qualified_hard_max_objective(decidb_cli, duckdb_conn):
 @pytest.mark.min_max
 @pytest.mark.correctness
 def test_qualified_hard_min_constraint(decidb_cli, duckdb_conn):
-    """`MIN(n: ...) <= K` — the hard direction on the constraint side."""
+    """`MIN(per n: ...) <= K` — the hard direction on the constraint side."""
     sql = """
         SELECT c.c_custkey, n.n_nationkey, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND n.n_nationkey > 0
         DECIDE per n: keepN(BOOL)
-        SUCH THAT MIN(n: n.n_nationkey * keepN) <= 1 AND SUM(n: keepN) >= 2
-        MAXIMIZE SUM(n: keepN)
+        SUCH THAT MIN(per n: n.n_nationkey * keepN) <= 1 AND SUM(per n: keepN) >= 2
+        MAXIMIZE SUM(per n: keepN)
     """
     result, _ = decidb_cli.execute(sql)
     keep = _keep_by_nation(result, 1, 2)
@@ -734,7 +734,7 @@ def test_qualified_reducer_with_aggregate_local_when_in_objective(decidb_cli, du
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_nationkey IN (5, 14) AND c.c_custkey <= 200
         DECIDE per n: keepN(BOOL)
-        SUCH THAT SUM(n: keepN) <= 1
+        SUCH THAT SUM(per n: keepN) <= 1
         MAXIMIZE when (n.n_nationkey > 1): sum({reducer})
     """
     counts = {
@@ -750,7 +750,7 @@ def test_qualified_reducer_with_aggregate_local_when_in_objective(decidb_cli, du
     }
     assert 5 * counts[5] > 14 * counts[14], "fixture no longer inverts the ranking; pick different nations"
 
-    qualified, _ = decidb_cli.execute(template.format(reducer="n: n.n_nationkey * keepN"))
+    qualified, _ = decidb_cli.execute(template.format(reducer="per n: n.n_nationkey * keepN"))
     unqualified, _ = decidb_cli.execute(template.format(reducer="n.n_nationkey * keepN"))
 
     q_keep = _keep_by_nation(qualified, 1, 2)
@@ -778,8 +778,8 @@ def test_aggregate_local_when_filters_inside_a_qualified_reducer(decidb_cli):
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_nationkey IN (5, 14) AND c.c_custkey <= 200
         DECIDE per n: keepN(BOOL)
-        SUCH THAT SUM(n: keepN) <= 1
-        MAXIMIZE when (n.n_nationkey < 10): sum(n: n.n_nationkey * keepN)
+        SUCH THAT SUM(per n: keepN) <= 1
+        MAXIMIZE when (n.n_nationkey < 10): sum(per n: n.n_nationkey * keepN)
     """
     )
     keep = _keep_by_nation(result, 1, 2)
@@ -807,7 +807,7 @@ def test_qualified_reducer_with_aggregate_local_when_in_constraint(decidb_cli):
         WHERE n.n_nationkey IN (5, 14, 15, 16)
         DECIDE per n: keepN(BOOL)
         SUCH THAT sum(when n.n_nationkey > 5 per n: keepN) <= 1
-        MAXIMIZE SUM(n: n.n_nationkey * keepN)
+        MAXIMIZE SUM(per n: n.n_nationkey * keepN)
     """
     )
     keep = _keep_by_nation(result, 1, 2)
@@ -844,8 +844,8 @@ def test_composed_minmax_preserves_the_qualifier(decidb_cli):
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_nationkey IN (5, 14) AND c.c_custkey <= 200
         DECIDE per n: keepN(BOOL)
-        SUCH THAT SUM(n: keepN) <= 1
-        MAXIMIZE SUM(n: n.n_nationkey * keepN){extra}
+        SUCH THAT SUM(per n: keepN) <= 1
+        MAXIMIZE SUM(per n: n.n_nationkey * keepN){extra}
     """
     control, _ = decidb_cli.execute(template.format(extra=""))
     composed, _ = decidb_cli.execute(template.format(extra=" + MAX(keepN)"))
@@ -866,7 +866,7 @@ def test_composed_minmax_preserves_the_qualifier_in_a_constraint(decidb_cli):
     """The composed *constraint* path is separate code from the objective path,
     so it needs its own pin.
 
-    Budget 20 against `SUM(n: nationkey * keepN) + MAX(keepN)`. Under identity
+    Budget 20 against `SUM(per n: nationkey * keepN) + MAX(keepN)`. Under identity
     semantics both nations fit: 5 + 14 + 1 = 20. Under row semantics neither
     does on its own (45 + 1 and 28 + 1 both exceed 20), so a dropped qualifier
     collapses the answer to the empty selection.
@@ -877,9 +877,9 @@ def test_composed_minmax_preserves_the_qualifier_in_a_constraint(decidb_cli):
         WHERE n.n_nationkey IN (5, 14) AND c.c_custkey <= 200
         DECIDE per n: keepN(BOOL)
         SUCH THAT SUM({reducer}) + MAX(keepN) <= 20
-        MAXIMIZE SUM(n: keepN)
+        MAXIMIZE SUM(per n: keepN)
     """
-    qualified, _ = decidb_cli.execute(template.format(reducer="n: n.n_nationkey * keepN"))
+    qualified, _ = decidb_cli.execute(template.format(reducer="per n: n.n_nationkey * keepN"))
     unqualified, _ = decidb_cli.execute(template.format(reducer="n.n_nationkey * keepN"))
 
     q_keep = _keep_by_nation(qualified, 1, 2)
@@ -898,7 +898,7 @@ def test_composed_minmax_preserves_the_qualifier_in_a_constraint(decidb_cli):
 
 @pytest.mark.correctness
 def test_qualified_reducer_as_a_bound(decidb_cli, duckdb_conn, oracle_solver):
-    """``SUM(n: keepN) <= SUM(n: n_nationkey) / 25`` — the qualifier de-duplicates the
+    """``SUM(per n: keepN) <= SUM(per n: n_nationkey) / 25`` — the qualifier de-duplicates the
     right-hand side too.
 
     The right side has always had the machinery (the physical layer runs the same
@@ -917,8 +917,8 @@ def test_qualified_reducer_as_a_bound(decidb_cli, duckdb_conn, oracle_solver):
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_nationkey IN (5, 14, 15, 16)
         DECIDE per n: keepN(BOOL)
-        SUCH THAT SUM(n: keepN) <= SUM(n: n.n_nationkey) / 25
-        MAXIMIZE SUM(n: n.n_nationkey * keepN)
+        SUCH THAT SUM(per n: keepN) <= SUM(per n: n.n_nationkey) / 25
+        MAXIMIZE SUM(per n: n.n_nationkey * keepN)
     """
     )
     keep = _keep_by_nation(result, nation_col=1, keep_col=2)
