@@ -13,7 +13,6 @@ the owner rules first.
 # Phase 3 — Each shape and formulation has one owner
 
 ## 3.4 Gaps filed in Phase 3 (one lane)
-- [ ] OPT-33 A squared objective's refusal beside a whole number — pipeline/05_optimizer/todo.md § OPT-33
 
 # Phase 4 — Model building has one contract
 

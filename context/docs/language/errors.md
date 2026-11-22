@@ -166,7 +166,7 @@ solver, is the place, so a user on Gurobi gets an answer to the same query.
 | `squaring or multiplying decisions in a constraint` | the first such clause |
 | `multiplying two decisions in the objective` | the objective |
 | `maximizing a squared decision` · `minimizing a negated squared decision` | the objective |
-| `squaring a decision that is not REAL` | the objective |
+| `a squared objective beside a whole-number value` (a declared `INT` or `BOOL` decision, or a binary a construct adds, such as an exact `ABS`'s) | the objective |
 | `squaring an expression of more than one decision` | the objective |
 | `a square scaled by a value whose sign is known only when the query runs` | the objective |
 | `MIN or MAX over a squared or multiplied expression` | the reducer |
