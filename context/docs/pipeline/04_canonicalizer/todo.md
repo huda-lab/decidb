@@ -21,6 +21,12 @@ files.
   bound-reducer machinery (`RewriteRhsAggregates`).
 - **Ruling (owner, 2026-11-21).** No query that solves today changes its answer; model rows
   move only for bodies with a data addend; an empty group or a NULL addend keeps its result. No list of addend shapes.
+- **Ruling (owner, 2026-11-22).** One rule splits a body that is linear in its decisions: its data part `e₀` is the body
+  with every decision set to 0, and `sum(e)` reads as `sum(e − e₀) + sum(e₀)` (`avg` likewise). It reaches a constant
+  nested in a product (`sum((x + 0.5) * 3)`), and both halves read the same data columns, so a NULL skips the same rows
+  in each. A body that is not linear in its decisions stays whole. The integer-step check counts a constant inside a
+  data factor (`sum(x * (w + 0.5)) > 2` returns 6 today where the minimum is 5, and is refused as `sum(x * 0.5) > 2`
+  is): a wrong answer becomes a refusal, which the 2026-11-21 ruling allows.
 - **Done when.** `sum(x + 0.5) + x > 4` agrees with the oracle; `grep -rn RefuseFractionalStep src` finds nothing;
   `./test/decide/run_tests.sh -n 2 -k "integer or fraction or canonical or scoped"` passes and the golden diff moves
   only bodies with a data addend.

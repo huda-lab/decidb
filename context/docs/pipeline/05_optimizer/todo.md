@@ -14,4 +14,6 @@ files.
 - **Decision needed.** The wording (`context/docs/language/errors.md` § solver gap).
 - **Recommendation.** `a squared objective beside a whole-number value is not supported on this installation`, at the
   objective: it is true for a declared INT or BOOL decision and for a value a construct adds.
+- **Ruling (owner, 2026-11-22).** The recommendation: `a squared objective beside a whole-number value is not supported
+  on this installation`, at the objective.
 - **Done when.** Both examples give the new text; `./test/decide/run_tests.sh -k "highs_refuses or quadratic"` passes.
