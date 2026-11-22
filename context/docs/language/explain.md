@@ -58,12 +58,12 @@ binary is labelled by quoting its clause (`QuoteWrittenClause`).
 Inside a DECIDE clause the parser records one span per expression (`EXPR`, with how tightly its own text binds:
 `DecideBinding`), plus a span for a `per` key (a declaration's included), a `by` key, the two halves of a `BETWEEN`
 and the objective (anchored at the start of the tail). A span is `{anchor, role, start, end, binding}`; the
-parentheses around an expression are not part of its span. `SelectNode::decide_text` (`DecideSourceText`) keeps the
+parentheses around an expression are not part of its span. `ParsedDecide::text` (`DecideSourceText`) keeps the
 clause as typed, from `DECIDE` through the objective, and its spans keyed by `(query_location, role)`; it is
-serialized, `Equals` ignores it, and `SelectNode::ToString` prints its tail (`SUCH THAT` on) verbatim after the
+serialized, `Equals` ignores it, and `ParsedDecide::ToString` prints its tail (`SUCH THAT` on) verbatim after the
 declarations, so a print-and-parse round trip keeps the spans. The binder keeps the
 parsed node's query location on the bound node, and the operator carries the text (`LogicalDecide::source_text`,
-copied to `PhysicalDecide`). A table macro whose argument lands in a DECIDE tail clears `decide_text`, since the
+copied to `PhysicalDecide`). A table macro whose argument lands in a DECIDE tail clears the text, since the
 argument is not in the body's text; that clause renders by tree. A scalar macro's expansion stands where its call
 stood: the call is quoted as written and the macro definition's text is not kept. A parameter is quoted as written
 (`$1`).

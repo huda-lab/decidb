@@ -14,7 +14,8 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `common/enums/decide.hpp` | all | `DecideSense`, `DecideExpression`, `DecideVarScope` (`ROW` / `ENTITY` / `SCALAR`) and `DecideVarScopeInfo`, `ConstraintKind`, every DECIDE tag constant and the tag helpers |
 | `common/decide_source_info.hpp` | 03 | `DecideSourceText` — the DECIDE tail's text and spans; `ConstraintSourceInfo` — the source display registry entry |
 | `common/decide_solver_capabilities.hpp` | 07 answers, 03/05/06/08 read | `SolverConstructSupport`, `SolverModelClass`, `DecideModelShape` and `ClassifyDecideModel` (the one classifier of a model's shape), `IsNonconvexProductGroup` — the backend differences upstream stages branch on. In `common/` because stage 07 answers it but four stages above read it |
-| `parser/decide/decide_parsed_markers.hpp` | 01, 02 read | Predicates over the parsed DECIDE markers: `IsDecideMarker`, `IsDecideScopeMarker`, `IsDecideAggregateName`, `IsScopedReducerCall`, `TakesReducerBy`, `UnwrapReducerMarkers`, `ReducerArgumentBody` |
+| `parser/decide/parsed_decide.hpp` | 01, 02 read | The parsed DECIDE part of a `SelectNode`: `DecideScope`, `DecideDeclaration`, `DecideClause`, `ParsedDecide` |
+| `parser/expression/decide_reducer_expression.hpp` | 01, 02 read | `DecideReducerExpression` — a reducer written with a scope in front of its first argument, a `by` after it, or both |
 | `parser/expression/decide_frame_expression.hpp` | 01 | `DecideFrameExpression` — a parsed frame selector, a point or a range (guide §5.6) |
 | `planner/expression_binder/decide/decide_binder.hpp` | 02 | Base decision binder; `BindAggregate`, `ValidateDecideScopeSpellings`, `FindOrCreateKeyScope`, `ValidateDecideNoExplicitDecisionCasts` |
 | `planner/expression_binder/decide/decide_constraints_binder.hpp` | 02 | `SUCH THAT` |
@@ -57,7 +58,8 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 
 | Path | Stage | Contents |
 |---|---|---|
-| `parser/decide/decide_parsed_markers.cpp` | 01 | The parsed-marker predicates, shared by the binder |
+| `parser/decide/parsed_decide.cpp` | 01 | The parsed DECIDE part: its text, copy, equality and `EnumerateExpressions` |
+| `parser/expression/decide_reducer_expression.cpp` | 01 | A scoped reducer's parsed form: equality, hash, copy and its text |
 | `parser/expression/decide_frame_expression.cpp` | 01 | A frame selector's parsed form: equality, copy, its text and serialization |
 | `planner/expression_binder/decide/decide_binder.cpp` | 02 | Shared DECIDE expression rules, reducers, a reducer's own scope and `by`, key scopes, where `when` / `per` / `by` may stand, the integrality gate |
 | `planner/expression_binder/decide/decide_constraints_binder.cpp` | 02 | `SUCH THAT` |
@@ -138,19 +140,19 @@ classDiagram
         +BindExpression()
         +BindAggregate()
         +BindFunction()
-        +BindScopedReducer()
-        +BindReducerBy()
+        +BindReducer()
     }
     class DecideConstraintsBinder {
         +BindComparison()
         +BindBetween()
         +BindOperator()
         +BindConjunction()
-        +BindScopedConstraint()
+        +BindConstraints()
+        +BindClause()
     }
     class DecideObjectiveBinder {
         +BindExpression()
-        +BindScopedObjective()
+        +BindObjective()
     }
 
     ExpressionBinder <|-- DecideBinder
@@ -225,7 +227,7 @@ classDiagram
 - **`ValidateDecideScopeSpellings()`** — where `when`, `per` and `by` may stand.
 - **`FindOrCreateKeyScope()`** — the one key scope per set of key columns.
 - **`ValidateDecideNoExplicitDecisionCasts()`** — the cast authorship boundary.
-- **`BindScopedReducer()` / `BindReducerBy()`**.
+- **`BindReducer()`** — a reducer's own `when`, `per` and `by`.
 
 ### `src/planner/decide/decide_canonicalizer.cpp` — stage 04
 - **`CanonicalizeTree()` / `CanonicalizeObjective()`** — pure; a comparison is canonicalized inside the tree.
@@ -338,7 +340,7 @@ a condition as another constraint.
 The path:
 
 1. **Grammar** — `decide_per ':' ColId '(' variable_type ')'` in `select.y`, which
-   wraps the name in the `SCOPE_PER_TAG` marker.
+   builds a `PGDecideDeclaration` with the `per` as its scope.
 2. **Binder** — `FindOrCreateKeyScope` resolves each key element (a column, or a
    relation standing for its stored columns), finds or creates the key's entry of the
    key table and the one scope for that key, and `DecideVarScopeInfo::Keyed(idx, K)` records it (an `ENTITY`

@@ -30,9 +30,9 @@ after it would lex as a DECIDE keyword token; this query has none. `decide_claus
 matches `DECIDE typed_decide_variable_list opt_decide_tail`, and `x(BOOL)` matches the
 `ColId '(' variable_type ')'` alternative — one decision per result row.
 
-The transformer moves three things onto the `SelectNode`: `decide_variables`
-(one `PG_AEXPR_OF` node pairing `x` with `bool_variable`), `decide_constraints`,
-and `decide_objective`, with `decide_sense = MAXIMIZE`.
+The transformer builds one `ParsedDecide` on the `SelectNode` (`decide`): `variables`
+(one `DecideDeclaration`, `x` with the type `BOOL` and no `per`), `constraints`
+(one `DecideClause` with no scope), and `objective`, with `sense = MAXIMIZE`.
 
 Parsed-tree validation, at the binder's entry: nothing fires. No decision named
 through a relation, no scope to place, no cast over a decision, no scalar function

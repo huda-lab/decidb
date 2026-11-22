@@ -22,23 +22,6 @@ order, one at a time. Rules for every one of them:
   `ExpressionIterator::EnumerateChildren`, a case in `LogicalOperatorVisitor::VisitExpression`, `IsFoldable()`
   false, and copy, equality, hash and generated serialization.
 
-## TREE-1 — Parser nodes
-
-- **Problem.** The parser writes `when`, `per`, `per row` and `by` as operator
-  `FunctionExpression`s named by a tag (`transform_operator.cpp:92`), a declaration as a comparison of the name
-  with a string constant (`grammar.cpp:664`), and every constraint as one AND. The binder reads meaning from a
-  marker's name, its child count and its child positions (`decide_parsed_markers.cpp`,
-  `decide_declarations_binder.cpp:56`, `:133`, `:187`, `decide_binder.cpp:126`, `:291`, `:590`, `:924`,
-  `decide_constraints_binder.cpp:155`, `decide_objective_binder.cpp:20`).
-- **Change.** design.md § 3.2.1: `DecideScope`, `DecideDeclaration`, `DecideClause`, `DecideReducerExpression`, on
-  `SelectNode` as two vectors and the objective clause, with one `EnumerateExpressions` for the DECIDE part. The
-  grammar's carriers exist (`PGDecideClause`, `PGDecideScope`, `parsenodes.hpp:1276`). The binder reads the fields
-  and still produces today's bound form, joining the clauses into the AND tree until TREE-3.
-  `IsDecideAggregateName` moves to the binder, its only caller.
-- **Done when.** Goldens identical; the serializer mode passes; a C++ test round-trips each new class (parse,
-  print, parse; copy, equality, serialization); `test/decidb/test_scope_parser.test` passes; no code names
-  `SCOPE_WHEN_TAG`, `SCOPE_PER_TAG`, `SCOPE_PER_ROW_TAG`, `REDUCER_BY_TAG` or `IsDecideMarker`.
-
 ## TREE-2 — `BoundDecide`, moved whole
 
 - **Problem.** The bound DECIDE data is 13 fields of `BoundSelectNode` (`bound_select_node.hpp:57`), copied one by
@@ -50,7 +33,6 @@ order, one at a time. Rules for every one of them:
   text and signatures. The binder fills it and it is moved into `LogicalDecide`, which keeps `decide_index`,
   `optimized`, the solver choice, `value_checks`, `bound_aggregates` and the rewrites' tables. `BoundDecide` has
   one `EnumerateExpressions`; both hand lists call it. A move only.
-- **Needs.** TREE-1.
 - **Done when.** Goldens identical; the serializer mode and `unittest "[decidb]"` pass; `BoundSelectNode` holds one
   DECIDE member.
 

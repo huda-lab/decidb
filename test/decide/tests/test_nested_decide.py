@@ -311,9 +311,8 @@ def test_a_decide_cannot_read_an_outer_query(decidb_cli, inner, name):
 
 # The same refusal for a column inside a DECIDE construct: a `when`, a `per` or a `by`
 # key, a scope in front of a clause or inside a reducer, the body of a scope, the
-# declaration's `per`. DuckDB's retry used to hand such a clause to the outer query, which
-# knows none of them ("Scalar Function __scope_when__ does not exist", "x not found", an
-# internal error). The column is refused where it fails to resolve, before any retry.
+# declaration's `per`. DuckDB's retry would hand such a clause to the outer query, which knows
+# none of them. The column is refused where it fails to resolve, before any retry.
 _OUTER_O = "(VALUES (1e0, 'p')) o(cap, s)"
 _INNER_T = "(VALUES (1, 2e0, 3e0, 'a')) t(id, w, v, k)"
 

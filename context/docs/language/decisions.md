@@ -13,7 +13,7 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D6 | `per g: sum(x) <= 10` is accepted; no `by` means `by ()` |
 | D7 | Each declarator has its own key; a `per` does not carry over |
 | D15 | A scope or `by` on a call other than `SUM`/`AVG`/`MIN`/`MAX` is refused with a message (D34 and D35 admit `by` on `count` and `norm`) |
-| D19 | A written `per row:`, in front of a constraint, inside a reducer or before a declaration, is the default written out (`PG_AEXPR_SCOPE_PER_ROW`, `SCOPE_PER_ROW_TAG`) |
+| D19 | A written `per row:`, in front of a constraint, inside a reducer or before a declaration, is the default written out (`PG_DECIDE_PER_ROW`, `DecidePer::ROW`) |
 | D22 | A reducer or `norm` with no argument gets a binder message (`'sum()' has 0 arguments`) |
 | D24 | The value rewrite handles exactly: a decision beside a reducer, different `by` keys, a row-varying factor, a reducer inside another expression, a `MIN`/`MAX` beside another term with a `by` or a non-constant bound, a decision beside a `MIN`/`MAX` in a constraint, a query-wide product beside a reducer |
 | D27 | `EXPLAIN` names every auxiliary by what it stands for and prints one account line per rewrite under its clause |

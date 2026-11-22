@@ -21,10 +21,10 @@ the clause the user wrote.
 - The lexer state is pushed at every `DECIDE` and `SUCH` and popped when the clause reduces
   (`PGDecidePushLexState` / `PGDecidePopLexState`), so a nested DECIDE leaves the outer clause's keywords intact.
 - Grammar (`third_party/libpg_query/grammar/statements/select.y`): `decide_when`, `decide_per`, `decide_scope`,
-  `decide_by`. `applyDecideScope` builds the markers `SCOPE_WHEN_TAG`, `SCOPE_PER_TAG` (children: body, then key) and
-  `SCOPE_PER_ROW_TAG`; `by` is `REDUCER_BY_TAG`. `%expect 4`, all from the optional declaration slot.
-- The grammar has only the current spellings: an old one is an ordinary syntax error (R13). The predicates over parsed
-  markers that the binder shares are in `src/parser/decide/decide_parsed_markers.cpp`.
+  `decide_by`. A scope is a `PGDecideScope`, which the transformer turns into a `DecideScope` (`when`, `per`, `key`,
+  `location`; `src/include/duckdb/parser/decide/parsed_decide.hpp`) on a `DecideClause`, a `DecideDeclaration` or a
+  `DecideReducerExpression`, which also holds a `by`. `%expect 4`, all from the optional declaration slot.
+- The grammar has only the current spellings: an old one is an ordinary syntax error (R13).
 
 ## Binder
 
@@ -36,17 +36,17 @@ the clause the user wrote.
   the key table and one `KeyedScopeInfo`. `DecideVarScope` records `ROW`, `KEYED` or `GLOBAL` (query-wide); a keyed
   declaration's `DecideVarScopeInfo` also keeps the key as written (`declared_key`) for messages. It is one struct
   rather than parallel arrays so an auxiliary appended by the optimizer cannot desync a scope from its key.
-- **Constraints.** `DecideConstraintsBinder::BindScopedConstraint` binds the body, then wraps it: `when` as a
+- **Constraints.** `DecideConstraintsBinder::BindClause` binds the body, then wraps it: `when` as a
   conjunction tagged `WHEN_FILTER_TAG` (child 0 the constraint, child 1 the condition), `per` as one tagged
   `PER_CLASS_TAG` (child 0 the constraint), tagged with its key's entry (`MakePerKeyTag`; no tag for `per ()`). The
   wrapper takes the location of the `per`, where the parser kept the key's text, so a message quotes the key as written.
-- **Reducers.** `DecideBinder::BindScopedReducer` puts the inner `when` on `BoundAggregateExpression::filter` and tags
-  an inner `per` with its key scope (`MakeQualifiedReducerTag`). `BindReducerBy` registers the `by` key in
+- **Reducers.** `DecideBinder::BindReducer` puts the inner `when` on `BoundAggregateExpression::filter` and tags
+  an inner `per` with its key scope (`MakeQualifiedReducerTag`). It registers the `by` key in
   `LogicalDecide::keys` (one entry per key; keys compare as sets, a key holding a subquery by its text,
   `FindOrCreateDecideKey`) and tags the reducer `MakeGroupKeyTag`. Tags are
   composable (`AddDecideTag`, `HasDecideTag`), because a keyed `AVG` is tagged by the binder and again by the AVG→SUM
   rewrite.
-- **Objective.** `DecideObjectiveBinder::BindScopedObjective` wraps a front `when` the same way; `per ()` adds
+- **Objective.** `DecideObjectiveBinder::BindObjective` wraps a front `when` the same way; `per ()` adds
   nothing. `outer(per k: inner(e) by (k))` binds as any nested reducer (D81): `outer` qualified by `k`, `inner`
   tagged with its `by` key.
 - A `CASE WHEN` that reads no decision is data wherever it stands, a per-row coefficient as `COALESCE` over data is; a

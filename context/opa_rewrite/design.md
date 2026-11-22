@@ -82,22 +82,25 @@ are columns, decisions, reducers and frames.
 
 | Thing | Kind | Holds | Replaces |
 |---|---|---|---|
-| `DecideScope` | struct | `when`; `per` as written: absent, `row`, `()`, or a key list | `__scope_when__`, `__scope_per__`, `__scope_per_row__` calls; "one child means `per ()`" |
+| `DecideScope` | struct | `when`; `per` as written: absent, `row`, `()`, or a key list; location (of its `per`, else of its `when`) | `__scope_when__`, `__scope_per__`, `__scope_per_row__` calls; "one child means `per ()`" |
 | `DecideDeclaration` | struct | name, type (INT, REAL, BOOL), its `per`, location | a comparison of the name with a string constant (`'integer_variable'`) |
-| `DecideClause` | struct | `DecideScope`, body, location | one item of the AND expression |
-| `DecideReducerExpression` | `ParsedExpression` | function name, arguments, the operand's `DecideScope`, `by` (absent, `()`, or a key list) | `__reducer_by__`, a scope marker as a call's first argument |
+| `DecideClause` | struct | `DecideScope`, body | one item of the AND expression |
+| `ParsedDecide` | struct | the declarations, the constraints' clauses, the objective clause with its sense, the source text | five `decide_*` fields of `SelectNode` |
+| `DecideReducerExpression` | `ParsedExpression` | the call as SQL parses it, the operand's `DecideScope`, `by` (absent, `()`, or a key list) | `__reducer_by__`, a scope marker as a call's first argument |
 | `DecideFrameExpression` | `ParsedExpression` | as today | — |
 
-`SelectNode` holds `vector<DecideDeclaration>`, `vector<DecideClause>`, the objective as one `DecideClause` with its
-sense, and the source text.
+`SelectNode` holds one `ParsedDecide` (`decide`), null for a query with no DECIDE. A clause has no location of its
+own: its body and its scope each have one.
 
 - A reducer node is made only where DECIDE syntax is written (a scope inside the call, a `by`).
   A plain `sum(x)` stays a `FunctionExpression`, and the binder makes a bound reducer of both, because whether a
   name is an aggregate is the catalog's to say.
-- Each class follows `DecideFrameExpression`, which has every piece: copy, equality, hash, `ToString`, generated
-  serialization (`parsed_expression.json`), child enumeration (`parsed_expression_iterator.cpp`).
-- The DECIDE part of `SelectNode` has one `EnumerateExpressions`. [read] Two walkers list its fields by hand today:
-  macro substitution (`parsed_expression_iterator.cpp:308`) and the node's own copy and equality.
+- The reducer node follows `DecideFrameExpression`, which has every piece: copy, equality, hash, `ToString`,
+  generated serialization (`parsed_expression.json`), child enumeration (`parsed_expression_iterator.cpp`). The
+  structs have copy, equality, `ToString` and generated serialization (`nodes.json`).
+- `ParsedDecide` has one `EnumerateExpressions`, the declarations' keys included. Macro substitution
+  (`ParsedExpressionIterator::EnumerateQueryNodeChildren`) goes through it, and `ParsedDecide` has one `Copy` and
+  one `Equals`.
 
 #### 3.2.2 Bound (stage 02 onward)
 

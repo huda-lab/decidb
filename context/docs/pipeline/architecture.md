@@ -20,8 +20,8 @@ DeciDB extends DuckDB's parser and planner to inject a new operator. It register
 - **Grammar productions** — `decide_clause`, `decide_declaration`, `decide_body`,
   `decide_tail`, `decide_constraint_item`, `decide_objective_item`, `decide_scope`,
   `decide_by`.
-- **Transformer rules** — parsed nodes into `SelectNode` fields, the tagged scope,
-  and `by` markers.
+- **Transformer rules** — parsed nodes into the `SelectNode`'s `ParsedDecide` and a
+  scoped reducer's `DecideReducerExpression`.
 - **A logical operator** — `LogicalDecide`, with hand-written serialization.
 - **An optimizer pass** — `DecideOptimizer`.
 - **A physical operator** — `PhysicalDecide`.

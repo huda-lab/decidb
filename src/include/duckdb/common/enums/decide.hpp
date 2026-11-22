@@ -264,20 +264,6 @@ inline bool TryParseQualifiedReducerTag(const string &alias, idx_t &scope_idx) {
 	return TryParseDecideIndexTag(alias, QUALIFIED_REDUCER_SCOPE_TAG_PREFIX, scope_idx);
 }
 
-//! Tags the parser uses for the scope written in front of a constraint, an objective, a
-//! declared variable or a reducer's argument: `[when condition] [per key]: body`.
-//! children[0] is the body. SCOPE_WHEN_TAG holds the condition in children[1];
-//! SCOPE_PER_TAG holds the key in children[1..], none for `per ()`. With both,
-//! SCOPE_PER_TAG is the outer tag. `per row`, the default written out, is
-//! SCOPE_PER_ROW_TAG over the body alone: it names no key (D19).
-static constexpr const char *SCOPE_WHEN_TAG = "__scope_when__";
-static constexpr const char *SCOPE_PER_TAG = "__scope_per__";
-static constexpr const char *SCOPE_PER_ROW_TAG = "__scope_per_row__";
-
-//! Tag the parser uses for a reducer's `BY (key)`: children[0] is the reducer call,
-//! children[1..] the key, none for `BY ()`.
-static constexpr const char *REDUCER_BY_TAG = "__reducer_by__";
-
 //! The bound form of a constraint's `per key:`: a conjunction whose child 0 is the
 //! constraint and whose children[1..] are the key's columns, none for `per ()`. The
 //! constraint is generated once per class of the key among the kept rows; it groups no
@@ -609,10 +595,6 @@ static constexpr const char *VALUE_LINK_NAME_PREFIX = "__value_";
 //! Every DECIDE tag above, the one list DecideNameContainsTag reads. A constant added above is added here.
 static constexpr const char *DECIDE_TAGS[] = {WHEN_FILTER_TAG,
                                               QUALIFIED_REDUCER_SCOPE_TAG_PREFIX,
-                                              SCOPE_WHEN_TAG,
-                                              SCOPE_PER_TAG,
-                                              SCOPE_PER_ROW_TAG,
-                                              REDUCER_BY_TAG,
                                               PER_CLASS_TAG,
                                               SIGNATURE_TAG_PREFIX,
                                               VALUE_REWRITE_TAG,

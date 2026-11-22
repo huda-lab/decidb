@@ -1,7 +1,7 @@
 # Stage 01 — Parser
 
-Turns SQL text into a parsed `SelectNode` carrying `decide_variables`,
-`decide_constraints`, `decide_sense` and `decide_objective`, and applies the
+Turns SQL text into a parsed `SelectNode` carrying one `ParsedDecide` (`decide`: the
+declarations, the constraints, the objective and its sense), and applies the
 source-preserving validation that must see what the user actually typed. A form the grammar
 does not have, such as a removed spelling, is an ordinary syntax error.
 
@@ -51,27 +51,26 @@ per K: x(TYPE)      keyed — one decision per class of the key K
 per (): x(TYPE)     query-wide — one decision for the whole query
 ```
 
-Each builds a `PG_AEXPR_OF` node pairing a one-field `PGColumnRef` with the type; with
-a `per`, `applyDecideScope` wraps the name in its scope marker.
+Each builds a `PGDecideDeclaration` (`makeDecideDeclaration`, `grammar.cpp`): the name, the type as a
+`PGDecideVariableType`, the `per` as a `PGDecideScope` (NULL when none is written) and the location.
 
-A name with no type (`x`, or `per K: x`) is the same declaration node with a NULL type, as DuckDB's `CREATE TABLE` builds
-a column with no type. Bison reduces by default,
+A name with no type (`x`, or `per K: x`) is the same declaration node with the type `PG_DECIDE_TYPE_NONE`, as DuckDB's
+`CREATE TABLE` builds a column with no type. Bison reduces by default,
 so an action in that production would run before the parser reads the token after the
 name, and its error would hide a syntax error there (`DECIDE t.x(INT) ...`). The
-transformer refuses the NULL type once the whole query has parsed, at the name: `decision
+transformer refuses that type once the whole query has parsed, at the name: `decision
 'x' has no type` (`../../language/errors.md`). `scalar` is an ordinary name, so it names
 a column or a decision (`DECIDE scalar(INT)`).
 
-A declaration with no type builds the declaration node with a NULL type, as DuckDB's `CREATE TABLE` does for a column
-with no type; the transformer refuses a node whose `rexpr` is null.
-
 The type in the parentheses is a `ColId`, which `makeDecideVariableType` (`grammar.cpp`)
-reads as `INT`, `REAL` or `BOOL` in any case; any other name is a syntax error at it.
+reads as `INT`, `REAL` or `BOOL` in any case and returns as a `PGDecideVariableType`; any other name is a syntax
+error at it.
 DECIDE adds no keyword for a type: DuckDB quotes every keyword when it prints a name, so
 a keyword `BOOL` would quote a column or a `UNION` member named `bool` in every message
 and rendered query.
 
-`decide_constraint_list` joins its items with `AND`. A comma between constraints is a plain syntax error.
+`decide_constraint_list` is a list of `PGDecideItem`, one per constraint, split at each `AND` that no parenthesis
+holds. A comma between constraints is a plain syntax error.
 
 ### Scopes: `when`, `per`, `by`
 
@@ -89,13 +88,17 @@ decide_by     ::= BY_DECIDE '(' ')' | BY_DECIDE '(' expr_list ')'
   `decide_scope ':'` may also precede the first argument of a function call
   (`func_name '(' decide_scope ':' func_arg_list ')'`), and `decide_per ':'` a
   declared name. `decide_by` may follow a `func_application` or a scoped call.
-- The scope is carried through the grammar as a `PGDecideScope` (`parsenodes.hpp`)
-  and folded by `applyDecideScope` (`grammar.cpp`) into `PG_AEXPR_SCOPE_WHEN`
-  (`lexpr` body, `rexpr` condition) inside `PG_AEXPR_SCOPE_PER` (`lexpr` body,
-  `rexpr` the key list, `NULL` for `per ()`). `per row`, the default written out,
-  builds `PG_AEXPR_SCOPE_PER_ROW` (`lexpr` body, no key), so a clause keeps the
-  spelling it was written in (D19). `by` builds `PG_AEXPR_REDUCER_BY` (`lexpr` the
-  call, `rexpr` the key list, `NULL` for `by ()`).
+- A scope is a `PGDecideScope` (`parsenodes.hpp`): the `when` condition or NULL, the
+  `per` as a `PGDecidePer` (`NONE`, `ROW`, `ALL` for `per ()`, `KEY`), the key list, and
+  the location of the `PER`, else of the `WHEN`. `per row`, the default written out,
+  is its own `PGDecidePer` value, so a clause keeps the spelling it was written in (D19).
+- A constraint and the objective are each a `PGDecideItem` (`makeDecideItem`): the
+  scope, or NULL, and the body. `PGDecideClause.constraints` is the list of the
+  constraints' items and `objective` the objective's item, or NULL.
+- A reducer with a scope in front of its first argument, a `by` after it, or both is a
+  `PGDecideReducer` (`makeDecideReducer`): the call without the scope, the scope or
+  NULL, `has_by`, the `by` key list (`NIL` for `by ()`), and the location of the `BY`,
+  else of the call. A call with neither stays a plain function call.
 - A key element must be a column or relation name (`decideCheckKey`): anything
   else is *"'q' in a per key is not a column or a relation"*, at the element.
   A parenthesized key is a plain syntax error. A `per`
@@ -231,12 +234,24 @@ does. Outside the clause nothing changes.
 
 ## 3. Transformer
 
-`TransformSelectNode` (`src/parser/transform/statement/transform_select_node.cpp`) moves the
-clause onto the `SelectNode`: `decide_variables` (via `TransformExpressionList`),
-`decide_constraints`, `decide_sense` (`MAXIMIZE` / `MINIMIZE` / `FEASIBILITY`
-when no objective was written), and `decide_objective`.
+`TransformSelectNode` (`src/parser/transform/statement/transform_select_node.cpp`) builds the
+clause as one `ParsedDecide` (`src/include/duckdb/parser/decide/parsed_decide.hpp`) on
+`SelectNode::decide`, which is null for a query with no DECIDE (`SelectNode::HasDecideClause()`):
 
-A frame selector is not a tagged function but a parsed expression class of its own, `DecideFrameExpression`
+| Field | Holds |
+|---|---|
+| `variables` | one `DecideDeclaration` per declaration: `name`, `type` (`DecideVariableType`: `REAL`, `INT`, `BOOL`), `scope` (its `per`), `location` |
+| `constraints` | one `DecideClause` per constraint: `scope`, `body` |
+| `objective` | a `DecideClause`, whose body is null when no objective is written |
+| `sense` | `MAXIMIZE` / `MINIMIZE`, `FEASIBILITY` when no objective is written |
+| `text` | the `DecideSourceText` (Source spans, below) |
+
+A `DecideScope` is `when` (null when none is written), `per` (`DecidePer`: `NONE`, `ROW`, `ALL`, `KEY`), `key` (the
+elements of `per K`) and `location` (of its `per`, else of its `when`). `TransformDecideScope` and `TransformDecideItem`
+(`transform_decide_reducer.cpp`) build a scope and a clause. A constraint with no scope whose body is a parenthesized
+`AND` becomes one clause per conjunct.
+
+A frame selector is a parsed expression class of its own, `DecideFrameExpression`
 (`ExpressionClass::DECIDE_FRAME`, `src/include/duckdb/parser/expression/decide_frame_expression.hpp`), the way
 `WindowExpression` is: `reducer` (empty for a point frame), `from`/`from_k`, `to`/`to_k`, `every`, `all`, `payload`,
 `fallback`, `order`, `descending`, `cyclic`, `within`. `Transformer::TransformDecideFrame`
@@ -254,20 +269,24 @@ into a `ShowRef` with `ShowType::DIAGNOSE` wrapping the inner query node — the
 mechanism `SUMMARIZE` and `DESCRIBE` use, so the prefix reaches the binder as a table
 reference rather than as a statement flag it would have to thread separately.
 
-`src/parser/transform/expression/transform_operator.cpp` converts every DECIDE
-`PG_AEXPR` node kind the same way — `lexpr` becomes child 0, `rexpr` (absent, one
-node, or a list) the children after it — into a tagged `FunctionExpression` with
-`is_operator = true` (the tags are in `common/enums/decide.hpp`):
+A `PGDecideReducer` becomes a parsed expression class of its own, `DecideReducerExpression`
+(`ExpressionClass::DECIDE_REDUCER`, `src/include/duckdb/parser/expression/decide_reducer_expression.hpp`), built by
+`Transformer::TransformDecideReducer`:
 
-| Parsed node | Becomes |
+| Field | Holds |
 |---|---|
-| `PG_AEXPR_SCOPE_WHEN` | `FunctionExpression(SCOPE_WHEN_TAG, [body, condition])` |
-| `PG_AEXPR_SCOPE_PER` | `FunctionExpression(SCOPE_PER_TAG, [body, key...])` |
-| `PG_AEXPR_SCOPE_PER_ROW` | `FunctionExpression(SCOPE_PER_ROW_TAG, [body])` |
-| `PG_AEXPR_REDUCER_BY` | `FunctionExpression(REDUCER_BY_TAG, [reducer, key...])` |
+| `call` | the call as SQL parses it, without the scope |
+| `scope` | the `DecideScope` in front of the call's first argument |
+| `has_by` | whether a `by` is written; `by ()` has no key |
+| `by` | the elements of the `by` key |
 
-All four reach the binder, which binds every one into the bound tree's own
-wrappers and tags (`../02_binder/done.md` §4a).
+It is built only where a scope is written inside a call or a `by` follows it; a plain `sum(x)` stays a
+`FunctionExpression`. Its children (the call, the scope's condition and key, the `by` key) are visited by
+`ParsedExpressionIterator`. `ParsedExpressionIterator::EnumerateQueryNodeChildren` visits the DECIDE part of a
+`SelectNode` through `ParsedDecide::EnumerateExpressions`: the keys of the declarations, and each clause's scope and
+body.
+
+The binder binds the scopes and reducers into the bound tree's own wrappers and tags (`../02_binder/done.md` §4a).
 
 **Source spans.** The grammar wraps every expression of a DECIDE clause in one decorator reduction
 (`a_expr: a_expr_body` and `b_expr: b_expr_body` call `noteDecideExpr`), the one place that sees an expression with its
@@ -278,9 +297,10 @@ SourceManager idea: one store of text, a location per node) keys each `EXPR` spa
 expression took, innermost first, together with a `DecideBinding`: how tightly the node's own text binds (`WHOLE` for a
 call, column, literal, `::` cast, parenthesized text, subquery and `CASE ... END`; `LOOSE`, `ADDITIVE`, `MULTIPLICATIVE`
 or `POWER` for an operator). `TransformSelectNode` assembles the clause's text, from `DECIDE` through the objective, and
-its spans into `SelectNode::decide_text` (`DecideSourceText`): one buffer with two marks. `start`, the `DECIDE`, is the
-base of every offset; `tail_start`, the `SUCH`, anchors the objective and begins `Tail()`, which `SelectNode::ToString`
-prints after the declarations. A declaration's `per` key has its span as a clause's does, so a message quotes it as
+its spans into `ParsedDecide::text` (`DecideSourceText`): one buffer with two marks. `start`, the `DECIDE`, is the
+base of every offset; `tail_start`, the `SUCH`, anchors the objective and begins `Tail()`, which
+`ParsedDecide::ToString` prints after the declarations. A declaration's `per` key has its span as a clause's does,
+so a message quotes it as
 written. In the split order the buffer holds the `FROM` and `WHERE` text between the declarations and `SUCH THAT`,
 which no span covers and nothing cuts. A parameter takes its location too, so `$1` is quoted as written.
 
@@ -312,21 +332,17 @@ formulation after types, scopes, and DuckDB coercions are known.
 
 ## 5. Statement rendering and parsed serialization
 
-The parsed tree stores DECIDE syntax as private structure: a variable declaration is
-a comparison against a type-marker string, and a scope and a `by` are
-tagged `FunctionExpression`s. Those encodings are for the parser and binder, not SQL
-users.
+Each parsed DECIDE type prints, copies and compares itself, and its serialization is generated: `DecideScope`,
+`DecideDeclaration`, `DecideClause` and `ParsedDecide` from `nodes.json`, `DecideReducerExpression` from
+`parsed_expression.json`.
 
-`SelectNode::ToString()` reverses the encoding. It emits `x(INT)`, `PER key: x(INT)`,
-`PER (): x(REAL)` and `PER ROW: x(BOOL)`, renders the top-level constraint list without
-generic SQL parentheses that the DECIDE grammar cannot accept, and restores objective
-direction. `FunctionExpression::ToString()` restores the scope `WHEN condition PER key:
-body` (WHEN first, as written, although PER is the outer tag), `PER ROW: body`
-and `reducer BY (key)` wherever those tags occur inside a larger
-expression. Ordinary parsed functions keep DuckDB's generic renderer.
-`SelectNode::decide_sense` defaults to `FEASIBILITY` and `decide_text` to empty, and
-`query_node.json` gives both that default, so they are written only for a DECIDE query
-and a view DuckDB stored, which has neither, loads with the defaults.
+`SelectNode::ToString()` prints `ParsedDecide::ToString()` after the `WHERE`. It emits `x(INT)`, `PER key: x(INT)`,
+`PER (): x(REAL)` and `PER ROW: x(BOOL)`, then the tail as the user wrote it when the text is kept, else the
+constraints joined with `AND`, each as `WHEN condition PER key: body`, and the objective after its direction.
+`DecideReducerExpression::ToString()` prints the call with the scope in front of its first argument and
+`BY (key)` after it. Ordinary parsed functions keep DuckDB's generic renderer.
+`SelectNode::decide` is null for a query with no DECIDE, and `query_node.json` gives it that default, so it is
+written only for a DECIDE query and a view DuckDB stored, which has none, loads with the default.
 
 This is a structural round trip, not source-text preservation: DuckDB may normalize
 case, quotes, parentheses, or the accepted split clause order. The contract is:
@@ -344,7 +360,9 @@ the objective's `when` and nested form, `NORM`, `IN`, scalar subqueries, quoted
 identifiers and `DIAGNOSE`. It checks reparsed equality, stable rendering, and binary
 `SelectStatement` round trips; a second case does the same for the scope grammar in
 depth (deck examples 1–8 as written and fully explicit, words that are keywords inside
-DECIDE, `per row` kept as written) and pins its parse errors.
+DECIDE, `per row` kept as written) and pins its parse errors. A third case, "The parsed DECIDE tree prints, parses,
+copies, compares and serializes", prints the tree without the user's text, parses it again, copies it, serializes
+it, checks a reducer node's hash, and checks that two statements differing in one part are not equal.
 
 DuckDB's parsed verifier creates and reparses the rendered statement. For a statement
 containing DECIDE, that is the end of this verifier: it does not execute a second
@@ -383,14 +401,13 @@ Non-DECIDE queries retain DuckDB's existing parsed-result comparison.
 | DECIDE `WHEN`, `PER`, `BY`, `AT`, `OVER` and `WITHIN` lexer gating | `third_party/libpg_query/src_backend_parser_parser.cpp` (`base_yylex`), state in `include/parser/gramparse.hpp` |
 | Frame carrier and helpers | `parsenodes.hpp` (`PGDecideFrame`), `grammar/grammar.cpp` (`makeDecideFrameOver`, `makeDecideFramePoint`, `makeDecideFrameRange`) |
 | Frame parsed expression and its transform | `src/parser/expression/decide_frame_expression.cpp`, `src/parser/transform/expression/transform_decide_frame.cpp` |
-| Scope carrier and helpers | `third_party/libpg_query/include/nodes/parsenodes.hpp` (`PGDecideScope`), `grammar/grammar.cpp` (`makeDecideScope`, `applyDecideScope`) |
+| Scope, item, declaration and reducer carriers and helpers | `third_party/libpg_query/include/nodes/parsenodes.hpp` (`PGDecideScope`, `PGDecideItem`, `PGDecideDeclaration`, `PGDecideReducer`), `grammar/grammar.cpp` (`makeDecideScope`, `makeDecideItem`, `makeDecideDeclaration`, `makeDecideReducer`, `makeDecideVariableType`) |
 | Source spans (one per expression of the clause, a `per`/`by` key, a BETWEEN's halves, the objective) | `grammar/grammar.cpp` (`noteDecideExpr`, `noteDecideParen`, `noteDecideReducerKey`, `noteDecideSpan`), called from the `a_expr` and `b_expr` decorator reductions in `select.y`; the roles are `PGDecideSpanRole` and `DecideSpanRole`, and `language/explain.md` describes how they are used |
 | Span keyed by query location, with its `DecideBinding` | `src/parser/transform/expression/transform_expression.cpp` (the interceptor `Transformer::TransformExpression`), `transform_select_node.cpp` (assembles `DecideSourceText`) |
 | Clause → `SelectNode` | `src/parser/transform/statement/transform_select_node.cpp` |
 | `DIAGNOSE` → `ShowRef` | `src/parser/transform/statement/transform_show_select.cpp` |
-| DECIDE tag construction | `src/parser/transform/expression/transform_operator.cpp` |
-
-| Parsed-marker predicates | `src/parser/decide/decide_parsed_markers.cpp` (`IsDecideMarker`, `IsScopedReducerCall`, `TakesReducerBy`, ...) |
+| Scope, clause and reducer transform | `src/parser/transform/expression/transform_decide_reducer.cpp` (`TransformDecideScope`, `TransformDecideItem`, `TransformDecideReducer`) |
+| Parsed DECIDE types | `src/parser/decide/parsed_decide.cpp` (`DecideScope`, `DecideDeclaration`, `DecideClause`, `ParsedDecide`), `src/parser/expression/decide_reducer_expression.cpp` (`DecideReducerExpression`) |
 | Parsed-tree validation | `src/planner/expression_binder/decide/decide_declarations_binder.cpp` (`BindDeclarations`), `decide_binder.cpp` (`ValidateDecideScopeSpellings` and the other validators) |
-| DECIDE statement rendering | `src/parser/query_node/select_node.cpp`, `src/parser/expression/function_expression.cpp` |
+| DECIDE statement rendering | `src/parser/query_node/select_node.cpp`, `src/parser/decide/parsed_decide.cpp`, `src/parser/expression/decide_reducer_expression.cpp` |
 | Parsed reparse verifier boundary | `src/verification/parsed_statement_verifier.cpp`, `src/main/client_verify.cpp` |

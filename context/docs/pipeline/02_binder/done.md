@@ -22,11 +22,10 @@ choose a solver formulation.
 
 ## 1. Variable declarations
 
-Each entry of `statement.decide_variables` arrives as a `PG_AEXPR_OF` comparison
-pairing a `ColumnRefExpression` with a type marker string; with a `per`, the name is
-wrapped in the parser's `SCOPE_PER_TAG` marker (children: the name, then the key), or
-in `SCOPE_PER_ROW_TAG` for `per row`. `SplitDeclaration` reads the name, the `per`
-marker and the type. Every declaration's name is checked and collected before any key
+Each entry of `statement.decide->variables` is a `DecideDeclaration` (`parsed_decide.hpp`):
+the name, the type (`DecideVariableType`), the `per` as a `DecideScope` (`DecidePer`:
+`NONE`, `ROW`, `ALL` for `per ()`, `KEY` with its key) and the location.
+`BindDeclarations` reads the fields. Every declaration's name is checked and collected before any key
 resolves, so a key can be told from a decision declared before or after it. The checks:
 
 | Check | Message |
@@ -81,7 +80,7 @@ decision's scope. One scope exists per key, whichever spelling names it: a decla
 ### Keyed declarations
 
 `FindOrCreateKeyScope` (`decide_binder.cpp`) builds the scope of `per K:` from the
-parser's marker. Each key element resolves against the query's own bind context —
+declaration's key. Each key element resolves against the query's own bind context —
 never an outer query, whose column would be one constant per run of this one:
 
 1. A declared decision, by its name: *"'x' is a decision, which when, per and by cannot
@@ -260,13 +259,12 @@ position, a constraint side, beside another term, under a `by` or in the objecti
 
 ### A reducer's own `when` and `per`
 
-`DecideBinder::BindScopedReducer` peels `[when c] [per K]:` off a reducer's argument
-and binds the reducer over the body. The condition binds as data, cast to `BOOLEAN`,
+A reducer written with a scope or a `by` is a `DecideReducerExpression` (`../01_parser/done.md` §3).
+`DecideBinder::BindReducer` binds its call, then its scope. The condition binds as data, cast to `BOOLEAN`,
 onto `BoundAggregateExpression::filter`, which physical extraction copies onto each
 term the reducer produces. A `per K` becomes a `__qualified_by_<i>__` tag on the exact
 key scope of `K` (`FindOrCreateKeyScope`; an empty key for `per ()`), whose classes the
-reducer counts once. `per row` adds nothing. A `by` after the reducer is
-`BindReducerBy` (§4a).
+reducer counts once. `per row` adds nothing. The `by` key binds last (§4a).
 
 ### Relation-qualified reducers
 
@@ -308,9 +306,10 @@ A constraint that is no comparison is refused at its node: a bare decision or fr
 other shape (`x IS NULL`, `x + 1`) as *"'x IS NULL' is not supported"* (Not implemented Error).
 
 Dedicated binding methods: `BindComparison`, `BindOperator`, `BindBetween`,
-`BindConjunction`, `BindScopedConstraint` (§4a).
+`BindConjunction`, `BindClause` (§4a).
 
-Constraints are joined with `AND`. `BindConjunction` refuses any other conjunction in a
+`BindConstraints` takes the constraints as a `vector<DecideClause>`, binds each with `BindClause` and joins the bound
+clauses with `AND`. `BindConjunction` refuses any other conjunction in a
 constraint position (`x <= cap OR x <= 1`, also under a scope): every later walk reads a
 conjunction as `AND`, and no layer builds the indicator an `OR` needs. Only a constraint
 list reaches `BindConjunction`: a conjunction inside an operand is data or refused (Data
@@ -340,7 +339,8 @@ Below a clause's top, an operand that reads no decision is data, and DuckDB bind
 its own rules (`DecideBinder::IsDataOperand`). The shape does not matter: a comparison
 read as 0/1 (`x <= 4 * CAST(cap > 2 AS INT)`), a lambda and its parameters
 (`sum(x * list_reduce([cap, b], (a, z) -> a + z))`), a prepared statement's `$1`. A
-function, a subquery and a window function keep their DECIDE handling: a function may be a reducer or a scope marker, a
+function, a subquery and a window function keep their DECIDE handling: a function may be a reducer (one written with a
+scope or a `by`, a `DecideReducerExpression`, too), a
 subquery has the checks below, and a window function is refused wherever it stands in a clause (*"a window function is
 not allowed in a DECIDE clause"*, as DuckDB's `WhereBinder` refuses one in `WHERE`; in a `when`, a `by` or a frame's
 order key the message names that position, §4a). A CASE that reads no decision is data, as a `COALESCE` over data is:
@@ -358,9 +358,9 @@ with the comparison quoted as written, at it: *"'(x > 1 AND cap > 1)' is a compa
 message serves a reducer body and the objective. Written with an explicit cast, it meets the cast rule first.
 
 A table macro's parameter reaches a clause because `ParsedExpressionIterator` visits a
-DECIDE's `SUCH THAT` and objective, which macro substitution walks (`ReplaceMacroParameters`).
-The CTE reference count and the prepared-statement verifier walk them too. Declarations
-are not visited: they hold names, types and key columns, never a value.
+DECIDE's expressions (`ParsedDecide::EnumerateExpressions`: the declarations' keys, and each clause's scope and
+body), which macro substitution walks (`ReplaceMacroParameters`).
+The CTE reference count and the prepared-statement verifier walk them too.
 
 ### Subqueries
 
@@ -376,8 +376,9 @@ A DECIDE inside a subquery reports its own refusal. When an expression fails to 
 subquery, DuckDB retries it in each outer query, in case it refers to one, and reports the
 retry's error. That retry binds the clause in a binder that knows no DECIDE construct: an
 inner *"OR between SUCH THAT constraints is not supported"* would reach the user as the outer *"Referenced
-column "y" not found"*, and a missing name inside a `when` as an unknown function
-`__scope_when__`. A clause reads no outer query (below), so the retry has nothing to find:
+column "y" not found"*, and a reducer written with a scope or a `by` as an internal error
+(`ExpressionBinder` reads no `DecideReducerExpression`). A clause reads no outer query (below), so the retry has
+nothing to find:
 `DecideBinder::ThrowClauseError` throws every error at the clause's root, before it.
 
 A DECIDE cannot read a column of an outer query, in any clause or in its `WHERE`: it solves
@@ -425,9 +426,9 @@ points at the column (a core edit, `../architecture.md` § Edits to existing Duc
 
 A frame's `else` whose text carries its own quotes keeps the doubled quote in `else ''a'' is not a number`.
 
-Arms kept as guards (BLOAT-26): the null check after `GetBoundAggregate` in `BindScopedReducer` and `BindReducerBy`
+Arms kept as guards (BLOAT-26): the null check after `GetBoundAggregate` in `BindReducer`
 (a nullable pointer read on the next line), and the error check after the scope lambda binds a scoped constraint's
-condition a second time (`BindScopedConstraint`). No query reaches them; each guards a typed read.
+condition a second time (`BindClause`). No query reaches them; each guards a typed read.
 
 ---
 
@@ -436,11 +437,11 @@ condition a second time (`BindScopedConstraint`). No query reaches them; each gu
 Every clause follows the scope rules: a clause with no scope written is `per row:`, and
 a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 `ValidateDecideScopeSpellings` (`decide_binder.cpp`) runs on the parsed constraints
-(one `AND` operand at a time) and on the objective, before either binds:
+(one `DecideClause` at a time) and on the objective, before either binds:
 
 - a scope or `by` inside an ordinary SQL subquery written in the clause, a `when`
-  condition or a key: *"'per key:' inside a subquery is not supported"* (or `per ():`,
-  `per row:`, `when condition:`, `by (key)`, whichever was written);
+  condition or a key: *"'per' inside a subquery is not supported"* (or `per ()`,
+  `per row`, `when`, `by`, whichever was written), at the scope's keyword;
 - a scope inside a call other than `SUM`/`AVG`/`MIN`/`MAX`: *"when or per inside
   'q', which is not a reducer"* (D15); a `by` after anything but those four, `norm` or `count`:
   *"by (...) does not follow a reducer"* (D34, D35). After a special form (`COALESCE`, `NULLIF`, `CAST`) or a parenthesized
@@ -467,26 +468,26 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 | `when c: C` | a WHEN wrapper (`WHEN_FILTER_TAG`) `[C, c]` |
 | `per K: C` | a `PER_CLASS_TAG` wrapper `[C]` tagged `__per_key_<i>__` with K's entry of the key table (no tag for `per ()`, which has no entry), its location the `per`'s, where the parser kept the key as written |
 | `when c per K: C` | a `PER_CLASS_TAG` wrapper around the `WHEN_FILTER_TAG` one `[C, c]`, tagged with K |
-| `per row: C`, `agg(per row: e)`, `per row: x(TYPE)` | nothing: the default written out (`SCOPE_PER_ROW_TAG`, peeled) |
+| `per row: C`, `agg(per row: e)`, `per row: x(TYPE)` | nothing: the default written out (`DecidePer::ROW`); a `per row:` clause binds to its body, which keeps its own query location |
 | `agg(...) by (G)` | the aggregate tagged `__group_key_<i>__`, naming `BoundSelectNode::decide_keys[i]`, whose `written_as_by` is set; `by ()` adds nothing |
 | `agg(when c: e)` | the aggregate's `filter` (§3) |
 | `agg(per K': e)` | a `__qualified_by_<i>__` tag on an exact key scope (§3) |
 | `MAXIMIZE when c: E` | a WHEN wrapper over the objective |
 | `outer(per k: inner(e) by (k))` | a nested reducer like any other (D81): `outer` qualified by k, `inner` tagged with its `by` |
 
-- `BindScopedConstraint` binds the body, the condition as data, the key through
+- `BindClause` binds the body, the condition as data, the key through
   `BindKey` (a declaration key's resolution into the key table; a column element keeps
   its written name for messages). A `BETWEEN` binds to two comparisons, each under the whole scope;
   the second binds the condition again from its parsed text, since a bound subquery
   cannot be copied.
-- The key's text is not a tag: the `PER` wrapper takes the location of the `per` marker and a message cuts the
+- The key's text is not a tag: the `PER` wrapper takes the location of the scope (its `per`) and a message cuts the
   key from the query there. The key table keeps the key as it was first written for a wrapper with no location.
-- `BindReducerBy`: a relation element stands for its stored columns (a column of that
+- A reducer's `by` (`BindReducer`): a relation element stands for its stored columns (a column of that
   name wins); any other element binds as data. Equal key sets share one entry of the key
   table, with every other key of those elements: equal as bound expressions, or, for a key
   holding a subquery, written alike — a bound subquery equals nothing, not even itself.
-- `BindScopedReducer` peels the inner `per`/`when` (§3); the reducer may take a `by`.
-- `BindScopedObjective`: `per ()` adds nothing; a `when` wraps the body. A nested reducer
+- `BindReducer` binds the inner `per`/`when` (§3); the reducer may take a `by`.
+- `BindObjective`: `per ()` adds nothing; a `when` wraps the body. A nested reducer
   binds as in a constraint. A decision outside the objective's
   reducers binds: a query-wide one is one column, and any other must have one instance
   over the kept rows, a run-time check. The objective's
@@ -541,8 +542,9 @@ overload may widen (`sum` of a FLOAT reads a DOUBLE). The range's reducer name i
 ## 5. Objective
 
 `DecideObjectiveBinder` binds `MAXIMIZE` / `MINIMIZE` bodies through the same
-`DecideBinder` rules. It knows the sense the user wrote (`decide_sense`); stage 04 writes every objective as a minimization
-(`../04_canonicalizer/done.md` §3.9). A scope in front (`BindScopedObjective`) is bound as §4a describes. It performs no algebraic
+`DecideBinder` rules. It knows the sense the user wrote (`ParsedDecide::sense`); stage 04 writes every objective as a
+minimization (`../04_canonicalizer/done.md` §3.9). A scope in front (`BindObjective` takes the objective's
+`DecideClause`) is bound as §4a describes. It performs no algebraic
 rewriting: the objective's shape — its additive spine, its reducer scales, its
 constant offset — is decided once by `DecideCanonicalizer::CanonicalizeObjective` on
 the bound tree, alongside constraints.
@@ -586,7 +588,7 @@ the select list is bound before any exists, so an auxiliary never appears in
 | An alias's primary: the `*_ALIAS` macros fill `StaticFunctionDefinition::primary`, registration copies it to `CreateFunctionInfo::primary_name` and `FunctionEntry::primary_name` | `src/function/function_list.cpp`, `extension/core_functions/function_list.cpp`, `src/function/register_function_list.cpp` |
 | Shared DECIDE expression rules (`IsDataOperand`), reducers, key scopes (`FindOrCreateKeyScope`, `FindOrCreateScope`, `BindKey`), where scopes may stand (`ValidateDecideScopeSpellings`) | `src/planner/expression_binder/decide/decide_binder.cpp` |
 | Degree, and the check that refuses on it (stage 04) | `src/planner/decide/decide_product_form.cpp`, `decide_shape_check.cpp` |
-| `SUCH THAT` binding and a constraint's scope (`BindScopedConstraint`) | `src/planner/expression_binder/decide/decide_constraints_binder.cpp` |
+| `SUCH THAT` binding and a constraint's scope (`BindConstraints`, `BindClause`) | `src/planner/expression_binder/decide/decide_constraints_binder.cpp` |
 | Objective binding and its scope | `src/planner/expression_binder/decide/decide_objective_binder.cpp` |
 | Refusing a DECIDE that reads an outer query (`ThrowIfOuterColumn`; the `WHERE` backstop in `BindSelectNode`) | `src/planner/expression_binder/decide/decide_binder.cpp`, `src/planner/binder/query_node/bind_select_node.cpp` |
 | Which parts of a query a walk visits (`decide_clauses`) | `src/parser/parsed_expression_iterator.cpp` |

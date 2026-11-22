@@ -67,13 +67,9 @@ static int DecideBindingOf(const duckdb_libpgquery::PGNode &node) {
 			return name == "**" || name == "^" ? NumericCast<int>(DecideBinding::POWER)
 			                                   : NumericCast<int>(DecideBinding::LOOSE);
 		}
-		// A call written as one, and DECIDE's markers for the scope and `by` of a reducer, are whole.
+		// A call written as one is whole.
 		case PG_AEXPR_NULLIF:
 		case AEXPR_PAREN:
-		case PG_AEXPR_SCOPE_WHEN:
-		case PG_AEXPR_SCOPE_PER:
-		case PG_AEXPR_SCOPE_PER_ROW:
-		case PG_AEXPR_REDUCER_BY:
 			return NumericCast<int>(DecideBinding::WHOLE);
 		default:
 			return NumericCast<int>(DecideBinding::LOOSE); // IN, LIKE, BETWEEN, IS DISTINCT, ...

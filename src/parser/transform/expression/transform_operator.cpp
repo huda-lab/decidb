@@ -1,4 +1,3 @@
-#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/parser/expression/between_expression.hpp"
 #include "duckdb/parser/expression/case_expression.hpp"
 #include "duckdb/parser/expression/cast_expression.hpp"
@@ -88,20 +87,6 @@ unique_ptr<ParsedExpression> Transformer::TransformInExpression(const string &na
 
 unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgquery::PGAExpr &root) {
 	auto name = string(PGPointerCast<duckdb_libpgquery::PGValue>(root.name->head->data.ptr_value)->val.str);
-
-	// DeciDB: a DECIDE marker is `tag(lexpr, rexpr...)`, rexpr being absent, one node, or a list.
-	auto decide_marker = [&](const char *tag) -> unique_ptr<ParsedExpression> {
-		vector<unique_ptr<ParsedExpression>> children;
-		children.push_back(TransformExpression(root.lexpr));
-		if (root.rexpr && root.rexpr->type == duckdb_libpgquery::T_PGList) {
-			TransformExpressionList(*PGPointerCast<duckdb_libpgquery::PGList>(root.rexpr), children);
-		} else if (root.rexpr) {
-			children.push_back(TransformExpression(root.rexpr));
-		}
-		auto result = make_uniq<FunctionExpression>(tag, std::move(children));
-		result->is_operator = true;
-		return std::move(result);
-	};
 
 	switch (root.kind) {
 	case duckdb_libpgquery::PG_AEXPR_OP_ALL:
@@ -219,17 +204,6 @@ unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgque
 		return make_uniq<ComparisonExpression>(ExpressionType::COMPARE_DISTINCT_FROM, std::move(left_expr),
 		                                       std::move(right_expr));
 	}
-	// DeciDB: the constraint or reducer in children[0], its WHEN condition, PER columns
-	// or qualifying relations after it (see common/enums/decide.hpp for each tag).
-	case duckdb_libpgquery::PG_AEXPR_SCOPE_WHEN:
-		return decide_marker(SCOPE_WHEN_TAG);
-	case duckdb_libpgquery::PG_AEXPR_SCOPE_PER:
-		return decide_marker(SCOPE_PER_TAG);
-	case duckdb_libpgquery::PG_AEXPR_SCOPE_PER_ROW:
-		return decide_marker(SCOPE_PER_ROW_TAG);
-	case duckdb_libpgquery::PG_AEXPR_REDUCER_BY:
-		return decide_marker(REDUCER_BY_TAG);
-
 	default:
 		break;
 	}
@@ -250,11 +224,6 @@ unique_ptr<ParsedExpression> Transformer::TransformAExpr(duckdb_libpgquery::PGAE
 	auto result = TransformAExprInternal(root);
 	if (result) {
 		SetQueryLocation(*result, root.location);
-		// `per row:` binds to its body alone, and the expression binder gives that bound body the marker's location.
-		// The marker takes the body's, so the clause text the parser kept for the body is still found by it.
-		if (root.kind == duckdb_libpgquery::PG_AEXPR_SCOPE_PER_ROW) {
-			result->query_location = result->Cast<FunctionExpression>().children[0]->query_location;
-		}
 	}
 	return result;
 }

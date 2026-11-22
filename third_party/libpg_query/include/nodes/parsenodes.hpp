@@ -234,10 +234,6 @@ typedef enum PGAExpr_Kind {
 	PG_AEXPR_BETWEEN_SYM,     /* name must be "BETWEEN SYMMETRIC" */
 	PG_AEXPR_NOT_BETWEEN_SYM, /* name must be "NOT BETWEEN SYMMETRIC" */
 	AEXPR_PAREN,              /* nameless dummy node for parentheses */
-	PG_AEXPR_SCOPE_WHEN,        /* DeciDB: scope filter, WHEN condition: body */
-	PG_AEXPR_SCOPE_PER,         /* DeciDB: scope key, PER key: body */
-	PG_AEXPR_SCOPE_PER_ROW,     /* DeciDB: the default scope written out, PER ROW: body */
-	PG_AEXPR_REDUCER_BY         /* DeciDB: reducer rows, agg(...) BY (key) */
 } PGAExpr_Kind;
 
 typedef struct PGAExpr {
