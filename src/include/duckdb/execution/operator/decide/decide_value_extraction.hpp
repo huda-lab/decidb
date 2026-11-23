@@ -207,11 +207,12 @@ void ScaleAvgTerms(const DecideConstraint &constraint, const vector<TermFilterSt
 //! then scale nothing. A mixed left side keeps the division, which may still be refused.
 bool HoistAvgIntoNotEqualBound(const DecideConstraint &constraint, vector<TermFilterState> &filters);
 
-//! The bound of a clause over groups that reads a frame and may differ within a group (FRAME_TIGHTEST_BOUND_TAG, D85):
-//! each group's instance takes its tightest value among all its kept rows where the bound has one, a row its reducers'
-//! own `when`s drop included (a group's every kept row bounds it) -- the least under `<`
-//! and `<=`, the greatest under `>` and `>=`, its one value under `=` -- as a side table takes a column's (paper
-//! §3.2.1). A row where the bound has none (`bound_null`) bounds nothing, and a group with no such row has no instance
+//! The bound of a clause over groups that reads a frame and may differ within a group
+//! (BoundDecideClause::tightest_frame_bound, D85): each group's instance takes its tightest value among all its kept
+//! rows where the bound has one, a row its reducers' own `when`s drop included (a group's every kept row bounds it) --
+//! the least under `<` and `<=`, the greatest under `>` and `>=`, its one value under `=` -- as a side table takes a
+//! column's (paper §3.2.1). A row where the bound has none (`bound_null`) bounds nothing, and a group with no such row
+//! has no instance
 //! (`null_rows`). `kept_groups` numbers each kept row's group, empty for every kept row in one; `instances` is what
 //! remains of those groups once a clause's rules have dropped some (empty: all of one group), and a group it no longer
 //! holds has no instance, so no bound to read (D68). So does a group holding a row of `null_rows`, a

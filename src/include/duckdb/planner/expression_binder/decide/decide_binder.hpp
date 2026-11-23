@@ -79,7 +79,7 @@ struct DecideQualifierContext {
 	vector<KeyedScopeInfo> *keyed_scopes = nullptr;
 	//! Every key bound so far; a reducer names its `by` key by its index (BoundDecideReducerExpression::by).
 	vector<DecideKey> *keys = nullptr;
-	//! Every frame selector bound so far; a frame's FRAME_TAG_PREFIX tag indexes it.
+	//! Every frame selector bound so far; BoundDecideReducerExpression::frame indexes it.
 	vector<DecideFrameSpec> *frames = nullptr;
 	//! The text the user wrote for the DECIDE tail (ParsedDecide::text), which a node's query location indexes.
 	const DecideSourceText *source_text = nullptr;
@@ -181,9 +181,9 @@ protected:
 	//! the `by` key into LogicalDecide::keys, named on the reducer by its `by` (none for `BY ()`).
 	BindResult BindReducer(DecideReducerExpression &reducer, idx_t depth);
 	//! Binds a frame selector (language/guide.md §5.6) to an aggregate over its payload
-	//! -- `first(e)` for a point frame, its reducer for a range -- tagged by
-	//! FRAME_TAG_PREFIX with the frame's entry in LogicalDecide::frames, which holds the
-	//! order key, the `within` key's columns, the positions and the fallback.
+	//! -- `first(e)` for a point frame, its reducer for a range -- which names the frame's entry in
+	//! LogicalDecide::frames (BoundDecideReducerExpression::frame); the entry holds the order key, the `within` key's
+	//! columns, the positions and the fallback.
 	BindResult BindDecideFrame(DecideFrameExpression &frame, idx_t depth);
 	//! A frame's `else`, bound into `out`: a number, and none when it is NULL before the
 	//! query runs (D86).

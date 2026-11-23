@@ -214,6 +214,10 @@ struct BoundDecideClause {
 	//! a DEBUG build checks after every pass that both still hold (DecideOptimizer::VerifyBoundReads).
 	CanonicalConstraintClass bound_read_shape = CanonicalConstraintClass::INVALID;
 	ExpressionType bound_read_type = ExpressionType::INVALID;
+	//! The clause is over groups and its bound reads a frame and may differ within a group: each group's instance
+	//! takes its tightest value among the rows where it has one (D85). No side table can read a frame, so execution
+	//! takes it (RewriteRhsAggregates sets it).
+	bool tightest_frame_bound = false;
 
 	BoundDecideClause Copy() const {
 		BoundDecideClause result;
@@ -232,6 +236,7 @@ struct BoundDecideClause {
 		result.query_wide_bound = query_wide_bound;
 		result.bound_read_shape = bound_read_shape;
 		result.bound_read_type = bound_read_type;
+		result.tightest_frame_bound = tightest_frame_bound;
 		return result;
 	}
 
@@ -259,9 +264,7 @@ struct DecideConstraint {
 	bool query_wide_bound = false;
 	//! The bound reads a flattened scalar subquery, whose column no message quotes as SQL the user can edit.
 	bool bound_holds_subquery = false;
-	//! The bound reads a frame and may differ within a group, so each group's instance takes its tightest value (D85).
-	//! The comparison carries FRAME_TIGHTEST_BOUND_TAG; a rewrite rebuilds its bound, and lowering replaces a bare
-	//! frame.
+	//! The clause takes its group's tightest bound (BoundDecideClause::tightest_frame_bound).
 	bool tightest_frame_bound = false;
 	ExpressionType comparison_type; // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
 	bool lhs_is_aggregate = false;  // True if original LHS was an aggregate (e.g., SUM(...))
@@ -358,8 +361,9 @@ struct DecideFrameColumn {
 	//! VALUE, REDUCED: the frame's `else`, of the payload's type; null when it has none.
 	unique_ptr<Expression> fallback;
 	LogicalType type;
-	//! AGGREGATE: its path key and its own `per` key, into LogicalDecide::keys, and the reducer as written
-	//! (LogicalDecide::FrameAggregate).
+	//! AGGREGATE: its entry of LogicalDecide::frame_aggregates, and that entry's path key and own `per` key, into
+	//! LogicalDecide::keys, and the reducer as written.
+	idx_t aggregate = DConstants::INVALID_INDEX;
 	idx_t key = DConstants::INVALID_INDEX;
 	idx_t class_key = DConstants::INVALID_INDEX;
 	string text;

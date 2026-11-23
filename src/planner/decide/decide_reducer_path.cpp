@@ -17,8 +17,11 @@
 namespace duckdb {
 
 bool TryGetDecideFrame(const Expression &expr, idx_t &frame) {
-	return expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER &&
-	       TryParseFrameTag(expr.GetAlias(), frame);
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER) {
+		return false;
+	}
+	frame = expr.Cast<BoundDecideReducerExpression>().frame;
+	return frame != DConstants::INVALID_INDEX;
 }
 
 bool ContainsDecideFrame(const Expression &expr) {

@@ -1264,10 +1264,10 @@ class TestTagNamesRefused:
     def test_key_column(self, decidb_cli):
         """ResolveKeyElement's refusal of a `per` key column; the key is no QualifyColumnName read."""
         decidb_cli.assert_error_at(
-            'SELECT id, x FROM (VALUES (1, 1, 5.0), (2, 1, 6.0), (3, 2, 7.0)) t(id, "__frame_0__", v) '
-            'DECIDE x(INT) SUCH THAT x <= 3 AND per "__frame_0__": SUM(x) <= 4 MAXIMIZE SUM(x * v)',
+            'SELECT id, x FROM (VALUES (1, 1, 5.0), (2, 1, 6.0), (3, 2, 7.0)) t(id, "__abs_function_0__", v) '
+            'DECIDE x(INT) SUCH THAT x <= 3 AND per "__abs_function_0__": SUM(x) <= 4 MAXIMIZE SUM(x * v)',
             kind="Binder Error",
-            at='"__frame_0__"',
+            at='"__abs_function_0__"',
         )
 
     def test_every_tag_constant_is_in_the_list(self):

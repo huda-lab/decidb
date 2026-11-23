@@ -359,9 +359,8 @@ private:
 	unique_ptr<Expression> FrameColumn(idx_t site, idx_t j, const LogicalType &type) {
 		auto &column = tree.frame_reads.columns[j];
 		if (column.kind == DecideFrameColumn::Kind::AGGREGATE) {
-			idx_t aggregate = DConstants::INVALID_INDEX;
-			if (!TryParseFrameAggregateTag(column.value->GetAlias(), aggregate) ||
-			    aggregate >= tree.frame_aggregate_nodes.size() ||
+			const auto aggregate = column.aggregate;
+			if (aggregate >= tree.frame_aggregate_nodes.size() ||
 			    tree.frame_aggregate_nodes[aggregate] == DConstants::INVALID_INDEX) {
 				throw InternalException("DECIDE tree: %s has no node", column.text);
 			}

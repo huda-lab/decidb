@@ -22,8 +22,8 @@
 // A frame selector's values are columns execution computes from the rows it selects
 // (DecideFrameReads::columns), so no side table can read one: a row-wise bound reads a frame as it reads a
 // column, as does a bound over groups that has one value per group, which execution checks as it reads it; one that
-// takes its group's tightest value execution takes too (FRAME_TIGHTEST_BOUND_TAG, D85), and a reducer over data whose
-// argument reads one execution computes (MakeFrameAggregate, LogicalDecide::frame_aggregates).
+// takes its group's tightest value execution takes too (BoundDecideClause::tightest_frame_bound, D85), and a reducer
+// over data whose argument reads one execution computes (MakeFrameAggregate, LogicalDecide::frame_aggregates).
 //
 // The values the side tables hold are checked by VALUE_IS_VALID checks appended to the DECIDE node's scope checks, so a
 // NaN, or an `=` bound with two values in a group, is reported after the scope checks, as the bound's reader would
@@ -179,7 +179,7 @@ private:
 			// Execution reads the bound, and its NaN, as it reads a row-wise one; one that may differ within a group
 			// it reads as the group's tightest value (D85).
 			if (reduces) {
-				AddDecideTag(comparison.alias, FRAME_TIGHTEST_BOUND_TAG);
+				clause.tightest_frame_bound = true;
 			}
 			return;
 		}
@@ -298,7 +298,7 @@ private:
 	}
 
 	//! A reducer over data whose argument reads a frame: no side table can compute it, since a frame's values are
-	//! columns execution computes. It stays a reducer over the rows it reads (`Reads`, its new filter), tagged with its
+	//! columns execution computes. It stays a reducer over the rows it reads (`Reads`, its new filter), naming its
 	//! entry of LogicalDecide::frame_aggregates -- its path key and its `per` key --, which stage 05 makes a frame
 	//! column execution computes after the frames (DecideFrameColumn::Kind::AGGREGATE). The reducers inside its
 	//! argument are columns first, as for any reducer.
@@ -325,7 +325,8 @@ private:
 			record.class_key = decide.bound.keyed_scopes[record.per].key;
 		}
 		record.text = Written(reducer);
-		aggregate.SetAlias(MakeFrameAggregateTag(decide.frame_aggregates.size()));
+		aggregate.ClearAlias();
+		aggregate.frame_aggregate = decide.frame_aggregates.size();
 		decide.frame_aggregates.push_back(std::move(record));
 		return std::move(marker);
 	}

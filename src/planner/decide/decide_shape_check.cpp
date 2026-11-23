@@ -203,8 +203,7 @@ static bool IsBoundAvgAggregate(const Expression &expr) {
 		return false;
 	}
 	auto &agg = expr.Cast<BoundDecideReducerExpression>();
-	idx_t frame;
-	return agg.function && StringUtil::CIEquals(agg.function->name, "avg") && !TryParseFrameTag(agg.GetAlias(), frame);
+	return agg.function && StringUtil::CIEquals(agg.function->name, "avg") && agg.frame == DConstants::INVALID_INDEX;
 }
 
 //! Is `expr` provably whole-numbered from declared types alone?
@@ -242,8 +241,7 @@ static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoi
 		const auto &name = agg.function->name;
 		// A frame is a value of the row, every addend and its `else` part of it: whole when the type its payload and
 		// `else` share is, and a range's SUM, MIN or MAX of them; an AVG range divides.
-		idx_t frame;
-		if (TryParseFrameTag(agg.GetAlias(), frame)) {
+		if (agg.frame != DConstants::INVALID_INDEX) {
 			return !StringUtil::CIEquals(name, "avg") && agg.children.size() == 1 &&
 			       DecideTypeIsWholeNumbered(agg.children[0]->return_type);
 		}

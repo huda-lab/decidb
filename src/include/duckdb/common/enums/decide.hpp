@@ -180,7 +180,7 @@ inline bool HasDecideTag(const string &alias, const string &tag) {
 }
 
 //! Remove every DECIDE tag from an alias, leaving whatever ordinary alias it was appended
-//! to: "cost__frame_0____frame_column__" yields "cost", and an alias that was
+//! to: "cost__abs_function_0____null_guard__" yields "cost", and an alias that was
 //! nothing but tags yields "".
 //!
 //! Tags are only ever appended (`AddDecideTag`), so they are always a suffix, and each one
@@ -204,7 +204,7 @@ inline string StripDecideTags(const string &alias) {
 }
 
 //! Reads the payload of a prefix-shaped tag out of a possibly multi-tag alias:
-//! ("__frame_2____frame_column__", "__frame_") yields "2". The payload runs
+//! ("__abs_function_2____null_guard__", "__abs_function_") yields "2". The payload runs
 //! from the end of the prefix to the tag's closing `__`, so payloads may contain single
 //! underscores. Returns false when the tag is absent or has an empty payload.
 inline bool ExtractDecideTagPayload(const string &alias, const string &prefix, string &payload) {
@@ -231,16 +231,6 @@ inline bool TryParseDecideIndexTag(const string &alias, const string &prefix, id
 	return true;
 }
 
-//! Tag prefix naming a frame selector: "__frame_<i>__" indexes LogicalDecide::frames. It
-//! stands on the BoundDecideReducerExpression a frame binds to -- `first(e)` for a point frame, its reducer
-//! for a range -- whose rows at an anchor row are the ones the frame selects there
-//! (language/guide.md §5.6).
-static constexpr const char *FRAME_TAG_PREFIX = "__frame_";
-
-inline string MakeFrameTag(idx_t frame_idx) {
-	return string(FRAME_TAG_PREFIX) + to_string(frame_idx) + "__";
-}
-
 //! Tag marking a reducer with a nonlinear body held by a tree-owned definition F node. The source body remains at its
 //! written site as a DEFINITION_FUNCTION_TAG_PREFIX read, while this aggregate marker tells MIN/MAX planning that its
 //! members are helper columns. A helper has no box, so stage 08 states a MIN/MAX over it natively.
@@ -264,36 +254,9 @@ static constexpr const char *L0_TOLERANCE_TAG = "__l0_tolerance__";
 //! IR's GuardCoefficients): the query never wrote it, so a render prints the value it guards.
 static constexpr const char *NULL_GUARD_TAG = "__null_guard__";
 
-inline bool TryParseFrameTag(const string &alias, idx_t &frame_idx) {
-	return TryParseDecideIndexTag(alias, FRAME_TAG_PREFIX, frame_idx);
-}
-
-//! On the comparison of a clause over groups: its bound reads a frame and may differ within a group, so it takes the
-//! group's tightest value among the rows where it has one (D85). No side table can read a frame, so execution takes it.
-//! The comparison holds the tag because a comparison's tags survive a rebuild (K5), which a bound's node does not.
-static constexpr const char *FRAME_TIGHTEST_BOUND_TAG = "__frame_tightest_bound__";
-
 //! On a reference to a frame column (DecideFrameReads::columns): its name is the frame as written, which a
 //! message prints as it stands, not as an identifier.
 static constexpr const char *FRAME_COLUMN_TAG = "__frame_column__";
-
-//! On a reducer over data whose argument reads a frame: "__frame_aggregate_<i>__" indexes
-//! LogicalDecide::frame_aggregates. No side table can read a frame, so execution computes it after the frames.
-static constexpr const char *FRAME_AGGREGATE_TAG_PREFIX = "__frame_aggregate_";
-
-inline string MakeFrameAggregateTag(idx_t index) {
-	return string(FRAME_AGGREGATE_TAG_PREFIX) + to_string(index) + "__";
-}
-
-inline bool TryParseFrameAggregateTag(const string &alias, idx_t &index) {
-	string payload;
-	if (!ExtractDecideTagPayload(alias, FRAME_AGGREGATE_TAG_PREFIX, payload) || payload.empty() ||
-	    payload.find_first_not_of("0123456789") != string::npos) {
-		return false;
-	}
-	index = static_cast<idx_t>(std::stoull(payload));
-	return true;
-}
 
 //! Tag on an ABS function in a clause, and on the positive lower-envelope row the tree builds for its F node (`aux >=
 //! inner`): both name the auxiliary the ABS became.
@@ -355,15 +318,12 @@ static constexpr const char *BODY_NAME_PREFIX = "__body_";
 static constexpr const char *VALUE_LINK_NAME_PREFIX = "__value_";
 
 //! Every DECIDE tag above, the one list DecideNameContainsTag reads. A constant added above is added here.
-static constexpr const char *DECIDE_TAGS[] = {FRAME_TAG_PREFIX,
-                                              BODY_DEFINITION_TAG,
+static constexpr const char *DECIDE_TAGS[] = {BODY_DEFINITION_TAG,
                                               L0_AUTO_BOUND_TAG,
                                               L0_WRITTEN_BOUND_TAG,
                                               L0_TOLERANCE_TAG,
                                               NULL_GUARD_TAG,
-                                              FRAME_TIGHTEST_BOUND_TAG,
                                               FRAME_COLUMN_TAG,
-                                              FRAME_AGGREGATE_TAG_PREFIX,
                                               ABS_FUNCTION_TAG_PREFIX,
                                               ABS_FUNCTION_NEG_TAG_PREFIX,
                                               BILINEAR_FUNCTION_GROUP_TAG_PREFIX,

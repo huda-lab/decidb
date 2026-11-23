@@ -121,6 +121,7 @@ void BoundDecideClause::Serialize(Serializer &serializer) const {
 	serializer.WriteProperty<CanonicalConstraintClass>(115, "shape", shape);
 	serializer.WritePropertyWithDefault<idx_t>(116, "group_key", group_key, DConstants::INVALID_INDEX);
 	serializer.WritePropertyWithDefault<bool>(117, "query_wide_bound", query_wide_bound, false);
+	serializer.WritePropertyWithDefault<bool>(118, "tightest_frame_bound", tightest_frame_bound, false);
 }
 
 BoundDecideClause BoundDecideClause::Deserialize(Deserializer &deserializer) {
@@ -143,6 +144,7 @@ BoundDecideClause BoundDecideClause::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadProperty<CanonicalConstraintClass>(115, "shape", result.shape);
 	deserializer.ReadPropertyWithExplicitDefault<idx_t>(116, "group_key", result.group_key, DConstants::INVALID_INDEX);
 	deserializer.ReadPropertyWithExplicitDefault<bool>(117, "query_wide_bound", result.query_wide_bound, false);
+	deserializer.ReadPropertyWithExplicitDefault<bool>(118, "tightest_frame_bound", result.tightest_frame_bound, false);
 	return result;
 }
 

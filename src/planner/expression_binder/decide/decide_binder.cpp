@@ -1114,7 +1114,7 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 
 	// The aggregate prints as the frame written: DecideBinder::BindExpression gives it the frame's query location.
 	auto &frames = *qualifier_context->frames;
-	AddDecideTag(aggregate->alias, MakeFrameTag(frames.size()));
+	aggregate->frame = frames.size();
 	frames.push_back(std::move(spec));
 	return BindResult(std::move(result));
 }

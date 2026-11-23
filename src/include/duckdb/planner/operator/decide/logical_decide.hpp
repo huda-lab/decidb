@@ -110,7 +110,7 @@ struct KeyedScopeInfo {
 	static KeyedScopeInfo Deserialize(Deserializer &deserializer);
 };
 
-//! A frame selector (language/guide.md §5.6), named by a FRAME_TAG_PREFIX tag on the aggregate it binds to:
+//! A frame selector (language/guide.md §5.6), named by the aggregate it binds to (BoundDecideReducerExpression::frame):
 //! `first(e)` for a point frame, the frame's reducer for a range. At an anchor row it reads the anchor's timeline --
 //! the rows sharing its `within` key, ordered by `order` -- at the positions it selects.
 struct DecideFrameSpec {
@@ -343,7 +343,7 @@ struct BoundDecide {
 	//! or reducer is keyed.
 	vector<KeyedScopeInfo> keyed_scopes;
 
-	//! Every frame selector written in the clause, indexed by FRAME_TAG_PREFIX tags.
+	//! Every frame selector written in the clause, indexed by BoundDecideReducerExpression::frame.
 	vector<DecideFrameSpec> frames;
 
 	//! The bound SUCH THAT clauses, one record per row, in the order written; a row a rewrite adds follows them.
@@ -638,10 +638,10 @@ public:
 	vector<unique_ptr<Expression>> retained_expressions;
 
 	//! A reducer over data whose argument reads a frame (language/guide.md §5.6): no side table can read a frame, whose
-	//! values execution computes, so the reducer stays in the tree, tagged with its entry (FRAME_AGGREGATE_TAG_PREFIX)
-	//! over the rows it reads (its filter), and stage 05 makes it a frame column execution computes after the frames
-	//! (DecideFrameColumn::Kind::AGGREGATE). Made by the bound-side rewrite; not serialized (an optimized plan never
-	//! is).
+	//! values execution computes, so the reducer stays in the tree, naming its entry
+	//! (BoundDecideReducerExpression::frame_aggregate), over the rows it reads (its filter), and stage 05 makes it a
+	//! frame column execution computes after the frames (DecideFrameColumn::Kind::AGGREGATE). Made by the bound-side
+	//! rewrite; not serialized (an optimized plan never is).
 	struct FrameAggregate {
 		//! Its path key: it has one value per group (FindOrCreateDecidePathKey); INVALID_INDEX for the whole query.
 		idx_t key = DConstants::INVALID_INDEX;

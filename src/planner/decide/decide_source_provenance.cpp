@@ -311,9 +311,8 @@ static string RenderReducer(const BoundDecideReducerExpression &agg, const strin
 
 static string RenderAggregate(const BoundDecideReducerExpression &agg, const RenderContext &ctx) {
 	// A frame marker is `first(e)` or the range's reducer, which no one wrote: it prints as the frame.
-	idx_t frame;
-	if (ctx.frames && TryParseFrameTag(agg.GetAlias(), frame) && frame < ctx.frames->size()) {
-		return (*ctx.frames)[frame].spelling;
+	if (ctx.frames && agg.frame < ctx.frames->size()) {
+		return (*ctx.frames)[agg.frame].spelling;
 	}
 	string body = agg.children.empty() ? string() : RenderSource(*agg.children[0], ctx);
 	// A norm's definition reads as written, `norm(e, p)`.

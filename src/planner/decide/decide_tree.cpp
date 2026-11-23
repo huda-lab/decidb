@@ -38,7 +38,7 @@ unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const
 	facts->rhs_expr = comparison.right->Copy();
 	facts->query_wide_bound = clause.query_wide_bound;
 	facts->bound_holds_subquery = DecideHoldsSubqueryValue(op.bound.computed_values, *comparison.right);
-	facts->tightest_frame_bound = HasDecideTag(comparison.alias, FRAME_TIGHTEST_BOUND_TAG);
+	facts->tightest_frame_bound = clause.tightest_frame_bound;
 	facts->origin = clause.origin;
 	if (comparison.type == ExpressionType::COMPARE_NOTEQUAL) {
 		facts->kind = ConstraintKind::USER_MECHANISM;
@@ -1138,9 +1138,8 @@ private:
 		node.decision_value = HasDecision(aggregate);
 		node.key = aggregate.by;
 		idx_t qualifier = aggregate.per;
-		idx_t frame_aggregate = DConstants::INVALID_INDEX;
-		if (TryParseFrameAggregateTag(aggregate.GetAlias(), frame_aggregate) &&
-		    frame_aggregate < op.frame_aggregates.size()) {
+		const auto frame_aggregate = aggregate.frame_aggregate;
+		if (frame_aggregate < op.frame_aggregates.size()) {
 			node.key = op.frame_aggregates[frame_aggregate].key;
 			qualifier = op.frame_aggregates[frame_aggregate].per;
 			node.text = op.frame_aggregates[frame_aggregate].text;

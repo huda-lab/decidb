@@ -373,9 +373,9 @@ private:
 		if (!expr) {
 			return;
 		}
-		idx_t frame, aggregate;
+		idx_t frame;
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER &&
-		    TryParseFrameAggregateTag(expr->GetAlias(), aggregate)) {
+		    expr->Cast<BoundDecideReducerExpression>().frame_aggregate != DConstants::INVALID_INDEX) {
 			// A reducer over data reading a frame (LogicalDecide::frame_aggregates): its frames first; once every
 			// frame has its columns, a column of its own after them (lower_aggregates).
 			auto &reducer = expr->Cast<BoundDecideReducerExpression>();
@@ -384,7 +384,7 @@ private:
 			}
 			LowerFrames(reducer.filter);
 			if (lower_aggregates) {
-				expr = FrameAggregateRef(aggregate, *expr);
+				expr = FrameAggregateRef(reducer.frame_aggregate, reducer);
 			}
 			return;
 		}
@@ -457,6 +457,7 @@ private:
 			auto &record = op.frame_aggregates[index];
 			DecideFrameColumn column;
 			column.kind = DecideFrameColumn::Kind::AGGREGATE;
+			column.aggregate = index;
 			column.value = FrameColumnValue(marker);
 			column.type = marker.return_type;
 			column.key = record.key;

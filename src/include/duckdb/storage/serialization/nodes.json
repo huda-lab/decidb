@@ -1481,6 +1481,12 @@
         "name": "query_wide_bound",
         "type": "bool",
         "default": "false"
+      },
+      {
+        "id": 118,
+        "name": "tightest_frame_bound",
+        "type": "bool",
+        "default": "false"
       }
     ],
     "pointer_type": "none"

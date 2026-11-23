@@ -85,6 +85,12 @@ public:
 	//! The nest it was inlined in place of (InlineSumOfGroupSums), an index into LogicalDecide::retained_expressions,
 	//! which the tree lowers for it. INVALID_INDEX for none.
 	idx_t retained = DConstants::INVALID_INDEX;
+	//! The frame it is the aggregate of, an index into LogicalDecide::frames: its rows at an anchor row are the ones
+	//! the frame selects there (language/guide.md §5.6). INVALID_INDEX for a reducer.
+	idx_t frame = DConstants::INVALID_INDEX;
+	//! It reads data and its argument reads a frame: its entry of LogicalDecide::frame_aggregates. No side table can
+	//! read a frame, so execution computes it after the frames. INVALID_INDEX for none.
+	idx_t frame_aggregate = DConstants::INVALID_INDEX;
 
 public:
 	//! The SQL aggregate it names, over the same arguments and rows.
