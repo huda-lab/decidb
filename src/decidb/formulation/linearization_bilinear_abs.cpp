@@ -226,7 +226,7 @@ static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx) {
 //! The expression inside the ABS on row `e` the operand emits (a row the `when` of its clause and its group keep), as
 //! the operand row `aux + sum_{t != aux} c_t x_t >= k` states it:
 //!   inner_r = k - sum_{t != aux} c_t[r] * x_t
-//! `columns` and `coefficients` are the sum's terms, each column once (two terms may land on one column -- a frame read
+//! `columns` and `coefficients` are the sum's terms, each column once (two terms may land on one column -- a frame
 //! selecting the row itself (`abs(x - at(last: x) over (...))` at the last period) -- and a row states a column once,
 //! or the solver refuses it), and `k` is the bound with the operand row's constant terms moved across (a frame's `else`
 //! read as data is a term of no decision). Both arms read the argument here and only state it differently.

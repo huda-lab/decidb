@@ -53,7 +53,7 @@ decision is a column there.
 ### Scope
 
 Three scopes, recorded per variable in `variable_scopes` as a `DecideVarScopeInfo` (`common/enums/decide.hpp`; the
-enum `DecideVarScope` is `ROW`, `KEYED`, `GLOBAL`, with `FRAME_READ` for the decisions no query declares):
+enum `DecideVarScope` is `ROW`, `KEYED`, `GLOBAL`):
 
 | Declaration | Scope | Meaning |
 |---|---|---|

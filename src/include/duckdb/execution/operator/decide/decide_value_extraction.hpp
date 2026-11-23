@@ -24,6 +24,7 @@ namespace duckdb {
 
 class ClientContext;
 struct DecideSourceNames;
+struct DecideFrameMap;
 
 //! Maps a node of an expression into another chunk layout, or returns null to leave it to ToChunkReferences.
 using DecideChunkLeaf = std::function<unique_ptr<Expression>(const Expression &expr)>;
@@ -74,15 +75,22 @@ struct DecideScopeRows {
 	}
 };
 
-//! How a data row gives the instance of one decision it reads, which a term names (ClauseRecords::instances): the row
-//! itself for a decision per row and for a frame read, the row's class for a keyed decision, 0 for a query-wide one.
+//! How a data row gives the instance of the decision one term reads there, which the term names
+//! (ClauseRecords::instances): the row itself for a decision per row, the row's class for a keyed decision, 0 for a
+//! query-wide one. A term a frame reads (language/guide.md §5.6) reads its decision at the row the frame selects, or
+//! at its own row where the frame selects none, where the term has no value or 0.
 struct DecideInstanceOfRow {
 	const DecideScopeRows *keyed = nullptr;
+	const DecideFrameMap *frame = nullptr;
 	bool query_wide = false;
 
 	idx_t At(idx_t row) const {
-		return query_wide ? 0 : keyed ? keyed->At(row) : row;
+		return query_wide ? 0 : keyed ? keyed->At(FrameRow(row)) : FrameRow(row);
 	}
+	idx_t FrameRow(idx_t row) const {
+		return frame ? SelectedRow(row) : row;
+	}
+	idx_t SelectedRow(idx_t row) const;
 };
 
 //! `expr` constant-folded once by DuckDB's own rule, as the expression rewriter folds a query's own expressions.
@@ -213,9 +221,8 @@ void CountTupleTermsOncePerGroup(const vector<DecideTerm> &terms, EvaluatedClaus
 idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t num_rows, bool grouped);
 
 //! A clause's evaluation before its rows are read (EvaluatedConstraint): its facts, its repair group, and each term's
-//! decision as a row reads it (`read_variable`, DecideGlobalSinkState::ReadVariable).
-EvaluatedClauseColumns InitializeEvaluatedConstraint(const DecideConstraint &constraint, idx_t repair_group_id,
-                                                     const std::function<idx_t(const DecideTerm &)> &read_variable);
+//! decision.
+EvaluatedClauseColumns InitializeEvaluatedConstraint(const DecideConstraint &constraint, idx_t repair_group_id);
 
 //! How a repair names `constraint`'s bound (ConstraintProvenance::rhs_label of the row's record, under DIAGNOSE only:
 //! `diagnose`), whether one editable value stands for it on every row, and a constant's value there. A constant

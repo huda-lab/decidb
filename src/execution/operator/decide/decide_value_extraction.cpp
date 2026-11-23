@@ -396,8 +396,7 @@ void DecideWriteClauseRecords(EvaluatedClauseColumns &evaluated, const ClauseRow
 	}
 }
 
-EvaluatedClauseColumns InitializeEvaluatedConstraint(const DecideConstraint &constraint, idx_t repair_group_id,
-                                                     const std::function<idx_t(const DecideTerm &)> &read_variable) {
+EvaluatedClauseColumns InitializeEvaluatedConstraint(const DecideConstraint &constraint, idx_t repair_group_id) {
 	EvaluatedClauseColumns evaluated;
 	evaluated.comparison_type = constraint.comparison_type;
 	evaluated.provenance.origin = constraint.origin;
@@ -413,7 +412,8 @@ EvaluatedClauseColumns InitializeEvaluatedConstraint(const DecideConstraint &con
 
 	// Store variable indices for all terms (before scanning data).
 	for (auto &term : constraint.lhs_terms) {
-		evaluated.variable_indices.push_back(read_variable(term));
+		evaluated.variable_indices.push_back(term.variable_index);
+		evaluated.repeats_columns = evaluated.repeats_columns || term.frame_read != DConstants::INVALID_INDEX;
 	}
 	return evaluated;
 }

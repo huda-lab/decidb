@@ -314,34 +314,35 @@ void DecideModelEmitter::KeyedMappings(vector<KeyedMapping> &mappings) {
 	ReadAbsence(mappings);
 }
 
-DecideInstanceOfRow DecideModelEmitter::InstanceOfRow(idx_t variable) const {
+DecideInstanceOfRow DecideModelEmitter::InstanceOfRow(idx_t variable, idx_t frame_read) const {
 	DecideInstanceOfRow instance;
-	// A frame read is numbered past the plan's decisions and is read per row.
+	// A term of no decision names none.
 	if (variable < tree.variable_scopes.size()) {
 		auto &scope = tree.variable_scopes[variable];
 		instance.query_wide = scope.IsGlobal();
 		if (scope.IsKeyed()) {
 			instance.keyed = &scope_rows[scope.keyed_scope_idx];
 		}
+		// A query-wide decision has one instance, whichever row a frame selects.
+		if (frame_read != DConstants::INVALID_INDEX && !instance.query_wide) {
+			instance.frame = &gstate.frame_maps[frame_read];
+		}
 	}
 	return instance;
 }
 
-TermInstances DecideModelEmitter::InstancesAt(idx_t variable, const vector<idx_t> *rows) const {
-	const auto instance = InstanceOfRow(variable);
+TermInstances DecideModelEmitter::InstancesAt(const DecideTerm &term, const vector<idx_t> *rows) const {
+	const auto instance = InstanceOfRow(term);
 	TermInstances out;
 	out.query_wide = instance.query_wide;
 	const idx_t places = rows ? rows->size() : num_rows;
-	for (idx_t place = 0; instance.keyed && place < places; place++) {
-		out.classes.push_back(instance.At(rows ? (*rows)[place] : place));
+	for (idx_t place = 0; (instance.keyed || instance.frame) && place < places; place++) {
+		out.listed.push_back(instance.At(rows ? (*rows)[place] : place));
 	}
 	return out;
 }
 
 idx_t DecideModelEmitter::Instances(idx_t variable) const {
-	if (variable >= tree.variable_scopes.size()) {
-		return num_rows;
-	}
 	auto &scope = tree.variable_scopes[variable];
 	return scope.IsGlobal() ? 1 : scope.IsKeyed() ? (*keyed)[scope.keyed_scope_idx].num_classes : num_rows;
 }
@@ -365,25 +366,10 @@ void DecideModelEmitter::AbsentInstances() {
 	}
 }
 
-void DecideModelEmitter::FrameReads() {
-	for (auto &read : gstate.frame_reads) {
-		SolverInput::FrameRead frame_read;
-		frame_read.base = read.first;
-		auto &map = gstate.frame_maps[read.second];
-		const auto instance = InstanceOfRow(read.first);
-		frame_read.instances.resize(num_rows);
-		for (idx_t row = 0; row < num_rows; row++) {
-			const auto selected = map.SelectedRow(row);
-			frame_read.instances[row] = instance.At(selected == DConstants::INVALID_INDEX ? row : selected);
-		}
-		gstate.evaluated_frame_reads.push_back(std::move(frame_read));
-	}
-}
-
-vector<DecideInstanceOfRow> DecideModelEmitter::InstancesOfRows(const vector<idx_t> &variables) const {
+vector<DecideInstanceOfRow> DecideModelEmitter::InstancesOfRows(const vector<DecideTerm> &terms) const {
 	vector<DecideInstanceOfRow> instances;
-	for (auto variable : variables) {
-		instances.push_back(InstanceOfRow(variable));
+	for (auto &term : terms) {
+		instances.push_back(InstanceOfRow(term));
 	}
 	return instances;
 }
@@ -779,9 +765,7 @@ EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
 	auto &node = *tree.nodes[root];
 	const auto entries = descent.Containers()[root].Count();
 	EmittedClause result;
-	result.row = InitializeEvaluatedConstraint(clause, body.clause_index, [&](const DecideTerm &term) {
-		return gstate.ReadVariable(term.variable_index, term.frame_read);
-	});
+	result.row = InitializeEvaluatedConstraint(clause, body.clause_index);
 	auto &evaluated = result.row;
 	// The rows its root holds, which its `when` routed, each numbered by its place among them and read at the entry
 	// standing for it. The clause keeps those its NULL tests keep (DecideNode::member_tests: a helper's row reads a
@@ -871,7 +855,7 @@ EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
 	}
 	const auto terms = term_values.data();
 	const auto decisions = variables.data();
-	const auto instances_of_rows = InstancesOfRows(variables);
+	const auto instances_of_rows = InstancesOfRows(clause.lhs_terms);
 	const auto term_instances = instances_of_rows.data();
 	const idx_t term_count = variables.size();
 	for (idx_t place = 0; place < kept; place++) {
@@ -1299,9 +1283,7 @@ EmittedClause DecideModelEmitter::Groups(idx_t root, bool counted) {
 	auto &body = node.compiled;
 	auto &clause = *body.clause;
 	EmittedClause result;
-	result.row = InitializeEvaluatedConstraint(clause, body.clause_index, [&](const DecideTerm &term) {
-		return gstate.ReadVariable(term.variable_index, term.frame_read);
-	});
+	result.row = InitializeEvaluatedConstraint(clause, body.clause_index);
 	auto &evaluated = result.row;
 	// The rows the clause keeps: every row its root holds, which its `when` routed, each numbered by its place among
 	// them and read at the entry standing for it.
@@ -1403,8 +1385,7 @@ EmittedClause DecideModelEmitter::Groups(idx_t root, bool counted) {
 	}
 	// The clause's rows, from its columns: one per group that holds a row.
 	result.sets = DecideClauseRowSets(evaluated, kept);
-	DecideWriteClauseRecords(evaluated, result.sets, result.rows, InstancesOfRows(evaluated.variable_indices),
-	                         Written(clause));
+	DecideWriteClauseRecords(evaluated, result.sets, result.rows, InstancesOfRows(clause.lhs_terms), Written(clause));
 	WriteMembersIn(evaluated);
 	Unplace(result.rows);
 	return result;
@@ -1539,8 +1520,8 @@ void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &f
 		                     vector<TermInstances> &instances) {
 			for (idx_t t = 0; t < terms.size(); t++) {
 				auto &term = terms[t];
-				variables.push_back(gstate.ReadVariable(term.variable_index, term.frame_read));
-				instances.push_back(InstancesAt(variables.back(), &result.rows));
+				variables.push_back(term.variable_index);
+				instances.push_back(InstancesAt(term, &result.rows));
 				coefficients.emplace_back();
 				ReadPart(form[t], group.qualifier_scope_idx, term.sign, &term, coefficients.back(), null_rows);
 			}
@@ -1635,8 +1616,8 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 			columns_out.resize(terms.size());
 			for (idx_t t = 0; t < terms.size(); t++) {
 				auto &term = terms[t];
-				variables.push_back(gstate.ReadVariable(term));
-				instances.push_back(InstancesAt(variables.back(), nullptr));
+				variables.push_back(term.variable_index);
+				instances.push_back(InstancesAt(term, nullptr));
 				if (columns.Absence().MayBe(term)) {
 					absent.push_back(&term);
 				}
@@ -1680,7 +1661,8 @@ vector<TermFilterState> DecideModelEmitter::ObjectiveTerms(idx_t root, const vec
 		auto &site = sites[t];
 		const auto program = site.program;
 		auto &filter = filters[t];
-		variables.push_back(gstate.ReadVariable(term.variable_index, term.frame_read));
+		variables.push_back(term.variable_index);
+		objective_instances.push_back(InstanceOfRow(term));
 		filter.avg_scale = term.avg_scale;
 		filter.has_filter = true;
 		filter.mask.assign(num_rows, false);
@@ -1753,7 +1735,7 @@ void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {
 		}
 		vector<CoefficientColumn> coefficients(terms.size());
 		for (idx_t t = 0; t < terms.size(); t++) {
-			variable_ids.push_back(gstate.ReadVariable(terms[t].variable_index, terms[t].frame_read));
+			variable_ids.push_back(terms[t].variable_index);
 			auto numbers = columns.Numbers(node, sites[t].program, reads, nullptr);
 			coefficients[t].AssignDense(num_rows);
 			for (idx_t e = 0; e < entries.size(); e++) {
@@ -1770,8 +1752,8 @@ void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {
 	DecideListFrameMembers(map, tree.ReducerOf(tree_node),
 	                       DecideClauseRefOf(op.display.constraint_sources, op.display.source_text,
 	                                         tree.Definition(tree_node)->origin.source_clause_id),
-	                       tree_node.text, payload, payload_vars, InstancesOfRows(payload_vars), fallback,
-	                       fallback_vars, InstancesOfRows(fallback_vars), out);
+	                       tree_node.text, payload, payload_vars, InstancesOfRows(body.members), fallback,
+	                       fallback_vars, InstancesOfRows(body.fallback), out);
 }
 
 void DecideModelEmitter::ValueLinks() {
@@ -1828,15 +1810,16 @@ void DecideModelEmitter::ValueLinks() {
 			auto &term = body.members[t];
 			auto &site_t = body.linear[t];
 			coefficients[t] = columns.Numbers(site, site_t.program, members.reads, nullptr);
-			variables[t] = gstate.ReadVariable(term.variable_index, term.frame_read);
+			variables[t] = term.variable_index;
 		}
 		// A MIN or MAX of equal members is that member once. Members can be equal only when none reads a per-row
 		// decision: two rows of a group then read the same instances (a nested reducer's value, a keyed decision). A
-		// frame read is a read per row: its variable is numbered past the plan's (DecideGlobalSinkState::ReadVariable).
+		// frame reads a row of its own for each.
 		bool distinct = IsDecideExtremum(definition.reducer);
-		const auto instances = InstancesOfRows(variables);
+		const auto instances = InstancesOfRows(body.members);
 		for (idx_t t = 0; t < variables.size() && distinct; t++) {
-			distinct = variables[t] == DConstants::INVALID_INDEX || instances[t].query_wide || instances[t].keyed;
+			distinct = variables[t] == DConstants::INVALID_INDEX || instances[t].query_wide ||
+			           (instances[t].keyed && !instances[t].frame);
 		}
 		std::set<vector<double>> listed;
 		for (idx_t group = 0; group < reads_by_group.size(); group++) {
@@ -2016,8 +1999,8 @@ void DecideModelEmitter::WriteMembersIn(EvaluatedConstraint &clause) const {
 		return;
 	}
 	// Its decisions are those its rows name: a helper written in gives way to its members'.
-	clause.members_written_in = true;
-	vector<bool> named(tree.variable_scopes.size() + gstate.frame_reads.size(), false);
+	clause.repeats_columns = true;
+	vector<bool> named(tree.variable_scopes.size(), false);
 	std::vector<bool> &seen = named;
 	clause.variable_indices.clear();
 	for (auto variable : records.variables) {
@@ -2034,7 +2017,7 @@ void DecideModelEmitter::ObjectiveCoefficients() {
 	auto &sums = gstate.objective_coefficients;
 	const auto written =
 	    DecideClauseRefOf(op.display.constraint_sources, op.display.source_text, DConstants::INVALID_INDEX);
-	sums.resize(tree.variable_scopes.size() + gstate.frame_reads.size());
+	sums.resize(tree.variable_scopes.size());
 	auto add = [&](idx_t variable, idx_t instance, double coefficient) {
 		auto &of_variable = sums[variable];
 		if (of_variable.empty()) {
@@ -2053,7 +2036,7 @@ void DecideModelEmitter::ObjectiveCoefficients() {
 			continue;
 		}
 		written_in[t] = true;
-		const auto instance = InstanceOfRow(variable);
+		const auto &instance = objective_instances[t];
 		for (idx_t row = 0; row < num_rows; row++) {
 			const double coefficient = term_columns[t].Get(row);
 			if (coefficient != 0.0) {
@@ -2079,7 +2062,7 @@ void DecideModelEmitter::ObjectiveCoefficients() {
 		} else if (!written_in[t]) {
 			// Every row's coefficient counts. A term beside the reducers counts once: its coefficient is kept on
 			// one row and is 0 on the others (CountTupleTermsOnce).
-			const auto instance = InstanceOfRow(variable);
+			const auto &instance = objective_instances[t];
 			for (idx_t row = 0; row < num_rows; row++) {
 				const double coefficient = column.Get(row);
 				if (coefficient != 0.0) {

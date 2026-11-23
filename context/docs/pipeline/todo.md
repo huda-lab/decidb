@@ -45,20 +45,6 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   `build/release/test/unittest "[decidb]"`; the corpus query of `test/decide/golden/corpus.sql` line 717's
   neighbour (`per grp: sum(x) by (grp) <= budget / 10 * open`) has 6 columns and 3 rows.
 
-## MODEL-22 — A frame read is resolved where its term is written
-
-- **Problem.** A term names its instance (`06_model_formulation/done.md` § A term names the instance it reads), and a
-  frame read's is the row it is read at: stage 06 turns it into its base decision's instance at the row the frame
-  selects (`VarIndexer::InstanceColumn`, `ResolveInstance`, `SolverInput::frame_reads`, `first_frame_read`,
-  `BaseVariable`, `SyncFrameReadBoxes`, the boxes `instance_floors.cpp` and `formulate_model.cpp` copy from the base).
-  The emitter holds the frame's map where it writes the term (`DecideModelEmitter::FrameReads`).
-- **Change.** The emitter writes a frame read's term on its base decision, at the base's instance at the selected
-  row. `DecideVarScope::FRAME_READ`, `SolverInput::frame_reads` and their readers in stage 06 go. A clause that reads
-  a decision and a frame read of it then holds two terms on one decision: each reader of
-  `EvaluatedConstraint::variable_indices` is checked for that.
-- **Done when.** No `FRAME_READ` or `frame_reads` under `src/decidb` or `src/include/duckdb/decidb`;
-  `./test/decide/run_tests.sh -k "frame"`; model goldens identical.
-
 ## MODEL-17 — The emitter reads a term in one place
 
 - **Problem.** "Read a term's program at its site, project it onto the reader's rows, mark NULLs and absence" is
@@ -81,7 +67,7 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   (`:1279-1330`). Fifteen fields of `DecideGlobalSinkState` mirror `SolverInput` and are moved one by one in
   `BuildSolverInput` (`physical_decide.cpp:509-511`, `597-614`, `658-663`).
   `EvaluatedConstraint::variable_indices` means each term's decision before a helper's members are written in and
-  the distinct decisions after, with `members_written_in` to tell them apart; `emitted_rows` is a cache stage 06
+  the distinct decisions after, with `repeats_columns` to tell them apart; `emitted_rows` is a cache stage 06
   keeps inside the record it is handed.
 - **Change.** A builder owns a clause's working columns and returns a plain `EvaluatedConstraint` (GoF Builder). Each
   rule that drops an instance contributes a named mask, combined once. The emitter writes into the `SolverInput` the

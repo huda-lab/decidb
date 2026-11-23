@@ -436,8 +436,8 @@ payload at the selected row, the `else` at a row that reaches it, NULL where nei
 or, for a range, its `REDUCED` column (the frame's reducer over the window's values), and a reducer's NULL test of a
 frame over decisions (stage 04) by its `DEFINED` column, TRUE where each of the frame's `READ` and `FALLBACK` columns
 holds a value. A frame over decisions inside a `MIN`/`MAX` of several terms is a term
-like any other (`DecideBody::members`), its `frame_read` set: stage 08 hands stage 06 the variable each term
-reads (`ReducerValueMembers::variables`), a frame read among them. A range over decisions reaches no term: it is a
+like any other (`DecideBody::members`), its `frame_read` set: stage 08 hands stage 06 the decision and the instance
+each term reads (`ReducerValueMembers::variables`, `::instances`), the instance the frame's selected row reads. A range over decisions reaches no term: it is a
 helper by now (§2, `RewriteFrameRanges`), whose link also reads the range's `else` as terms, each coefficient a
 FALLBACK column (`DecideBody::fallback`). What a signature reads of a reached `else` is recorded per frame
 (`DecideFrameReads::fallback_columns`).

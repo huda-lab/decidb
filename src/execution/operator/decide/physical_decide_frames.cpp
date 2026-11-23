@@ -733,6 +733,11 @@ void SkipDecideFrameNullReads(const DecideTree &tree, vector<DecideFrameMap> &ma
 	}
 }
 
+idx_t DecideInstanceOfRow::SelectedRow(idx_t row) const {
+	const auto selected = frame->SelectedRow(row);
+	return selected == DConstants::INVALID_INDEX ? row : selected;
+}
+
 DecideScopeRows DecideFrameWindowRows(const DecideFrameMap &map) {
 	const idx_t num_rows = map.anchors.size();
 	DecideScopeRows rows(num_rows, map.WindowCount(), num_rows);

@@ -26,11 +26,8 @@ enum class DecideSense : uint8_t { MAXIMIZE = 0, MINIMIZE = 1, FEASIBILITY = 2 }
 //!   ROW        — `x(INT)`, `per row: x(INT)` one column per result row
 //!   KEYED      — `per K: x(INT)`             one column per distinct value of the key
 //!   GLOBAL     — `per (): x(INT)`            one column for the whole query
-//!   FRAME_READ — never declared: a decision read at the row a frame selector selects for
-//!                each row (SolverInput::frame_reads). It owns no column; at a row it is
-//!                its base decision's column at the selected row. Execution creates it.
 //! The values are serialized, so a stored plan reads under any rename.
-enum class DecideVarScope : uint8_t { ROW = 0, KEYED = 1, GLOBAL = 2, FRAME_READ = 3 };
+enum class DecideVarScope : uint8_t { ROW = 0, KEYED = 1, GLOBAL = 2 };
 
 //! Per-variable scope assignment. Kept as one struct rather than parallel
 //! arrays so the optimizer's auxiliary-variable appends cannot desync the

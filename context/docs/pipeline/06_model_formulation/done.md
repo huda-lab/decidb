@@ -65,17 +65,11 @@ Construction and ownership:
 There is no non-owning constructor. Focused tests use the same owning path as
 production, so keyed-mapping lifetime has one contract everywhere.
 
-**A frame read** (`DecideVarScope::FRAME_READ`, `SolverInput::frame_reads`) is a decision read at the row a frame
-selector selects (`../../language/guide.md` §5.6, D78): variable `first_frame_read + i`, after the plan's decisions,
-is decision `base` read at `rows[row]` -- the selected row, or the row itself where the frame selects none, where every
-term reading it has no value or 0. It owns no column and `NumInstances` is 0: a term names it at the row it is read at,
-and `InstanceColumn` returns its base's column at the selected row, the redirect living where every column resolution
-already passes rather than at each emission site. `ResolveInstance` turns it into its base at the selected row for the
-readers of an instance's box (`InstanceBox`). Its type and box are its base's, copied again wherever the boxes are rewritten
-wholesale (after the floors, the implied bounds and a diagnosis's widening, `SyncFrameReadBoxes` in stage 08), and
-`BaseVariable` maps it to its base for a table of the plan's decisions (a name, the ABS helpers the tree's `ABS` nodes
-name). A helper's member names each term's instance as a clause's record does (`ReducerValueMembers::instances`), so a
-frame read lands on the selected row's column there too, and its range is its base's box.
+**A decision read through a frame** (`../../language/guide.md` §5.6, D78) is a term on that decision, at its instance
+at the row the frame selects: stage 08 resolves the row where it writes the term (`DecideInstanceOfRow::frame`), so
+stage 06 knows no frame. Several rows can read one instance that way (`avg(at(first: x) ...)`), so the clause says
+that a row may name a column twice (`EvaluatedConstraint::repeats_columns`) and its terms are summed per column, as a
+helper's members written in are. The type, the box and the name a pass reads for the term are the decision's own.
 
 **An instance with no column.** A keyed decision's absent class, and a helper instance stage 08 wrote where it is read
 (`SolverInput::written_in`, §9 "A helper written where it is read"), own no column: `instance_slot` holds
@@ -262,8 +256,7 @@ its bound; the values it admits when it bounds one decision; its group, which na
 first data row.
 
 **A term names the instance it reads.** The instance is the row for a decision per row, the row's class for a keyed
-one, 0 for a query-wide one, and the row it is read at for a frame read, whose column is its base decision's at the row
-its frame selects. The node that writes a term holds the row, so stage 08 reads the instance there
+one, 0 for a query-wide one; through a frame, the decision's instance at the row the frame selects. The node that writes a term holds the row, so stage 08 reads the instance there
 (`DecideInstanceOfRow`), and stage 06 finds a term's column from the decision and the instance alone
 (`VarIndexer::InstanceColumn`), as LLVM's machine IR names a register and not the source line that set it. A
 product group's term names its instance at each place of its columns (`TermInstances`). So stage 06 reads no map
@@ -822,7 +815,7 @@ nothing:
 
 - **The links** (`reducer_value_links`) hold the groups that keep a column, and each gets its definition.
 - **A clause's records** name the members' decisions where a term read a written-in instance, the members' constants
-  in the record's constant. `EvaluatedConstraint::members_written_in` says a row may then name one column in several
+  in the record's constant. `EvaluatedConstraint::repeats_columns` says a row may then name one column in several
   terms, so the builder sums its terms per column, and `variable_indices` lists the decisions the rows name.
 - **The objective's terms on such a helper** are summed into its members' instances by stage 08
   (`SolverInput::objective_coefficients`, §3); the constants they carry are in `objective_constant`.
@@ -1087,7 +1080,7 @@ answer.
 (`ClauseRecords::EffectiveBound`), in phase 1's interval and in the row `t = inner` alike (`ReadAbsArgument`, which both
 forms read): a frame's `else` read as data (`abs(x - at(previous else 50: x) over (...))`) is a term of
 no decision, and read off the bound alone it was left out -- `|x1 - 50|` read as `|x1|`.
-The argument's columns are summed per column before the row is written: a frame read
+The argument's columns are summed per column before the row is written: a frame
 that selects the anchor itself (`abs(x - at(last: x) over (...))` at the last period)
 lands on the column its other term reads, and a solver refuses a row naming a column
 twice.

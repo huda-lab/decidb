@@ -329,7 +329,6 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	ScaleObjectiveAvg(gstate, num_rows, evaluated);
 	emitter.ObjectiveCoefficients();
 	emitter.AbsentInstances();
-	emitter.FrameReads();
 	// What the data left of each clause is reported once its clauses and its objective are read.
 	ReportSkippedInstances(gstate);
 	// The bottom-up values the evaluation computed, each node's programs on its entries.
@@ -514,17 +513,6 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	solver_input.written_in = std::move(gstate.written_in);
 	ReportInlinedHelpers(solver_input);
 	solver_input.variable_scopes = tree->variable_scopes;
-	// The decisions frames read at another row (SolverInput::frame_reads), after the plan's
-	// own: each its base read, at each row, at the row its frame selects -- or the row
-	// itself where it selects none, where every term reading it has no value or 0.
-	solver_input.first_frame_read = num_decide_vars;
-	if (!gstate.frame_reads.empty()) {
-		solver_input.variable_scopes.resize(num_decide_vars, DecideVarScopeInfo::Row());
-		solver_input.num_decide_vars = num_decide_vars + gstate.frame_reads.size();
-		solver_input.variable_scopes.resize(solver_input.num_decide_vars,
-		                                    DecideVarScopeInfo(DecideVarScope::FRAME_READ, DConstants::INVALID_INDEX));
-	}
-	solver_input.frame_reads = std::move(gstate.evaluated_frame_reads);
 
 	// The flat column space, built ONCE and handed to every consumer below. It reads only the scopes and the class
 	// mappings, which are final here, and the floors a `when` lowers (ResolveLiftedFloors) need its row to instance
@@ -580,10 +568,6 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 		solver_input.lower_bounds[var] = tree->singleton_row_boxes[var].EffectiveLower();
 		solver_input.upper_bounds[var] = tree->singleton_row_boxes[var].upper;
 	}
-	if (!solver_input.frame_reads.empty()) {
-		solver_input.lower_bounds.resize(solver_input.num_decide_vars);
-		solver_input.upper_bounds.resize(solver_input.num_decide_vars);
-	}
 
 	// Everything below this point is stage 06 working on the evaluated model, so
 	// hand the constraints and the formulation links over before the first pass.
@@ -623,7 +607,6 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// rigid box is captured, which it re-opens for the decisions it lowers, and before any pass reads the box.
 	phase.Next("assembly.lifted_floors");
 	ResolveLiftedFloors(solver_input, out_var_indexer, tree->singleton_row_boxes);
-	SyncFrameReadBoxes(solver_input);
 	phase.Next("assembly.implied_bounds");
 
 	// Data-driven implied-bound propagation: derive finite upper bounds for
@@ -639,7 +622,6 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 		DeriveReducerValueBounds(solver_input, out_var_indexer);
 	}
 	DecidePropagateImpliedBounds(solver_input, out_var_indexer);
-	SyncFrameReadBoxes(solver_input);
 	phase.Next("assembly.objective_and_avg");
 	// Objective (linear part)
 	solver_input.objective_coefficients = std::move(gstate.objective_coefficients);
@@ -797,11 +779,6 @@ void PhysicalDecide::BuildVarLabels(const SolverInput &solver_input, vector<stri
 		if (!var_is_aux[i]) {
 			var_labels[i] = tree->decide_variables[i]->GetName();
 		}
-	}
-	// A frame read is labelled as its base is.
-	for (auto &read : solver_input.frame_reads) {
-		var_labels.push_back(var_labels[read.base]);
-		var_is_aux.push_back(var_is_aux[read.base]);
 	}
 }
 

@@ -227,26 +227,15 @@ VarIndexer VarIndexer::Build(SolverInput &input) {
 	VarIndexer idx;
 	// The layout is their one reader from here, and outlives the input for the readback.
 	idx.keyed_mappings = std::move(input.keyed_mappings);
-	idx.frame_reads = input.frame_reads;
-	idx.first_frame_read = input.first_frame_read;
 	BuildVarIndexer(idx, input);
-	for (idx_t i = 0; i < idx.frame_reads.size(); i++) {
-		auto v = idx.first_frame_read + i;
-		if (v >= idx.var_scope.size() || idx.var_scope[v] != DecideVarScope::FRAME_READ ||
-		    idx.frame_reads[i].base >= idx.first_frame_read ||
-		    idx.var_scope[idx.frame_reads[i].base] == DecideVarScope::FRAME_READ ||
-		    idx.frame_reads[i].instances.size() != idx.num_rows) {
-			throw InternalException("DECIDE: frame read %llu does not read a decision of the plan at every row", v);
-		}
-	}
 	return idx;
 }
 
 //! Whether each decision term of `ec` has solver columns of its own: every term names a different decision, each
-//! is row-scoped, and none is a helper's members. Then no two (term, data row) pairs share a column, and a row's terms
-//! are read without summing them.
+//! is row-scoped, and none repeats a column (EvaluatedConstraint::repeats_columns). Then no two (term, data row) pairs
+//! share a column, and a row's terms are read without summing them.
 static bool TermsHaveTheirOwnColumns(const EvaluatedConstraint &ec, const VarIndexer &indexer) {
-	if (ec.members_written_in) {
+	if (ec.repeats_columns) {
 		return false;
 	}
 	std::unordered_set<idx_t> seen_vars;
@@ -574,14 +563,12 @@ static void BuildModelObjective(SolverModel &model, SolverInput &input, const Va
 	}
 	model.obj_constant = input.objective_constant;
 
-	// Its linear part, a coefficient per instance (SolverInput::objective_coefficients). Accumulated: a frame read's
-	// instances share its base decision's columns.
+	// Its linear part, a coefficient per instance (SolverInput::objective_coefficients), each instance a column.
 	for (idx_t var = 0; var < input.objective_coefficients.size(); var++) {
 		auto &instances = input.objective_coefficients[var];
 		for (idx_t inst = 0; inst < instances.size(); inst++) {
 			if (instances[inst] != 0.0) {
-				AddCoefficient(model.obj_coeffs[indexer.InstanceColumn(var, inst)], instances[inst],
-				               input.objective_written);
+				model.obj_coeffs[indexer.InstanceColumn(var, inst)] = instances[inst];
 			}
 		}
 	}

@@ -250,7 +250,7 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer)
 			}
 			double bound = single_variable ? -std::numeric_limits<double>::infinity() : 0.0;
 			bool every_instance_bounded = true;
-			const idx_t instances = indexer.TermInstances(v);
+			const idx_t instances = indexer.NumInstances(v);
 			for (idx_t inst = 0; inst < instances && every_instance_bounded; inst++) {
 				// An instance with no column has none to bound.
 				const idx_t column = indexer.InstanceColumnOrNone(v, inst);

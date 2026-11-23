@@ -230,8 +230,8 @@ columns in a scan of their own.
   terms, are computed after them (`FramePrograms`). A frame refuses in this order: its range's limit after
   the reads of its rows, then its partition (D75), frame after frame; then a position of two payloads it reads (D73,
   the descent's `DecideDescentPosition::conflict`), named by its timeline's and its order key's least spellings (D69).
-  Each message points at the frame (`DecideFrameSpec::location`). Its maps are stage 06's (`DecideGlobalSinkState::frame_maps`), which reads a frame read's rows
-  from them. A node is computed when it is first read, a hole's G before the node that reads it, rather than in an
+  Each message points at the frame (`DecideFrameSpec::location`). Its maps (`DecideGlobalSinkState::frame_maps`) give the row a term read through the frame names its
+  instance at. A node is computed when it is first read, a hole's G before the node that reads it, rather than in an
   `eval_order` walk. The descent's reads that route the rows (a `when`, a key that is no grouped clause's `by` key)
   raise as they read. A program raises where its entry is read, never for an entry no member reads. A definition's
   programs are read where the auxiliary's absence is resolved (`DecideModelEmitter::ReadAbsence`), auxiliary by
@@ -655,9 +655,9 @@ the frames as data columns, and readback references the input's own columns only
 a frame reads -- a point's selected peer, every position a range's window visits, one whose NULL reads left it nothing
 to read included (`DecideFrameMap::WindowVisits`) -- of several rows to one signature of its payload (D73, deck p. 110):
 each column the payload reads by value (a point's columns, a range's reducer argument or its helper's member terms),
-each decision by its instance, whatever its coefficient. A frame's decision terms read `gstate.ReadVariable`: a frame
-read numbered once per decision and frame (`SolverInput::frame_reads`, stage 06), its rows the selected ones; a
-query-wide decision is its own read.
+each decision by its instance, whatever its coefficient. A frame's decision term names its decision, at the instance
+the selected row reads (`DecideModelEmitter::InstanceOfRow`, `DecideInstanceOfRow::frame`); a query-wide decision has
+one instance, whichever row is selected.
 
 Where a frame has nothing to read, every column of it holds NULL, which is no value (D84) as any NULL a clause reads:
 the instance is skipped (`DecideAbsence::SkipNullInstances`), a reducer's member is out of its filter, an objective term is dropped. An

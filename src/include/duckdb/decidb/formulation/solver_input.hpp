@@ -148,14 +148,14 @@ struct EmittedRows {
 };
 
 //! The instance of one decision at each place of a column that reads it (EvaluatedProductGroup): the data row at that
-//! place for a decision per row and for a frame read, 0 for a query-wide one, and the class listed per place for a
-//! keyed one.
+//! place for a decision per row, 0 for a query-wide one, and the instance listed per place for a keyed one and for one
+//! a frame reads at another row.
 struct TermInstances {
 	bool query_wide = false;
-	vector<idx_t> classes;
+	vector<idx_t> listed;
 
 	idx_t At(idx_t place, idx_t row) const {
-		return query_wide ? 0 : classes.empty() ? row : classes[place];
+		return query_wide ? 0 : listed.empty() ? row : listed[place];
 	}
 };
 
@@ -248,8 +248,8 @@ struct ConstraintProvenance {
 //! `instances[t]` of decision `variables[t]`, times `coefficients[t]`, for t in [term_begin[e], term_begin[e + 1]), as
 //! a helper's members are listed (ReducerValueLinkSpec::members): a term per data row its group holds, none where the
 //! coefficient is 0. The node that writes a term knows the instance its row reads (a decision per row: the row; a
-//! keyed one: the row's class; a query-wide one: 0; a frame read: the row it is read at, VarIndexer::InstanceColumn),
-//! so stage 06 finds a term's column with no map from data rows.
+//! keyed one: the row's class; a query-wide one: 0; through a frame, the decision's instance at the row the frame
+//! selects), so stage 06 finds a term's column with no map from data rows (VarIndexer::InstanceColumn).
 struct ClauseRecords {
 	vector<idx_t> term_begin {0};
 	vector<idx_t> variables;
@@ -290,11 +290,11 @@ struct ClauseRecords {
 
 struct EvaluatedConstraint {
 	//! The decision of each term of the clause, INVALID_INDEX for a term that reads none; for a clause stage 08 wrote
-	//! a helper's members into (`members_written_in`), each decision its rows name, once.
+	//! a helper's members into, each decision its rows name, once.
 	vector<idx_t> variable_indices;
-	//! Whether a term of the clause read a helper the plan writes where it is read, so its rows hold that helper's
-	//! members: a row may then name one column in several terms.
-	bool members_written_in = false;
+	//! Whether a row may name one column in several terms: a term read a helper the plan writes where it is read, so
+	//! the row holds that helper's members, or a frame, through which several rows read one instance.
+	bool repeats_columns = false;
 	//! The rows the clause emits.
 	ClauseRecords records;
 	//! The decision whose default floor of 0 this bound replaces on the rows its clause keeps
@@ -604,8 +604,7 @@ struct SolverInput {
 	vector<LogicalType> variable_types;
 	vector<double> lower_bounds;
 	vector<double> upper_bounds;
-	//! The name each plan decision was declared with, which a refusal of the formulation quotes. One per plan decision
-	//! (variable `v < first_frame_read`); a frame read is named as its base is (BaseVariable).
+	//! The name each decision was declared with, which a refusal of the formulation quotes.
 	vector<string> variable_names;
 
 	//! The subset of the column box that no diagnosis will ever open: a variable's
@@ -719,7 +718,7 @@ struct SolverInput {
 	//! 08 did not write where they are read. Consumed (moved into `constraints` or emitted as extremum links) by the
 	//! formulation pass.
 	vector<ReducerValueLinkSpec> reducer_value_links;
-	//! The objective's linear part: per decision, numbered as a term names one (a frame read after the plan's), the
+	//! The objective's linear part: per decision, the
 	//! coefficient of each of its instances, and none for a decision the objective reads no instance of. The objective
 	//! is one row, so stage 08 sums its terms per instance: a helper the plan writes where it is read is its members
 	//! here (DecideHelperForm).
@@ -810,28 +809,9 @@ struct SolverInput {
 	//! helper none of which is. No term stage 06 reads names one.
 	vector<vector<bool>> written_in;
 
-	//! Per-variable scope (row / keyed / query-wide / frame read).
+	//! Per-variable scope (row / keyed / query-wide).
 	//! For a keyed variable, keyed_scope_idx indexes keyed_mappings.
 	vector<DecideVarScopeInfo> variable_scopes;
-
-	//! A decision read at the row a frame selector selects (language/guide.md §5.6): variable `first_frame_read + i` is
-	//! decision `base` read, at each row, at instance `instances[row]` -- the one the selected row reads, or the row's
-	//! own where the frame selects none, where every term reading it has coefficient 0. It owns no column
-	//! (DecideVarScope::FRAME_READ); its type and box are its base's, so a pass reading a term's box reads a sound one.
-	struct FrameRead {
-		idx_t base = DConstants::INVALID_INDEX;
-		vector<idx_t> instances;
-	};
-	vector<FrameRead> frame_reads;
-	//! The first frame read's variable index: the plan's decisions come first.
-	idx_t first_frame_read = 0;
-	//! The plan's decision variable `var` reads: itself, or a frame read's base. What a
-	//! table of the plan's decisions (a name, a domain) is looked up by.
-	idx_t BaseVariable(idx_t var) const {
-		return var >= first_frame_read && var - first_frame_read < frame_reads.size()
-		           ? frame_reads[var - first_frame_read].base
-		           : var;
-	}
 
 	//! The query is under DIAGNOSE. SolverModel::Build then builds the state only a diagnosis reads (what each row
 	//! records of its clause beyond `source_clause_id`, ConstraintProvenance), and keeps each data-valued bound on one

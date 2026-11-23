@@ -80,16 +80,11 @@ public:
 	//! The frame selectors' timelines and selections, one per
 	//! frame, in LogicalDecide::frames order.
 	vector<DecideFrameMap> frame_maps;
-	//! The decisions a frame reads at another row (SolverInput::frame_reads): each pair of
-	//! a decision and a frame once, the variable after the plan's decisions.
-	vector<std::pair<idx_t, idx_t>> frame_reads;
 	//! Per decision, the rows whose instance of it has no value beyond its keyed scope's absent class: an auxiliary
 	//! whose definition reads an instance with none there (D88); empty where none.
 	vector<vector<bool>> absent_reads;
 	//! Per decision, the instances every row reads with no value; moved into SolverInput::absent_instances.
 	vector<vector<bool>> absent_instances;
-	//! The frame reads, each with its base decision's instance per row; moved into SolverInput::frame_reads.
-	vector<SolverInput::FrameRead> evaluated_frame_reads;
 	//! Per clause (its source clause id), the instances its rows hold once grouped, and those left once each with no
 	//! value is skipped (deck pp. 50, 56): the most any of its rows holds, as a rewrite states the clause's instances
 	//! in each of its rows (PhysicalDecide::ReportSkippedInstances).
@@ -105,28 +100,6 @@ public:
 		auto &counts = clause_instances[source_clause_id];
 		counts.grouped = MaxValue(counts.grouped, grouped);
 		counts.kept = MaxValue(counts.kept, kept);
-	}
-
-	//! The variable a term reads at each row: its own, or -- for a frame's payload term --
-	//! the read of it at the row the frame selects. A query-wide decision has one column,
-	//! which every row reads, so it is its own read.
-	idx_t ReadVariable(const DecideTerm &term) {
-		return ReadVariable(term.variable_index, term.frame_read);
-	}
-	idx_t ReadVariable(idx_t variable, idx_t frame_read) {
-		if (frame_read == DConstants::INVALID_INDEX) {
-			return variable;
-		}
-		if (variable < op.tree->variable_scopes.size() && op.tree->variable_scopes[variable].IsGlobal()) {
-			return variable;
-		}
-		auto read = std::make_pair(variable, frame_read);
-		auto it = std::find(frame_reads.begin(), frame_reads.end(), read);
-		if (it == frame_reads.end()) {
-			frame_reads.push_back(read);
-			it = frame_reads.end() - 1;
-		}
-		return op.tree->decide_variables.size() + static_cast<idx_t>(it - frame_reads.begin());
 	}
 
 	//! Set when the solve failed under DIAGNOSE: the findings were handed off instead of

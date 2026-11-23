@@ -70,13 +70,9 @@ struct VarIndexer {
 	//! The keyed mappings, taken from the SolverInput (Build): the indexer can therefore outlive it.
 	vector<KeyedMapping> keyed_mappings;
 
-	//! Owned frame reads (SolverInput::frame_reads), variables `first_frame_read` on.
-	vector<SolverInput::FrameRead> frame_reads;
-	idx_t first_frame_read = 0;
-
-	//! The instance of a variable that a term at data row `row` names: the row for a decision per row and for a frame
-	//! read, the row's class for a keyed one, 0 for a query-wide one. A keyed scope holds its rows for a declared
-	//! decision alone (KeyedMapping::row_to_class).
+	//! The instance of a variable at data row `row`: the row for a decision per row, the row's class for a keyed one,
+	//! 0 for a query-wide one. A keyed scope holds its rows for a declared decision alone
+	//! (KeyedMapping::row_to_class).
 	inline idx_t InstanceOf(idx_t var_idx, idx_t row) const {
 		switch (var_scope[var_idx]) {
 		case DecideVarScope::GLOBAL:
@@ -99,18 +95,11 @@ struct VarIndexer {
 	//! The column of instance `inst` of `var_idx` as a term names it (InstanceColumn), or INVALID_INDEX where it has
 	//! none.
 	inline idx_t InstanceColumnOrNone(idx_t var_idx, idx_t inst) const {
-		ResolveInstance(var_idx, inst);
 		return HasColumn(var_idx, inst) ? InstanceColumn(var_idx, inst) : DConstants::INVALID_INDEX;
-	}
-	//! How many instances of `var_idx` a term may name: NumInstances, and a frame read's rows.
-	inline idx_t TermInstances(idx_t var_idx) const {
-		return var_scope[var_idx] == DecideVarScope::FRAME_READ ? num_rows : NumInstances(var_idx);
 	}
 	//! Whether instance `inst` of `var_idx` has a column (instance_slot).
 	inline bool HasColumn(idx_t var_idx, idx_t inst) const {
 		switch (var_scope[var_idx]) {
-		case DecideVarScope::FRAME_READ:
-			return false;
 		case DecideVarScope::GLOBAL:
 			return scalar_var_index[var_idx] != DConstants::INVALID_INDEX;
 		default:
@@ -120,18 +109,13 @@ struct VarIndexer {
 	}
 
 	//! Flat column of instance `inst` of a variable, which a term names (ClauseRecords::instances): a row for a
-	//! row-scoped variable, a class for a keyed one, 0 for a query-wide one. A frame read has no column of its own:
-	//! its instance is the row it is read at, and its column its base decision's at the row its frame selects.
+	//! row-scoped variable, a class for a keyed one, 0 for a query-wide one.
 	inline idx_t InstanceColumn(idx_t var_idx, idx_t inst) const {
 		switch (var_scope[var_idx]) {
 		case DecideVarScope::ROW:
 			return inst * num_row_vars + row_var_offset[var_idx];
 		case DecideVarScope::GLOBAL:
 			return scalar_var_index[var_idx];
-		case DecideVarScope::FRAME_READ: {
-			auto &read = frame_reads[var_idx - first_frame_read];
-			return InstanceColumn(read.base, read.instances[inst]);
-		}
 		default: {
 			if (var_idx < instance_slot.size() && !instance_slot[var_idx].empty()) {
 				const idx_t slot = instance_slot[var_idx][inst];
@@ -144,16 +128,6 @@ struct VarIndexer {
 			}
 			return keyed_var_base[var_idx] + inst;
 		}
-		}
-	}
-
-	//! A term on a frame read is a term on its base decision, at the instance the row its frame selects reads; any
-	//! other term is itself.
-	inline void ResolveInstance(idx_t &var_idx, idx_t &inst) const {
-		if (var_scope[var_idx] == DecideVarScope::FRAME_READ) {
-			auto &read = frame_reads[var_idx - first_frame_read];
-			var_idx = read.base;
-			inst = read.instances[inst];
 		}
 	}
 
@@ -173,16 +147,14 @@ struct VarIndexer {
 		}
 	}
 
-	//! Get the number of instances (copies) for a given decide variable; none for a frame
-	//! read, whose columns are its base's, nor for a query-wide helper written where it is read.
+	//! Get the number of instances (copies) for a given decide variable; none for a query-wide helper written where
+	//! it is read.
 	inline idx_t NumInstances(idx_t var_idx) const {
 		switch (var_scope[var_idx]) {
 		case DecideVarScope::ROW:
 			return num_rows;
 		case DecideVarScope::GLOBAL:
 			return scalar_var_index[var_idx] == DConstants::INVALID_INDEX ? 0 : 1;
-		case DecideVarScope::FRAME_READ:
-			return 0;
 		default: {
 			return keyed_mappings[var_keyed_mapping_idx[var_idx]].num_classes;
 		}
@@ -226,7 +198,6 @@ struct InstanceBox {
 
 	//! The floor of instance `instance` of `var`, against the box floors `box_lower`.
 	double LowerOf(idx_t var, idx_t instance, const vector<double> &box_lower) const {
-		indexer.ResolveInstance(var, instance);
 		double floor = input.InstanceLower(var, instance, box_lower);
 		return reach ? std::max(floor, InstanceReachLower(input.instance_reach_lower, var, instance)) : floor;
 	}
@@ -236,7 +207,6 @@ struct InstanceBox {
 		if (!reach) {
 			return box_upper[var];
 		}
-		indexer.ResolveInstance(var, instance);
 		return std::min(box_upper[var], InstanceReachUpper(input.instance_reach_upper, var, instance));
 	}
 };

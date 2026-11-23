@@ -27,11 +27,6 @@ void FormulateModel(SolverInput &input, const FormulationBox &box, VarIndexer &v
 
 	// Plain declared names, for the refusals the linearization can raise.
 	vector<string> decide_var_names = input.variable_names;
-	decide_var_names.reserve(input.num_decide_vars);
-	// A frame read is named as its base is: the bound a refusal asks for is the base's.
-	for (auto &read : input.frame_reads) {
-		decide_var_names.push_back(decide_var_names[read.base]);
-	}
 
 	// THE ROUTING of every construct this stage may state natively, one rule for all of them (NativeConstructPolicy).
 	// Stage 05 recorded the shape and the backend's capabilities; whether a declared construct is used is decided here,

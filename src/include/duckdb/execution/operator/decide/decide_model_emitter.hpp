@@ -101,7 +101,7 @@ private:
 };
 
 //! Writes what the model reads, from the tree's containers: gstate's evaluated clauses and the keyed mappings, in the
-//! order of the written clauses, so frame reads and repair groups are numbered in that order.
+//! order of the written clauses, so repair groups are numbered in that order.
 class DecideModelEmitter {
 public:
 	DecideModelEmitter(const PhysicalDecide &op, ClientContext &context, const DecideTree &tree,
@@ -127,10 +127,8 @@ public:
 	//! A term on a helper the plan writes where it is read is that helper's members.
 	void ObjectiveCoefficients();
 	//! What stage 06 reads of the rows once every term is written, by instance: each auxiliary's instances that every
-	//! row reads with no value (DecideGlobalSinkState::absent_instances), and each frame read's instance of its base
-	//! decision per row (::evaluated_frame_reads).
+	//! row reads with no value (DecideGlobalSinkState::absent_instances).
 	void AbsentInstances();
-	void FrameReads();
 
 private:
 	//! A helper's members (language/guide.md §7.2): the entries of its G's operand it reads, every decision they read
@@ -185,14 +183,19 @@ private:
 	void HandLink(ReducerValueLinkSpec &&spec, DecideHelperForm form);
 	//! The keyed scopes' classes (KeyedMappings), which a term's instance is read from.
 	const vector<KeyedMapping> *keyed = nullptr;
-	//! How a data row gives the instance of `variable`, a plan decision or a frame read (ReadVariable), and of each of
-	//! `variables`; of no decision (INVALID_INDEX), nothing a reader asks for.
-	DecideInstanceOfRow InstanceOfRow(idx_t variable) const;
-	vector<DecideInstanceOfRow> InstancesOfRows(const vector<idx_t> &variables) const;
-	//! How many instances `variable` has: a row each for a decision per row or a frame read, its key's classes, or 1.
+	//! How a data row gives the instance of `variable` it reads, through frame `frame_read` if a frame reads it there;
+	//! of a term's decision, and of each of `terms`'; of no decision (INVALID_INDEX), nothing a reader asks for.
+	DecideInstanceOfRow InstanceOfRow(idx_t variable, idx_t frame_read = DConstants::INVALID_INDEX) const;
+	DecideInstanceOfRow InstanceOfRow(const DecideTerm &term) const {
+		return InstanceOfRow(term.variable_index, term.frame_read);
+	}
+	vector<DecideInstanceOfRow> InstancesOfRows(const vector<DecideTerm> &terms) const;
+	//! The objective's linear terms' (ObjectiveTerms), which ObjectiveCoefficients reads.
+	vector<DecideInstanceOfRow> objective_instances;
+	//! How many instances `variable` has: a row each for a decision per row, its key's classes, or 1.
 	idx_t Instances(idx_t variable) const;
-	//! The instances `variable` has at the data rows `rows` lists by place, or at every data row with no list.
-	TermInstances InstancesAt(idx_t variable, const vector<idx_t> *rows) const;
+	//! The instances `term`'s decision has at the data rows `rows` lists by place, or at every data row with no list.
+	TermInstances InstancesAt(const DecideTerm &term, const vector<idx_t> *rows) const;
 	//! Writes each term of a list that reads a written-in instance as that instance's members, scaled by the term's
 	//! coefficient, their constants added to the constant of the term's row: `begin` delimits the rows, as a clause's
 	//! records and a helper's members do. A read of an instance with no member has no value: the objective drops it

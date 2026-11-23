@@ -272,7 +272,6 @@ static void OpenElasticColumnBox(SolverInput &input) {
 			input.upper_bounds[var] = std::min(rigid_upper, input.upper_bounds[var] + room);
 		}
 	}
-	SyncFrameReadBoxes(input);
 }
 
 //===--------------------------------------------------------------------===//
