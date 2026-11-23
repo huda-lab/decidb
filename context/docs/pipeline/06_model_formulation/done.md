@@ -365,7 +365,9 @@ backend does the same for its COO arrays.
 
 ---
 
-## 5. `ApplyComparisonSense()`
+## 5. `ApplyComparison()`
+
+One function maps a comparison to a row's sense and bound, for a linear row and a quadratic one alike.
 
 | `ExpressionType` | Sense | RHS |
 |---|---|---|
@@ -442,9 +444,9 @@ source clause (display), the removal group (the atomic DROP identity) and the re
 execution numbers every clause it evaluates -- the lowered clauses, then under DIAGNOSE the folded (singleton-row)
 bounds' clauses -- so no two clauses share one). It is a Value Object, held by composition and copied whole, as LLVM
 copies a `DebugLoc`, so a site that copies an origin cannot drop one of the ids. Every record that describes a row (a
-clause row, a `RawConstraint`, a `GeneralConstraintSpec`, a bilinear link) holds its origin as `provenance.origin` (the
-link, as `origin`). The model builder copies a raw row's or a construct's provenance whole (`StampProvenance`), under
-`DIAGNOSE`; otherwise it copies the source clause only.
+clause row, a `ModelConstraint`, a `GeneralConstraint`, a bilinear link) holds its origin as `provenance.origin` (the
+link, as `origin`). A row a lowering states and a native construct are moved into the model with their provenance,
+which is kept whole under `DIAGNOSE` and cut to the source clause otherwise (`KeepProvenance`).
 
 **A clause row carries its provenance from the emitter.** `EvaluatedConstraint::provenance` holds the origin and the
 clause-level facts execution reads off the clause: the `kind` (user parameter vs rigid mechanism row), the elastic
@@ -1141,10 +1143,11 @@ the same `origin.removal_group_id` used for matrix, quadratic, and native-genera
 That is why the two native lists remain separate: one relates columns, the other conditions
 a row.
 
-`SolverInput::IndicatorConstraintSpec` therefore **holds a `RawConstraint`** rather than
-restating its fields. A conditional row and the matrix row it lowers to are the same row
-with the same provenance, and composing them is what makes that literally true instead
-of a convention two field lists have to keep.
+An `IndicatorConstraint` therefore **is a `ModelConstraint`** with a condition, rather than a
+restatement of its fields. A conditional row and the matrix row it lowers to are the same row
+with the same provenance: the lowering keeps the row and adds the term that switches it. The
+input and the model hold one type for each of a row, a conditional row and a native construct,
+so the builder moves them and copies no field.
 
 `z == 0 => LHS <= K-1` and `z == 1 => LHS >= K+1` say what a Big-M pair says, with no
 constant to dominate the row — so no contributing variable needs a finite bound.

@@ -510,14 +510,54 @@ inline bool DeclaresGeneralConstraint(const SolverConstructSupport &constructs, 
 	return false;
 }
 
-struct GeneralConstraintSpec {
+//! A linear row in flat columns: sum(coefficients[i] * x[indices[i]]) <sense> rhs. A lowering states its rows in this
+//! form (SolverInput::global_constraints) and the model holds every row in it (SolverModel::constraints).
+struct ModelConstraint {
+	vector<int> indices;
+	vector<double> coefficients;
+	char sense = '<'; //!< '<' (<=), '>' (>=), '=' (==)
+	double rhs = 0.0;
+	//! Which clause the row came from. A row built from an `EvaluatedConstraint` gets its group from the record's
+	//! `groups` / `group_names`; a row a lowering states has to state them (StampGroup), so that changing a row's shape
+	//! never changes what a diagnosis calls it. `indicator_col` is the `<>` disjunction binary the row belongs to. A
+	//! row no clause owns is STRUCTURAL.
+	ConstraintProvenance provenance = ConstraintProvenance::Structural();
+	//! A row with no terms is the constant comparison `0 <sense> rhs`, judged once as the model is built
+	//! (ConstantRowFails, or DuckDB's own comparison for a bound on one decision): the builder keeps it only
+	//! when it fails, and SolverModel::ProvesInfeasible reads this verdict.
+	bool constant_fails = false;
+
+	//! Place this row in group `group` of `ec`'s clause (INVALID_INDEX: none), named as `ec` names it.
+	void StampGroup(const EvaluatedConstraint &ec, idx_t group) {
+		provenance.group_key = group;
+		provenance.group_name = ec.NameOf(group);
+	}
+};
+
+//! A row, conditioned: it holds whenever `binary_column == binary_value`, and says nothing otherwise. This is the
+//! semantic form of a disjunctive clause, and no `GeneralConstraint` kind, because the kinds there relate columns to
+//! columns and carry no row at all.
+//!
+//! A `<>` is emitted this way and only this way. On a backend that states indicator constraints the pair goes down as
+//! written; on one that does not, `LowerDecideConstructs` keeps the row and adds a Big-M term that switches it. It is
+//! a row, so a diagnosis reaches it: exact grouped omission filters these alongside matrix rows, quadratic rows and
+//! native general constraints.
+struct IndicatorConstraint : public ModelConstraint {
+	int binary_column = -1;
+	int binary_value = 1;
+};
+
+//! A construct the backend states itself, in flat columns. Stage 06 emits one only where the chosen backend declared
+//! the construct in its SolverConstructSupport, so an adapter never sees a kind it did not ask for; every other
+//! backend receives lowered rows instead.
+struct GeneralConstraint {
 	GeneralConstraintKind kind = GeneralConstraintKind::ABS;
 	//! Flat column the construct's value lands in (Gurobi's `resvar`).
 	int result_column = -1;
 	//! Flat columns of the construct's arguments. ABS takes exactly one.
 	vector<int> argument_columns;
-	//! Clause origin. `SolverModel::Build` copies it onto the model's construct. A native construct has no matrix row
-	//! for the elastic engine to slacken, but it still has to be nameable.
+	//! Clause origin. A native construct has no matrix row for the elastic engine to slacken, but it still has to be
+	//! nameable.
 	ConstraintProvenance provenance = ConstraintProvenance::Structural();
 };
 
@@ -684,28 +724,8 @@ struct SolverInput {
 	//! McCormick, …). Surfaced via BuildColumnProvenance onto the global column.
 	vector<string> global_variable_labels;
 
-	// Raw ILP constraints involving global variables (indices are absolute into the
-	// flattened variable array including global vars)
-	struct RawConstraint {
-		vector<int> indices;
-		vector<double> coefficients;
-		char sense; // '<' (<=), '>' (>=), '=' (==)
-		double rhs;
-		//! The row's provenance, which the model builder copies onto the model's row (StampProvenance), and a clause's
-		//! rows state in full: a per-row clause emitted through `EvaluatedConstraint` gets its group and
-		//! `indicator_col` from its records' `groups` / `group_names`; a clause emitted in flat columns has to state
-		//! them (StampGroup), so that changing a row's SHAPE never changes what diagnosis calls it. `indicator_col` is
-		//! the
-		//! `<>` disjunction binary the row belongs to; the DROP group the origin names independently groups all its
-		//! descendants. A row no clause owns is STRUCTURAL.
-		ConstraintProvenance provenance = ConstraintProvenance::Structural();
-		//! Place this row in group `group` of `ec`'s clause (INVALID_INDEX: none), named as `ec` names it.
-		void StampGroup(const EvaluatedConstraint &ec, idx_t group) {
-			provenance.group_key = group;
-			provenance.group_name = ec.NameOf(group);
-		}
-	};
-	vector<RawConstraint> global_constraints;
+	//! The rows a lowering states, in flat columns (the global variables' included).
+	vector<ModelConstraint> global_constraints;
 
 	//! The classes a scoped clause's group stands for (language/guide.md §8.1, D28),
 	//! referenced by `EvaluatedConstraint::group_class_set`.
@@ -733,31 +753,13 @@ struct SolverInput {
 	};
 	vector<KeyValues> key_values;
 
-	//! A ROW, conditioned: it holds whenever `binary_column == binary_value`, and says
-	//! nothing otherwise. This is the semantic form of a disjunctive clause, and it is
-	//! its own list rather than a `GeneralConstraintSpec` kind because the kinds there
-	//! relate columns to columns and carry no row at all.
-	//!
-	//! A `<>` is emitted this way and only this way. On a backend that states indicator
-	//! constraints the pair goes down as written; on one that does not,
-	//! `LowerDecideConstructs` turns each half into an ordinary matrix row with a Big-M
-	//! that switches it. Holding the row itself — rather than a description of one — is
-	//! what makes that lowering a rewrite of one field. Exact grouped omission filters
-	//! these alongside matrix rows, quadratic rows, and native general constraints.
-	struct IndicatorConstraintSpec {
-		int binary_column = -1;
-		int binary_value = 1;
-		//! The implied row, provenance included. Composed rather than restated so a
-		//! conditional row and the matrix row it lowers to cannot drift apart.
-		RawConstraint row;
-	};
-	vector<IndicatorConstraintSpec> indicator_constraints;
+	//! The conditional rows of the `<>` clauses, until `LowerDecideConstructs` lowers them for a backend that states
+	//! none.
+	vector<IndicatorConstraint> indicator_constraints;
 
-	//! Constructs left native for the backend, in flat columns. Emitted at stage 08
-	//! once the VarIndexer exists — like `global_constraints`, and for the same reason.
-	//! Empty whenever the chosen backend declared the construct unsupported, in which
-	//! case the lowering path filled `constraints` instead.
-	vector<GeneralConstraintSpec> general_constraints;
+	//! Constructs left native for the backend. Empty whenever the chosen backend declared the construct unsupported,
+	//! in which case the lowering filled `constraints` instead.
+	vector<GeneralConstraint> general_constraints;
 
 	//! Stage 05's answer on which constructs the backend states itself and which arrive lowered into rows
 	//! (LogicalDecide::use_native_constructs), and the test-only policy to state a declared construct natively

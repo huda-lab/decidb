@@ -197,7 +197,7 @@ user-clause level instead of raw rows.
   (`ClauseProvenance`: `origin`, `kind`, `shape`, `rhs_label`) and place it through one free function,
   `StampConstraintProvenance` (`group_key`/`group_name` where grouped, `is_aggregate`, `rhs_mechanism_offset`,
   `class_set`, and for the per-row sites `data_row` and `per_kept_row`). A raw row and a native construct carry a
-  provenance of their own, which `StampProvenance` copies whole. The builder stamps no clause text:
+  provenance of their own, which the builder keeps whole (`KeepProvenance`). The builder stamps no clause text:
   a clause's `when c per K:` qualifier lives in the source registry alone (`ConstraintSourceInfo::qualifier`, built by
   `InitializeConstraintSourceInfo` in `decide_source_provenance.cpp`), and the
   diagnosis renderer reads it there through `FindConstraintSource`.

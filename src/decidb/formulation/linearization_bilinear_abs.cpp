@@ -90,7 +90,7 @@ void LinearizeBilinear(SolverInput &input, const VarIndexer &indexer, const Form
 		                         ? indexer.keyed_mappings[indexer.var_keyed_mapping_idx[link.aux_idx]].absent_class
 		                         : DConstants::INVALID_INDEX;
 		auto emit = [&](vector<int> indices, vector<double> coefficients, char sense, double rhs) {
-			SolverInput::RawConstraint row;
+			ModelConstraint row;
 			row.indices = std::move(indices);
 			row.coefficients = std::move(coefficients);
 			row.sense = sense;
@@ -242,7 +242,7 @@ double ReadAbsArgument(const AbsLinkSpec &link, const VarIndexer &indexer, idx_t
 }
 
 //! The row's provenance, which every row of an ABS carries as the clause it was written in does.
-void StampAbsRow(SolverInput::RawConstraint &row, const EvaluatedConstraint &operand, idx_t e) {
+void StampAbsRow(ModelConstraint &row, const EvaluatedConstraint &operand, idx_t e) {
 	row.provenance.kind = ConstraintKind::STRUCTURAL;
 	row.provenance.origin = operand.provenance.origin;
 	row.StampGroup(operand, operand.records.groups[e]);
@@ -272,7 +272,7 @@ void ExpandAbs(SolverInput &input, const VarIndexer &indexer, const AbsLinkSpec 
 		const int sign = static_cast<int>(AddGlobalBinaryAux(input, indexer, 0.0, link.label));
 
 		// `aux + sum c x + A1 * y <= k + A1`, which is `aux - inner <= A1 * (1 - y)`.
-		SolverInput::RawConstraint pin_inner;
+		ModelConstraint pin_inner;
 		pin_inner.indices.push_back(aux);
 		pin_inner.coefficients.push_back(1.0);
 		pin_inner.indices.insert(pin_inner.indices.end(), columns.begin(), columns.end());
@@ -285,7 +285,7 @@ void ExpandAbs(SolverInput &input, const VarIndexer &indexer, const AbsLinkSpec 
 		input.global_constraints.push_back(std::move(pin_inner));
 
 		// `aux - sum c x - A2 * y <= -k`, which is `aux + inner <= A2 * y`.
-		SolverInput::RawConstraint pin_negated;
+		ModelConstraint pin_negated;
 		pin_negated.indices.push_back(aux);
 		pin_negated.coefficients.push_back(1.0);
 		for (idx_t t = 0; t < columns.size(); t++) {
@@ -301,7 +301,7 @@ void ExpandAbs(SolverInput &input, const VarIndexer &indexer, const AbsLinkSpec 
 	}
 }
 
-//! The native form: one column `t` per active row, an equality row `t = inner`, and a `GeneralConstraintSpec` saying
+//! The native form: one column `t` per active row, an equality row `t = inner`, and a `GeneralConstraint` saying
 //! `aux = |t|`. The general constraint relates two VARIABLES, so the linear half has to be a row either way. That is
 //! the whole shape of a native construct here; it replaces the two Big-M rows and the sign indicator, which is the
 //! point, since those are what needed a finite M. The lower envelope stays: it is exact (`aux >= inner`,
@@ -343,7 +343,7 @@ void StateAbsNatively(SolverInput &input, const VarIndexer &indexer, const Insta
 			t_idx = AddGlobalContinuousAux(input, indexer, inner_range, 0.0);
 
 			// `t - inner = 0` with `inner = k - sum c_t x_t` is `t + sum c_t x_t = k`.
-			SolverInput::RawConstraint link_row;
+			ModelConstraint link_row;
 			link_row.indices.push_back(static_cast<int>(t_idx));
 			link_row.coefficients.push_back(1.0);
 			link_row.indices.insert(link_row.indices.end(), columns.begin(), columns.end());
@@ -355,7 +355,7 @@ void StateAbsNatively(SolverInput &input, const VarIndexer &indexer, const Insta
 			input.global_constraints.push_back(std::move(link_row));
 		}
 
-		GeneralConstraintSpec gc;
+		GeneralConstraint gc;
 		gc.kind = GeneralConstraintKind::ABS;
 		gc.result_column = static_cast<int>(indexer.Get(link.aux_idx, operand.records.data_rows[e]));
 		gc.argument_columns.push_back(static_cast<int>(t_idx));

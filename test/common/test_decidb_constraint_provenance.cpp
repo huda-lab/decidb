@@ -126,7 +126,7 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 	SECTION("raw global constraints are tagged STRUCTURAL with no clause") {
 		SolverInput input = MakeBaseInput(2, 2);
 		input.constraints.push_back(MakeAggregate({0, 1}, 2, 10.0)); // clause 0
-		SolverInput::RawConstraint raw;
+		ModelConstraint raw;
 		raw.indices = {0};
 		raw.coefficients = {1.0};
 		raw.sense = '<';
@@ -145,7 +145,7 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 
 	SECTION("raw rows preserve source identity separately from repair grouping") {
 		SolverInput input = MakeBaseInput(1, 1);
-		SolverInput::RawConstraint raw;
+		ModelConstraint raw;
 		raw.indices = {0};
 		raw.coefficients = {1.0};
 		raw.sense = '<';
@@ -171,7 +171,7 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		aggregate.provenance.origin.repair_group_id = 3;
 		aggregate.comparison_type = ExpressionType::COMPARE_LESSTHAN; // a strict bound remembers the typed K
 		input.constraints.push_back(std::move(aggregate));
-		SolverInput::RawConstraint raw;
+		ModelConstraint raw;
 		raw.indices = {0};
 		raw.coefficients = {1.0};
 		raw.sense = '<';
@@ -179,7 +179,7 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		raw.provenance.origin.source_clause_id = 7;
 		raw.provenance.origin.repair_group_id = 11;
 		input.global_constraints.push_back(std::move(raw));
-		GeneralConstraintSpec general;
+		GeneralConstraint general;
 		general.result_column = 1;
 		general.argument_columns = {0};
 		general.provenance.origin.source_clause_id = 9;
@@ -209,7 +209,7 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		auto aggregate = MakeAggregate({0, 1}, 2, 10.0);
 		aggregate.comparison_type = ExpressionType::COMPARE_LESSTHAN;
 		input.constraints.push_back(std::move(aggregate));
-		GeneralConstraintSpec general;
+		GeneralConstraint general;
 		general.result_column = 1;
 		general.argument_columns = {0};
 		general.provenance.origin.repair_group_id = 13;

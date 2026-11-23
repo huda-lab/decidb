@@ -129,7 +129,7 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
 			args.push_back(
 			    ExtremumArgumentColumn(input, indexer, fill_member(i), members, i, spec.label, spec.source_clause_id));
 		}
-		GeneralConstraintSpec gc;
+		GeneralConstraint gc;
 		gc.kind = spec.is_max ? GeneralConstraintKind::MAX : GeneralConstraintKind::MIN;
 		gc.result_column = result_col;
 		gc.argument_columns = std::move(args);
@@ -148,7 +148,7 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer, const Extre
 	double M = spec.closing_big_m;
 	double m_coeff = spec.is_max ? M : -M;
 	char sense = spec.is_max ? '<' : '>';
-	SolverInput::RawConstraint sum_y;
+	ModelConstraint sum_y;
 	sum_y.indices.reserve(members.count);
 	sum_y.coefficients.reserve(members.count);
 	for (idx_t i = 0; i < members.count; i++) {

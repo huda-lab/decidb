@@ -142,7 +142,7 @@ static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer, cons
 
 		// The provenance every shape of this clause carries. `indicator_col` is both the
 		// marker that says "remove-only `<>`" and the key that groups the clause's rows.
-		auto stamp = [&](SolverInput::RawConstraint &rc) {
+		auto stamp = [&](ModelConstraint &rc) {
 			rc.provenance.kind = ConstraintKind::USER_MECHANISM;
 			rc.provenance.shape = ElasticShape::PER_ROW_DATA;
 			rc.provenance.origin = ec.provenance.origin;
@@ -152,7 +152,7 @@ static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer, cons
 
 		if (collapse != NECollapse::DISJUNCTION) {
 			bool lower = collapse == NECollapse::LOWER_ONLY;
-			SolverInput::RawConstraint rc;
+			ModelConstraint rc;
 			rc.indices = std::move(indices);
 			rc.coefficients = std::move(coefficients);
 			rc.sense = lower ? '<' : '>';
@@ -169,14 +169,14 @@ static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer, cons
 		// The row's terms are taken by value so the half that no longer needs them can
 		// hand them straight over: only the first half copies.
 		auto emit = [&](vector<int> row_indices, vector<double> row_values, int binval, char sense, double rhs) {
-			SolverInput::IndicatorConstraintSpec ic;
+			IndicatorConstraint ic;
 			ic.binary_column = static_cast<int>(z_col);
 			ic.binary_value = binval;
-			ic.row.indices = std::move(row_indices);
-			ic.row.coefficients = std::move(row_values);
-			ic.row.sense = sense;
-			ic.row.rhs = rhs;
-			stamp(ic.row);
+			ic.indices = std::move(row_indices);
+			ic.coefficients = std::move(row_values);
+			ic.sense = sense;
+			ic.rhs = rhs;
+			stamp(ic);
 			input.indicator_constraints.push_back(std::move(ic));
 		};
 		// z = 0  =>  LHS <= K - 1
@@ -321,7 +321,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 				vector<double> coefs = last_value ? std::move(group_coefs) : group_coefs;
 
 				// The provenance both halves carry, whichever shape they end up in.
-				auto stamp = [&](SolverInput::RawConstraint &rc) {
+				auto stamp = [&](ModelConstraint &rc) {
 					rc.provenance.kind = ConstraintKind::USER_MECHANISM;
 					rc.provenance.origin = ec.provenance.origin;
 					rc.provenance.indicator_col = z_idx;
@@ -332,7 +332,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 				// Collapsed: one plain inequality, no indicator and no disjunction left.
 				if (collapse != NECollapse::DISJUNCTION) {
 					bool lower = collapse == NECollapse::LOWER_ONLY;
-					SolverInput::RawConstraint rc;
+					ModelConstraint rc;
 					rc.sense = lower ? '<' : '>';
 					rc.rhs = lower ? rhs - 1.0 : rhs + 1.0;
 					rc.indices = std::move(indices);
@@ -352,14 +352,14 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 				// snapshot, the second hands it over.
 				auto emit = [&](vector<int> row_indices, vector<double> row_coefs, int binval, char sense,
 				                double bound) {
-					SolverInput::IndicatorConstraintSpec ic;
+					IndicatorConstraint ic;
 					ic.binary_column = static_cast<int>(z_idx);
 					ic.binary_value = binval;
-					ic.row.indices = std::move(row_indices);
-					ic.row.coefficients = std::move(row_coefs);
-					ic.row.sense = sense;
-					ic.row.rhs = bound;
-					stamp(ic.row);
+					ic.indices = std::move(row_indices);
+					ic.coefficients = std::move(row_coefs);
+					ic.sense = sense;
+					ic.rhs = bound;
+					stamp(ic);
 					input.indicator_constraints.push_back(std::move(ic));
 				};
 				emit(indices, coefs, 0, '<', rhs - 1.0);

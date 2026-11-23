@@ -254,19 +254,6 @@ struct InstanceBox {
 	}
 };
 
-//! A single linear constraint: sum(coefficients[i] * x[indices[i]]) <sense> rhs
-struct ModelConstraint {
-	vector<int> indices;             //!< Variable indices into the flattened variable array
-	vector<double> coefficients;     //!< Coefficient for each variable
-	char sense;                      //!< '<' (<=), '>' (>=), '=' (==)
-	double rhs;                      //!< Right-hand side value
-	ConstraintProvenance provenance; //!< Row → clause origin (F2)
-	//! A row with no terms is the constant comparison `0 <sense> rhs`, judged once as the model is built
-	//! (ConstantRowFails, or DuckDB's own comparison for a bound on one decision): the builder keeps it only
-	//! when it fails, and SolverModel::ProvesInfeasible reads this verdict.
-	bool constant_fails = false;
-};
-
 //! Can any assignment meet this row's bound? A finite left-hand side never reaches
 //! `Ax >= +inf`, `Ax <= -inf`, or `Ax = ±inf`, so a row spelled that way is infeasible
 //! on its own — no other row is implicated and no finite loosening closes the gap. The
@@ -353,31 +340,9 @@ struct SolverModel {
 	//! Gurobi handles this with NonConvex=2; HiGHS cannot solve it.
 	bool nonconvex_quadratic = false;
 
-	//! Constructs the backend takes natively rather than as rows: the result column,
-	//! the argument columns, and the provenance every row carries. Non-empty only when
-	//! the chosen backend declared the construct in its SolverConstructSupport, so an
-	//! adapter never sees a kind it did not ask for. Every other backend received the
-	//! lowered rows in `constraints` instead.
-	struct GeneralConstraint {
-		GeneralConstraintKind kind = GeneralConstraintKind::ABS;
-		int result_column = -1;
-		vector<int> argument_columns;
-		ConstraintProvenance provenance;
-	};
+	//! Constructs the backend takes natively rather than as rows, and the conditional rows it states itself
+	//! (SolverInput::general_constraints, ::indicator_constraints, moved here by Build).
 	vector<GeneralConstraint> general_constraints;
-
-	//! `binary_column == binary_value` implies this row. Carries a full row, unlike a
-	//! general constraint, so infeasible diagnosis can still reach it — the removal
-	//! dial groups these by provenance exactly as it groups matrix rows.
-	struct IndicatorConstraint {
-		int binary_column = -1;
-		int binary_value = 1;
-		vector<int> indices;
-		vector<double> coefficients;
-		char sense = '<';
-		double rhs = 0.0;
-		ConstraintProvenance provenance;
-	};
 	vector<IndicatorConstraint> indicator_constraints;
 
 	//! Constraints (linear)

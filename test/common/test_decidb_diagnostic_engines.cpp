@@ -987,15 +987,15 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		model.quadratic_constraints.push_back(quadratic);
 		model.quadratic_constraints.push_back(SolverModel::QuadraticConstraint());
 
-		SolverModel::IndicatorConstraint indicator;
+		IndicatorConstraint indicator;
 		indicator.provenance.origin.removal_group_id = 7;
 		model.indicator_constraints.push_back(indicator);
-		model.indicator_constraints.push_back(SolverModel::IndicatorConstraint());
+		model.indicator_constraints.push_back(IndicatorConstraint());
 
-		SolverModel::GeneralConstraint general;
+		GeneralConstraint general;
 		general.provenance.origin.removal_group_id = 7;
 		model.general_constraints.push_back(general);
-		model.general_constraints.push_back(SolverModel::GeneralConstraint());
+		model.general_constraints.push_back(GeneralConstraint());
 
 		SolverModel dropped = DropRemovalGroups(model, std::set<idx_t> {7});
 		CHECK(dropped.constraints.size() == 1);

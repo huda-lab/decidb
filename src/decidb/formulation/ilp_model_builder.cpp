@@ -349,18 +349,52 @@ static void StampConstraintProvenance(const SolverInput &input, ConstraintProven
 	}
 }
 
-//! The provenance of a row a lowering emitted in flat columns (RawConstraint) or of a native construct
-//! (GeneralConstraintSpec), which state what an EvaluatedConstraint's sites derive from their group columns, so a
-//! clause reads the same in a diagnosis whichever shape its rows took. Only the clause is copied unless the query is
-//! under DIAGNOSE, which copies the whole record (the `<>` disjunction binary's column too, so the infeasible removal
-//! dial groups the two global rows of an aggregate `<>` just like a per-row one).
-static void StampProvenance(const SolverInput &input, ConstraintProvenance &provenance,
-                            const ConstraintProvenance &stated) {
-	provenance.origin.source_clause_id = stated.origin.source_clause_id;
-	if (!input.diagnose) {
+//! A row a lowering states in flat columns, or a native construct, arrives with its provenance, which states what an
+//! EvaluatedConstraint's sites derive from their group columns, so a clause reads the same in a diagnosis whichever
+//! shape its rows took. Under DIAGNOSE it is kept whole (the `<>` disjunction binary's column too, so the infeasible
+//! removal dial groups the two rows of an aggregate `<>` as a per-row one's); an ordinary query's row names its clause
+//! and carries nothing else, as ClauseProvenance has it.
+static void KeepProvenance(const SolverInput &input, ConstraintProvenance &provenance) {
+	if (input.diagnose) {
 		return;
 	}
-	provenance = stated;
+	ConstraintProvenance clause_only;
+	clause_only.origin.source_clause_id = provenance.origin.source_clause_id;
+	provenance = std::move(clause_only);
+}
+
+//! The sense and bound `comparison` gives `row`, whose bound `rhs` has the constant `lhs_offset` of its left side
+//! moved off it already. A strict `<` / `>` steps the bound to the next integer, which is exact because the bind-time
+//! type gate (DecideShapeCheck::CheckIntegerStep) admits only an integer-valued left side; under DIAGNOSE the row
+//! remembers the K the user typed, so a suggestion is quoted against `> K` and not the stepped bound.
+template <class ROW>
+static void ApplyComparison(const SolverInput &input, ROW &row, ExpressionType comparison, double rhs,
+                            double lhs_offset) {
+	bool strict = false;
+	switch (comparison) {
+	case ExpressionType::COMPARE_LESSTHAN:
+		strict = true;
+		DUCKDB_EXPLICIT_FALLTHROUGH;
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+		row.sense = '<';
+		break;
+	case ExpressionType::COMPARE_GREATERTHAN:
+		strict = true;
+		DUCKDB_EXPLICIT_FALLTHROUGH;
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+		row.sense = '>';
+		break;
+	case ExpressionType::COMPARE_EQUAL:
+		row.sense = '=';
+		break;
+	default:
+		throw InternalException("Unsupported comparison type in ILP model builder");
+	}
+	row.rhs = strict ? DecideStrictBound(row.sense == '>', rhs) : rhs;
+	if (strict && input.diagnose) {
+		row.provenance.strict = true;
+		row.provenance.typed_k = rhs + lhs_offset;
+	}
 }
 
 //! The model class this built model demands: the facts the build settled, in the shape the plan-time prediction
@@ -638,20 +672,11 @@ static void BuildModelRawRows(SolverModel &model, SolverInput &input, DecideProf
 	// Raw rows: the helpers' definitions, ABS and bilinear links, `<>` disjunctions. They stand before the clauses that
 	// read what they define (a helper's rows before the clause that reads it, an inner helper's before an outer's), the
 	// order the solver reads them in: the same model with a clause's row ahead of its helper's envelope rows solves
-	// two orders of magnitude slower. The index/coefficient vectors move out of `input` to avoid deep copies:
-	// SolveModel() in ilp_solver.cpp does not read input.global_constraints after this call.
+	// two orders of magnitude slower.
 	phase.Next("model.global_rows");
-	for (auto &raw : input.global_constraints) {
-		ModelConstraint constr;
-		constr.indices = std::move(raw.indices);
-		constr.coefficients = std::move(raw.coefficients);
-		constr.sense = raw.sense;
-		constr.rhs = raw.rhs;
-		// Raw rows include both structural links and user-facing
-		// constraints, so their provenance is explicit on RawConstraint rather than
-		// inferred from an EvaluatedConstraint position.
-		StampProvenance(input, constr.provenance, raw.provenance);
-		PushNormalizedConstraint(model, std::move(constr));
+	for (auto &row : input.global_constraints) {
+		KeepProvenance(input, row.provenance);
+		PushNormalizedConstraint(model, std::move(row));
 	}
 }
 
@@ -660,43 +685,6 @@ static void BuildModelRawRows(SolverModel &model, SolverInput &input, DecideProf
 static void BuildModelClauseRows(SolverModel &model, SolverInput &input, const VarIndexer &indexer,
                                  DecideProfileScope &phase) {
 	idx_t num_rows = input.num_rows;
-
-	// A strict `<` / `>` stepped the bound: under DIAGNOSE, remember the user's typed K so the diagnosis can re-quote a
-	// suggestion against `> K`, not the δ-adjusted rhs.
-	auto remember_typed_k = [&](ConstraintProvenance &provenance, double typed_k) {
-		if (input.diagnose) {
-			provenance.strict = true;
-			provenance.typed_k = typed_k;
-		}
-	};
-
-	// Helper: apply comparison sense to a constraint. A strict `<` / `>` steps the bound to the next integer, which
-	// is exact because the bind-time type gate (DecideShapeCheck::CheckIntegerStep) admits only an integer-valued
-	// left-hand side. `rhs` already has the LHS constant `lhs_offset` moved off it; the typed K added back.
-	auto ApplyComparisonSense = [&](ModelConstraint &constr, ExpressionType cmp, double rhs, double lhs_offset) {
-		if (cmp == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-			constr.sense = '>';
-			constr.rhs = rhs;
-		} else if (cmp == ExpressionType::COMPARE_GREATERTHAN) {
-			// δ site: `> K` becomes `>= floor(K)+1`.
-			constr.sense = '>';
-			constr.rhs = DecideStrictBound(true, rhs);
-			remember_typed_k(constr.provenance, rhs + lhs_offset);
-		} else if (cmp == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-			constr.sense = '<';
-			constr.rhs = rhs;
-		} else if (cmp == ExpressionType::COMPARE_LESSTHAN) {
-			// δ site: `< K` becomes `<= ceil(K)-1`.
-			constr.sense = '<';
-			constr.rhs = DecideStrictBound(false, rhs);
-			remember_typed_k(constr.provenance, rhs + lhs_offset);
-		} else if (cmp == ExpressionType::COMPARE_EQUAL) {
-			constr.sense = '=';
-			constr.rhs = rhs;
-		} else {
-			throw InternalException("Unsupported comparison type in ILP model builder");
-		}
-	};
 
 	// A per-row bound on one decision (`x <= cap`, `2 * x >= lo`, `0.1 * x <= c`) is a fact about one column, so it
 	// goes into that column's box rather than becoming a model row, as a literal bound already does
@@ -762,7 +750,7 @@ static void BuildModelClauseRows(SolverModel &model, SolverInput &input, const V
 			// decision (the `+ 3` of `x + 3 <= K`, the `c` of `SUM(x + c) >= K`) and the constants of the helpers
 			// written into the row.
 			double lhs_offset = records.constants[e];
-			ApplyComparisonSense(constr, eval_const.comparison_type, records.bounds[e] - lhs_offset, lhs_offset);
+			ApplyComparison(input, constr, eval_const.comparison_type, records.bounds[e] - lhs_offset, lhs_offset);
 			// F2: the group is stamped so a diagnosis over a grouped clause names the group its failure sits in
 			// (CollectUnreachableClauses reports one finding per clause, group and row). A per-row row stands for its
 			// data row: a scoped easy MIN/MAX's member row for its `by` group's classes, a `per K:` clause's row for
@@ -827,32 +815,8 @@ static void BuildModelClauseRows(SolverModel &model, SolverInput &input, const V
 		}
 
 		// RHS and sense (move constant terms to RHS). A strict `< K` / `> K` steps the bound as the linear path does.
-		double adjusted_rhs = records.bounds[e] - rhs_adjustment;
-		qc.rhs = adjusted_rhs;
 		lhs_constant = rhs_adjustment;
-		switch (ec.comparison_type) {
-		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-			qc.sense = '<';
-			break;
-		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-			qc.sense = '>';
-			break;
-		case ExpressionType::COMPARE_EQUAL:
-			qc.sense = '=';
-			break;
-		case ExpressionType::COMPARE_LESSTHAN:
-			qc.sense = '<';
-			qc.rhs = DecideStrictBound(false, adjusted_rhs);
-			remember_typed_k(qc.provenance, records.bounds[e]);
-			break;
-		case ExpressionType::COMPARE_GREATERTHAN:
-			qc.sense = '>';
-			qc.rhs = DecideStrictBound(true, adjusted_rhs);
-			remember_typed_k(qc.provenance, records.bounds[e]);
-			break;
-		default:
-			throw InternalException("Unsupported comparison type in ILP model builder (quadratic)");
-		}
+		ApplyComparison(input, qc, ec.comparison_type, records.bounds[e] - rhs_adjustment, rhs_adjustment);
 		return qc;
 	};
 
@@ -871,33 +835,17 @@ static void BuildModelClauseRows(SolverModel &model, SolverInput &input, const V
 		}
 	}
 
-	// Conditional rows the chosen backend states itself. Whatever `LowerDecideConstructs`
-	// did not lower arrives here still conditioned; everything it did lower is an ordinary
-	// row in `global_constraints` above. A model holds one or the other for a given
-	// clause, never both. The row half carries the same provenance a matrix row does, so
-	// this only re-homes it.
-	model.indicator_constraints.reserve(input.indicator_constraints.size());
-	for (auto &spec : input.indicator_constraints) {
-		SolverModel::IndicatorConstraint ic;
-		ic.binary_column = spec.binary_column;
-		ic.binary_value = spec.binary_value;
-		ic.indices = std::move(spec.row.indices);
-		ic.coefficients = std::move(spec.row.coefficients);
-		ic.sense = spec.row.sense;
-		ic.rhs = spec.row.rhs;
-		StampProvenance(input, ic.provenance, spec.row.provenance);
-		model.indicator_constraints.push_back(std::move(ic));
-	}
-
+	// The conditional rows and the constructs the chosen backend states itself. Whatever `LowerDecideConstructs` did
+	// not lower arrives here still conditioned; everything it did lower is an ordinary row in `global_constraints`
+	// above. A model holds one or the other for a given clause, never both.
 	phase.Next("model.general_constraints");
-	model.general_constraints.reserve(input.general_constraints.size());
-	for (auto &spec : input.general_constraints) {
-		SolverModel::GeneralConstraint gc;
-		gc.kind = spec.kind;
-		gc.result_column = spec.result_column;
-		gc.argument_columns = std::move(spec.argument_columns);
-		StampProvenance(input, gc.provenance, spec.provenance);
-		model.general_constraints.push_back(std::move(gc));
+	model.indicator_constraints = std::move(input.indicator_constraints);
+	for (auto &row : model.indicator_constraints) {
+		KeepProvenance(input, row.provenance);
+	}
+	model.general_constraints = std::move(input.general_constraints);
+	for (auto &construct : model.general_constraints) {
+		KeepProvenance(input, construct.provenance);
 	}
 }
 

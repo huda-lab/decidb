@@ -45,17 +45,6 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   `build/release/test/unittest "[decidb]"`; the corpus query of `test/decide/golden/corpus.sql` line 717's
   neighbour (`per grp: sum(x) by (grp) <= budget / 10 * open`) has 6 columns and 3 rows.
 
-## MODEL-12 — The model's constraints have one struct each, and one mapping from a comparison to a sense
-
-- **Problem.** `SolverModel::GeneralConstraint` holds the four fields of `GeneralConstraintSpec`,
-  `SolverModel::IndicatorConstraint` is `IndicatorConstraintSpec` with its `RawConstraint` flattened, and the builder
-  copies field by field between them (`ilp_model_builder.cpp:644-655`, `879-901`). The mapping from a comparison to a
-  row's sense, with the strict step and the typed bound a diagnosis quotes, is written in `ApplyComparisonSense`
-  (`:676-699`) and again in `BuildQuadraticConstraint` (`:833-855`).
-- **Change.** One type per constraint kind, moved from the input to the model; one function maps a comparison.
-- **Done when.** `build/release/test/unittest "[decidb]"`; `./test/decide/run_tests.sh -k "quadratic or native or
-  indicator or diagnose"`; model goldens identical.
-
 ## MODEL-13 — A term names the instance it reads
 
 - **Problem.** A term between execution and stage 06 is `(decision, data row, coefficient)` (`ClauseRecords`,

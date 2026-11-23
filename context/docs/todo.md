@@ -16,9 +16,6 @@ the owner rules first.
 - [ ] MODEL-6 One reading of a reducer body (decision) — pipeline/todo.md § MODEL-6
 - [ ] MODEL-8 The helper of a link whose data may split its classes (decision) — pipeline/todo.md § MODEL-8
 
-## 6.2 Code with no reader (one lane)
-- [ ] MODEL-12 One struct per model constraint, one comparison mapping — pipeline/todo.md § MODEL-12
-
 ## 6.3 Instances, not input rows (one lane)
 - [ ] MODEL-13 A term names the instance it reads — pipeline/todo.md § MODEL-13
 - [ ] MODEL-14 A helper has no array as long as the input — pipeline/todo.md § MODEL-14 (needs: MODEL-13)
@@ -34,5 +31,5 @@ the owner rules first.
 - [ ] MODEL-20 The helper-form rule names the readers that take members — pipeline/todo.md § MODEL-20
 - [ ] MODEL-21 One term extraction for a clause and the objective — pipeline/todo.md § MODEL-21
 
-## 6.6 Gate (one lane; needs: 6.2 to 6.5)
+## 6.6 Gate (one lane; needs: 6.3 to 6.5)
 - [ ] MODEL-7 Phase 6 gate and docs — pipeline/todo.md § MODEL-7

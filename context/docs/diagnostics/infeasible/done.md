@@ -450,7 +450,7 @@ preferred when it can restore feasibility.
   divides the terms of an AVG reducer by the rows it reads in its group), so it is reported raw,
   with no `/N_g`.
 - **Strict `<` / `>`.** The δ offset (`< K → <= ceil(K)-1`, `> K → >= floor(K)+1`) is baked into
-  `rhs` at the δ site (`ApplyComparisonSense`, `ilp_model_builder.cpp`), which also sets
+  `rhs` at the δ site (`ApplyComparison`, `ilp_model_builder.cpp`), which also sets
   `provenance.strict` + `provenance.typed_k` (the user's literal: a constant moved off the body,
   as in `SUM(x - 5) < 3`, is added back). `MakeLoosenEdit` re-quotes the
   suggestion against `typed_k` and renders `<` / `>`, e.g. `x < 10` → `x < 16`.

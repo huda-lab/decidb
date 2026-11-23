@@ -159,8 +159,7 @@ void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer, const 
 	if (constructs.not_equal || input.indicator_constraints.empty()) {
 		return;
 	}
-	for (auto &ic : input.indicator_constraints) {
-		auto &row = ic.row;
+	for (auto &row : input.indicator_constraints) {
 		D_ASSERT(row.sense == '<' || row.sense == '>');
 		// The Big-M is the distance from the row's bound to the far end of its own
 		// reach: relaxed by exactly that much, the row admits everything the columns can
@@ -188,15 +187,16 @@ void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer, const 
 		// branch clear of floating-point wobble in the solver's own row activity.
 		M = MaxValue<double>(M, 0.0) + 1.0;
 
-		SolverInput::RawConstraint lowered = std::move(row);
+		// The row itself, with the term that switches it.
+		ModelConstraint lowered = std::move(row);
 		// `z == v` implies the row, so the row must be slackened by M exactly when `z != v`. The `<>` rewrite states
 		// two halves: `z == 0 => LHS <= K-1`, slackened by `M*z`, and `z == 1 => LHS >= K+1`, slackened by `M*(1-z)`,
 		// which moves the bound as well as adding the term.
-		D_ASSERT((ic.binary_value == 0) == hi_end);
-		if (ic.binary_value == 1) {
+		D_ASSERT((row.binary_value == 0) == hi_end);
+		if (row.binary_value == 1) {
 			lowered.rhs -= M;
 		}
-		lowered.indices.push_back(ic.binary_column);
+		lowered.indices.push_back(row.binary_column);
 		lowered.coefficients.push_back(-M);
 		input.global_constraints.push_back(std::move(lowered));
 	}

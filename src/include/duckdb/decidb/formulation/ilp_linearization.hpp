@@ -248,7 +248,7 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
 //! `VarIndexer`. The ABS is a pseudo-operation that stage 05 only recorded, and this is where it is legalized or
 //! expanded (as LLVM's legalization decides per operation): `policy.Use(range_unbounded)` is the one place native
 //! against lowered is decided for ABS, by the rule MIN and MAX read too.
-//!   - Native: one column `t` per active row, an equality row `t = inner`, and a `GeneralConstraintSpec` saying
+//!   - Native: one column `t` per active row, an equality row `t = inner`, and a `GeneralConstraint` saying
 //!     `aux = |t|`. Each `t` is boxed by ITS OWN row's reach, keeping each end it can derive independently, exactly as
 //!     `EmitExtremumLink` boxes its argument columns: a row whose contributors are all bounded gets a real box even
 //!     when another row's are not; a column is left free only where nothing is derivable at all, which is the query
@@ -414,8 +414,8 @@ struct MinMaxLinkRow {
 
 	//! The left-hand side `1 * column + (this row)` of a solver row, sized for `extra` more columns so that nothing
 	//! reallocates as the caller adds them.
-	SolverInput::RawConstraint LeftHandSide(int column, idx_t extra = 0) const {
-		SolverInput::RawConstraint rc;
+	ModelConstraint LeftHandSide(int column, idx_t extra = 0) const {
+		ModelConstraint rc;
 		rc.indices.reserve(1 + indices.size() + extra);
 		rc.coefficients.reserve(1 + indices.size() + extra);
 		rc.indices.push_back(column);
