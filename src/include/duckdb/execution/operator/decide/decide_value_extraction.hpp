@@ -34,14 +34,54 @@ using DecideChunkLeaf = std::function<unique_ptr<Expression>(const Expression &e
 unique_ptr<Expression> ToChunkReferences(const Expression &expr, ClientContext &context,
                                          const DecideChunkLeaf &leaf = nullptr);
 
+//! The class of a keyed scope at each data row. A declared decision's scope holds a class for every row
+//! (KeyedMapping::row_to_class). A helper's is read by the rows its node holds an entry for, so it costs what reads
+//! it: few of the input's rows are listed by row, and more than that hold a class each, as a declared decision's do.
+//! A row that reads no class of a helper reads the spare one (KeyedMapping::absent_class).
+struct DecideScopeRows {
+	//! A list is shorter than the row per class it stands for while fewer than one row in LISTED_SHARE reads.
+	static constexpr idx_t LISTED_SHARE = 8;
+
+	const idx_t *declared = nullptr;
+	vector<idx_t> class_of_row;
+	//! (row, class), by row once closed.
+	vector<pair<idx_t, idx_t>> listed;
+	idx_t num_classes = 0;
+	idx_t absent_class = DConstants::INVALID_INDEX;
+
+	DecideScopeRows() = default;
+	//! A declared decision's.
+	explicit DecideScopeRows(const KeyedMapping &mapping)
+	    : declared(mapping.row_to_class.data()), num_classes(mapping.num_classes), absent_class(mapping.absent_class) {
+	}
+	//! A helper's, of `num_classes` classes, read by at most `reads` of the input's `num_rows` rows: List each read,
+	//! then Close.
+	DecideScopeRows(idx_t num_rows, idx_t num_classes, idx_t reads);
+	//! `row` reads class `class_id`, or none (INVALID_INDEX). A node read from several places lists a row once for
+	//! each, with the same class.
+	void List(idx_t row, idx_t class_id) {
+		if (!class_of_row.empty()) {
+			class_of_row[row] = class_id;
+		} else if (class_id != DConstants::INVALID_INDEX) {
+			listed.emplace_back(row, class_id);
+		}
+	}
+	//! Numbers the spare class if some row reads none, and gives the scope's classes as stage 06 reads them.
+	KeyedMapping Close(idx_t num_rows);
+	idx_t At(idx_t row) const;
+	bool Absent(idx_t row) const {
+		return absent_class != DConstants::INVALID_INDEX && At(row) == absent_class;
+	}
+};
+
 //! How a data row gives the instance of one decision it reads, which a term names (ClauseRecords::instances): the row
 //! itself for a decision per row and for a frame read, the row's class for a keyed decision, 0 for a query-wide one.
 struct DecideInstanceOfRow {
-	const idx_t *class_of_row = nullptr;
+	const DecideScopeRows *keyed = nullptr;
 	bool query_wide = false;
 
 	idx_t At(idx_t row) const {
-		return query_wide ? 0 : class_of_row ? class_of_row[row] : row;
+		return query_wide ? 0 : keyed ? keyed->At(row) : row;
 	}
 };
 
@@ -299,10 +339,6 @@ void DecideNameVariants(const vector<DecideSignatureField> &fields, idx_t class_
                         std::function<vector<Value>(idx_t)> read, const vector<idx_t> &class_of,
                         const vector<idx_t> &variants_per_class, const vector<idx_t> &first_rows,
                         SolverInput::KeyValues &key_values);
-
-//! A row in no class of a keyed scope (a NULL written key, a dropped row, a helper's group with no member) has no
-//! decision: it maps to one spare class, so that every row has an id (KeyedMapping::absent_class).
-void DecideMapRowsInNoClass(KeyedMapping &mapping);
 
 //! One member: the terms whose coefficients `columns` and variables `variables` are read at `row`, each on the
 //! instance `instances` gives there and its coefficient times `scale`, those of no decision its constant. A constant

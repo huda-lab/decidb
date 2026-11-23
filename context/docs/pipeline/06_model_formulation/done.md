@@ -42,7 +42,7 @@ model builder and by the column labeller in diagnostics.
 | Block | Index formula |
 |---|---|
 | Per-row | `row * num_row_vars + row_var_offset[var_idx]` |
-| Keyed | `keyed_var_base[var_idx] + row_to_class[row]` |
+| Keyed | `keyed_var_base[var_idx] + class` |
 | Query-wide | `scalar_column[var_idx]` — `row` is ignored |
 | Global | `global_block_start + g` |
 
@@ -68,14 +68,14 @@ production, so keyed-mapping lifetime has one contract everywhere.
 **A frame read** (`DecideVarScope::FRAME_READ`, `SolverInput::frame_reads`) is a decision read at the row a frame
 selector selects (`../../language/guide.md` §5.6, D78): variable `first_frame_read + i`, after the plan's decisions,
 is decision `base` read at `rows[row]` -- the selected row, or the row itself where the frame selects none, where every
-term reading it has no value or 0. It owns no column: `Get` returns its base's column at that row, the redirect living
-where every column resolution already passes rather than at each emission site; `InstanceColumn` and `InstanceOf`
-refuse it, and `NumInstances` is 0. `ResolveRead` turns it into its base at the selected row for the readers of an
-instance's box (`InstanceBox`). Its type and box are its base's, copied again wherever the boxes are rewritten
+term reading it has no value or 0. It owns no column and `NumInstances` is 0: a term names it at the row it is read at,
+and `InstanceColumn` returns its base's column at the selected row, the redirect living where every column resolution
+already passes rather than at each emission site. `ResolveInstance` turns it into its base at the selected row for the
+readers of an instance's box (`InstanceBox`). Its type and box are its base's, copied again wherever the boxes are rewritten
 wholesale (after the floors, the implied bounds and a diagnosis's widening, `SyncFrameReadBoxes` in stage 08), and
 `BaseVariable` maps it to its base for a table of the plan's decisions (a name, the ABS helpers the tree's `ABS` nodes
-name). A helper's members read each term's variable through the indexer at each row (`ReducerValueMembers::variables`),
-so a frame read lands on the selected row's column there too, and its range is its base's box.
+name). A helper's member names each term's instance as a clause's record does (`ReducerValueMembers::instances`), so a
+frame read lands on the selected row's column there too, and its range is its base's box.
 
 **An instance with no column.** A keyed decision's absent class, and a helper instance stage 08 wrote where it is read
 (`SolverInput::written_in`, §9 "A helper written where it is read"), own no column: `instance_slot` holds
@@ -266,6 +266,9 @@ one, 0 for a query-wide one, and the row it is read at for a frame read, whose c
 its frame selects. The node that writes a term holds the row, so stage 08 reads the instance there
 (`DecideInstanceOfRow`), and stage 06 finds a term's column from the decision and the instance alone
 (`VarIndexer::InstanceColumn`), as LLVM's machine IR names a register and not the source line that set it. A
+product group's term names its instance at each place of its columns (`TermInstances`). So stage 06 reads no map
+from rows for a helper, and a helper's scope hands it none: `KeyedMapping::row_to_class` is filled for a declared
+decision alone, which the output reads back by row (`VarIndexer::ColumnOrNone`, `InstanceOf`). A
 helper's group names the instance it defines (`ReducerValueMembers::group_instances`), and a row that defines an
 auxiliary names the auxiliary's instance in its own term (`ClauseRecords::InstanceOf`). The data row of a record is
 kept for a diagnosis, which names the row (`ClauseRecords::data_rows`). Every reader of a clause reads the records: implied bounds, the Big-M and range walks
@@ -744,7 +747,7 @@ every link, which the three passes below read. The helper's own column enters on
 `DeriveReducerValueBounds` brackets, per group, the reducer's value — the sum of the
 members' signed brackets for SUM/AVG (an AVG's coefficients already carry the 1/n), their
 cover for MIN/MAX — and boxes each helper instance by its own group's reach
-(`instance_reach_lower` / `instance_reach_upper`, mapped through `VarIndexer::InstanceOf`),
+(`instance_reach_lower` / `instance_reach_upper`, by the instance each group names),
 each end on its own; an end no member bounds stays open. The decision's box is the cover of
 every instance's reach, so every pass that reads it stays sound, and only ever tightens.
 The reach is not the floors' refinement: a floor holds against any box, the rigid one

@@ -26,7 +26,7 @@ DecideAbsence::DecideAbsence(const DecideTree &tree) : tree(tree), products(tree
 	}
 }
 
-void DecideAbsence::ReadClasses(const vector<KeyedMapping> &classes_p, const vector<vector<bool>> &auxiliaries_p) {
+void DecideAbsence::ReadClasses(const vector<DecideScopeRows> &classes_p, const vector<vector<bool>> &auxiliaries_p) {
 	classes = &classes_p;
 	auxiliaries = &auxiliaries_p;
 }
@@ -49,7 +49,7 @@ bool DecideAbsence::At(idx_t variable, idx_t row) const {
 		return true;
 	}
 	auto &scope = tree.variable_scopes[variable];
-	return scope.IsKeyed() && (*classes)[scope.keyed_scope_idx].IsAbsent(row);
+	return scope.IsKeyed() && (*classes)[scope.keyed_scope_idx].Absent(row);
 }
 
 bool DecideAbsence::TermAt(const DecideTerm &term, idx_t row) const {

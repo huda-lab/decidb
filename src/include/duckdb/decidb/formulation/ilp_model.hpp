@@ -74,29 +74,27 @@ struct VarIndexer {
 	vector<SolverInput::FrameRead> frame_reads;
 	idx_t first_frame_read = 0;
 
-	//! Get the flat solver variable index for a given decide variable at a given row.
-	//! A scalar variable ignores `row` — every row resolves to the same column. A frame
-	//! read is its base decision's column at the row its frame selects.
-	inline idx_t Get(idx_t var_idx, idx_t row) const {
+	//! The instance of a variable that a term at data row `row` names: the row for a decision per row and for a frame
+	//! read, the row's class for a keyed one, 0 for a query-wide one. A keyed scope holds its rows for a declared
+	//! decision alone (KeyedMapping::row_to_class).
+	inline idx_t InstanceOf(idx_t var_idx, idx_t row) const {
 		switch (var_scope[var_idx]) {
-		case DecideVarScope::ROW:
-			return row * num_row_vars + row_var_offset[var_idx];
 		case DecideVarScope::GLOBAL:
-			return scalar_var_index[var_idx];
-		case DecideVarScope::FRAME_READ: {
-			auto &read = frame_reads[var_idx - first_frame_read];
-			return InstanceColumn(read.base, read.instances[row]);
-		}
+			return 0;
+		case DecideVarScope::KEYED:
+			return keyed_mappings[var_keyed_mapping_idx[var_idx]].row_to_class[row];
 		default:
-			return InstanceColumn(var_idx, keyed_mappings[var_keyed_mapping_idx[var_idx]].row_to_class[row]);
+			return row;
 		}
 	}
-
-	//! Get(), or INVALID_INDEX where the instance `row` reads has no column -- a row in no class, an instance written
-	//! into its readers --, read through a frame at the row it selects.
+	//! The flat column of a variable at data row `row`.
+	inline idx_t Get(idx_t var_idx, idx_t row) const {
+		return InstanceColumn(var_idx, InstanceOf(var_idx, row));
+	}
+	//! Get(), or INVALID_INDEX where the instance `row` reads has no column: a row in no class, an instance written
+	//! into its readers.
 	inline idx_t ColumnOrNone(idx_t var_idx, idx_t row) const {
-		return InstanceColumnOrNone(var_idx,
-		                            var_scope[var_idx] == DecideVarScope::FRAME_READ ? row : InstanceOf(var_idx, row));
+		return InstanceColumnOrNone(var_idx, InstanceOf(var_idx, row));
 	}
 	//! The column of instance `inst` of `var_idx` as a term names it (InstanceColumn), or INVALID_INDEX where it has
 	//! none.
@@ -156,21 +154,6 @@ struct VarIndexer {
 			auto &read = frame_reads[var_idx - first_frame_read];
 			var_idx = read.base;
 			inst = read.instances[inst];
-		}
-	}
-
-	//! The instance of a variable that data row `row` reads: the row itself, its class, or the single query-wide
-	//! instance. Up to the block offset the inverse of Get(): `InstanceColumn(v, InstanceOf(v, row)) == Get(v, row)`.
-	inline idx_t InstanceOf(idx_t var_idx, idx_t row) const {
-		switch (var_scope[var_idx]) {
-		case DecideVarScope::ROW:
-			return row;
-		case DecideVarScope::GLOBAL:
-			return 0;
-		case DecideVarScope::FRAME_READ:
-			throw InternalException("DECIDE: a frame read has no instance of its own");
-		default:
-			return keyed_mappings[var_keyed_mapping_idx[var_idx]].row_to_class[row];
 		}
 	}
 
@@ -430,8 +413,8 @@ struct ColumnProvenance {
 //! caller pre-extracts per-decide-variable labels (user name or aux source
 //! expression) and an is-aux flag. Output is sized `indexer.total_vars`; every
 //! entry defaults to GLOBAL_AUX (the global block stays unnamed), then the row /
-//! keyed blocks are filled by inverting `indexer.Get(var, row)` over all
-//! decide variables and rows — mirrors the solution-readback iteration.
+//! keyed blocks are filled from every decide variable's instances that hold a column
+//! (`indexer.InstanceColumn`).
 //!   var_labels[v]  — name (USER) or source expression (AUX) for decide var v
 //!   var_is_aux[v]  — true if decide var v is an auxiliary linearization variable
 //!   global_var_labels[g] — clause text for global var g (e.g. an aggregate `<>`

@@ -770,16 +770,40 @@ void DecideNameVariants(const vector<DecideSignatureField> &fields, idx_t class_
 	};
 }
 
-void DecideMapRowsInNoClass(KeyedMapping &mapping) {
-	for (auto &id : mapping.row_to_class) {
-		if (id == DConstants::INVALID_INDEX) {
-			mapping.absent_class = mapping.num_classes;
-			id = mapping.absent_class;
+DecideScopeRows::DecideScopeRows(idx_t num_rows, idx_t num_classes, idx_t reads) : num_classes(num_classes) {
+	if (reads * LISTED_SHARE >= num_rows) {
+		class_of_row.assign(num_rows, DConstants::INVALID_INDEX);
+	}
+}
+
+KeyedMapping DecideScopeRows::Close(idx_t num_rows) {
+	std::sort(listed.begin(), listed.end());
+	listed.erase(std::unique(listed.begin(), listed.end()), listed.end());
+	bool none = class_of_row.empty() && listed.size() < num_rows;
+	for (auto &class_id : class_of_row) {
+		if (class_id == DConstants::INVALID_INDEX) {
+			none = true;
+			class_id = num_classes;
 		}
 	}
-	if (mapping.absent_class != DConstants::INVALID_INDEX) {
-		mapping.num_classes++;
+	if (none) {
+		absent_class = num_classes++;
 	}
+	KeyedMapping mapping;
+	mapping.num_classes = num_classes;
+	mapping.absent_class = absent_class;
+	return mapping;
+}
+
+idx_t DecideScopeRows::At(idx_t row) const {
+	if (declared) {
+		return declared[row];
+	}
+	if (!class_of_row.empty()) {
+		return class_of_row[row];
+	}
+	const auto found = std::lower_bound(listed.begin(), listed.end(), std::make_pair(row, idx_t(0)));
+	return found != listed.end() && found->first == row ? found->second : absent_class;
 }
 
 void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx_t> &variables,

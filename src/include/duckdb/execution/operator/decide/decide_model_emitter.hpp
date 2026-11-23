@@ -156,9 +156,11 @@ private:
 	//! how a row another node holds is read into the clause's columns, which are as long as its kept rows. One vector
 	//! for every clause, set and cleared on the kept rows alone, so a clause costs what it keeps.
 	vector<idx_t> place_of_row;
+	//! Per keyed scope, its class at each row (KeyedMappings).
+	vector<DecideScopeRows> scope_rows;
 	//! How many rows the clause at hand keeps.
 	idx_t placed = 0;
-	//! Per value-link node, its helper's members, read once where its classes are (HelperMapping), which ValueLinks
+	//! Per value-link node, its helper's members, read once where its classes are (HelperRows), which ValueLinks
 	//! lists.
 	vector<LinkMembers> link_members;
 	//! A helper the plan writes where it is read: its members, and each instance's group among them. A SUM or AVG is
@@ -189,6 +191,8 @@ private:
 	vector<DecideInstanceOfRow> InstancesOfRows(const vector<idx_t> &variables) const;
 	//! How many instances `variable` has: a row each for a decision per row or a frame read, its key's classes, or 1.
 	idx_t Instances(idx_t variable) const;
+	//! The instances `variable` has at the data rows `rows` lists by place, or at every data row with no list.
+	TermInstances InstancesAt(idx_t variable, const vector<idx_t> *rows) const;
 	//! Writes each term of a list that reads a written-in instance as that instance's members, scaled by the term's
 	//! coefficient, their constants added to the constant of the term's row: `begin` delimits the rows, as a clause's
 	//! records and a helper's members do. A read of an instance with no member has no value: the objective drops it
@@ -245,7 +249,7 @@ private:
 	void KeyClasses(idx_t root, const vector<pair<idx_t, idx_t>> &rows, vector<idx_t> &class_ids,
 	                vector<GroupName> &class_names);
 	//! A relation-qualified reducer's scope: the variants of its operand over the rows the reducer reads.
-	KeyedMapping SignatureMapping(idx_t scope);
+	DecideScopeRows SignatureRows(idx_t scope);
 	//! The rows at which each auxiliary has no value (D88): a row its definition keeps where what the definition reads
 	//! unreduced is NULL, and a row where a decision the definition reads has no instance; and each helper's classes,
 	//! in the order the definitions read each other.
@@ -256,7 +260,7 @@ private:
 	LinkMembers Members(idx_t node);
 	//! A helper's classes: the groups of its `by` key that hold a member, each read by the rows of its group the
 	//! clause keeps; its members kept for ValueLinks (link_members).
-	KeyedMapping HelperMapping(idx_t node);
+	DecideScopeRows HelperRows(idx_t node);
 	//! A range frame's helper's members (language/guide.md §5.6), per window of its frame (DecideListFrameMembers): its
 	//! payload's terms on the rows the windows read, its `else`'s at the anchors that reach it, each a program on the
 	//! frame's O `node`.

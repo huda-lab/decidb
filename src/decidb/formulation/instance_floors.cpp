@@ -35,7 +35,7 @@ void ResolveLiftedFloors(SolverInput &input, const VarIndexer &indexer, const ve
 			}
 			// A floor of "no bound" (-infinity) is the solver's open end, as an unconditional one writes it (D41).
 			double floor = std::max(ec.records.admitted_lower[e], -DECIDE_SOLVER_INFINITY);
-			auto &instance_floor = lowered[var][indexer.InstanceOf(var, ec.records.data_rows[e])];
+			auto &instance_floor = lowered[var][ec.records.InstanceOf(e, var)];
 			// Every clause that keeps the instance applies to it, so the tightest floor is the instance's.
 			instance_floor = instance_floor == INF ? floor : std::max(instance_floor, floor);
 		}

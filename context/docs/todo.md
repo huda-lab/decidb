@@ -17,7 +17,7 @@ the owner rules first.
 - [ ] MODEL-8 The helper of a link whose data may split its classes (decision) — pipeline/todo.md § MODEL-8
 
 ## 6.3 Instances, not input rows (one lane)
-- [ ] MODEL-14 A helper has no array as long as the input — pipeline/todo.md § MODEL-14
+- [ ] MODEL-22 A frame read is resolved where its term is written — pipeline/todo.md § MODEL-22
 
 ## 6.4 The emitter's structure (one lane; needs: 6.3)
 - [ ] MODEL-17 The emitter reads a term in one place — pipeline/todo.md § MODEL-17

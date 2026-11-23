@@ -40,7 +40,7 @@ public:
 
 	//! What the rule reads: the keyed scopes' classes (a helper's from its G's groups), each auxiliary's rows with no
 	//! value, complete for one once its definition is read, and the frames' maps once their O nodes are computed.
-	void ReadClasses(const vector<KeyedMapping> &classes, const vector<vector<bool>> &auxiliaries);
+	void ReadClasses(const vector<DecideScopeRows> &classes, const vector<vector<bool>> &auxiliaries);
 	void ReadFrames(const vector<DecideFrameMap> &frames);
 
 	//! Whether decision `variable` has no value at `row`. None for no decision (INVALID_INDEX).
@@ -70,7 +70,7 @@ private:
 	const DecideTree &tree;
 	//! Per decision, the product it is the auxiliary of, or null.
 	vector<const DecideBooleanProductDefinition *> products;
-	const vector<KeyedMapping> *classes = nullptr;
+	const vector<DecideScopeRows> *classes = nullptr;
 	const vector<vector<bool>> *auxiliaries = nullptr;
 	const vector<DecideFrameMap> *frames = nullptr;
 };

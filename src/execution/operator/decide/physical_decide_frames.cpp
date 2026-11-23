@@ -733,17 +733,15 @@ void SkipDecideFrameNullReads(const DecideTree &tree, vector<DecideFrameMap> &ma
 	}
 }
 
-KeyedMapping DecideFrameWindowMapping(const DecideFrameMap &map) {
+DecideScopeRows DecideFrameWindowRows(const DecideFrameMap &map) {
 	const idx_t num_rows = map.anchors.size();
-	KeyedMapping mapping;
-	mapping.num_classes = map.WindowCount();
-	mapping.row_to_class.assign(num_rows, DConstants::INVALID_INDEX);
+	DecideScopeRows rows(num_rows, map.WindowCount(), num_rows);
 	for (idx_t row = 0; row < num_rows; row++) {
 		if (map.anchors[row] && !map.Absent(row)) {
-			mapping.row_to_class[row] = map.window[row];
+			rows.List(row, map.window[row]);
 		}
 	}
-	return mapping;
+	return rows;
 }
 
 void DecideListFrameMembers(const DecideFrameMap &map, DecideReducerKind aggregate, const DecideClauseRef &clause,
@@ -762,7 +760,7 @@ void DecideListFrameMembers(const DecideFrameMap &map, DecideReducerKind aggrega
 			throw InternalException("DECIDE: %s's window reads nothing but is not absent", frame_text);
 		}
 		const double share = is_avg ? 1.0 / static_cast<double>(values) : 1.0;
-		// A window is an instance of the frame's helper (DecideFrameWindowMapping).
+		// A window is an instance of the frame's helper (DecideFrameWindowRows).
 		out.AddGroup(w);
 		map.ForEachRead(w, [&](idx_t row, idx_t times) {
 			DecideListMember(payload, payload_vars, payload_instances, row,

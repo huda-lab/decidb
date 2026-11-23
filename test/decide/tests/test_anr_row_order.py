@@ -257,6 +257,29 @@ def test_the_answer_holds_in_every_order(solver_path, scope_solver, case, order)
     _judge(solver_path, scope_solver, case, _reordered(case.sql, order))
 
 
+#: `when t.p` keeps 2 of 40 rows, so the helper of the inner sum is read on few of the input's rows and lists them
+#: (`DecideScopeRows`), each twice: the two rows that define the `abs` both read it.
+FEW_ROWS = tuple((i, i in (7, 31)) for i in range(1, 41))
+A_HELPER_FEW_ROWS_READ = Case(
+    "a_helper_few_rows_read",
+    "D88",
+    2,
+    WHEN_COLUMNS,
+    FEW_ROWS,
+    ABS_UNDER_A_WHEN.decisions,
+    ABS_UNDER_A_WHEN.clauses,
+    ABS_UNDER_A_WHEN.objective,
+    f"""SELECT id, x {table('t', WHEN_COLUMNS, FEW_ROWS)} DECIDE x(REAL)
+        SUCH THAT x <= 5 AND sum(when t.p: abs(sum(x))) <= 4 MAXIMIZE sum(x) ORDER BY id""",
+)
+
+
+@pytest.mark.correctness
+def test_a_helper_few_rows_read_is_read_at_each(solver_path, scope_solver):
+    """The helper has its instance at the two rows that read it and none at the other 38."""
+    _judge(solver_path, scope_solver, A_HELPER_FEW_ROWS_READ, A_HELPER_FEW_ROWS_READ.sql)
+
+
 @pytest.mark.correctness
 @pytest.mark.parametrize("case", _named(ANSWERED))
 def test_the_model_keeps_its_size_in_every_order(solver_path, tmp_path, case):

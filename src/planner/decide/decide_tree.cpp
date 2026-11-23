@@ -855,7 +855,7 @@ private:
 
 	//! A relation-qualified reducer's operand, once its body is lowered: its instances are its qualifier's classes
 	//! split by the values its body reads (D70, D71), the keyed mapping of the qualifier's scope
-	//! (DecideModelEmitter::SignatureMapping), whichever reducer it is, a written one or a helper's.
+	//! (DecideModelEmitter::SignatureRows), whichever reducer it is, a written one or a helper's.
 	void Qualified(idx_t operand, idx_t scope) {
 		UseSignature(*tree->nodes[operand], op.bound.keyed_scopes[scope].signature);
 		tree->qualified_operands[scope] = operand;

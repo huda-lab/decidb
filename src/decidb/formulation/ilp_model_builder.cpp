@@ -29,8 +29,9 @@ struct FormRow {
 	double constant = 0.0;
 };
 
-static FormRow ReadFormRow(const vector<idx_t> &variables, const vector<CoefficientColumn> &columns, idx_t place,
-                           idx_t row, const VarIndexer &indexer, const DecideClauseRef &written) {
+static FormRow ReadFormRow(const vector<idx_t> &variables, const vector<CoefficientColumn> &columns,
+                           const vector<TermInstances> &instances, idx_t place, idx_t row, const VarIndexer &indexer,
+                           const DecideClauseRef &written) {
 	FormRow form;
 	// `variables` and `columns` are pushed together (DecideModelEmitter), and each column holds the data row `row` at
 	// `place`.
@@ -43,7 +44,7 @@ static FormRow ReadFormRow(const vector<idx_t> &variables, const vector<Coeffici
 			AddCoefficient(form.constant, a, written);
 			continue;
 		}
-		form.terms.emplace_back(static_cast<int>(indexer.Get(variables[t], row)), a);
+		form.terms.emplace_back(static_cast<int>(indexer.InstanceColumn(variables[t], instances[t].At(place, row))), a);
 	}
 	return form;
 }
@@ -109,12 +110,14 @@ static void AddProductGroupRow(const EvaluatedProductGroup &group, idx_t place, 
 	if (w == 0.0) {
 		return;
 	}
-	auto left = ReadFormRow(group.left_variables, group.left_coefficients, place, row, indexer, written);
+	auto left =
+	    ReadFormRow(group.left_variables, group.left_coefficients, group.left_instances, place, row, indexer, written);
 	if (group.square) {
 		AddSquareRow(left, w, q, add_linear, constant, written);
 		return;
 	}
-	auto right = ReadFormRow(group.right_variables, group.right_coefficients, place, row, indexer, written);
+	auto right = ReadFormRow(group.right_variables, group.right_coefficients, group.right_instances, place, row,
+	                         indexer, written);
 	AddProductRow(left, right, w, q, add_linear, constant, written);
 }
 

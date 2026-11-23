@@ -147,16 +147,30 @@ struct EmittedRows {
 	EmittedRows &operator=(EmittedRows &&) = default;
 };
 
+//! The instance of one decision at each place of a column that reads it (EvaluatedProductGroup): the data row at that
+//! place for a decision per row and for a frame read, 0 for a query-wide one, and the class listed per place for a
+//! keyed one.
+struct TermInstances {
+	bool query_wide = false;
+	vector<idx_t> classes;
+
+	idx_t At(idx_t place, idx_t row) const {
+		return query_wide ? 0 : classes.empty() ? row : classes[place];
+	}
+};
+
 //! A product group (DecideProductGroup) evaluated on every row its reader holds (the objective's every data row, a
 //! clause's kept rows by place): `weight[row] * l(row) * r(row)`, where `l` and `r` are linear forms in that row's
-//! decisions. A square has no right form and multiplies `left` by itself.
+//! decisions, each term on the instance its row reads. A square has no right form and multiplies `left` by itself.
 struct EvaluatedProductGroup {
 	//! The group's sign times its weight, 0 on a row the group does not read.
 	CoefficientColumn weight;
 	vector<idx_t> left_variables;                // [term_idx], INVALID_INDEX for a constant
 	vector<CoefficientColumn> left_coefficients; // [term_idx]
+	vector<TermInstances> left_instances;        // [term_idx]
 	vector<idx_t> right_variables;
 	vector<CoefficientColumn> right_coefficients;
+	vector<TermInstances> right_instances;
 	bool square = false;
 	//! DecideProductGroup::weight_sign: what the plan knew of the weight's sign, for convexity.
 	int weight_sign = 1;
@@ -355,8 +369,10 @@ struct QuadraticClause {
 //! to `absent_class`: one spare class fixed at 0 that no constraint reads, so the row
 //! has no decision (its output is NULL). INVALID_INDEX when every row has a class.
 struct KeyedMapping {
-	idx_t num_classes = 0;      //! Number of distinct classes in this table
-	vector<idx_t> row_to_class; //! [row_idx] -> class_id (0..num_classes-1)
+	idx_t num_classes = 0; //! Number of distinct classes in this table
+	//! [row_idx] -> class_id (0..num_classes-1). Empty for a helper's scope once the model is written: stage 06 reads a
+	//! helper by the instance each term names.
+	vector<idx_t> row_to_class;
 	idx_t absent_class = DConstants::INVALID_INDEX;
 
 	bool IsAbsent(idx_t row) const {

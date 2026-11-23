@@ -309,8 +309,12 @@ columns in a scan of their own.
   it reads has an instance, a relation-qualified reducer's first of each class, and an AVG's coefficients are divided by
   its group's members (`ScaleAvgRows`). A row in no group of the key is computed on but lists no
   member. The groups that hold a member, numbered by rank among them, are the helper's classes, which every row of a
-  group the clause keeps reads (`DecideModelEmitter::HelperMapping`, `DecideMapRowsInNoClass`); a row of a group with
-  none reads no helper, so what reads it there skips its instance. The definitions and the helpers' classes are read in
+  group the clause keeps reads (`DecideModelEmitter::HelperRows`); a row of a group with
+  none reads no helper, so what reads it there skips its instance. **A helper's class at a row** is held for the rows its
+  node holds an entry for (`DecideScopeRows`): listed by row while fewer than one row in eight reads it, a class per
+  row from there on, as a sparse vector turns dense. So a helper costs what reads it, and forty helpers that each
+  read two thousand of two million rows cost what forty plain clauses do. The list is sorted once, since a node read
+  from several places holds an entry per reader for a row. The definitions and the helpers' classes are read in
   the tree's order, which puts what defines a decision before what reads it, a helper no clause reads but through a
   product's auxiliary included (its root of its own). A member's message names the clause that first read the helper, as
   written (its definition's `origin`). A helper's rows are read where its classes are built, before any clause: the rows its
@@ -328,7 +332,7 @@ columns in a scan of their own.
   frame selects, and has no value where the frame reads nothing or the decision has no instance there
   (`DecideAbsence::TermAt`, `DecideFrameReadsAbsent`), wherever a term's absence is read: a clause's
   rows, the objective's entries, a definition's absence, a helper's members. A range over decisions' helper has a class
-  per window (`DecideFrameWindowMapping`) and lists its members per window through `DecideListFrameMembers`, its
+  per window (`DecideFrameWindowRows`) and lists its members per window through `DecideListFrameMembers`, its
   payload's and its `else`'s coefficients programs on its O, read on the rows its
   windows read and the anchors that reach the `else`, after every clause. A signature's frame field
   splits the variants by the frame's keys, the anchor's position as its order key compares when it reads relative to
@@ -615,14 +619,16 @@ coefficient evaluation:
    reducer is NULL there, D68), so its rows map to the absent class below.
 3. A row in no class (a NULL written key, or a row a helper's clause drops) has no
    decision. It maps to one spare class, `KeyedMapping::absent_class` (the Null Object
-   pattern), so every row has an id and `VarIndexer::Get` stays total. The model builder
+   pattern), so every row has an id and a read by row stays total. The model builder
    fixes the absent column at 0, so an objective term that reads it is dropped; a reducer
    over the decision never reads the row (`DecideCanonicalizer::SkipNullData` tests the
    key's written columns for NULL), and an unreduced read skips its instance
    (§5). The output shows NULL there.
 4. Class ids are the key's group ids: numbered by key value (below), so a keyed
    decision's solver columns follow its key's values, not the rows' order.
-5. Fill a `row_to_class` vector of size `num_rows`.
+5. A declared decision fills a `row_to_class` vector of size `num_rows`, which the output reads back. A helper's
+   rows stay with the emitter (`DecideScopeRows`): what it writes names each helper's instance, so stage 06 reads no
+   row of one.
 
 The result is a `KeyedMapping { num_classes, row_to_class, absent_class }` on the
 `SolverInput`, which is what makes several rows share one solver column.
@@ -715,7 +721,7 @@ position). An anchor whose window reads nothing -- a reversed range, `all` meeti
 -- is absent (`DecideFrameMap::absent`). A range over data's `REDUCED` column runs the frame's own bound aggregate
 through its state functions over each window's values (`ReduceRangeValues`), so SQL's types and NULL handling hold: a
 NULL value is skipped, `count` counts the rest. A range over decisions is its helper decision's instances, one per
-window (the emitter's `HelperMapping` reads the windows; an absent anchor is in no class), and its members are listed
+window (the emitter's `HelperRows` reads the windows; an absent anchor is in no class), and its members are listed
 per window (`DecideModelEmitter::ValueLinks`): a member per row read, times its visits for SUM and AVG, one for the
 `else` times the missing positions, AVG dividing by the window's values. A value read as NULL -- a payload coefficient
 at a row, an `else` coefficient at the anchor -- is no member (`SkipDecideRangeNullReads`, before the windows are
@@ -817,7 +823,7 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   row in no class of its own `per` (a NULL written key, D5) and a
   row at which one of its terms reads a keyed decision with no instance there -- a nested
   reducer's helper whose group holds no member, which is NULL (D68) and a reducer skips
-  (D67, D87) -- grouped by its path key over those rows (`HelperMapping`, which gives the
+  (D67, D87) -- grouped by its path key over those rows (`HelperRows`, which gives the
   helper's classes too; a NULL written key in no group, only the groups that hold a
   member); its coefficients are its terms' programs on the operand's entries; its `per`
   de-duplicates within each
@@ -1287,7 +1293,7 @@ is:
 
 ```
 global_row   = current_row_offset + row_in_chunk
-solution_idx = gstate.var_indexer.Get(decide_var_idx, global_row)
+solution_idx = gstate.var_indexer.ColumnOrNone(decide_var_idx, global_row)
 value        = ilp_solution[solution_idx]
 ```
 

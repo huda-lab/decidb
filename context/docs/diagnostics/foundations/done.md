@@ -221,8 +221,8 @@ it represents, so the unbounded diagnosis names escaping variables.
   aux-creating rewrite calls, and threaded to `PhysicalDecide`.
 - **`ColumnProvenance` + `BuildColumnProvenance`** (`ilp_model.hpp` /
   `ilp_model_builder.cpp`). `ColumnKind{USER, AUX, GLOBAL_AUX}`. The builder is
-  pure (caller pre-extracts per-decide-var labels + an is-aux flag) and inverts
-  `VarIndexer::Get(var, row)` over all rows to produce a `flat column →
+  pure (caller pre-extracts per-decide-var labels + an is-aux flag) and walks every
+  decision's instances that hold a column (`VarIndexer::InstanceColumn`) to produce a `flat column →
   ColumnProvenance` map. The provenance retains the variable's **instance**
   identity (the class id for a keyed decision, the row for a decision per row) — the
   hook the unbounded escape characterization resolves to categorical slice findings

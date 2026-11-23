@@ -45,21 +45,19 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   `build/release/test/unittest "[decidb]"`; the corpus query of `test/decide/golden/corpus.sql` line 717's
   neighbour (`per grp: sum(x) by (grp) <= budget / 10 * open`) has 6 columns and 3 rows.
 
-## MODEL-14 — A helper has no array as long as the input
+## MODEL-22 — A frame read is resolved where its term is written
 
-- **Problem.** A term names its instance (`06_model_formulation/done.md` § A term names the instance it reads), so
-  stage 06 reads no helper's `row_to_class`, and a helper is never an output column. Each helper still holds an array
-  as long as the input (`HelperMapping`), which `VarIndexer::Build` copies: 40 clauses that each read a helper over
-  2,000,000 rows peak at 2.41 GB against 1.09 GB for one, with 185 ms against 26 ms in `execution.tree_model` and
-  52 ms in the layout. `instance_floors.cpp` reads a floor's instance through the record's data row.
-- **Change.** A helper's scope holds its number of instances and no row map; only a declared keyed decision keeps
-  `row_to_class`, for the output. `VarIndexer` reads the mappings it is given and copies none. A frame read's base
-  instance is resolved where its term is written, if every reader of `SolverInput::frame_reads` can then go
-  (`DecideVarScope::FRAME_READ`, `ResolveRead`: 22 uses in stage 06); say in the task's commit which.
-- **Done when.** `context/opa_rewrite/repro/clauses_times_rows.sql` with each clause written
-  `when g = k: 2 * x <= sum(w * x) + 1`, 40 clauses over 2,000,000 rows: peak memory and `execution.tree_model`
-  within a tenth of the 40 plain clauses'; `./test/decide/run_tests.sh -k "anr or frame or scope or per"`; model
-  goldens identical.
+- **Problem.** A term names its instance (`06_model_formulation/done.md` § A term names the instance it reads), and a
+  frame read's is the row it is read at: stage 06 turns it into its base decision's instance at the row the frame
+  selects (`VarIndexer::InstanceColumn`, `ResolveInstance`, `SolverInput::frame_reads`, `first_frame_read`,
+  `BaseVariable`, `SyncFrameReadBoxes`, the boxes `instance_floors.cpp` and `formulate_model.cpp` copy from the base).
+  The emitter holds the frame's map where it writes the term (`DecideModelEmitter::FrameReads`).
+- **Change.** The emitter writes a frame read's term on its base decision, at the base's instance at the selected
+  row. `DecideVarScope::FRAME_READ`, `SolverInput::frame_reads` and their readers in stage 06 go. A clause that reads
+  a decision and a frame read of it then holds two terms on one decision: each reader of
+  `EvaluatedConstraint::variable_indices` is checked for that.
+- **Done when.** No `FRAME_READ` or `frame_reads` under `src/decidb` or `src/include/duckdb/decidb`;
+  `./test/decide/run_tests.sh -k "frame"`; model goldens identical.
 
 ## MODEL-17 — The emitter reads a term in one place
 
@@ -139,5 +137,5 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
 - **Needs.** Every task above that is not a decision.
 - **Done when.** `make decide-test`; `DECIDB_FORCE_SOLVER=highs make decide-test`;
   `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`; the debug build's suite; `unittest "[decidb]"` in both builds;
-  `repro/clauses_times_rows.sql` and its helper form (MODEL-14) no slower in evaluation time or peak memory than
+  `repro/clauses_times_rows.sql` and its helper form no slower in evaluation time or peak memory than
   `08_execution/done.md` states; `make format-check`.

@@ -302,9 +302,12 @@ DecideVariantDifference DecideModelEmitter::ObjectiveDifference(idx_t root, cons
 
 void DecideModelEmitter::KeyedMappings(vector<KeyedMapping> &mappings) {
 	mappings = DecideDeclaredMappings(descent);
-	for (idx_t scope = 0; scope < tree.keyed_scopes.size(); scope++) {
-		if (tree.keyed_scopes[scope].signature != DConstants::INVALID_INDEX) {
-			mappings[scope] = SignatureMapping(scope);
+	for (idx_t scope = 0; scope < mappings.size(); scope++) {
+		if (scope < tree.keyed_scopes.size() && tree.keyed_scopes[scope].signature != DConstants::INVALID_INDEX) {
+			scope_rows.push_back(SignatureRows(scope));
+			mappings[scope] = scope_rows.back().Close(num_rows);
+		} else {
+			scope_rows.emplace_back(mappings[scope]);
 		}
 	}
 	keyed = &mappings;
@@ -318,10 +321,21 @@ DecideInstanceOfRow DecideModelEmitter::InstanceOfRow(idx_t variable) const {
 		auto &scope = tree.variable_scopes[variable];
 		instance.query_wide = scope.IsGlobal();
 		if (scope.IsKeyed()) {
-			instance.class_of_row = (*keyed)[scope.keyed_scope_idx].row_to_class.data();
+			instance.keyed = &scope_rows[scope.keyed_scope_idx];
 		}
 	}
 	return instance;
+}
+
+TermInstances DecideModelEmitter::InstancesAt(idx_t variable, const vector<idx_t> *rows) const {
+	const auto instance = InstanceOfRow(variable);
+	TermInstances out;
+	out.query_wide = instance.query_wide;
+	const idx_t places = rows ? rows->size() : num_rows;
+	for (idx_t place = 0; instance.keyed && place < places; place++) {
+		out.classes.push_back(instance.At(rows ? (*rows)[place] : place));
+	}
+	return out;
 }
 
 idx_t DecideModelEmitter::Instances(idx_t variable) const {
@@ -374,7 +388,7 @@ vector<DecideInstanceOfRow> DecideModelEmitter::InstancesOfRows(const vector<idx
 	return instances;
 }
 
-KeyedMapping DecideModelEmitter::SignatureMapping(idx_t scope) {
+DecideScopeRows DecideModelEmitter::SignatureRows(idx_t scope) {
 	// The reducer's operand, whose instances are its classes split by the values its body reads (D70, D71).
 	const auto operand = tree.qualified_operands[scope];
 	if (operand == DConstants::INVALID_INDEX) {
@@ -382,20 +396,17 @@ KeyedMapping DecideModelEmitter::SignatureMapping(idx_t scope) {
 	}
 	auto &signature = tree.signatures[tree.keyed_scopes[scope].signature];
 	const auto variants = Variants(operand, &signature);
-	KeyedMapping mapping;
-	mapping.num_classes = variants.count;
+	const auto reads = DecideEntryRows(tree, descent, operand);
+	DecideScopeRows scope_classes(num_rows, variants.count, reads.size());
 	// How many classes of the key those values come from, for EXPLAIN ANALYZE (D71).
 	if (variants.count > variants.num_classes) {
 		op.RecordVariants(signature, "values", variants.count, variants.num_classes);
 	}
 	// A row the reducer does not read has no class.
-	mapping.row_to_class.assign(num_rows, DConstants::INVALID_INDEX);
-	const auto rows = DecideEntryRows(tree, descent, operand);
-	for (idx_t place = 0; place < rows.size(); place++) {
-		mapping.row_to_class[rows[place].first] = variants.of_entry[rows[place].second];
+	for (auto read : reads) {
+		scope_classes.List(read.first, variants.of_entry[read.second]);
 	}
-	DecideMapRowsInNoClass(mapping);
-	return mapping;
+	return scope_classes;
 }
 
 DecideModelEmitter::LinkMembers DecideModelEmitter::Members(idx_t node) {
@@ -440,31 +451,27 @@ DecideModelEmitter::LinkMembers DecideModelEmitter::Members(idx_t node) {
 	return members;
 }
 
-KeyedMapping DecideModelEmitter::HelperMapping(idx_t node_index) {
+DecideScopeRows DecideModelEmitter::HelperRows(idx_t node_index) {
 	auto &node = *tree.nodes[node_index];
 	if (node.kind == DecideNodeKind::FRAME) {
 		// A range frame's helper: a class per window of its frame.
-		auto mapping = DecideFrameWindowMapping(gstate.frame_maps[node.Cast<DecideFrameNode>().frame]);
-		DecideMapRowsInNoClass(mapping);
-		return mapping;
+		return DecideFrameWindowRows(gstate.frame_maps[node.Cast<DecideFrameNode>().frame]);
 	}
 	auto &members = link_members[node_index];
 	members = Members(node_index);
-	KeyedMapping mapping;
-	mapping.num_classes = members.groups;
-	mapping.row_to_class.assign(num_rows, DConstants::INVALID_INDEX);
+	const auto reads = DecideEntryRows(tree, descent, node_index);
+	DecideScopeRows scope_classes(num_rows, members.groups, reads.size());
 	// A group with no member has no helper, so a row of it reads none.
 	auto &reducer = descent.Containers()[node_index];
-	for (auto read : DecideEntryRows(tree, descent, node_index)) {
-		mapping.row_to_class[read.first] = members.group_of_slot[reducer.Slot(read.second)];
+	for (auto read : reads) {
+		scope_classes.List(read.first, members.group_of_slot[reducer.Slot(read.second)]);
 	}
-	DecideMapRowsInNoClass(mapping);
-	return mapping;
+	return scope_classes;
 }
 
 void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 	gstate.absent_reads.assign(tree.decide_variables.size(), vector<bool>());
-	columns.Absence().ReadClasses(mappings, gstate.absent_reads);
+	columns.Absence().ReadClasses(scope_rows, gstate.absent_reads);
 	gstate.evaluated_bilinear_links.clear();
 	for (auto &definition : tree.definitions) {
 		auto product = definition->TryCast<DecideBooleanProductDefinition>();
@@ -507,7 +514,9 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 		           tree.OwnedBy(node, DecideHelperKind::DEFINITION)) {
 			// The owning F node resolves absence from its linked rows.
 		} else if (node.Linked()) {
-			mappings[tree.variable_scopes[tree.ValueVar(node)].keyed_scope_idx] = HelperMapping(root);
+			const auto scope = tree.variable_scopes[tree.ValueVar(node)].keyed_scope_idx;
+			scope_rows[scope] = HelperRows(root);
+			mappings[scope] = scope_rows[scope].Close(num_rows);
 		} else if (node.compiled.clause && node.compiled.clause->defined_var != DConstants::INVALID_INDEX &&
 		           !tree.OwnedBy(node, DecideHelperKind::ABS)) {
 			DefinitionAbsence(root, node.compiled.clause->defined_var);
@@ -521,7 +530,7 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 		for (auto factor : {std::make_pair(product.bool_var_idx, &product.bool_instances),
 		                    std::make_pair(product.other_var_idx, &product.other_instances)}) {
 			const auto instance = InstanceOfRow(factor.first);
-			for (idx_t row = 0; per_row && instance.class_of_row && row < num_rows; row++) {
+			for (idx_t row = 0; per_row && instance.keyed && row < num_rows; row++) {
 				factor.second->push_back(instance.At(row));
 			}
 		}
@@ -1526,16 +1535,18 @@ void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &f
 		// where it has no instance (D84).
 		ReadPart(sites.weight, group.qualifier_scope_idx, group.sign, nullptr, out.weight, null_rows);
 		auto read_form = [&](const vector<DecideTerm> &terms, const vector<DecideTermSite> &form,
-		                     vector<idx_t> &variables, vector<CoefficientColumn> &coefficients) {
+		                     vector<idx_t> &variables, vector<CoefficientColumn> &coefficients,
+		                     vector<TermInstances> &instances) {
 			for (idx_t t = 0; t < terms.size(); t++) {
 				auto &term = terms[t];
 				variables.push_back(gstate.ReadVariable(term.variable_index, term.frame_read));
+				instances.push_back(InstancesAt(variables.back(), &result.rows));
 				coefficients.emplace_back();
 				ReadPart(form[t], group.qualifier_scope_idx, term.sign, &term, coefficients.back(), null_rows);
 			}
 		};
-		read_form(group.left, sites.left, out.left_variables, out.left_coefficients);
-		read_form(group.right, sites.right, out.right_variables, out.right_coefficients);
+		read_form(group.left, sites.left, out.left_variables, out.left_coefficients, out.left_instances);
+		read_form(group.right, sites.right, out.right_variables, out.right_coefficients, out.right_instances);
 		auto &filter = filters[clause.lhs_terms.size() + g];
 		if (group.avg_scale) {
 			ScaleAvgRows(out.weight, filter.has_filter, filter.mask, placed, evaluated.row_group_ids,
@@ -1619,11 +1630,13 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 		vector<vector<double>> numbers;
 		vector<CoefficientColumn *> coefficients;
 		auto read_form = [&](const vector<DecideTerm> &terms, const vector<DecideTermSite> &form,
-		                     vector<idx_t> &variables, vector<CoefficientColumn> &columns_out) {
+		                     vector<idx_t> &variables, vector<CoefficientColumn> &columns_out,
+		                     vector<TermInstances> &instances) {
 			columns_out.resize(terms.size());
 			for (idx_t t = 0; t < terms.size(); t++) {
 				auto &term = terms[t];
 				variables.push_back(gstate.ReadVariable(term));
+				instances.push_back(InstancesAt(variables.back(), nullptr));
 				if (columns.Absence().MayBe(term)) {
 					absent.push_back(&term);
 				}
@@ -1632,8 +1645,8 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 				coefficients.push_back(&columns_out[t]);
 			}
 		};
-		read_form(group.left, sites.left, out.left_variables, out.left_coefficients);
-		read_form(group.right, sites.right, out.right_variables, out.right_coefficients);
+		read_form(group.left, sites.left, out.left_variables, out.left_coefficients, out.left_instances);
+		read_form(group.right, sites.right, out.right_variables, out.right_coefficients, out.right_instances);
 		filter.avg_scale = group.avg_scale;
 		filter.has_filter = true;
 		filter.mask.assign(num_rows, false);
@@ -1823,8 +1836,7 @@ void DecideModelEmitter::ValueLinks() {
 		bool distinct = IsDecideExtremum(definition.reducer);
 		const auto instances = InstancesOfRows(variables);
 		for (idx_t t = 0; t < variables.size() && distinct; t++) {
-			distinct =
-			    variables[t] == DConstants::INVALID_INDEX || instances[t].query_wide || instances[t].class_of_row;
+			distinct = variables[t] == DConstants::INVALID_INDEX || instances[t].query_wide || instances[t].keyed;
 		}
 		std::set<vector<double>> listed;
 		for (idx_t group = 0; group < reads_by_group.size(); group++) {
@@ -1832,7 +1844,7 @@ void DecideModelEmitter::ValueLinks() {
 			if (group_reads.empty()) {
 				continue;
 			}
-			// A group's number is its helper's instance (HelperMapping).
+			// A group's number is its helper's instance (HelperRows).
 			spec.members.AddGroup(group);
 			listed.clear();
 			const auto avg_scale =

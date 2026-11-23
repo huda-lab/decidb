@@ -244,7 +244,7 @@ DecideFrameColumnValues ComputeDecideFrameColumns(ClientContext &context, const 
 
 //! A range frame's helper's classes (DecideOptimizer::RewriteFrameRanges): one per window of its frame, read by the
 //! window's anchors; an anchor whose window reads nothing is in none.
-KeyedMapping DecideFrameWindowMapping(const DecideFrameMap &map);
+DecideScopeRows DecideFrameWindowRows(const DecideFrameMap &map);
 
 //! A range frame's helper's members (language/guide.md §5.6), one group per window that reads something, the helper's
 //! instance for that window: a member per row the window reads, and one for its `else`, the payload's coefficients
