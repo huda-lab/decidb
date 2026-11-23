@@ -85,7 +85,7 @@ primary
 (`DecideWrittenName`, `../pipeline/02_binder/done.md` § One spelling per function): `pow(x - v, 2)` reprints as `pow`
 and `@(x - v)` as `@`, also in the ABS rewrite's account label.
 `Expression::ToString()` is not used because the bound tree is not the query: it carries casts the binder inserted,
-prints functions in call form, and keeps a frame's and a function's tags in aliases (`__frame_0__`).
+prints functions in call form, and keeps a function's tags in aliases (`__abs_function_0__`).
 
 **The style** (D32): quoted text as typed, in the user's case; a reprinted node (a rewritten row, the decision structure
 of a layer) with reducers, `norm` and keywords in lower case; the `when c per K:` qualifier in front; a

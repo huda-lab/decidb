@@ -525,7 +525,7 @@ order key"*).
 `DecideBinder::BindDecideFrame` binds the frame onto the aggregate that reads its payload at the selected rows: the
 range's reducer (`sum`, `avg`, `min`, `max` or `count`), else `first`, which reads the one row a point selects. It
 records a `DecideFrameSpec` (`logical_decide.hpp`) on the clause's frame list, the aggregate (a
-`BoundDecideReducerExpression`, `BindFrameAggregate`) tagged `__frame_<i>__` on its alias and with the frame as written
+`BoundDecideReducerExpression`, `BindFrameAggregate`) naming the entry by its `frame` field and with the frame as written
 (its defaults left out) as a source fragment of its own: the anchors and
 their `k`, `every`, `all`, the fallback (a number, *"else ''a'' is not a number"*, whose doubled quote is the text's own plus the sentence's; `else NULL` written, or one
 that folds to NULL, is none, D86), the order key bound as

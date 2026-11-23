@@ -479,7 +479,7 @@ same shared cap after canonicalization and must produce the same actionable
 diagnosis. Internal names such as `SUBQUERY` never appear in suggested SQL.
 
 A reducer's facts are fields of its node and a clause's are fields of its record, so a rebuild copies them with the
-node (`CopyFacts`) or the record. The tags that remain (a frame's, a function's) live in the same `alias` field a plain
+node (`CopyFacts`) or the record. The tags that remain (a function's) live in the same `alias` field a plain
 user alias would occupy. `GetName()` strips them (`StripDecideTags`, `base_expression.cpp`), and a call's or a
 reducer's `ToString()` prints the name it was written under (`written_name`, §3.3c). `StripDecideTags` removes every
 trailing `__…__` run, so a user alias that ends in one loses it there; a result column takes its
@@ -707,7 +707,7 @@ Foldable decision-free bounds that evaluate to NULL are rejected here, with
 without mutating the clause. They perform explicit decision-side and
 additive-placement checks, then canonicalize a copy and compare
 with an ordered, **alias-aware** comparison (`CanonicalTreesEqual`) — required because DuckDB's ordinary
-`Expression::Equals` ignores an alias, where a frame's and a function's tags live. A clause that classifies as VALUE and
+`Expression::Equals` ignores an alias, where a function's tags live, and a reducer's facts, its frame among them. A clause that classifies as VALUE and
 is not recorded in that shape fails too.
 
 They throw `InternalException`: past this boundary a non-canonical clause is an
@@ -764,7 +764,7 @@ and is no field.
 
 ### Frame selectors
 
-A frame's marker -- the `BoundDecideReducerExpression` the binder bound it to, tagged `__frame_<i>__` on its alias -- is
+A frame's marker -- the `BoundDecideReducerExpression` the binder bound it to, whose `frame` field names its entry of `frames` -- is
 a
 tuple term read at another row, never a reducer (`ContainsReducer`,
 `TryMatchScaledAggregate`): a frame over decisions sits left as any
@@ -782,7 +782,7 @@ anchor is the data's to say: stage 08 reads it per instance (D84, D88). `SkipNul
 tests a frame inside a reducer over decisions whole (`marker IS NOT NULL`), as it tests a
 column: the frame reads another row, or nothing, so no column of the row itself says whether
 it has a value (D84), and the member goes where it reads nothing (D87); stage 05 makes the
-test a column. A marker names its frame by its tag alone, which `Expression::Equals`
+test a column. A marker names its frame by its `frame` field alone, which `Expression::Equals`
 ignores, so every DECIDE comparison of trees that may hold a frame -- the NULL tests
 `SkipNullData` collects, a filter like terms share, a helper's reducer and rows -- reads
 `DecideExpressionsEqual` (`decide_reducer_path.hpp`), which holds two markers the same only

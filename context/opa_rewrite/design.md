@@ -108,8 +108,8 @@ own: its body and its scope each have one.
 |---|---|---|---|
 | `BoundDecide` | struct | decisions with their scopes, keys, keyed scopes, frames, clauses, the objective clause, sense, constant offset, source text | 13 fields copied one by one from `BoundSelectNode` to `LogicalDecide` |
 | `BoundDecideClause` | struct | scope, body (the comparison), origin, and the facts of § 3.3 contract 4 | an AND child, its wrapper tags, `constraint_sources[i]` |
-| `BoundDecideReducerExpression` | `Expression` | the bound aggregate function with its bind data (none for a norm no definition has replaced, which its `norm` field names with its order and bound), `children`, `filter` (its `when` and its members' NULL tests, each a `BoundDecideNullTestExpression`), `by` key index, own `per` scope index, written name, and what the rewrites record (`count_scale`, `holds_reducer`, `retained`). Every DECIDE aggregate is one, a frame's included, which keeps its `__frame_<i>__` tag until TREE-5 | a `BoundAggregateExpression` with `__group_key_`, `__qualified_by_`, `__decide_norm_`, `__written_norm_` tags; `norm` as a SUM with a patched return type |
-| `BoundDecideFrameExpression` | `Expression` | a frame index and the payload | a `BoundDecideReducerExpression` whose alias carries `__frame_<i>__` |
+| `BoundDecideReducerExpression` | `Expression` | the bound aggregate function with its bind data (none for a norm no definition has replaced, which its `norm` field names with its order and bound), `children`, `filter` (its `when` and its members' NULL tests, each a `BoundDecideNullTestExpression`), `by` key index, own `per` scope index, written name, and what the rewrites record (`count_scale`, `holds_reducer`, `retained`). Every DECIDE aggregate is one, a frame's included, which its `frame` field tells | a `BoundAggregateExpression` with `__group_key_`, `__qualified_by_`, `__decide_norm_`, `__written_norm_` tags; `norm` as a SUM with a patched return type |
+| the `frame` field of `BoundDecideReducerExpression` | a field, not a class | an index into `frames`. A frame's aggregate is a reducer node already (the function, its bind data, its rows, and for a range the reducer's facts), so a frame class would repeat it and owe the class obligations; `TryGetDecideFrame` tests the class and the field | a `BoundDecideReducerExpression` whose alias carries `__frame_<i>__` |
 | `BoundDecide::computed_values` | table of `DecideComputedValue` | a computed value read whole, found by equality with its `value`: whether it is one value for the whole query, and whether it is a flattened subquery. No node wraps the read (R25) | `__query_wide_value__`, `__row_varying_subquery__`, `__bound_reducer__` on a leaf |
 
 - **Existing types are reused.** A clause's scope is today's `DecideClauseScope` (`decide_tree_terms.hpp:107`) and
@@ -238,7 +238,7 @@ The steps run in order, one at a time: each touches files the next one touches.
 | TREE-2 | `BoundDecide`, moved whole | 02, 03, planning | the field-by-field copies at each hop |
 | TREE-3 | Clause records | 02–05, planning, 08's readers, direct front end, EXPLAIN, DIAGNOSE | the AND tree, its wrappers, `constraint_sources`, 14 tags |
 | TREE-4 | Reducer node and value node | 02–05, DuckDB's statistics pass, planning, 08's readers, direct front end | 15 tags; `norm` as a patched SUM |
-| TREE-5 | Frame node | 02–05, planning | 4 tags, the frame guards |
+| TREE-5 | Frame field | 02–05, planning | 3 tags |
 | TREE-6 | Function nodes and one table of helper definitions (§ 3.2.3) | 05, planning | 9 tags; four of the five definition tables |
 | TREE-7 | One lowering walk; `DecideNode` by kind (§ 3.2.4) | planning, 08 (field access only) | the second lowering, the address join |
 | TREE-8 | Direct rules read `BoundDecide` (R17) | direct solve | `DirectIR` and its front end, the last tag |
@@ -280,9 +280,10 @@ goes with the later one.
 | TREE-4 | `QUERY_WIDE_VALUE`, `ROW_VARYING_SUBQUERY`, `BOUND_REDUCER` | an entry of `BoundDecide::computed_values`; the guard around a recorded reducer's value holds a `BoundDecideNullTestExpression` |
 | TREE-4 | `QUERY_WIDE_BOUND` | a clause field |
 | TREE-4 | `WRITTEN_NAME_` | on a reducer: a field. On a scalar call (`@`, `**`): a display field `written_name` on `BoundFunctionExpression`, beside `is_operator` |
-| TREE-5 | `FRAME_`, `FRAME_COLUMN`, `FRAME_TIGHTEST_BOUND` | the frame node's index; a clause field for the tightest bound |
-| TREE-5 | `FRAME_AGGREGATE_` | a field of the data reducer naming its `frame_aggregates` record |
+| TREE-5 | `FRAME_`, `FRAME_TIGHTEST_BOUND` | the reducer's `frame` field; the clause field `tightest_frame_bound` |
+| TREE-5 | `FRAME_AGGREGATE_` | the data reducer's `frame_aggregate` field, naming its `frame_aggregates` record; the lowered column holds it as `DecideFrameColumn::aggregate` |
 | TREE-6 | `ABS_FUNCTION_`, `ABS_FUNCTION_NEG_`, `BILINEAR_FUNCTION_GROUP_`, `L0_INDICATOR_FUNCTION_`, `DEFINITION_FUNCTION_`, `BODY_DEFINITION`, `L0_AUTO_BOUND`, `L0_WRITTEN_BOUND`, `L0_TOLERANCE` | the function node and its definition |
+| TREE-7 | `FRAME_COLUMN` | the lowering walk, which owns the frame-column registry and makes the references † . The reference is a `BoundReferenceExpression` DuckDB's executor reads, with no field and no frame node to hold an index; its index range is shared with the tree's child reads, and DuckDB's resolver names ordinary references by the bare column name, so a name is not display text |
 | TREE-8 | `NULL_GUARD` | a term's fact, applied when its program is compiled; the direct front end is its second writer † |
 | TREE-9 | the seven helper name prefixes (`ABS_AUX_NAME_`, `VALUE_LINK_NAME_`, …) | none: [read] no code reads a helper's origin from its name. They stay as display names and leave the tag list with the name refusal |
 

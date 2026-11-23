@@ -49,7 +49,7 @@ objective's texts, `source_columns`, `optimized`, the solver choice and the tabl
 
 | Class | What it is | Holds |
 |---|---|---|
-| `BoundDecideReducerExpression` (`planner/expression/bound_decide_reducer_expression.hpp`) | a reducer (`sum`, `avg`, `min`, `max`, `count`, `norm`), and the aggregate a frame binds to | `function` and `bind_info` (the overload `FunctionBinder` picked; `function` is null for a norm no definition has replaced), `children` (none for `count(*)`, two for a collated MIN or MAX), `filter` (the rows it reads); and its facts: `by` (an index into `keys`), `per` (an index into `keyed_scopes`), `norm` (`DecideNorm`: order and the L0 bound), `written_name`, `count_scale`, `holds_reducer`, `retained` |
+| `BoundDecideReducerExpression` (`planner/expression/bound_decide_reducer_expression.hpp`) | a reducer (`sum`, `avg`, `min`, `max`, `count`, `norm`), and the aggregate a frame binds to | `function` and `bind_info` (the overload `FunctionBinder` picked; `function` is null for a norm no definition has replaced), `children` (none for `count(*)`, two for a collated MIN or MAX), `filter` (the rows it reads); and its facts: `by` (an index into `keys`), `per` (an index into `keyed_scopes`), `norm` (`DecideNorm`: order and the L0 bound), `written_name`, `count_scale`, `holds_reducer`, `retained`, `frame` (an index into `frames`, for the aggregate a frame binds to), `frame_aggregate` (an index into `LogicalDecide::frame_aggregates`, for a reducer over data whose argument reads a frame) |
 | `BoundDecideNullTestExpression` (`bound_decide_null_test_expression.hpp`) | an `IS NOT NULL` test a reducer's rows gain beside its written `when` (`DecideCanonicalizer::SkipNullData`), and the test around a recorded reducer's value (`RhsBoundRewriter::InKey`) | `test`: the `IS NOT NULL`, or TRUE once the statistics prove it |
 
 - **The reducer is laid out as DuckDB's `BoundWindowExpression` is**: the bound aggregate function with its bind data,
@@ -58,7 +58,8 @@ objective's texts, `source_columns`, `optimized`, the solver choice and the tabl
   column, a direct rule's plan) `ToAggregate()` makes the `BoundAggregateExpression` it names.
 - **`Equals` compares what the reducer computes**: its type, function, arguments, rows and bind data. A norm with no
   function is the norm its order and bound name, so it does not equal the SUM over its body. The facts the rewrites
-  record (`by`, `per`, `count_scale`, `holds_reducer`, `retained`, and the norm a definition was written as) are left
+  record (`by`, `per`, `count_scale`, `holds_reducer`, `retained`, `frame`, `frame_aggregate`, and the norm a
+  definition was written as) are left
   out, as DuckDB leaves out an alias, and `FactsEqual` (`DecideFactsEqual` for any two nodes) compares them where they
   are structure. `written_name` is display only and is in neither.
 - **Each owes DuckDB the obligations of an `Expression` class**: a case in `ExpressionIterator::EnumerateChildren`
@@ -88,8 +89,18 @@ data the objective reads as one value (§2), and a read is told by equality with
 3. *Every DECIDE aggregate, a frame's included, is one `BoundDecideReducerExpression`*, as DuckDB's
    `BoundWindowExpression` is one class for every window function. One bind path makes them all
    (`DecideBinder::BindAggregate`; `BindFrameAggregate` for a frame's), and a frame's aggregate carries reducer facts,
-   so a second class would be a two-class case in every function that reads a reducer. A frame keeps its
-   `__frame_<i>__` mark on `alias` until it has a node of its own.
+   so a second class would be a two-class case in every function that reads a reducer. The design's
+   `BoundDecideFrameExpression` is therefore the field `frame`: a frame class would hold a frame index over a payload
+   and still need the function, the bind data, the rows and the facts a range's reducer has, and would owe the
+   obligations of a class for them. `TryGetDecideFrame` (`decide_reducer_path.hpp`) is the one test: the class and the
+   field. A frame column is another class, a `BoundReferenceExpression` the lowering makes, so the two are not
+   confused.
+4. *A reference to a frame column keeps a mark on its alias* (`FRAME_COLUMN_TAG`): its name is the frame as written,
+   which a message prints as it stands and not as an identifier. The reference is a chunk column DuckDB's executor
+   reads, a `BoundReferenceExpression`, which has no field for the fact. Its index does not tell it either (the tree's
+   child reads are named references in the same range), and a name cannot be display text for every reference:
+   DuckDB's `ColumnBindingResolver` makes the ordinary ones with the column's bare name, which
+   `NameInputColumns` (`plan_decide.cpp`) reads as an identifier.
 - `src/execution/column_binding_resolver.cpp` — the `LOGICAL_DECIDE` case
 - `src/execution/physical_plan/plan_decide.cpp` — logical → physical
 
@@ -231,7 +242,7 @@ relation-qualified reducer over decisions whose body has a field), and by the ob
 data `value`, a `decision` (an index into `decide_variables`), a `by` key (an index
 into `keys`) or a `frame` (an index into `frames`, D82), with its text. `frames` holds one
 `DecideFrameSpec` per frame selector (`../../language/guide.md` §5.6, property 223),
-indexed by the `__frame_<i>__` tag on the aggregate it binds to: its anchors and their
+indexed by the `frame` field of the aggregate it binds to: its anchors and their
 `k`, `every`, `all`, its fallback and order key, `desc`, `cyclic`, and its `within` key as
 an index into `keys`, and a range's reducer (id 121); then where the canonicalizer placed it (stage 04, ids
 113-120): `rows`, the rows its timelines read (its path's, null for every row), `timeline_key`, the names its

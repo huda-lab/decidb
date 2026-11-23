@@ -22,18 +22,6 @@ order, one at a time. Rules for every one of them:
   `ExpressionIterator::EnumerateChildren`, a case in `LogicalOperatorVisitor::VisitExpression`, `IsFoldable()`
   false, and copy, equality, hash and generated serialization.
 
-## TREE-5 — Frame node
-
-- **Problem.** A frame is a `BoundDecideReducerExpression` (`first(e)`, or the range's reducer) whose alias carries
-  an index into `frames` (`BindFrameAggregate`, `decide_binder.cpp`), told from a reducer by `TryGetDecideFrame` and
-  `ContainsDecideFrame` at each site. A data reducer that reads a frame, a frame column and a clause's tightest
-  frame bound are three more tags.
-- **Change.** `BoundDecideFrameExpression`: a frame index and the payload, with the four obligations. The `frames`
-  table stays (R25). The guards become class checks. The tightest bound is a clause field; a data reducer names
-  its `frame_aggregates` record by a field.
-- **Done when.** Goldens identical; the frame tests and the serializer mode pass; `FRAME_TAG_PREFIX`,
-  `FRAME_COLUMN_TAG`, `FRAME_AGGREGATE_TAG_PREFIX` and `FRAME_TIGHTEST_BOUND_TAG` are named nowhere.
-
 ## TREE-6 — Function nodes and one table of helper definitions
 
 - **Problem.** An ABS, a Boolean product, an L0 count and a nonlinear body are each a tag on the kept call that
@@ -46,7 +34,6 @@ order, one at a time. Rules for every one of them:
   node, and the facts joined over its readers (`push` as one `ExtremumPush`, whether an ABS is exact, the
   innermost-first order). A reader and a copy of a clause hold the index. After this step a clause's shape has one
   writer.
-- **Needs.** TREE-5.
 - **Done when.** Goldens identical; `EXPLAIN` and DIAGNOSE tests pass; the 9 tags design.md § 3.5 lists for TREE-6
   are named nowhere; one loop enumerates the definitions.
 
@@ -65,7 +52,9 @@ order, one at a time. Rules for every one of them:
 - **Done when.** Goldens and model dumps identical on both solvers; the debug build reports nothing;
   `context/opa_rewrite/tools/ab_bench.py` against the build before the phase, no workload beyond about 10%;
   `DecideTreeSources` and `retained_function_links` are named nowhere; the tests that reached only a deleted
-  cross-check are deleted; the `lizard` figures of `decide_tree.cpp` before and after are in the report.
+  cross-check are deleted; `FRAME_COLUMN_TAG` is named nowhere (design.md § 3.5: the walk makes the frame-column
+  references and says which of them print as written); the `lizard` figures of `decide_tree.cpp` before and after
+  are in the report.
 
 ## TREE-8 — Direct rules read `BoundDecide`
 

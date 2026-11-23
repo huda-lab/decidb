@@ -204,8 +204,8 @@ is a column stage 08 computes from the rows it selects, so no side table reads o
 in it, read as a column is, so an infinite value is a bound as a column's is (guide §3);
 in a bound of a clause over groups it stays only where it has one value per group -- a
 `first` or `last` frame whose timeline key the group key holds -- and execution checks its NaN as it reads it. One
-that needs its group's tightest value (D85) has its comparison tagged `FRAME_TIGHTEST_BOUND_TAG`, which survives the
-rebuilds that give a bound a new node, and execution takes that value from the rows it reads (stage 08), in the groups
+that needs its group's tightest value (D85) sets its clause's `tightest_frame_bound`
+(`BoundDecideClause`, which `RewriteMinMax` copies to an easy half), and execution takes that value from the rows it reads (stage 08), in the groups
 that hold an instance. A column's tightest value is the group's MIN or MAX in a side table.
 Bound reduction relies on two facts a later pass can change: the clause's shape, since only the aggregate shape takes
 the group's tightest value, and the comparison's direction, which says which value is the tightest. For a bound that
@@ -222,7 +222,7 @@ other data bound's NaN check is a scope check too. A check copies the value it r
 where each of the clause's reducers with a `when` of its own keeps a row of the group: a group with none holds no
 instance and constrains nothing, so
 its bound is not read (guide §7.4), as a frame's is not. A reducer over data whose argument reads a frame stays a reducer over the rows it
-reads, tagged with its entry of `LogicalDecide::frame_aggregates` (its path key and its own `per` key,
+reads, naming its entry of `LogicalDecide::frame_aggregates` by its `frame_aggregate` field (its path key and its own `per` key,
 `MakeFrameAggregate`), and a norm of one also checks its body (`ArgumentMessage`) at the rows the reducer reads,
 since a norm's value can hide a NaN (an L0 count's SIGN reads it as 0); the linear form makes it a trailing frame column
 (`DecideFrameColumn::Kind::AGGREGATE`, a second `LowerFramesOnce` once every frame has its columns) that stage 08
