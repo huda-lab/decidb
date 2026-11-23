@@ -364,7 +364,9 @@ columns in a scan of their own.
   | in the objective | each row it keeps, or each member | drops the part there | `ObjectivePart` |
 
   A product group is read where its weight and every form term are, so the objective's is dropped on a row where
-  one form's decision has no value. A per-row clause's terms (`Rows`), a helper's members (`ValueLinks`) and a
+  one form's decision has no value. In a reducer the rule seldom has a row to act on: the reducer's member tests
+  already leave out a row where a decision of its body has no instance or a frame selects nothing, and a product
+  with a nested reducer is refused. A per-row clause's terms (`Rows`), a helper's members (`ValueLinks`) and a
   frame's (`FrameMembers`) stand on their node's own entries and read their programs there
   (`DecideTreeColumns::Numbers`), with no row of another node to join. A variant whose first row D88
   moves to a later row of its entry is named by the entry's first row; no query is known to reach it.

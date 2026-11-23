@@ -45,16 +45,6 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   `build/release/test/unittest "[decidb]"`; the corpus query of `test/decide/golden/corpus.sql` line 717's
   neighbour (`per grp: sum(x) by (grp) <= budget / 10 * open`) has 6 columns and 3 rows.
 
-## MODEL-23 — Tests pin a product group's part in a reducer
-
-- **Problem.** A product group's part in a reducer is read as a term is (`08_execution/done.md` § A part is read by
-  its place): a member whose form decision has no value is no member (D84), and a coefficient is computed on every
-  member before a relation-qualified reducer selects its classes. No test reaches either with a product group.
-- **Change.** Two oracle tests: a product group in a `sum` whose form reads an auxiliary with no value on one member
-  (D88), and one in a relation-qualified reducer whose coefficient is not finite on a row in no class.
-- **Done when.** `./test/decide/run_tests.sh -k "quadratic and (absent or class)"`; each test fails with
-  `ReadInReducer` reading `Tested` for a part's entries, or `Numbers` on `reads`.
-
 ## MODEL-18 — A clause's working columns are apart from its result, and the emitter fills the solver input
 
 - **Problem.** `EvaluatedClauseColumns` inherits the stage 06 `EvaluatedConstraint` and is sliced in `Route`, which
