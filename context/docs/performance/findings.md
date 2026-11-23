@@ -72,11 +72,9 @@ rows (`execution.tree_descent`) and the evaluation of each node's programs into 
 (`execution.tree_model`: the keyed-decision mapping, constraints, objective and the helper decisions' members), then
 `execution.assemble_input` and `execution.formulate`.
 
-Per-query costs on these spans come from the measurement runs ([todo.md § PERF-6](todo.md#perf-6--solver-execution)).
-
 **Variant numbering.** The determination checks are gone (D70): a `per K:` clause in the per-row shape numbers its rows
 by key and signature (`DecideModelEmitter::Variants`) where its signature has a field, and nothing runs where it has
-none. Its cost on a 1M-row join is not yet measured ([todo.md § PERF-23](todo.md#perf-23--variant-numbering)).
+none. Its cost on a 1M-row join is not measured.
 
 ## Model construction
 

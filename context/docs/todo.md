@@ -7,7 +7,7 @@ Read first: `.claude/CLAUDE.md`, `context/opa_rewrite/README.md`. Checks: `direc
 work any task in these todo files.
 
 Each phase is one architectural change. Phases run in order; groups
-inside a phase run in order; measurement runs fit between phases. `(decision)` marks a task whose **Decision needed**
+inside a phase run in order. `(decision)` marks a task whose **Decision needed**
 the owner rules first.
 
 # Phase 6 — The model is written at the nodes
@@ -17,12 +17,3 @@ the owner rules first.
 
 ## 6.2 Gate (one lane; needs: 6.1)
 - [ ] MODEL-7 Phase 6 gate and docs — pipeline/todo.md § MODEL-7
-
-# Measurements (outside the phases; confirm each start with the owner)
-
-## M.1 Measurement runs (one lane)
-- [ ] PERF-23 Variant numbering — performance/todo.md § PERF-23
-- [ ] PERF-24 A nested objective's helpers — performance/todo.md § PERF-24
-- [ ] PERF-6 Solver execution — performance/todo.md § PERF-6
-- [ ] PERF-8 Memory and scaling — performance/todo.md § PERF-8
-- [ ] PERF-1 Methodology, a second host — performance/todo.md § PERF-1
