@@ -43,36 +43,8 @@ public:
 	// Evaluated Coefficients (Phase 2)
 	//===--------------------------------------------------------------------===//
 
-	vector<EvaluatedConstraint> evaluated_constraints;
-	//! The `<>` clauses, evaluated; moved into SolverInput::not_equals.
-	vector<NotEqualClause> evaluated_not_equals;
-	//! The clauses with terms of degree 2, evaluated; moved into SolverInput::quadratics.
-	vector<QuadraticClause> evaluated_quadratics;
-	//! The stage-06 records the emitter materializes from BOOLEAN_PRODUCT F nodes for the unchanged linearizer.
-	vector<BilinearLinkSpec> evaluated_bilinear_links;
-	//! One record per ABS F node, with its envelope rows evaluated; moved into SolverInput::abs_links.
-	vector<AbsLinkSpec> evaluated_abs_links;
 	//! `singleton_row_constraints`, evaluated under DIAGNOSE for the repair model alone.
 	vector<EvaluatedConstraint> evaluated_singleton_row_constraints;
-	//! The classes each aggregate-shape row's group stands for (D28), referenced from the
-	//! rows; filled under DIAGNOSE only and moved into SolverInput::class_sets.
-	vector<SolverInput::ClassSet> class_sets;
-	//! The value rewrite's helper decisions, each with its reducer's members evaluated
-	//!; moved into SolverInput::reducer_value_links.
-	vector<ReducerValueLinkSpec> evaluated_value_links;
-	//! Per helper, the instances written where they are read; moved into SolverInput::written_in.
-	vector<vector<bool>> written_in;
-	//! The objective's linear terms as they are read, a column over the input's rows each, with the decision each
-	//! reads: the emitter's working state, which DecideModelEmitter::ObjectiveCoefficients sums and frees.
-	vector<CoefficientColumn> evaluated_objective_coefficients; // [term_idx]
-	vector<idx_t> objective_variable_indices;
-	//! The objective's linear part per instance and its constant; moved into SolverInput::objective_coefficients and
-	//! ::objective_constant.
-	vector<vector<double>> objective_coefficients;
-	double objective_constant = 0.0;
-
-	//! The objective's product groups, evaluated; moved into SolverInput::objective_product_groups.
-	vector<EvaluatedProductGroup> evaluated_objective_groups;
 
 	vector<double> ilp_solution;
 	VarIndexer var_indexer; // For mapping (var_idx, row) to solution indices
@@ -80,11 +52,6 @@ public:
 	//! The frame selectors' timelines and selections, one per
 	//! frame, in LogicalDecide::frames order.
 	vector<DecideFrameMap> frame_maps;
-	//! Per decision, the rows whose instance of it has no value beyond its keyed scope's absent class: an auxiliary
-	//! whose definition reads an instance with none there (D88); empty where none.
-	vector<vector<bool>> absent_reads;
-	//! Per decision, the instances every row reads with no value; moved into SolverInput::absent_instances.
-	vector<vector<bool>> absent_instances;
 	//! Per clause (its source clause id), the instances its rows hold once grouped, and those left once each with no
 	//! value is skipped (deck pp. 50, 56): the most any of its rows holds, as a rewrite states the clause's instances
 	//! in each of its rows (PhysicalDecide::ReportSkippedInstances).

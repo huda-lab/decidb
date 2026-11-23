@@ -29,8 +29,9 @@ its programs). Model building, the solve and the diagnoses live with their stage
 | `FinalizeSolveResult` | 3 — calls `SolveDecide` (`decide_solve.cpp`: the solve, and at a time limit the prompt to continue or the incumbent), switches on the terminal (`SOLVED`/`UNBOUNDED`/`INFEASIBLE`/`UNDIAGNOSED`), and hands the diagnosis off or finishes `gstate` |
 | `UnboundedTerminal`, `InfeasibleTerminal` (`decide_diagnostic_terminals.cpp`) | under `DIAGNOSE` only — the engines a failure runs; the infeasible one formulates the repair model, 3b again against the widened box (`FormulateElasticModel`) |
 
-`EvaluateTree` fills one `EvaluatedClauses`, the filter state of the objective's terms and product groups, which
-`BuildSolverInput` reads. `FormulateModel` reads `SolverInput`, the box and the column space and nothing else: the
+`EvaluateTree` writes what the model reads of the data into the `SolverInput` itself: the model emitter holds it and
+fills its clauses, links, mappings and objective, so the sink state mirrors none of them and `BuildSolverInput` adds
+the plan's facts and settles the box. `FormulateModel` reads `SolverInput`, the box and the column space and nothing else: the
 declared names and the native-construct policy are on `SolverInput` (`variable_names`, `use_native_constructs`), and
 a row whose `M` the box gives names its indicator (`EvaluatedConstraint::sized_indicator`). Nothing in it depends on a variable bound, so the
 formulation pass runs twice against two boxes from one input.
@@ -240,7 +241,7 @@ columns in a scan of their own.
   its terms: the reducer's own `when`, which the descent reads, then its member tests. A value error is found by
   reading its window entry by entry.
 - *Formulation* (`decide_model_emitter.hpp`): the model emitter, an Adapter onto stage 06, writes the model's evaluated
-  clauses (`PhysicalDecide::EvaluatedClauses`) and the keyed mappings through the shared blocks of
+  clauses and the keyed mappings into the `SolverInput` through the shared blocks of
   `decide_value_extraction.hpp` (`InitializeEvaluatedConstraint`, `DescribeBound`, `DecideAbsence::SkipNullInstances`,
   `CountInstances`), one code path for each rule and its message. A clause in the aggregate shape keeps the rows its
   root holds, groups them by the slots of its G of the `by` key, numbered by value, and emits, skips and counts them
@@ -254,7 +255,7 @@ columns in a scan of their own.
   reducer is read on each row the objective keeps and counted once (`CountTupleTermsOnce`). Either is dropped where its
   decision has no instance (D84). A relation-qualified reducer reads the first entry of each instance of its operand,
   its first row, however many spellings split the class into entries, so its columns hold each instance once, and AVG
-  then divides them (`ScaleObjectiveAvg`; by the G's slots for an AVG read in place, D81). An objective with a second
+  then divides them (`DecideModelEmitter::Objective`; by the G's slots for an AVG read in place, D81). An objective with a second
   variant over its kept rows raises the message `DecideObjectiveTwiceMessage` builds (D72), reading the signature's
   fields from its root's entries (`ObjectiveDifference`), and a frame field's reason with `DecideFrameDifference`: two
   positions of one timeline, two timelines (which D75 refuses first), or two values its `else` reads, a NULL one value
@@ -450,8 +451,8 @@ product, an L0 indicator or a definition as an F node, ABS reading a reducer's f
 tests. Profile counter (`DECIDB_PROFILE`): `execution.descent_rows`, the rows the descent read.
 
 Finalize releases the descent once `EvaluateTree` returns: what the solve and the output read of the evaluation is
-copied into `EvaluatedClauses` and the global state's fields (a key's group values into `KeyValues::values_of`), so the
-node containers do not live through the solve.
+written into the `SolverInput` (a key's group values into `KeyValues::values_of`) and the global state's frame maps,
+so the node containers do not live through the solve.
 
 ## 2. The folded variable box
 
@@ -693,7 +694,7 @@ Everything that reads absence asks it. `DecideAbsence::At` answers whether the
 instance a row reads of a decision has a value. A keyed decision has none on a row in no class of its scope (its
 mapping's absent class), and so has a helper's group with no member. An auxiliary -- an ABS's, a body helper, an L0
 indicator, a product -- has none where the rows defining it (`DecideConstraint::defined_var`, the helper of the definition that states the row;
-a product's factors) read an instance with none (`DecideGlobalSinkState::absent_reads`). The model
+a product's factors) read an instance with none (`DecideModelEmitter::absent_reads`). The model
 emitter (`ReadAbsence`) resolves both in the order the definitions read each other -- a helper's members may read an
 auxiliary whose definition reads a helper made after it -- whatever order the rewrites numbered them in. Every reader
 reads that one mark: a comparison skips the instance, a helper drops the member, the objective drops the term. A term's
@@ -1213,9 +1214,8 @@ minimization and carries no sense.
 quadratic clause's product groups. `Groups` (the aggregate shape) and `Rows` (the per-row shape) return it, and one
 `DecideModelEmitter::Route` puts it in the list of its kind, so a row never says what kind it is. A folded bound's
 clause goes among the repair model's rows (`evaluated_singleton_row_constraints`, under `DIAGNOSE` only). A
-`COMPARE_NOTEQUAL` goes to `evaluated_not_equals`, a clause with product groups to `evaluated_quadratics`, and any
-other to `evaluated_constraints`. `BuildSolverInput` moves them to `SolverInput::constraints`, `not_equals` and
-`quadratics` (`../06_model_formulation/done.md` § 4). An ABS's envelope rows go to the ABS's record instead
+`COMPARE_NOTEQUAL` goes to `SolverInput::not_equals`, a clause with product groups to `quadratics`, and any
+other to `constraints` (`../06_model_formulation/done.md` § 4). An ABS's envelope rows go to the ABS's record instead
 (`AbsEnvelope`, `evaluated_abs_links`).
 
 The row starts from its clause: `InitializeEvaluatedConstraint` sets its `provenance` from the tree's constraint (the
@@ -1255,8 +1255,8 @@ in the sequence.
 links off `gstate`, builds the `VarIndexer`, resolves the variable types and the
 column box (the folded bounds, the `lower_bounds` sentinel, the rigid snapshot, the
 floors a `when` lowers, then `DecidePropagateImpliedBounds`). The objective's AVG scaling
-runs before it, at the end of the evaluation (`ScaleObjectiveAvg`). It runs
-exactly once per query, because it is the pass that consumes `gstate`.
+runs before it, where the objective is read (`DecideModelEmitter::Objective`). It runs
+exactly once per query.
 
 `FormulateModel` **formulates**, against a `FormulationBox` handed to it: the auto-`M`
 refill for L0 links, the ABS / `<>` / bilinear linearizers, the helpers' definitions (every MIN/MAX's extremum link

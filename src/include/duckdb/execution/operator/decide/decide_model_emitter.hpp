@@ -106,28 +106,24 @@ class DecideModelEmitter {
 public:
 	DecideModelEmitter(const PhysicalDecide &op, ClientContext &context, const DecideTree &tree,
 	                   const DecideDescent &descent, DecideTreeColumns &columns, DecideGlobalSinkState &gstate,
-	                   vector<SolverInput::KeyValues> &key_values, const DecideSourceNames &names, idx_t num_rows);
+	                   SolverInput &input, const DecideSourceNames &names, idx_t num_rows);
 
 	//! Each declared decision's classes, numbered by its key's values, each relation-qualified reducer's, its classes
 	//! split by its body's values, and each helper's, the groups that hold a member, a row in none in a class of its
-	//! own; and the rows at which each auxiliary has no value (DecideGlobalSinkState::absent_reads).
-	void KeyedMappings(vector<KeyedMapping> &mappings);
+	//! own (SolverInput::keyed_mappings); and the rows at which each auxiliary has no value (absent_reads).
+	void KeyedMappings();
 	//! Every clause in written order, then the folded bounds' rows under DIAGNOSE.
 	void Constraints();
-	//! The objective's linear terms and its product groups, each on the rows it reads, and each one's filter of those
-	//! rows in `evaluated`, which the qualifiers and AVG then read; none without an objective.
-	void Objective(PhysicalDecide::EvaluatedClauses &evaluated);
+	//! The objective: its linear part as one coefficient per instance of each decision it reads, its constant
+	//! (SolverInput::objective_coefficients, ::objective_constant) and its product groups (::objective_product_groups).
+	void Objective();
 	//! Each helper's members, per group of its `by` key that holds one, listed before any clause or the objective is
-	//! read. A helper the plan keeps a column for is handed to stage 06 (DecideGlobalSinkState::evaluated_value_links);
+	//! read. A helper the plan keeps a column for is handed to stage 06 (SolverInput::reducer_value_links);
 	//! one it writes where it is read (DecideHelperForm) is kept here, and each reader's term on it is written as its
 	//! members (WriteMembersIn), so stage 06 meets no read of it.
 	void ValueLinks();
-	//! The objective's linear part as one coefficient per instance of each decision it reads, and its constant
-	//! (DecideGlobalSinkState::objective_coefficients, ::objective_constant), once the objective's columns are final.
-	//! A term on a helper the plan writes where it is read is that helper's members.
-	void ObjectiveCoefficients();
 	//! What stage 06 reads of the rows once every term is written, by instance: each auxiliary's instances that every
-	//! row reads with no value (DecideGlobalSinkState::absent_instances).
+	//! row reads with no value (SolverInput::absent_instances).
 	void AbsentInstances();
 
 private:
@@ -146,8 +142,21 @@ private:
 	const DecideDescent &descent;
 	DecideTreeColumns &columns;
 	DecideGlobalSinkState &gstate;
-	//! The names' key values, which stage 06 reads a group's name by (SolverInput::key_values).
-	vector<SolverInput::KeyValues> &key_values;
+	//! What stage 06 reads, which every step here writes into.
+	SolverInput &input;
+	//! Per decision, the rows whose instance of it has no value beyond its keyed scope's absent class: an auxiliary
+	//! whose definition reads an instance with none there (D88); empty where none.
+	vector<vector<bool>> absent_reads;
+	//! The objective's linear terms as they are read, a column over the input's rows each, with the decision each
+	//! reads, which ObjectiveCoefficients sums and frees.
+	vector<CoefficientColumn> objective_columns;
+	vector<idx_t> objective_variables;
+	//! The objective's linear terms and its product groups, each on the rows it reads, and each one's filter of those
+	//! rows, which its AVGs read; none without an objective.
+	void ReadObjective(vector<TermFilterState> &linear_filters, vector<TermFilterState> &group_filters);
+	//! The objective's linear part summed per instance, once its columns are final. A term on a helper the plan writes
+	//! where it is read is that helper's members.
+	void ObjectiveCoefficients();
 	const DecideSourceNames &names;
 	idx_t num_rows;
 	//! The place of each row the clause at hand keeps among its kept rows (Place), INVALID_INDEX for every other row:
@@ -181,8 +190,6 @@ private:
 
 	//! Hands a listed helper to stage 06, or keeps the instances its plan form writes where they are read.
 	void HandLink(ReducerValueLinkSpec &&spec, DecideHelperForm form);
-	//! The keyed scopes' classes (KeyedMappings), which a term's instance is read from.
-	const vector<KeyedMapping> *keyed = nullptr;
 	//! How a data row gives the instance of `variable` it reads, through frame `frame_read` if a frame reads it there;
 	//! of a term's decision, and of each of `terms`'; of no decision (INVALID_INDEX), nothing a reader asks for.
 	DecideInstanceOfRow InstanceOfRow(idx_t variable, idx_t frame_read = DConstants::INVALID_INDEX) const;
@@ -217,13 +224,12 @@ private:
 	//! each class among them (Classes). Its records are written from the root's entries, with no column between.
 	EmittedClause Rows(idx_t root, bool counted);
 	//! Puts an evaluated clause in the list of its kind: a folded bound's among the repair model's rows, a `<>` in
-	//! `evaluated_not_equals`, one with terms of degree 2 in `evaluated_quadratics`, any other in
-	//! `evaluated_constraints`.
+	//! SolverInput::not_equals, one with terms of degree 2 in ::quadratics, any other in ::constraints.
 	//! `clause` as a message refers to it, for a sum past a DOUBLE.
 	DecideClauseRef Written(const DecideConstraint &clause) const;
 	void Route(EmittedClause &&clause, bool folded);
 	//! One of an ABS F node's two envelope rows, evaluated by the existing row evaluator, which supplies the scoped
-	//! instances, into the node's record (DecideGlobalSinkState::evaluated_abs_links).
+	//! instances, into the node's record (SolverInput::abs_links).
 	void AbsEnvelope(idx_t function, idx_t root, bool counted);
 	//! The model rows of a clause in the per-row shape under `per K:` (DecideClauseScope::ONE_ROW_PER_CLASS): one per
 	//! variant of each class of K, at its first row with a value (D88), numbered and named by value as Variants does,

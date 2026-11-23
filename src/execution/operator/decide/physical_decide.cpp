@@ -245,22 +245,16 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 	if (num_rows == 0) {
 		return SinkFinalizeType::READY;
 	}
-	// The values each key's groups are named by in messages (D69), one table per naming site.
-	vector<SolverInput::KeyValues> key_values;
-
-	vector<KeyedMapping> keyed_mappings;
-	EvaluatedClauses evaluated;
-	EvaluateTree(context, gstate, num_rows, key_values, keyed_mappings, evaluated);
-	// What the solve and the output read of the evaluation is copied into `evaluated` and gstate's fields, so the
-	// node containers go now rather than with the global state.
+	// The evaluation writes what the model reads of the data into the solver input, so the node containers go now
+	// rather than with the global state.
+	SolverInput solver_input;
+	EvaluateTree(context, gstate, num_rows, solver_input);
 	gstate.descent.reset();
 
-	// BuildSolverInput: assemble the model input and settle the column box. Nothing below this line
-	// touches the data again.
+	// BuildSolverInput: the plan's facts and the column box. Nothing below this line touches the data again.
 	DecideProfileScope phase("execution.assemble_input");
 	VarIndexer var_indexer;
-	SolverInput solver_input =
-	    BuildSolverInput(gstate, num_rows, std::move(keyed_mappings), std::move(key_values), var_indexer);
+	BuildSolverInput(num_rows, solver_input, var_indexer);
 
 	// Under DIAGNOSE, keep the model input and column space as assembly left them —
 	// before a single constant was derived. An infeasibility repair searches a WIDER box
@@ -291,8 +285,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 }
 
 void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                                  vector<SolverInput::KeyValues> &key_values, vector<KeyedMapping> &keyed_mappings,
-                                  EvaluatedClauses &evaluated) const {
+                                  SolverInput &input) const {
 	auto &descent = gstate.descent;
 	// Top-down: one descent reads the buffer a chunk at a time, each numbered by the rows before it, and the buffer is
 	// never scanned again to evaluate a row.
@@ -317,17 +310,15 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	columns.ReadFrames(tree->frames, num_rows, gstate.frame_maps);
 	// What the data checks and the data reducers no clause reads raise, before any clause is read.
 	columns.CheckData();
-	DecideModelEmitter emitter(*this, context, *tree, *descent, columns, gstate, key_values, names, num_rows);
-	emitter.KeyedMappings(keyed_mappings);
+	DecideModelEmitter emitter(*this, context, *tree, *descent, columns, gstate, input, names, num_rows);
+	emitter.KeyedMappings();
 	// The helpers first: a clause, the objective or another helper that reads one the plan writes in reads its
 	// members.
 	emitter.ValueLinks();
 	emitter.Constraints();
 	// A relation-qualified reducer reads each class's first entry, its first row, so the objective's columns are
 	// qualified as they are read.
-	emitter.Objective(evaluated);
-	ScaleObjectiveAvg(gstate, num_rows, evaluated);
-	emitter.ObjectiveCoefficients();
+	emitter.Objective();
 	emitter.AbsentInstances();
 	// What the data left of each clause is reported once its clauses and its objective are read.
 	ReportSkippedInstances(gstate);
@@ -474,43 +465,17 @@ void PhysicalDecide::RecordRunTimeAccount(idx_t source_clause_id, string subject
 // EvaluateTree: the objective's AVG scale
 //===--------------------------------------------------------------------===//
 
-void PhysicalDecide::ScaleObjectiveAvg(DecideGlobalSinkState &gstate, idx_t num_rows, EvaluatedClauses &evaluated) {
-	for (idx_t term_idx = 0; term_idx < evaluated.linear_filters.size(); term_idx++) {
-		auto &filter = evaluated.linear_filters[term_idx];
-		if (filter.avg_scale) {
-			ScaleAvgRows(gstate.evaluated_objective_coefficients[term_idx], filter.has_filter, filter.mask, num_rows,
-			             filter.avg_group_ids, filter.avg_num_groups);
-		}
-	}
-	// A product group's AVG divides its weight, which multiplies the whole product.
-	for (idx_t group_idx = 0; group_idx < evaluated.group_filters.size(); group_idx++) {
-		auto &filter = evaluated.group_filters[group_idx];
-		if (filter.avg_scale) {
-			ScaleAvgRows(gstate.evaluated_objective_groups[group_idx].weight, filter.has_filter, filter.mask, num_rows,
-			             filter.avg_group_ids, filter.avg_num_groups);
-		}
-	}
-}
-
 //===--------------------------------------------------------------------===//
 // Finalize: BuildSolverInput
 //===--------------------------------------------------------------------===//
 
-SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_t num_rows,
-                                             vector<KeyedMapping> keyed_mappings,
-                                             vector<SolverInput::KeyValues> key_values,
-                                             VarIndexer &out_var_indexer) const {
+void PhysicalDecide::BuildSolverInput(idx_t num_rows, SolverInput &solver_input, VarIndexer &out_var_indexer) const {
 	DecideProfileScope phase("assembly.var_indexer");
 	idx_t num_decide_vars = tree->decide_variables.size();
 
-	// Construct SolverInput
-	SolverInput solver_input;
 	solver_input.diagnose = tree->diagnose;
 	solver_input.num_rows = num_rows;
 	solver_input.num_decide_vars = num_decide_vars;
-	solver_input.keyed_mappings = std::move(keyed_mappings);
-	solver_input.absent_instances = std::move(gstate.absent_instances);
-	solver_input.written_in = std::move(gstate.written_in);
 	ReportInlinedHelpers(solver_input);
 	solver_input.variable_scopes = tree->variable_scopes;
 
@@ -569,20 +534,10 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 		solver_input.upper_bounds[var] = tree->singleton_row_boxes[var].upper;
 	}
 
-	// Everything below this point is stage 06 working on the evaluated model, so
-	// hand the constraints and the formulation links over before the first pass.
-	solver_input.constraints = std::move(gstate.evaluated_constraints);
-	solver_input.not_equals = std::move(gstate.evaluated_not_equals);
-	solver_input.quadratics = std::move(gstate.evaluated_quadratics);
-	solver_input.class_sets = std::move(gstate.class_sets);
-	solver_input.key_values = std::move(key_values);
-	solver_input.bilinear_links = std::move(gstate.evaluated_bilinear_links);
-	// Each ABS arrives as the record stage 05 made of it, with its two envelope rows evaluated, and they join the model
-	// here, before any pass reads the rows: implied-bound propagation reads `aux >= inner` of `ABS(x) <= 3` as a bound
-	// on x.
-	solver_input.abs_links = std::move(gstate.evaluated_abs_links);
+	// Everything below this point is stage 06 working on the evaluated model. Each ABS arrives as the record stage 05
+	// made of it, with its two envelope rows evaluated, and they join the model here, before any pass reads the rows:
+	// implied-bound propagation reads `aux >= inner` of `ABS(x) <= 3` as a bound on x.
 	EmitAbsEnvelopes(solver_input);
-	solver_input.reducer_value_links = std::move(gstate.evaluated_value_links);
 
 	// The rigid box, captured before any propagation runs and with every user-folded
 	// direction re-opened. What is left is the intrinsic domain alone — the only part of
@@ -622,14 +577,6 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 		DeriveReducerValueBounds(solver_input, out_var_indexer);
 	}
 	DecidePropagateImpliedBounds(solver_input, out_var_indexer);
-	phase.Next("assembly.objective_and_avg");
-	// Objective (linear part)
-	solver_input.objective_coefficients = std::move(gstate.objective_coefficients);
-	solver_input.objective_constant = gstate.objective_constant;
-
-	solver_input.objective_product_groups = std::move(gstate.evaluated_objective_groups);
-
-	return solver_input;
 }
 
 //===--------------------------------------------------------------------===//

@@ -29,9 +29,9 @@ static idx_t Parts(const DecideConstraint &clause) {
 
 DecideModelEmitter::DecideModelEmitter(const PhysicalDecide &op, ClientContext &context, const DecideTree &tree,
                                        const DecideDescent &descent, DecideTreeColumns &columns,
-                                       DecideGlobalSinkState &gstate, vector<SolverInput::KeyValues> &key_values,
+                                       DecideGlobalSinkState &gstate, SolverInput &input,
                                        const DecideSourceNames &names, idx_t num_rows)
-    : op(op), context(context), tree(tree), descent(descent), columns(columns), gstate(gstate), key_values(key_values),
+    : op(op), context(context), tree(tree), descent(descent), columns(columns), gstate(gstate), input(input),
       names(names), num_rows(num_rows), place_of_row(num_rows, DConstants::INVALID_INDEX) {
 }
 
@@ -300,7 +300,8 @@ DecideVariantDifference DecideModelEmitter::ObjectiveDifference(idx_t root, cons
 	                            read);
 }
 
-void DecideModelEmitter::KeyedMappings(vector<KeyedMapping> &mappings) {
+void DecideModelEmitter::KeyedMappings() {
+	auto &mappings = input.keyed_mappings;
 	mappings = DecideDeclaredMappings(descent);
 	for (idx_t scope = 0; scope < mappings.size(); scope++) {
 		if (scope < tree.keyed_scopes.size() && tree.keyed_scopes[scope].signature != DConstants::INVALID_INDEX) {
@@ -310,7 +311,6 @@ void DecideModelEmitter::KeyedMappings(vector<KeyedMapping> &mappings) {
 			scope_rows.emplace_back(mappings[scope]);
 		}
 	}
-	keyed = &mappings;
 	ReadAbsence(mappings);
 }
 
@@ -344,18 +344,18 @@ TermInstances DecideModelEmitter::InstancesAt(const DecideTerm &term, const vect
 
 idx_t DecideModelEmitter::Instances(idx_t variable) const {
 	auto &scope = tree.variable_scopes[variable];
-	return scope.IsGlobal() ? 1 : scope.IsKeyed() ? (*keyed)[scope.keyed_scope_idx].num_classes : num_rows;
+	return scope.IsGlobal() ? 1 : scope.IsKeyed() ? input.keyed_mappings[scope.keyed_scope_idx].num_classes : num_rows;
 }
 
 void DecideModelEmitter::AbsentInstances() {
-	gstate.absent_instances.assign(gstate.absent_reads.size(), vector<bool>());
-	for (idx_t variable = 0; variable < gstate.absent_reads.size(); variable++) {
-		auto &absent = gstate.absent_reads[variable];
+	input.absent_instances.assign(absent_reads.size(), vector<bool>());
+	for (idx_t variable = 0; variable < absent_reads.size(); variable++) {
+		auto &absent = absent_reads[variable];
 		if (absent.empty()) {
 			continue;
 		}
 		// An instance is read where some row that reads it has a value.
-		auto &none = gstate.absent_instances[variable];
+		auto &none = input.absent_instances[variable];
 		none.assign(Instances(variable), true);
 		const auto instance = InstanceOfRow(variable);
 		for (idx_t row = 0; row < absent.size(); row++) {
@@ -456,9 +456,9 @@ DecideScopeRows DecideModelEmitter::HelperRows(idx_t node_index) {
 }
 
 void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
-	gstate.absent_reads.assign(tree.decide_variables.size(), vector<bool>());
-	columns.Absence().ReadClasses(scope_rows, gstate.absent_reads);
-	gstate.evaluated_bilinear_links.clear();
+	absent_reads.assign(tree.decide_variables.size(), vector<bool>());
+	columns.Absence().ReadClasses(scope_rows, absent_reads);
+	input.bilinear_links.clear();
 	for (auto &definition : tree.definitions) {
 		auto product = definition->TryCast<DecideBooleanProductDefinition>();
 		if (!product) {
@@ -469,7 +469,7 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 		link.bool_var_idx = product->bool_factor;
 		link.other_var_idx = product->other_factor;
 		link.origin = product->origin;
-		gstate.evaluated_bilinear_links.push_back(link);
+		input.bilinear_links.push_back(link);
 	}
 	// The rows defining each auxiliary (DecideConstraint::defined_var) and each helper's G, in the tree's order, which
 	// puts what defines a decision before what reads it (D88): an auxiliary or a helper a definition or a helper's
@@ -510,7 +510,7 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 	}
 	// A product's auxiliary has none where a factor has none (DecideAbsence::At), which stage 06 reads too. One per
 	// row reads a keyed factor at its row's class.
-	for (auto &product : gstate.evaluated_bilinear_links) {
+	for (auto &product : input.bilinear_links) {
 		auto &scope = tree.variable_scopes[product.aux_idx];
 		const bool per_row = !scope.IsKeyed() && !scope.IsGlobal();
 		for (auto factor : {std::make_pair(product.bool_var_idx, &product.bool_instances),
@@ -520,7 +520,7 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 				factor.second->push_back(instance.At(row));
 			}
 		}
-		auto &absent = gstate.absent_reads[product.aux_idx];
+		auto &absent = absent_reads[product.aux_idx];
 		if (!columns.Absence().MayBe(product.aux_idx)) {
 			continue;
 		}
@@ -539,7 +539,7 @@ void DecideModelEmitter::FunctionAbsence(idx_t function) {
 	if (variable < tree.variable_scopes.size() && tree.variable_scopes[variable].IsGlobal()) {
 		return;
 	}
-	auto &absent = gstate.absent_reads[variable];
+	auto &absent = absent_reads[variable];
 	vector<bool> present(num_rows, false);
 	const auto &container = descent.Containers()[function];
 	for (idx_t entry = 0; entry < container.Count(); entry++) {
@@ -557,7 +557,7 @@ void DecideModelEmitter::FunctionAbsence(idx_t function) {
 void DecideModelEmitter::DefinitionAbsence(idx_t root, idx_t variable) {
 	auto &body = tree.nodes[root]->compiled;
 	auto &clause = *body.clause;
-	auto &absent = gstate.absent_reads[variable];
+	auto &absent = absent_reads[variable];
 	const bool reducer_definition = tree.OwnedBy(*tree.nodes[root], DecideHelperKind::DEFINITION);
 	auto mark = [&](idx_t row) {
 		absent.resize(num_rows, false);
@@ -728,12 +728,12 @@ void DecideModelEmitter::Route(EmittedClause &&clause, bool folded) {
 		}
 		not_equal.excluded_begin.push_back(not_equal.excluded.size());
 		not_equal.row = std::move(row);
-		gstate.evaluated_not_equals.push_back(std::move(not_equal));
+		input.not_equals.push_back(std::move(not_equal));
 	} else if (!clause.products.empty()) {
-		gstate.evaluated_quadratics.push_back({std::move(row), std::move(clause.products), std::move(sets.begin),
-		                                       std::move(sets.rows), std::move(clause.rows)});
+		input.quadratics.push_back({std::move(row), std::move(clause.products), std::move(sets.begin),
+		                            std::move(sets.rows), std::move(clause.rows)});
 	} else {
-		gstate.evaluated_constraints.push_back(std::move(row));
+		input.constraints.push_back(std::move(row));
 	}
 }
 
@@ -741,11 +741,11 @@ void DecideModelEmitter::AbsEnvelope(idx_t function, idx_t root, bool counted) {
 	auto &node = *tree.nodes[function];
 	auto &definition = tree.Definition(node)->Cast<DecideAbsDefinition>();
 	const auto &envelopes = node.Cast<DecideFunctionNode>().rows;
-	auto link = std::find_if(gstate.evaluated_abs_links.begin(), gstate.evaluated_abs_links.end(),
+	auto link = std::find_if(input.abs_links.begin(), input.abs_links.end(),
 	                         [&](const AbsLinkSpec &candidate) { return candidate.aux_idx == definition.helper; });
-	if (link == gstate.evaluated_abs_links.end()) {
-		gstate.evaluated_abs_links.emplace_back();
-		link = gstate.evaluated_abs_links.end() - 1;
+	if (link == input.abs_links.end()) {
+		input.abs_links.emplace_back();
+		link = input.abs_links.end() - 1;
 		link->aux_idx = definition.helper;
 		link->exact = definition.exact;
 		link->written = definition.label;
@@ -775,8 +775,8 @@ EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
 	const idx_t kept = rows.size();
 	vector<bool> tested = columns.Tested(root);
 	vector<bool> definition_absent(kept, false);
-	if (tree.OwnedBy(node, DecideHelperKind::DEFINITION) && clause.defined_var < gstate.absent_reads.size()) {
-		const auto &absent = gstate.absent_reads[clause.defined_var];
+	if (tree.OwnedBy(node, DecideHelperKind::DEFINITION) && clause.defined_var < absent_reads.size()) {
+		const auto &absent = absent_reads[clause.defined_var];
 		const auto &entry_rows = descent.Containers()[root].rows;
 		for (idx_t entry = 0; entry < tested.size(); entry++) {
 			const auto row = entry_rows[entry];
@@ -953,8 +953,8 @@ void DecideModelEmitter::Classes(idx_t root, const vector<pair<idx_t, idx_t>> &r
 	DecideOneRowPerVariant(
 	    variant_of, class_of_row, variants.count, variants.num_classes,
 	    [&](idx_t place) {
-		    return defined < gstate.absent_reads.size() && !gstate.absent_reads[defined].empty() &&
-		           gstate.absent_reads[defined][result.rows[place]];
+		    return defined < absent_reads.size() && !absent_reads[defined].empty() &&
+		           absent_reads[defined][result.rows[place]];
 	    },
 	    evaluated.row_group_ids, class_of, first_rows, variants_per_class);
 	evaluated.num_groups = variants.count;
@@ -984,10 +984,10 @@ void DecideModelEmitter::Classes(idx_t root, const vector<pair<idx_t, idx_t>> &r
 		    ids = class_ids;
 		    named = class_names;
 	    },
-	    gstate.class_sets);
+	    input.class_sets);
 	if (signature) {
 		DecideNameVariantClassSets(class_of, variants_per_class, evaluated.group_names, evaluated.group_class_set,
-		                           gstate.class_sets);
+		                           input.class_sets);
 	}
 }
 
@@ -1120,8 +1120,8 @@ vector<GroupName> DecideModelEmitter::NameVariants(idx_t root, const DecideSigna
 	DecideNameVariants(
 	    signature.fields, elements.size(), [values](idx_t variant) { return values[variant]; }, class_of,
 	    variants_per_class, first_rows, key_values);
-	const auto named = this->key_values.size();
-	this->key_values.push_back(std::move(key_values));
+	const auto named = input.key_values.size();
+	input.key_values.push_back(std::move(key_values));
 	vector<GroupName> result;
 	for (idx_t variant = 0; variant < first_rows.size(); variant++) {
 		result.push_back({named, variant});
@@ -1132,8 +1132,8 @@ vector<GroupName> DecideModelEmitter::NameVariants(idx_t root, const DecideSigna
 void DecideModelEmitter::KeyClasses(idx_t root, const vector<pair<idx_t, idx_t>> &rows, vector<idx_t> &class_ids,
                                     vector<GroupName> &class_names) {
 	auto &container = descent.Containers()[root];
-	const auto named = key_values.size();
-	key_values.push_back(DecideGroupKeyValues(tree, descent, root));
+	const auto named = input.key_values.size();
+	input.key_values.push_back(DecideGroupKeyValues(tree, descent, root));
 	// The root's slots by K's values; a grouped root holds its kept rows in no class of K in a slot of its own.
 	auto &slots = container.groups;
 	vector<idx_t> by_rank(slots.size());
@@ -1362,7 +1362,7 @@ EmittedClause DecideModelEmitter::Groups(idx_t root, bool counted) {
 		    [&](vector<idx_t> &class_ids, vector<GroupName> &class_names) {
 			    KeyClasses(root, rows, class_ids, class_names);
 		    },
-		    gstate.class_sets);
+		    input.class_sets);
 	}
 	// A group in which a reducer reads no member has no value there, so neither has its instance (D68).
 	vector<const TermFilterState *> reducers;
@@ -1387,7 +1387,7 @@ EmittedClause DecideModelEmitter::Groups(idx_t root, bool counted) {
 		TakeTightestFrameBound(evaluated.comparison_type, RenderDecideSource(*clause.rhs_expr, names),
 		                       DecideSpanLocation(op.display.source_text, clause.rhs_expr->GetQueryLocation()),
 		                       bound_null, kept_row_group_ids, evaluated.row_group_ids, evaluated.num_groups,
-		                       evaluated.group_names, key_values, evaluated.rhs_values.MutableDense(), null_rows);
+		                       evaluated.group_names, input.key_values, evaluated.rhs_values.MutableDense(), null_rows);
 	}
 	DecideAbsence::SkipNullInstances(null_rows, true, kept, evaluated.row_group_ids, evaluated.num_groups);
 	if (counted) {
@@ -1538,14 +1538,37 @@ void DecideModelEmitter::Polynomial(idx_t root, const vector<pair<idx_t, idx_t>>
 
 void DecideModelEmitter::Name(idx_t by, const vector<idx_t> &kept_groups, EvaluatedClauseColumns &evaluated) {
 	// Each group is named by its key's values, which the solver input reads by its rank.
-	const auto values = key_values.size();
-	key_values.push_back(DecideGroupKeyValues(tree, descent, by));
+	const auto values = input.key_values.size();
+	input.key_values.push_back(DecideGroupKeyValues(tree, descent, by));
 	for (auto group : kept_groups) {
 		evaluated.group_names.push_back({values, group});
 	}
 }
 
-void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) {
+void DecideModelEmitter::Objective() {
+	vector<TermFilterState> linear_filters, group_filters;
+	ReadObjective(linear_filters, group_filters);
+	// Each AVG term is divided by the rows it reads, or by those of its own group (D81); a product group's AVG divides
+	// its weight, which multiplies the whole product.
+	for (idx_t t = 0; t < linear_filters.size(); t++) {
+		auto &filter = linear_filters[t];
+		if (filter.avg_scale) {
+			ScaleAvgRows(objective_columns[t], filter.has_filter, filter.mask, num_rows, filter.avg_group_ids,
+			             filter.avg_num_groups);
+		}
+	}
+	for (idx_t g = 0; g < group_filters.size(); g++) {
+		auto &filter = group_filters[g];
+		if (filter.avg_scale) {
+			ScaleAvgRows(input.objective_product_groups[g].weight, filter.has_filter, filter.mask, num_rows,
+			             filter.avg_group_ids, filter.avg_num_groups);
+		}
+	}
+	ObjectiveCoefficients();
+}
+
+void DecideModelEmitter::ReadObjective(vector<TermFilterState> &linear_filters,
+                                       vector<TermFilterState> &group_filters) {
 	auto found = std::find_if(tree.roots.begin(), tree.roots.end(),
 	                          [&](idx_t root) { return tree.nodes[root]->compiled.objective != nullptr; });
 	if (found == tree.roots.end()) {
@@ -1581,20 +1604,19 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 	for (auto &read : container.routed) {
 		marked[read.first] = true;
 	}
-	evaluated.linear_filters = ObjectiveTerms(objective.terms, body.linear, gstate.evaluated_objective_coefficients,
-	                                          gstate.objective_variable_indices);
+	linear_filters = ObjectiveTerms(objective.terms, body.linear, objective_columns, objective_variables);
 	// A term outside every reducer counts once, on the first row the objective keeps.
-	CountTupleTermsOnce(objective.terms, gstate.evaluated_objective_coefficients, &kept, num_rows);
+	CountTupleTermsOnce(objective.terms, objective_columns, &kept, num_rows);
 	// A product group is read as a term is, on the members of the G it ranges over or on each row the objective
 	// keeps: its weight, 0 on every other row, and its forms' coefficients, which stage 05 read as 0 where NULL
 	// (DropNullObjectiveTerms). A row on which a form's decision has no instance gives the group no value, so it is
 	// dropped there as a term is (D84). One outside every reducer counts once.
 	auto &groups = objective.product_groups;
-	evaluated.group_filters.resize(groups.size());
+	group_filters.resize(groups.size());
 	for (idx_t g = 0; g < groups.size(); g++) {
 		auto &group = groups[g];
 		auto &sites = body.groups[g];
-		auto &filter = evaluated.group_filters[g];
+		auto &filter = group_filters[g];
 		const auto site = sites.weight.node;
 		EvaluatedProductGroup out;
 		out.square = group.square;
@@ -1627,9 +1649,9 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 			}
 		}
 		AvgGroups(group.avg_scale, group.avg_group_key, group.child, site, filter);
-		gstate.evaluated_objective_groups.push_back(std::move(out));
+		input.objective_product_groups.push_back(std::move(out));
 	}
-	CountProductsOnce(groups, gstate.evaluated_objective_groups, &kept, num_rows);
+	CountProductsOnce(groups, input.objective_product_groups, &kept, num_rows);
 }
 
 void DecideModelEmitter::ObjectivePart(const Part &part, CoefficientColumn &column, vector<bool> &read_rows) {
@@ -1863,14 +1885,14 @@ void DecideModelEmitter::HandLink(ReducerValueLinkSpec &&spec, DecideHelperForm 
 	helper_counts.members += members.constants.size();
 	helper_counts.terms += members.variables.size();
 	if (form == DecideHelperForm::VARIABLE) {
-		gstate.evaluated_value_links.push_back(std::move(spec));
+		input.reducer_value_links.push_back(std::move(spec));
 		return;
 	}
 	auto &scope = tree.variable_scopes[spec.value_var];
 	WrittenHelper helper;
 	helper.whole = !IsDecideExtremum(spec.reducer);
 	helper.label = spec.label;
-	helper.group_of_instance.assign(scope.IsGlobal() ? 1 : (*keyed)[scope.keyed_scope_idx].num_classes,
+	helper.group_of_instance.assign(scope.IsGlobal() ? 1 : input.keyed_mappings[scope.keyed_scope_idx].num_classes,
 	                                DConstants::INVALID_INDEX);
 	// A SUM or AVG is its members; a MIN or MAX group of one member is that member (deck p. 112, R44), the one fact
 	// of the data read here. The other groups keep their columns and their links.
@@ -1890,8 +1912,8 @@ void DecideModelEmitter::HandLink(ReducerValueLinkSpec &&spec, DecideHelperForm 
 		}
 	}
 	// The instances with no column, which the column layout reads (SolverInput::written_in).
-	gstate.written_in.resize(tree.variable_scopes.size());
-	auto &written = gstate.written_in[spec.value_var];
+	input.written_in.resize(tree.variable_scopes.size());
+	auto &written = input.written_in[spec.value_var];
 	for (auto group : helper.group_of_instance) {
 		written.push_back(helper.whole || group != DConstants::INVALID_INDEX);
 	}
@@ -1901,7 +1923,7 @@ void DecideModelEmitter::HandLink(ReducerValueLinkSpec &&spec, DecideHelperForm 
 	written_helpers.push_back(std::move(helper));
 	if (linked.GroupCount() > 0) {
 		spec.members = std::move(linked);
-		gstate.evaluated_value_links.push_back(std::move(spec));
+		input.reducer_value_links.push_back(std::move(spec));
 	} else {
 		helper_counts.written_in++;
 	}
@@ -1984,9 +2006,9 @@ void DecideModelEmitter::WriteMembersIn(EvaluatedConstraint &clause) const {
 }
 
 void DecideModelEmitter::ObjectiveCoefficients() {
-	auto &term_variables = gstate.objective_variable_indices;
-	auto &term_columns = gstate.evaluated_objective_coefficients;
-	auto &sums = gstate.objective_coefficients;
+	auto &term_variables = objective_variables;
+	auto &term_columns = objective_columns;
+	auto &sums = input.objective_coefficients;
 	const auto written =
 	    DecideClauseRefOf(op.display.constraint_sources, op.display.source_text, DConstants::INVALID_INDEX);
 	sums.resize(tree.variable_scopes.size());
@@ -2023,13 +2045,13 @@ void DecideModelEmitter::ObjectiveCoefficients() {
 	WriteMembersIn(begin, variables, instances, coefficients, constant, true);
 	// A term with no decision (a data column) moves no optimum: it is the objective's constant. Summed without a
 	// check: no solve reads it, and a sum past a DOUBLE only makes the reported value infinite.
-	gstate.objective_constant = tree.objective_constant_offset + constant[0];
+	input.objective_constant = tree.objective_constant_offset + constant[0];
 	for (idx_t t = 0; t < term_variables.size(); t++) {
 		const idx_t variable = term_variables[t];
 		auto &column = term_columns[t];
 		if (variable == DConstants::INVALID_INDEX) {
 			for (idx_t row = 0; row < num_rows; row++) {
-				gstate.objective_constant += column.Get(row);
+				input.objective_constant += column.Get(row);
 			}
 		} else if (!written_in[t]) {
 			// Every row's coefficient counts. A term beside the reducers counts once: its coefficient is kept on

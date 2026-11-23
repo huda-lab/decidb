@@ -31,9 +31,9 @@ struct TermFilterState;
 //!
 //! and a skipped instance is counted (D90). The bottom-up pass applies the first five where it reads a definition, in
 //! the tree's order, so what defines a decision has its absence before what reads it (DecideModelEmitter): an
-//! auxiliary's rows with none are `Rows`, which stage 06 reads as SolverInput::absent_reads. A clause's instances are
-//! skipped by the last two, where it is read. Data are not strict: DuckDB evaluates them, so `coalesce(hole, 0)`
-//! consumes a NULL with no code here.
+//! auxiliary's rows with none are `Rows`, which stage 06 reads by instance (SolverInput::absent_instances). A clause's
+//! instances are skipped by the last two, where it is read. Data are not strict: DuckDB evaluates them, so
+//! `coalesce(hole, 0)` consumes a NULL with no code here.
 class DecideAbsence {
 public:
 	explicit DecideAbsence(const DecideTree &tree);

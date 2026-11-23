@@ -179,31 +179,16 @@ private:
 	//! with no column at all replaces its plan line (ParamsToString), which says it becomes one.
 	void ReportInlinedHelpers(const SolverInput &input) const;
 
-	//! Everything EvaluateTree reads off the data that a later step still needs. Nothing here depends
-	//! on a variable bound, which is what lets the formulation pass run twice against
-	//! two different boxes from the same evaluated clauses.
-	struct EvaluatedClauses {
-		//! Filter state for the objective's linear terms and its product groups.
-		vector<TermFilterState> linear_filters, group_filters;
-	};
-
 	//! The evaluation (language/guide.md §6.4): the tree's descent over the input (`gstate.descent`), each node's
-	//! programs over its entries, and the model emitter, filling gstate's evaluation fields and the arguments after
-	//! `num_rows`, with the values its groups are named by in `key_values`.
-	void EvaluateTree(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-	                  vector<SolverInput::KeyValues> &key_values, vector<KeyedMapping> &keyed_mappings,
-	                  EvaluatedClauses &evaluated) const;
+	//! programs over its entries, and the model emitter, which writes what the model reads of the data into `input`.
+	//! Nothing it writes depends on a variable bound, which is what lets the formulation pass run twice against two
+	//! boxes from the same evaluated clauses.
+	void EvaluateTree(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows, SolverInput &input) const;
 
-	//! Then each AVG term is divided by the rows it reads, or by those of its own group (D81).
-	static void ScaleObjectiveAvg(DecideGlobalSinkState &gstate, idx_t num_rows, EvaluatedClauses &evaluated);
-
-	//! BuildSolverInput: build `SolverInput` out of what EvaluateTree evaluated — variable
-	//! types and the column box, implied-bound propagation, the objective transfer, and
-	//! the flat column space. Runs once per query: it moves the evaluated data off
-	//! `gstate`, and the box it settles is the one the formulation pass below is then
-	//! handed.
-	SolverInput BuildSolverInput(DecideGlobalSinkState &gstate, idx_t num_rows, vector<KeyedMapping> keyed_mappings,
-	                             vector<SolverInput::KeyValues> key_values, VarIndexer &out_var_indexer) const;
+	//! BuildSolverInput: what `solver_input` holds beside what EvaluateTree wrote into it — the plan's facts, the
+	//! variable types and the column box, implied-bound propagation, and the flat column space. Runs once per query:
+	//! the box it settles is the one the formulation pass below is then handed.
+	void BuildSolverInput(idx_t num_rows, SolverInput &solver_input, VarIndexer &out_var_indexer) const;
 
 	//! FinalizeSolveResult, solve and readback: the solve (SolveDecide), the RouteSolveResult switch and its four
 	//! terminal cases, and the shared success epilogue. `elastic` is retained under `DIAGNOSE` only.
