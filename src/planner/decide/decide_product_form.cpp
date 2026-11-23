@@ -111,31 +111,6 @@ DecideTermDegree DecideDegreeOf(ClientContext &context, const Expression &expr, 
 	return result;
 }
 
-//! Equals ignores aliases. On a decision-bearing node they are structure (a reducer's `by` and `per`), so they must
-//! agree there; on data they are provenance (where a column was written), which two equal values may differ in.
-static bool DecisionAliasesEqual(const Expression &left, const Expression &right, idx_t decide_index) {
-	if (!BoundExpressionReferencesDecide(left, decide_index)) {
-		return true;
-	}
-	if (!DecideFactsEqual(left, right)) {
-		return false;
-	}
-	vector<const Expression *> left_children;
-	vector<const Expression *> right_children;
-	ExpressionIterator::EnumerateChildren(left, [&](const Expression &child) { left_children.push_back(&child); });
-	ExpressionIterator::EnumerateChildren(right, [&](const Expression &child) { right_children.push_back(&child); });
-	for (idx_t i = 0; i < left_children.size(); i++) {
-		if (!DecisionAliasesEqual(*left_children[i], *right_children[i], decide_index)) {
-			return false;
-		}
-	}
-	return true;
-}
-
-bool DecideTermsEqual(const Expression &left, const Expression &right, idx_t decide_index) {
-	return DecideExpressionsEqual(left, right) && DecisionAliasesEqual(left, right, decide_index);
-}
-
 //! Whether two additive forms are the same multiset of terms, `right` with every sign multiplied by `flip` (1 or -1).
 static bool SameSignedTerms(const Expression &left, const Expression &right, idx_t decide_index, int flip) {
 	auto left_atoms = ReadCanonicalAtoms(left, decide_index);
@@ -148,8 +123,8 @@ static bool SameSignedTerms(const Expression &left, const Expression &right, idx
 		bool found = false;
 		for (idx_t i = 0; i < right_atoms.size() && !found; i++) {
 			if (!matched[i] && right_atoms[i].sign * flip == atom.sign &&
-			    DecideTermsEqual(*UnwrapDecideCasts(*atom.term, decide_index),
-			                     *UnwrapDecideCasts(*right_atoms[i].term, decide_index), decide_index)) {
+			    DecideExpressionsEqual(*UnwrapDecideCasts(*atom.term, decide_index),
+			                           *UnwrapDecideCasts(*right_atoms[i].term, decide_index))) {
 				matched[i] = true;
 				found = true;
 			}
@@ -163,7 +138,7 @@ static bool SameSignedTerms(const Expression &left, const Expression &right, idx
 
 bool DecideFactorsEqual(const Expression &left, const Expression &right, idx_t decide_index) {
 	// An additive form is a multiset of signed terms: `x + y` and `y + x` are one factor.
-	return DecideTermsEqual(left, right, decide_index) || SameSignedTerms(left, right, decide_index, 1);
+	return DecideExpressionsEqual(left, right) || SameSignedTerms(left, right, decide_index, 1);
 }
 
 //! Whether `right` is `-left`: the same additive form with every sign reversed (`x - s` and `s - x`).
@@ -294,7 +269,7 @@ struct ProductReader {
 		    expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER ||
 		    expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_FRAME) {
 			for (auto *seen : form.zero_terms) {
-				if (DecideTermsEqual(*seen, expr, decide_index)) {
+				if (DecideExpressionsEqual(*seen, expr)) {
 					return;
 				}
 			}

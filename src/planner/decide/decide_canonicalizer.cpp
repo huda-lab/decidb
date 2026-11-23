@@ -32,32 +32,6 @@
 
 namespace duckdb {
 
-static void CollectExpressionChildren(const Expression &expr, vector<const Expression *> &children) {
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { children.push_back(&child); });
-}
-
-//! Expression::Equals ignores an alias and the facts of a reducer that do not change what it computes (its `by`, its
-//! `per`, the norm it was written as), which canonicalization must keep. Canonical fixed-point verification therefore
-//! needs the semantic comparison plus an ordered, recursive comparison of both (DecideFactsEqual).
-static bool CanonicalTreesEqual(const Expression &left, const Expression &right) {
-	if (!Expression::Equals(left, right) || !DecideFactsEqual(left, right)) {
-		return false;
-	}
-	vector<const Expression *> left_children;
-	vector<const Expression *> right_children;
-	CollectExpressionChildren(left, left_children);
-	CollectExpressionChildren(right, right_children);
-	if (left_children.size() != right_children.size()) {
-		return false;
-	}
-	for (idx_t i = 0; i < left_children.size(); i++) {
-		if (!CanonicalTreesEqual(*left_children[i], *right_children[i])) {
-			return false;
-		}
-	}
-	return true;
-}
-
 bool TryMatchScaledAggregate(const Expression &expr, idx_t decide_index, ScaledAggregateMatch &result) {
 	result = {};
 	auto current = UnwrapDecideCasts(expr, decide_index);
@@ -1458,7 +1432,7 @@ void DecideCanonicalizer::VerifyCanonicalObjective(const BoundDecideClause &obje
 		if (residual_offset != 0.0) {
 			CanonicalInvariantFailure("O2", "canonical objective still yields a constant offset", *objective.body);
 		}
-		if (!CanonicalTreesEqual(*objective.body, *fixed_point.body)) {
+		if (!Expression::Equals(*objective.body, *fixed_point.body)) {
 			CanonicalInvariantFailure(
 			    "O4/O7", "canonicalizing the objective again changes its structure, reducer scale, or tags",
 			    *objective.body);
@@ -1486,7 +1460,7 @@ void DecideCanonicalizer::VerifyCanonical(const BoundDecideClause &clause) const
 			VerifyCanonicalComparison(clause.body->Cast<BoundComparisonExpression>());
 		}
 		auto fixed_point = CanonicalizeClauseBody(*clause.body);
-		if (!CanonicalTreesEqual(*clause.body, *fixed_point)) {
+		if (!Expression::Equals(*clause.body, *fixed_point)) {
 			CanonicalInvariantFailure("C4/C6/C7",
 			                          "canonicalizing the clause again changes its structure, reducer scale, or tags",
 			                          *clause.body);

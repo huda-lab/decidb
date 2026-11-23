@@ -71,6 +71,9 @@ bool BoundFunctionExpression::Equals(const BaseExpression &other_p) const {
 	if (other.function != function) {
 		return false;
 	}
+	if (!(definition == other.definition)) {
+		return false;
+	}
 	if (!Expression::ListEquals(children, other.children)) {
 		return false;
 	}

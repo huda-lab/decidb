@@ -164,7 +164,7 @@ void CollectBodySites(Expression &expr, idx_t decide_index, const DecideTermSpli
 
 //! Copies of one reducer under one `when`: they share a helper.
 bool SameReducer(const BodySite &a, const BodySite &b) {
-	if (!DecideFactsEqual(*a.reducer, *b.reducer) || !DecideExpressionsEqual(*a.reducer, *b.reducer)) {
+	if (!DecideExpressionsEqual(*a.reducer, *b.reducer)) {
 		return false;
 	}
 	if (!a.when || !b.when) {

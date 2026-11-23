@@ -158,7 +158,7 @@ struct Helpers {
 			auto &held = link.Reducer();
 			// A clause's rows carry copies of its `when`: the same condition.
 			const bool same_rows = rows ? link.when && DecideExpressionsEqual(*link.when, *rows) : !link.when;
-			if (DecideExpressionsEqual(held, agg) && held.per == agg.per && link.path_key == path_key && same_rows &&
+			if (DecideExpressionsEqual(held, agg) && link.path_key == path_key && same_rows &&
 			    link.class_key == class_key) {
 				return i;
 			}

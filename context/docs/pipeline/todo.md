@@ -28,18 +28,6 @@ every one of them:
 - **Tests** (R32): focused tests in each task's **Done when**; `make decide-test` once at the end of each queue
   group; every other suite in TREE-28.
 
-## TREE-11 — Reducer equality and hash hold every fact
-
-- **Problem.** `BoundDecideReducerExpression::Equals` and `Hash` leave out `by`, `per`, `frame`, `count_scale` and
-  `retained` (`bound_decide_reducer_expression.cpp:66,99`), so `sum(x)` equals `sum(x) by (g)`. A parallel
-  protocol compensates: `FactsEqual`, `DecideFactsEqual` (`decide_tree_nodes.cpp:39`), `CanonicalTreesEqual`
-  (`decide_canonicalizer.cpp:42`), `DecisionAliasesEqual`, and hand recursions in `decide_product_form.cpp:108` and
-  `decide_tree_definition.cpp:168`. `BoundFunctionExpression::definition` is outside equality too.
-- **Change.** Every fact that changes what a node computes is part of `Equals` and `Hash`. The parallel protocol
-  and the alias comparison go. A caller that relied on the loose equality is found and stated, not worked around.
-- **Done when.** `DecideFactsEqual` and `FactsEqual` are named nowhere; `./test/decide/run_tests.sh -k "reducer or
-  by or per or frame or like_term or canonical"` and `build/release/test/unittest "[decidb]"` pass.
-
 ## TREE-12 — Member tests are a reducer field
 
 - **Problem.** A member's NULL test is a marker class, `BoundDecideNullTestExpression`, inside the reducer's filter
@@ -50,7 +38,6 @@ every one of them:
 - **Change.** A `member_tests` list beside `filter` on the reducer, as `BoundWindowExpression` keeps its partitions
   apart from its filter; `ToAggregate` conjoins the two. The guard of a recorded reducer's value is a fact of its
   `DecideBoundAggregate` record. The class, its executor cases, its serialization and the six splitters go.
-- **Needs.** TREE-11.
 - **Done when.** `BoundDecideNullTestExpression` is named nowhere; `./test/decide/run_tests.sh -k "null or skip or
   when or filter"`, `build/release/test/unittest "[decidb]"` and
   `DECIDB_VERIFY_SERIALIZER=1 ./test/decide/run_tests.sh -k "null or skip"` pass; design.md § 3.2.2 and § 3.5 name

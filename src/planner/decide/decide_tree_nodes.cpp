@@ -36,15 +36,6 @@ DecideHelperRef DecideDefinitionOf(const Expression &expr) {
 	           : DecideHelperRef();
 }
 
-bool DecideFactsEqual(const Expression &a, const Expression &b) {
-	if (a.GetAlias() != b.GetAlias() || !(DecideDefinitionOf(a) == DecideDefinitionOf(b))) {
-		return false;
-	}
-	return a.GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER ||
-	       b.GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER ||
-	       a.Cast<BoundDecideReducerExpression>().FactsEqual(b.Cast<BoundDecideReducerExpression>());
-}
-
 //===--------------------------------------------------------------------===//
 // A reducer's NULL tests
 //===--------------------------------------------------------------------===//

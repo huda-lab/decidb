@@ -32,11 +32,6 @@ bool IsDecideNormMarker(const Expression &expr);
 //! node.
 DecideHelperRef DecideDefinitionOf(const Expression &expr);
 
-//! Whether two nodes agree on every fact Expression::Equals leaves out: their names' tags, the definitions they name
-//! and, for two reducers, their facts (BoundDecideReducerExpression::FactsEqual). On a decision-bearing node these
-//! are structure (a reducer's `by` and `per`).
-bool DecideFactsEqual(const Expression &a, const Expression &b);
-
 //===--------------------------------------------------------------------===//
 // A reducer's NULL tests
 //===--------------------------------------------------------------------===//

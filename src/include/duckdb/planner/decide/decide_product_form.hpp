@@ -91,10 +91,6 @@ bool IsDecideProductNode(ClientContext &context, const Expression &expr, idx_t d
 //! factor when it is nothing else.
 DecideProductForm ReadDecideProduct(ClientContext &context, const Expression &expr, idx_t decide_index);
 
-//! Whether two terms are the same: equal trees whose decision-bearing nodes carry the same tags (a reducer's `by` and
-//! `per` live in its alias). Tags on data only say where it was written, so they may differ.
-bool DecideTermsEqual(const Expression &left, const Expression &right, idx_t decide_index);
-
 //! Whether two decision-bearing factors are the same term: equal trees, or additive forms with the same signed terms
 //! (`x + y` and `y + x`).
 bool DecideFactorsEqual(const Expression &left, const Expression &right, idx_t decide_index);

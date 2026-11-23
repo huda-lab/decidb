@@ -34,7 +34,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `planner/expression/bound_decide_reducer_expression.hpp` | 02 to 05 | `BoundDecideReducerExpression` — a reducer, with its facts as fields; `DecideNorm` |
 | `planner/expression/bound_decide_frame_expression.hpp` | 02 to 05 | `BoundDecideFrameExpression` — a frame: its index in the frames table and its payload |
 | `planner/expression/bound_decide_null_test_expression.hpp` | 04 to 08 | `BoundDecideNullTestExpression` — an `IS NOT NULL` test a reducer's rows gain beside its written `when` |
-| `planner/decide/decide_tree_nodes.hpp` | 03 to 05 | What reads a reducer's facts off any expression (`IsDecideNormMarker`, `DecideFactsEqual`), `DecideWrittenName`, and `DecideComputedValue` with its two lookups |
+| `planner/decide/decide_tree_nodes.hpp` | 03 to 05 | What reads a reducer's facts off any expression (`IsDecideNormMarker`), `DecideWrittenName`, and `DecideComputedValue` with its two lookups |
 | `optimizer/decide/decide_optimizer.hpp` | 05 | The rewrite passes |
 | `optimizer/decide/decide_linear_form.hpp` | 05 | Flattening into `decide.prepared`; the last DECIDE optimization pass |
 | `optimizer/decide/decide_solver_gate.hpp` | 05 | Backend choice, the native-construct mask, and the plan-time model-class gate |

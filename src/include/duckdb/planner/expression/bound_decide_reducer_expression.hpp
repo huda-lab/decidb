@@ -95,8 +95,6 @@ public:
 	//! Takes the facts of `other`, the reducer it is built in place of: its keys, its norm, its written name and what
 	//! the rewrites recorded.
 	void CopyFacts(const BoundDecideReducerExpression &other);
-	//! Whether the two agree on those facts, the written name apart. Equals leaves them out, as it does an alias.
-	bool FactsEqual(const BoundDecideReducerExpression &other) const;
 	//! The name it was written under.
 	string WrittenName() const;
 

@@ -231,7 +231,7 @@ whole-exponent `POWER` node, as DuckDB's `ArithmeticSimplificationRule` is over 
 additive pass below reads one spelling. The rule:
 
 - flattens `*`, the binder's casts over decisions, unary minus and `POWER(b, k)` for a whole `k`;
-- merges equal decision-bearing factors into powers, comparing trees with their facts and tags (`DecideFactsEqual`), and
+- merges equal decision-bearing factors into powers, comparing trees with `Expression::Equals`, which holds a reducer's facts, and
   additive forms
   as multisets of signed terms, so `(x+y)*(y+x)` is `POWER(x + y, 2)`;
 - composes data factors into the coefficient with `*` and never merges or folds them, so SQL's arithmetic over the
@@ -707,8 +707,7 @@ Foldable decision-free bounds that evaluate to NULL are rejected here, with
 `VerifyCanonical` / `VerifyCanonicalObjective` check the observable invariant
 without mutating the clause. They perform explicit decision-side and
 additive-placement checks, then canonicalize a copy and compare
-with an ordered, **alias-aware** comparison (`CanonicalTreesEqual`) — required because DuckDB's ordinary
-`Expression::Equals` ignores an alias, where a function's tags live, and a reducer's facts, its frame among them. A clause that classifies as VALUE and
+with `Expression::Equals`, which holds a reducer's facts and the definition a kept call names. A clause that classifies as VALUE and
 is not recorded in that shape fails too.
 
 They throw `InternalException`: past this boundary a non-canonical clause is an

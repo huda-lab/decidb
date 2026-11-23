@@ -63,11 +63,6 @@ void BoundDecideReducerExpression::CopyFacts(const BoundDecideReducerExpression 
 	frame_aggregate = other.frame_aggregate;
 }
 
-bool BoundDecideReducerExpression::FactsEqual(const BoundDecideReducerExpression &other) const {
-	return by == other.by && per == other.per && norm == other.norm && holds_reducer == other.holds_reducer &&
-	       retained == other.retained && frame_aggregate == other.frame_aggregate;
-}
-
 string DecideNorm::Written() const {
 	switch (order) {
 	case Order::NONE:
@@ -97,6 +92,7 @@ string BoundDecideReducerExpression::ToString() const {
 
 hash_t BoundDecideReducerExpression::Hash() const {
 	auto hash = CombineHash(Expression::Hash(), duckdb::Hash(static_cast<uint8_t>(kind)));
+	hash = CombineHash(hash, CombineHash(duckdb::Hash(by), duckdb::Hash(per)));
 	return function ? CombineHash(hash, function->Hash()) : hash;
 }
 
@@ -105,8 +101,11 @@ bool BoundDecideReducerExpression::Equals(const BaseExpression &other_p) const {
 		return false;
 	}
 	auto &other = other_p.Cast<BoundDecideReducerExpression>();
-	// A NORM is the norm it names; the norm of a definition is its spelling.
-	if (kind != other.kind || (function ? !(*other.function == *function) : !(other.norm == norm))) {
+	// Every fact but the name it was written under, which is display. A NORM is the norm it names, and the norm of a
+	// definition is the one it was written as.
+	if (kind != other.kind || by != other.by || per != other.per || !(norm == other.norm) ||
+	    holds_reducer != other.holds_reducer || retained != other.retained ||
+	    frame_aggregate != other.frame_aggregate || (function && !(*other.function == *function))) {
 		return false;
 	}
 	return Expression::ListEquals(children, other.children) && Expression::Equals(other.filter, filter) &&

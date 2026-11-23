@@ -38,8 +38,8 @@ public:
 	//! DECIDE clause to its primary, so every check matches one name. Empty for a call written under `function.name`.
 	string written_name;
 	//! The helper definition a DECIDE rewrite kept the call for (LogicalDecide::NameDefinition); unset otherwise.
-	//! Copied with the call; Equals and Hash leave it out, as they do an alias (DecideFactsEqual compares it). An
-	//! optimized plan is never serialized, so neither is this.
+	//! Copied with the call and compared by Equals: two calls that name different definitions are different values.
+	//! An optimized plan is never serialized, so neither is this.
 	DecideHelperRef definition;
 
 public:

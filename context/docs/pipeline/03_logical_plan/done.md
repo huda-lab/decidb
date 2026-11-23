@@ -56,12 +56,10 @@ objective's texts, `source_columns`, `optimized`, the solver choice and the tabl
   its arguments, and the clause-like parts as fields. It is no SQL aggregate: no `LogicalAggregate` computes it and
   DuckDB's executor never reaches it. The tree lowers it, and where DuckDB runs an aggregate (a tree G node, a frame
   column, a direct rule's plan) `ToAggregate()` makes the `BoundAggregateExpression` it names.
-- **`Equals` compares what the reducer computes**: its type, function, arguments, rows and bind data. A NORM
-  is the norm its order and bound name, so it does not equal the SUM over its body. The facts the rewrites
-  record (`by`, `per`, `holds_reducer`, `retained`, `frame`, `frame_aggregate`, and the norm a
-  definition was written as) are left
-  out, as DuckDB leaves out an alias, and `FactsEqual` (`DecideFactsEqual` for any two nodes) compares them where they
-  are structure. `written_name` is display only and is in neither.
+- **`Equals` and `Hash` hold every fact of the reducer**: its kind, type, function, arguments, rows and bind data, its
+  `by` and `per`, the norm it is or was written as, and what the rewrites record (`holds_reducer`, `retained`,
+  `frame_aggregate`). `sum(x)` and `sum(x) by (g)` are different values, so `Expression::Equals` is the one
+  comparison every reader uses. `written_name` is display only and is left out, as an alias is.
 - **Each owes DuckDB the obligations of an `Expression` class**: a case in `ExpressionIterator::EnumerateChildren`
   (the reducer's `children` and `filter`; the test), a no-op case in `LogicalOperatorVisitor::VisitExpression`,
   `IsFoldable()` false, and copy, equality, hash and serialization (`expression.json`; the reducer's body is written by
@@ -92,7 +90,7 @@ innermost first, so a definition reads only helpers of definitions before it. Ev
 - **A kept call names its definition by a typed reference.** `BoundFunctionExpression::definition`
   (`DecideHelperRef`: the entry's kind and its index) is a symbol reference, as Clang's `DeclRefExpr` is to its
   `Decl`. `LogicalDecide::NameDefinition` is its one writer and `DecideDefinitionOf` its reader. `Copy` carries it;
-  `Equals` and `Hash` leave it out, as they do an alias; `DecideFactsEqual` compares it; `DecideStripTags` unsets it on
+  `Equals` compares it; `DecideStripTags` unsets it on
   the copy `ExpressionBuilder::Of` takes. A call that is first a `PRODUCT` and then a reducer's body names the `DEFINITION`.
   A `REDUCER_VALUE` has no kept call: the reader holds the helper's column.
 - **What a row is to the helper it defines is a clause field.** `BoundDecideClause::helper_row` (`DecideHelperRow`:

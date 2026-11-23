@@ -1071,7 +1071,6 @@ TEST_CASE("A bound DECIDE reducer copies every field and compares by what it com
 	auto &copy = copy_owner->Cast<Reducer>();
 	REQUIRE(copy.Equals(source));
 	REQUIRE(copy.Hash() == source.Hash());
-	REQUIRE(copy.FactsEqual(source));
 	REQUIRE(copy.written_name == "total");
 	REQUIRE(copy.alias == "named");
 	REQUIRE(copy.query_location == source.query_location);
@@ -1081,11 +1080,10 @@ TEST_CASE("A bound DECIDE reducer copies every field and compares by what it com
 		auto other = source.Copy();
 		change(other->Cast<Reducer>());
 		REQUIRE(other->Equals(source) == source.Equals(*other));
-		return std::make_pair(!other->Equals(source), !other->Cast<Reducer>().FactsEqual(source));
+		return !other->Equals(source);
 	};
-	const auto another = std::make_pair(true, false);
-	const auto another_fact = std::make_pair(false, true);
-	const auto display_only = std::make_pair(false, false);
+	const bool another = true;
+	const bool display_only = false;
 	// What it computes: its arguments, its rows, its function and the function's bind data.
 	REQUIRE(changed([&](Reducer &r) { r.children[0] = make_uniq<BoundConstantExpression>(Value::INTEGER(1)); }) ==
 	        another);
@@ -1095,14 +1093,13 @@ TEST_CASE("A bound DECIDE reducer copies every field and compares by what it com
 	REQUIRE(changed([&](Reducer &r) { r.function = make_uniq<AggregateFunction>(*avg->function); }) == another);
 	REQUIRE(changed([&](Reducer &r) { r.bind_info = make_uniq<NumberedBindData>(2); }) == another);
 	REQUIRE(changed([&](Reducer &r) { r.bind_info.reset(); }) == another);
-	// What the rewrites record on it is left out of Equals, as an alias is, and compared by FactsEqual. The norm of
-	// a reducer with a function is the spelling of its definition, so it is one of them.
-	REQUIRE(changed([&](Reducer &r) { r.by = 0; }) == another_fact);
-	REQUIRE(changed([&](Reducer &r) { r.per = 0; }) == another_fact);
-	REQUIRE(changed([&](Reducer &r) { r.norm.order = DecideNorm::Order::INF; }) == another_fact);
-	REQUIRE(changed([&](Reducer &r) { r.holds_reducer = false; }) == another_fact);
-	REQUIRE(changed([&](Reducer &r) { r.retained = 0; }) == another_fact);
-	REQUIRE(changed([&](Reducer &r) { r.frame_aggregate = 0; }) == another_fact);
+	// Each fact is part of what it is: its keys, the norm it was written as, and what the rewrites record on it.
+	REQUIRE(changed([&](Reducer &r) { r.by = 0; }) == another);
+	REQUIRE(changed([&](Reducer &r) { r.per = 0; }) == another);
+	REQUIRE(changed([&](Reducer &r) { r.norm.order = DecideNorm::Order::INF; }) == another);
+	REQUIRE(changed([&](Reducer &r) { r.holds_reducer = false; }) == another);
+	REQUIRE(changed([&](Reducer &r) { r.retained = 0; }) == another);
+	REQUIRE(changed([&](Reducer &r) { r.frame_aggregate = 0; }) == another);
 	// The written name and the alias are display only.
 	REQUIRE(changed([&](Reducer &r) { r.written_name = "sum"; }) == display_only);
 	REQUIRE(changed([&](Reducer &r) { r.alias = "renamed"; }) == display_only);
@@ -1180,16 +1177,14 @@ TEST_CASE("A kept call carries the helper definition it names beside what it com
 	// A copy names the same definition.
 	auto copy = kept.Copy();
 	REQUIRE(DecideDefinitionOf(*copy) == DecideDefinitionOf(kept));
-	// The reference is no part of what the call computes, and is a fact of the node.
-	REQUIRE(kept.Equals(plain));
-	REQUIRE(kept.Hash() == plain.Hash());
-	REQUIRE(DecideFactsEqual(kept, *copy));
-	REQUIRE(!DecideFactsEqual(kept, plain));
+	// A call that names a definition is another value than the plain call.
+	REQUIRE(kept.Equals(*copy));
+	REQUIRE(!kept.Equals(plain));
 	BoundFunctionExpression other(LogicalType::INTEGER, function, {}, nullptr);
 	decide.NameDefinition(other, 0);
-	REQUIRE(!DecideFactsEqual(kept, other));
+	REQUIRE(!kept.Equals(other));
 
 	// A stripped copy names none.
 	DecideStripTags(*copy);
-	REQUIRE(DecideFactsEqual(*copy, plain));
+	REQUIRE(copy->Equals(plain));
 }
