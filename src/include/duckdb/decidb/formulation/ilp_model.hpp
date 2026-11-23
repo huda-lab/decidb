@@ -518,7 +518,7 @@ const vector<idx_t> &ClauseRows(const EvaluatedConstraint &ec);
 //! aggregate `<>` expansion and the model builder read one matrix; the builder, the last reader, takes it. Its rows
 //! are final by the first call, as ClauseRows' are. An inlined helper reads its members there (D89), from `input`.
 //! `written` names the clause when a sum grows past a DOUBLE. Built against one column space: laid out again
-//! (InlineReducerValueLinks), it is built anew.
+//! (WriteHelpersIn), it is built anew.
 const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const SolverInput &input, const VarIndexer &indexer,
                                      const DecideClauseRef &written);
 

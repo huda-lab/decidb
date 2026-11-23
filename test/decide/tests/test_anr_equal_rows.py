@@ -64,9 +64,10 @@ def test_a_value_clause_with_no_per_has_the_rows_per_writes(decidb_cli, scope_so
 @pytest.mark.correctness
 def test_a_clause_with_no_per_has_one_row_per_distinct_signature(decidb_cli, scope_solver, tmp_path):
     """The reducers' `by (g)` is a field of the clause's signature: the twelve rows are three variants, one per group
-    of `g`, and the model holds a row for each beside the helper's definition."""
+    of `g`, and the model holds a row for each beside the helper's definition: the query's sum is a helper, which
+    every variant reads, and each group's sum is written into its variant's row."""
     sql = _query("x(INT)", "x <= 5 AND sum(a * x) + sum(b * x) by (g) <= (SELECT 40)")
-    assert _sizes(decidb_cli, tmp_path, sql) == {"num_vars": 13, "num_rows": 4}
+    assert _sizes(decidb_cli, tmp_path, sql) == {"num_vars": 12 + 1, "num_rows": 3 + 1}
     clauses = [X_BOUND, Scoped((Reduce("sum", _a_x), Reduce("sum", _b_x, by=("g",))), "<=", (const(40),))]
     _judged(decidb_cli, scope_solver, sql, [Decision("x")], clauses)
 

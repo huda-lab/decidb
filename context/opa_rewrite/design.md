@@ -27,7 +27,7 @@ a set of distinct signatures for `per K` and `per ()`; an O is a map from `withi
 | 2 | Built. `Sink` buffers each thread's rows; `Finalize` routes the whole buffer through one descent |
 | 3 | Built for data values. A G over decisions holds a helper variable made at planning, not an expression |
 | 4 | Built |
-| 5 | Not built. Every nested decision reducer becomes a helper variable at planning (`AddValueHelper`); stage 06 removes the ones it can (`InlineReducerValueLinks`). The models still match the deck's on its example |
+| 5 | Not built. Every nested decision reducer becomes a helper variable at planning (`AddValueHelper`); the optimizer chooses which are written into their readers (`ChooseHelperForms`) and stage 06 writes them in (`WriteHelpersIn`). The models still match the deck's on its example |
 
 One clause exists in eight forms between planning and the solver: the bound expression with its marker strings and
 side tables on `LogicalDecide`; the tree's nodes; the linear-form records inside the nodes; compiled programs;
@@ -387,7 +387,7 @@ The design, its measurements and the tasks: [review/ARCH-2-design.md](review/ARC
   from 198 ms to 250 ms. A member of a G is one distinct instance of its child, where a MIN or MAX over group values
   lists one per input row today.
 - **Terms are split from the finished nodes (R46)**, prototype first.
-- **Delete:** `InlineReducerValueLinks`, `PlaceHelpers`, the inlined variable scope and the second column layout,
+- **Delete:** `WriteHelpersIn`, the inlined variable scope and the second column layout,
   the emitter's input-length vectors, `ClauseRows` and `ClauseEmittedRows`' regrouping, the row loops of
   `decide_value_extraction.cpp`.
 - **Survives:** routing, containers, the key map, data programs and folds, frames, the no-value rule
@@ -435,4 +435,4 @@ Cleaning this code before the phase that replaces it is work done twice.
 | One AND expression for all clauses, with `when` and `per` as tagged conjunctions | Phase 5: the clause record (ARCH-1) |
 | `DecideNode` is one struct of 67 fields; `DecideTree::Validate` has complexity 142 | Phase 5: nodes split by kind |
 | The emitter scatters node values into arrays as long as the input; evaluation scales with clauses times rows (`repro/clauses_times_rows.sql`) | Phase 6 |
-| Helpers are created at planning and removed by `InlineReducerValueLinks` (300 lines, complexity 90) | Phase 6 |
+| Helpers the plan writes in are created at planning and removed by `WriteHelpersIn`, with a second column layout | Phase 6 |

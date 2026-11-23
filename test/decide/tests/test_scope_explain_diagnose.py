@@ -229,13 +229,13 @@ def test_explain_names_functions_as_the_scope_spellings_write_them(decidb_cli):
 @pytest.mark.explain
 def test_explain_a_nested_objective_accounts_for_each_helper(decidb_cli):
     """A nested objective (D81) prints as written, with no upper-case `PER`, and each of its
-    reducers has its account: the inner one a helper per `by` group, the outer one a helper
-    the objective reads once."""
+    reducers has its account: the inner sum, a member of the MAX, is written into it, and the
+    MAX is a helper the objective reads once; an inner MAX is a helper per `by` group."""
     text = _plan(
         decidb_cli, _ship_query("ship(INT)", "ship >= 1", "MINIMIZE max(per D.region: sum(ship) by (D.region))")
     )
     assert "MINIMIZEmax(perD.region:sum(ship)by(D.region))" in text, text
-    assert "↳sum(ship)by(D.region)becomesahelperdecisionpergroup" in text, text
+    assert "↳sum(ship)by(D.region)iswrittenwhereitisread,withnohelperdecision" in text, text
     assert "↳max(perD.region:sum(ship)by(D.region))becomesahelperdecision" in text, text
     assert "PER" not in text, text
     text = _plan(

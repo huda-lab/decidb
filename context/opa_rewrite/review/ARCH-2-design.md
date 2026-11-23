@@ -77,7 +77,7 @@ take an expression. Proposed, read off the plan alone:
 
 | Reducer | Form | Condition |
 |---|---|---|
-| SUM, AVG | **members passed up** | every reader takes a linear expression, and either it is in a nest of sums (the deck's rule, pp. 115, 119; today's `flattened`) or each instance has one reading row by construction (a window that moves with its row and is read by one row; a sum that is a member of a MIN or MAX pinned on one side) |
+| SUM, AVG | **members passed up** | every reader takes a linear expression, and either it is in a nest of sums (the deck's rule, pp. 115, 119; today's `flattened`) or each instance has one reading row by construction (a window that moves with its row and is read by one row; a sum that is a member of a MIN or MAX pinned on one side; a sum whose one reading clause has its rows within the sum's groups) |
 | SUM, AVG | variable, one definition row per group | any other |
 | MIN, MAX | variable, one link per group | always |
 | MIN, MAX, a group of one member | that member, no variable | a fixed part of the form (deck p. 112), when every reader takes a linear expression |

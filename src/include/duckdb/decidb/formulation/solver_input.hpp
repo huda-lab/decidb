@@ -461,8 +461,10 @@ struct ReducerValueLinkSpec {
 	idx_t source_clause_id = DConstants::INVALID_INDEX;
 	//! A range frame's helper, one instance per window (D78), rather than a reducer's.
 	bool frame = false;
+	//! The form the plan gave the helper (DecideReducerValueDefinition::form).
+	DecideHelperForm form = DecideHelperForm::VARIABLE;
 	ReducerValueMembers members;
-	//! Set by InlineReducerValueLinks for one written into its rows and the objective (D89): they read an instance's
+	//! Set by WriteHelpersIn for one written into its rows and the objective (D89): they read an instance's
 	//! members in place of its column. Its bounds are still derived (a bound flows through it to the helpers among
 	//! its members); no definition is emitted, and its members move to SolverInput::inlined_helpers.
 	bool inlined = false;
@@ -796,7 +798,7 @@ struct SolverInput {
 	//! whose definition reads an instance with none, or a NULL (D88); empty where none. An instance every row of
 	//! which reads none is a column fixed at 0, which no row reads, as an absent class is.
 	vector<vector<bool>> absent_reads;
-	//! Per keyed helper, the instances written into their readers as their one member (InlineReducerValueLinks: a MIN
+	//! Per keyed helper, the instances written into their readers as their one member (WriteHelpersIn: a MIN
 	//! or MAX group of one member is that member, deck p. 112), which own no column (VarIndexer::instance_slot);
 	//! empty for a helper none of which is.
 	vector<vector<bool>> written_in;

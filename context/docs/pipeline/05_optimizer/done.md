@@ -263,20 +263,32 @@ The `optimizer.decide` span of `DECIDB_PROFILE=1` times the whole block.
 **The form of a reducer helper** (`decide_helper_form.cpp`; context/opa_rewrite/decisions.md R42 to R44). A helper the
 value rewrite made is a column, or its members are written into what reads it. The pass reads every body through
 `EnumerateBodies` and each ABS operand with the walk every push is read from (`WalkPolarity`), and records per helper
-whether a reader states its column, how many linear rows read it, and the one other helper whose member reads it.
+whether a reader states its column, how many linear rows read it, whether those rows lie within its groups, and the
+one other helper whose member reads it.
 
 | Form | Reducer | When |
 |---|---|---|
-| `WRITTEN_IN` | SUM, AVG | every reader takes a linear expression, and it is in a nest of sums (a SUM or AVG reads it, or it reads one), or it is a member of a MIN or MAX, or it is a range whose window moves with the row (`DecideFrameSpec::Relative`) and one row reads it |
+| `WRITTEN_IN` | SUM, AVG | every reader takes a linear expression, and it is in a nest of sums (a SUM or AVG that is no frame reads it, or it reads one that is no frame), or it is a member of a MIN or MAX, or one row reads it and that row holds each instance once: a range whose window moves with the row (`DecideFrameSpec::Relative`), or a reducer whose reading clause has its rows within the reducer's groups |
 | `ONE_MEMBER_WRITTEN_IN` | MIN, MAX | every reader takes a linear expression: a group of one member is that member |
 | `VARIABLE` | any | any other |
 
 A reader states the column, so the helper keeps it, when it is a product or a square, a frame's payload, an exact ABS,
 a `<>`, a row that is not linear, a bound on one decision (which may fold into the column's box), a MIN or MAX pinned
 on both sides, or a second helper. A one-sided ABS states its operand in two rows, so it counts as two readers. A
-range of a whole timeline is one instance that every row of the timeline reads, so it keeps its column. The model
-builder does not read the form yet: `InlineReducerValueLinks` still decides from the built model, and
-`DECIDB_FORM_DIFF=<file>` lists each helper where the two differ.
+range of a whole timeline is one instance that every row of the timeline reads, so it keeps its column.
+
+A clause's rows lie within a helper's groups when no row of the clause reads a group twice over: the objective, or a
+clause whose `per` key is among the helper's `by` keys and whose row signature (`CollectSignatureFields`) names no
+per-row decision, no frame and no `by` key outside the helper's. A signature's data fields are not read: a class that
+the data splits into variants holds its group's members once per variant, as a nest's rows do. The rule is measured
+on the link of a facility-location model, `per g: sum(x) by (g) <= budget * open` over 200,000 rows: the solve takes
+37 ms written in and 98 ms with a column per group at 100 groups, 700 ms and 1,145 ms at 20,000, 6.7 s and 10.1 s at
+100,000. A per-row clause (`x <= share * sum(x) by (g)`) reads each group once per member, so its helper keeps the
+column: N rows of two entries, not N rows of a group's members.
+
+The pass states the form in the plan: the rewrite account of a `WRITTEN_IN` helper becomes
+`Kind::VALUE_HELPER_INLINED`, so a plain EXPLAIN prints it. Stage 06 applies the form (`WriteHelpersIn`) and decides
+nothing.
 
 **Every pass that reads bodies reaches them through one enumerator** (`LogicalDecide::EnumerateBodies`, the Visitor
 pattern, as DuckDB's `LogicalOperatorVisitor::EnumerateExpressions` enumerates a node's expressions). It visits

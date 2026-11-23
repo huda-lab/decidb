@@ -111,7 +111,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `decidb/formulation/linearization_minmax.cpp` | 06 | MIN/MAX: the extremum link of every helper |
 | `decidb/formulation/linearization_not_equal.cpp` | 06 | `<>` collapse and Big-M disjunction |
 | `decidb/formulation/linearization_bilinear_abs.cpp` | 06 | McCormick and ABS rows |
-| `decidb/formulation/linearization_reducer_value.cpp` | 06 | The value rewrite's helpers: where each is written in (`PlaceHelpers`, `InlineReducerValueLinks`, D89), their boxes and definitions |
+| `decidb/formulation/linearization_reducer_value.cpp` | 06 | The value rewrite's helpers: the write-in of each the plan's form names (`WriteHelpersIn`, D89), their boxes and definitions |
 | `decidb/solver/decide_solve.cpp` | 07 | `SolveDecide`: the solve options, the solve, and a time limit's prompt to continue or incumbent |
 | `decidb/solver/ilp_solver.cpp` | 07 | Dispatch, INF_OR_UNBD probe, ray attachment |
 | `decidb/solver/solver_registry.cpp` | 07 | `REGISTERED_BACKENDS` — the one table naming every backend |

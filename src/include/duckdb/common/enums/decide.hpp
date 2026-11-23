@@ -202,6 +202,20 @@ enum class DecideHelperKind : uint8_t {
 	REDUCER_VALUE,
 };
 
+//! How a reducer's helper stands in the model, chosen by the optimizer from the helper's readers
+//! (DecideOptimizer::ChooseHelperForms) and repeated by execution once per group
+//! (DecideReducerValueDefinition::form).
+enum class DecideHelperForm : uint8_t {
+	//! A column per instance, defined by a row or a link per group.
+	VARIABLE,
+	//! A MIN or MAX whose readers take a linear expression: a column per instance, but a group of one member is that
+	//! member and has no column (deck p. 112).
+	ONE_MEMBER_WRITTEN_IN,
+	//! A SUM or AVG with no column: its members are written into the rows, the objective or the helper that read it
+	//! (the deck's "a SUM passes its members up", pp. 115, 119).
+	WRITTEN_IN,
+};
+
 //! The definition a kept call names (BoundFunctionExpression::definition): its entry of
 //! LogicalDecide::helper_definitions and that entry's kind, as a compiler's use node holds its declaration. The kind
 //! is the entry's, written beside the index by the one writer (LogicalDecide::NameDefinition) for the readers that

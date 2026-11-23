@@ -177,8 +177,6 @@ private:
 	//! What stage 06 made of each helper the plan names (D89): written where it is read, with no column, or its groups
 	//! of one member written in -- an EXPLAIN ANALYZE line under each clause whose plan line names the helper. A helper
 	//! with no column at all replaces its plan line (ParamsToString), which says it becomes one.
-	//! Phase 6's side-by-side check of each reducer helper's form (physical_decide.cpp).
-	void CompareHelperForms(const SolverInput &input) const;
 	void ReportInlinedHelpers(const SolverInput &input) const;
 
 	//! Everything EvaluateTree reads off the data that a later step still needs. Nothing here depends

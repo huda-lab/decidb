@@ -78,13 +78,34 @@ TEST_CASE("A SUM in a nest of sums is written into its reader, and so is the SUM
 	REQUIRE(FormOf(mixed, "sum(max(x) by (t.g, t.h)) by (t.g)") == DecideHelperForm::WRITTEN_IN);
 }
 
-TEST_CASE("A lone SUM that rows read keeps its column", "[decidb]") {
+TEST_CASE("A lone SUM is written into the one clause whose rows lie within its groups", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	REQUIRE_NO_FAIL(con.Query("SET decide_direct_solve='off'"));
-	// Every row of a group reads the group's sum: written in, the group's members would stand in each of them.
-	auto forms = HelperForms(con, "x(REAL) SUCH THAT x <= 5 AND x <= 0.5 * sum(x) by (t.g) + 1 MAXIMIZE sum(x)");
-	REQUIRE(FormOf(forms, "sum(x) by (t.g)") == DecideHelperForm::VARIABLE);
+	// The facility-location link: a row per group, which data may split into variants.
+	auto link = HelperForms(con, "x(REAL), per t.g: b(BOOL) SUCH THAT x <= 5 AND per t.g: sum(x) by (t.g) <= t.w * b "
+	                             "MAXIMIZE sum(x)");
+	REQUIRE(FormOf(link, "sum(x) by (t.g)") == DecideHelperForm::WRITTEN_IN);
+	// A decision read per row makes a row per input row: the group's members would stand in each.
+	auto per_row = HelperForms(con, "x(REAL) SUCH THAT x <= 5 AND x <= 0.5 * sum(x) by (t.g) + 1 MAXIMIZE sum(x)");
+	REQUIRE(FormOf(per_row, "sum(x) by (t.g)") == DecideHelperForm::VARIABLE);
+	// A row per group of `g` reads the query's sum from outside its one group, and its own group's from inside.
+	auto coarser = HelperForms(con, "x(REAL) SUCH THAT x <= 5 AND sum(x) by (t.g) + sum(x) <= 9 MAXIMIZE sum(x)");
+	REQUIRE(FormOf(coarser, "sum(x) by (t.g)") == DecideHelperForm::WRITTEN_IN);
+	REQUIRE(FormOf(coarser, "sum(x)") == DecideHelperForm::VARIABLE);
+	// Neither key holds the other.
+	auto crossed =
+	    HelperForms(con, "x(REAL) SUCH THAT x <= 5 AND sum(x) by (t.g) + sum(x) by (t.h) <= 9 MAXIMIZE sum(x)");
+	REQUIRE(FormOf(crossed, "sum(x) by (t.g)") == DecideHelperForm::VARIABLE);
+	REQUIRE(FormOf(crossed, "sum(x) by (t.h)") == DecideHelperForm::VARIABLE);
+	// A clause's classes finer than the groups read each group once per class.
+	auto finer = HelperForms(con, "x(REAL), per t.g: b(BOOL) SUCH THAT x <= 5 AND per t.id: sum(x) by (t.g) <= t.w * b "
+	                              "MAXIMIZE sum(x)");
+	REQUIRE(FormOf(finer, "sum(x) by (t.g)") == DecideHelperForm::VARIABLE);
+	// Two clauses read it.
+	auto twice = HelperForms(con, "x(REAL), per t.g: b(BOOL) SUCH THAT x <= 5 AND per t.g: sum(x) by (t.g) <= t.w * b "
+	                              "AND per t.g: sum(x) by (t.g) <= 2 * t.w * b + 1 MAXIMIZE sum(x)");
+	REQUIRE(FormOf(twice, "sum(x) by (t.g)") == DecideHelperForm::VARIABLE);
 }
 
 TEST_CASE("A SUM that is a member of a MIN or MAX is written in unless the MIN or MAX is pinned on both sides",
@@ -112,6 +133,11 @@ TEST_CASE("A range is written into its one reader when its window moves with the
 	auto whole = HelperForms(
 	    con, "x(REAL) SUCH THAT x <= 5 AND x <= sum(from first to last: x) over (t.p) - t.w MAXIMIZE sum(x)");
 	REQUIRE(FormOf(whole, "sum(from first to last: x) over (t.p)") == DecideHelperForm::VARIABLE);
+	// A window a SUM reads is written into the SUM, which every row reads and so keeps its column.
+	auto summed = HelperForms(con, "x(REAL) SUCH THAT x <= 5 AND x <= sum(sum(from previous to previous else 0: x) "
+	                               "over (t.p)) + 1 MAXIMIZE sum(x)");
+	REQUIRE(FormOf(summed, "sum(from previous to previous else 0: x) over (t.p)") == DecideHelperForm::WRITTEN_IN);
+	REQUIRE(FormOf(summed, "sum(sum(from previous to previous else 0: x) over (t.p))") == DecideHelperForm::VARIABLE);
 	// A one-sided ABS states its operand in two rows, so each window has two readers.
 	auto twice = HelperForms(con, "x(REAL) SUCH THAT x <= 5 AND abs(x - sum(from previous to previous else 0: x) "
 	                              "over (t.p)) <= 4 MAXIMIZE sum(x)");

@@ -264,13 +264,14 @@ one group at a time. No test asserts an answer its docstring derives.
   column was lost.
 - **`test_anr_inlining.py`** — helpers written where they are read (D89): a range's
   windows into their anchors' rows, with and without `else`, an AVG, an `else` constant, a
-  window every row reads kept, windows shared by a few rows written in, the objective; group
+  window every row reads kept, a group's sum read by a clause `per` the group written in, the objective; group
   sums into the objective's MAX, a range into the reducer around it, F1's inner sums into its
   regions; a MIN/MAX of one member written in, and one closing on no bound; what keeps a
   column (`<>`, a bound on the helper alone, a MAX closing natively on a sum two members read,
   a MAX of several members); DIAGNOSE through an inlined helper, and the achievable objective
   counting its constants. Model sizes pinned, answers judged by `_anr_oracle`, both solvers
-  where the formulation differs. The pass on hand-built inputs is
+  where the formulation differs. The plan rule on hand-built plans is
+  `test/common/test_decidb_helper_form.cpp`'s, the write-in on hand-built inputs
   `test/common/test_decidb_helper_inlining.cpp`'s.
 - **`test_anr_diagnostics.py`** — DIAGNOSE and EXPLAIN over variants, nests and frames:
   F17's variant repaired, a definition never offered for repair, the groups a frame leaves

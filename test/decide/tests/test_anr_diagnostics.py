@@ -199,7 +199,14 @@ def test_dropping_a_clause_drops_its_helpers_alone(request, cli_fixture):
         pytest.param(
             f"sum(abs(x - at(previous: x) {TL})) <= 4", "becomesahelperdecision", id="a-sum-of-abs-over-a-frame"
         ),
-        pytest.param(f"x <= sum(from previous to next: x) {TL}", "becomesahelperdecision", id="a-range-over-decisions"),
+        pytest.param(
+            f"x <= sum(from previous to next: x) {TL}",
+            "iswrittenwhereitisread,withnohelperdecision",
+            id="a-range-over-decisions",
+        ),
+        pytest.param(
+            f"x <= max(from previous to next: x) {TL}", "becomesahelperdecision", id="an-extremum-range-over-decisions"
+        ),
     ],
 )
 def test_explain_names_what_each_construct_became(decidb_cli, clause_sql, account):

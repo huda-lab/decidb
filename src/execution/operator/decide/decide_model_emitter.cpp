@@ -8,6 +8,8 @@
 
 #include "duckdb/execution/operator/decide/decide_model_emitter.hpp"
 
+#include <set>
+
 #include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/execution/operator/decide/decide_global_sink_state.hpp"
@@ -1553,7 +1555,7 @@ void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {
 	                       tree_node.text, payload, payload_vars, fallback, fallback_vars, out);
 }
 
-void DecideModelEmitter::ValueLinks() {
+void DecideModelEmitter::ValueLinks(const vector<KeyedMapping> &mappings) {
 	// Reducer definitions are emitted from their G/O nodes, children first, each member term in its place; node-owned
 	// metadata supplies the helper's formulation sides, qualifier and label.
 	for (auto node : tree.eval_order) {
@@ -1571,6 +1573,7 @@ void DecideModelEmitter::ValueLinks() {
 		spec.label = definition.label;
 		spec.source_clause_id = definition.origin.source_clause_id;
 		spec.frame = tree_node.kind == DecideNodeKind::FRAME;
+		spec.form = definition.form;
 		if (spec.frame) {
 			FrameMembers(node, spec.members);
 			gstate.evaluated_value_links.push_back(std::move(spec));
@@ -1604,11 +1607,32 @@ void DecideModelEmitter::ValueLinks() {
 			coefficients[t] = columns.Numbers(site, site_t.program, members.reads, nullptr);
 			variables[t] = gstate.ReadVariable(term.variable_index, term.frame_read);
 		}
+		// A MIN or MAX of equal members is that member once. Members can be equal only when none reads a per-row
+		// decision: two rows of a group then read the same instances (a nested reducer's value, a keyed decision). A
+		// frame read is a read per row: its variable is numbered past the plan's (DecideGlobalSinkState::ReadVariable).
+		bool distinct = IsDecideExtremum(definition.reducer);
+		vector<const KeyedMapping *> instances(variables.size(), nullptr);
+		for (idx_t t = 0; t < variables.size() && distinct; t++) {
+			auto &term = body.members[t];
+			if (term.variable_index == DConstants::INVALID_INDEX) {
+				continue;
+			}
+			auto &scope = tree.variable_scopes[term.variable_index];
+			if (term.frame_read != DConstants::INVALID_INDEX) {
+				distinct = scope.IsGlobal();
+			} else if (scope.IsKeyed()) {
+				instances[t] = &mappings[scope.keyed_scope_idx];
+			} else {
+				distinct = scope.IsGlobal();
+			}
+		}
+		std::set<vector<double>> listed;
 		for (auto &group_rows : rows_by_group) {
 			if (group_rows.empty()) {
 				continue;
 			}
 			spec.members.AddGroup(group_rows.front());
+			listed.clear();
 			const auto avg_scale =
 			    definition.reducer == DecideReducerKind::AVG ? 1.0 / static_cast<double>(group_rows.size()) : 1.0;
 			for (auto row : group_rows) {
@@ -1622,6 +1646,19 @@ void DecideModelEmitter::ValueLinks() {
 				if (!std::isfinite(constant)) {
 					throw DecideTooLargeError(DecideClauseRefOf(op.display.constraint_sources, op.display.source_text,
 					                                            spec.source_clause_id));
+				}
+				if (distinct) {
+					vector<double> member {constant};
+					for (idx_t term = 0; term < variables.size(); term++) {
+						if (variables[term] != DConstants::INVALID_INDEX) {
+							member.push_back(coefficients[term][entry]);
+							member.push_back(instances[term] ? static_cast<double>(instances[term]->row_to_class[row])
+							                                 : 0);
+						}
+					}
+					if (!listed.insert(std::move(member)).second) {
+						continue;
+					}
 				}
 				spec.members.AddMember(constant);
 				for (idx_t term = 0; term < variables.size(); term++) {

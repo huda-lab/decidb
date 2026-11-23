@@ -567,8 +567,8 @@ def test_a_helper_row_too_far_apart_names_the_clause_that_reads_it(decidb_cli_hi
 
 # A helper decision (the two-level form's group sum or extremum) is defined where its first reader reads it, and a sum
 # of its members past a DOUBLE names that clause as written, not the reducer as the plan prints it (lowercased, with
-# its `by`). `by (b)` puts both rows in one group, and each of `b`'s 1e308 is finite. A sum read twice costs a column
-# and a definition (InliningAddsNoNonzero), so those cases read it in two clauses. (name, DECIDE clauses, the clause
+# its `by`). `by (b)` puts both rows in one group, and each of `b`'s 1e308 is finite. A sum two clauses read keeps its column
+# and its definition (ChooseHelperForms), so those cases read it in two clauses. (name, DECIDE clauses, the clause
 # the message names, the backends that reach the site.)
 HELPER_SUMS = [
     # SparseCoeffAccumulator::BeginForDecisions of a member: one row's two terms read `y` at the same row.

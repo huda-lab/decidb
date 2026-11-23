@@ -48,7 +48,9 @@ def _profile(cli, sql):
 
 
 def _plain(cli, sql):
-    return _run(cli, "EXPLAIN " + sql).stdout.replace(" ", "")
+    """EXPLAIN's DECIDE box, joined as `_profile` joins EXPLAIN ANALYZE's."""
+    out = _run(cli, "EXPLAIN " + sql).stdout
+    return "".join(line.strip().strip("│").strip() for line in out.splitlines()).replace(" ", "")
 
 
 @pytest.mark.correctness
@@ -260,31 +262,34 @@ def test_a_query_with_no_objective_is_no_warning(decidb_cli):
 
 @pytest.mark.correctness
 @pytest.mark.parametrize(
-    "clause_sql, line",
+    "clause_sql, line, planned",
     [
         # Each window read by its anchor alone: written into its row.
         pytest.param(
             f"x >= sum(from 2 previous to previous else 0: x) {TL} - t.w",
             f"↳sum(from2previoustopreviouselse0:x){TL}iswrittenwhereitisread,withnohelperdecision",
+            True,
             id="whole",
         ),
-        # A reducer's helper per group, each read by its group's rows once.
+        # A reducer a MIN or MAX reads as a member: written into its row of the link.
         pytest.param(
-            "x <= sum(t.w * x) by (t.product) - 1",
+            "max(sum(t.w * x) by (t.product)) <= 9",
             "↳sum(t.w*x)by(t.product)iswrittenwhereitisread,withnohelperdecision",
+            True,
             id="a-reducer",
         ),
         # C's window is C alone: that group of one member is its member; the others keep their columns.
         pytest.param(
             f"x >= max(from previous to next: x) {TL} - 1",
             f"↳max(frompreviousto next:x){TL}:eachgroupofonememberiswrittenwhereitisread,withnohelperdecision",
+            False,
             id="groups-of-one-member",
         ),
     ],
 )
-def test_a_helper_written_where_it_is_read_says_so(decidb_cli, clause_sql, line):
-    """The plan says a range becomes a helper; whether stage 06 writes it where it is read
-    is the data's (D89), so EXPLAIN ANALYZE says that under the clause."""
+def test_a_helper_written_where_it_is_read_says_so(decidb_cli, clause_sql, line, planned):
+    """A SUM or AVG the plan writes where it is read says so in EXPLAIN. Which groups of a MIN
+    or MAX hold one member is the data's, so only EXPLAIN ANALYZE says that under the clause."""
     sql = _query(clause_sql)
     assert line.replace(" ", "") in _profile(decidb_cli, sql)
-    assert "writtenwhere" not in _plain(decidb_cli, sql)
+    assert ("writtenwhere" in _plain(decidb_cli, sql)) == planned

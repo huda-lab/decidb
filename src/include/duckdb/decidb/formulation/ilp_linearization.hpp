@@ -260,21 +260,12 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
 //!     constant from the signed interval DeriveAbsAuxiliaryBounds derived.
 void EmitAbsConstraints(SolverInput &input, const VarIndexer &indexer, NativeConstructPolicy policy);
 
-//! The value rewrite's helper decisions (SolverInput::reducer_value_links), phase 0, at the end of assembly, once the
-//! rows and the objective are final: inline each helper whose every reader can read its members in place of its
-//! column -- linear rows of plain clauses and the linear objective, or the members of one outer helper -- where doing
-//! so adds no nonzero to the model (D89), counted on the data: an instance of `m` terms read `k` times costs `m * k`
-//! written in, against `m + 1` for its definition and `k` for its reads. `held` lists the decisions read where only a
-//! column can stand and SolverInput does not show it: a bound folded into its column's box. One read by an outer
-//! helper's members -- a nested reducer -- is written into them, each term reading an instance becoming that instance's
-//! terms; one read by rows and the objective is marked `inlined`, for the model builder to write its members where they
-//! read it. Either way its variable becomes DecideVarScope::INLINED, with no column. A MIN or MAX group of one member
-//! is that member, written in group by group (SolverInput::written_in); an outer MIN or MAX that may close natively
-//! takes only instances read once. `minmax_values` are G/O MIN/MAX outputs whose non-singleton formulas stay explicit.
-//! SUM/AVG values remain eligible for recursive expansion into their readers. A singleton MIN/MAX group may be written
-//! directly at its readers, since its reducer value is that one member (deck p. 112). Returns whether a helper was
-//! inlined or written through: the column space must then be laid out again.
-bool InlineReducerValueLinks(SolverInput &input, const vector<idx_t> &held, const vector<idx_t> &minmax_values);
+//! Writes each reducer helper where the plan's form says (ReducerValueLinkSpec::form, DecideHelperForm), at the end of
+//! assembly: a WRITTEN_IN helper's members into the rows and the objective that read it (SolverInput::inlined_helpers)
+//! or into the members of the one helper that reads it, its variable DecideVarScope::INLINED with no column; a
+//! ONE_MEMBER_WRITTEN_IN helper's groups of one member the same way, group by group (SolverInput::written_in). Returns
+//! whether any helper was written in: the column space must then be laid out again.
+bool WriteHelpersIn(SolverInput &input);
 
 //! The value rewrite's helper decisions (SolverInput::reducer_value_links), phase 1: box
 //! each helper instance by the reach of its own group's members -- the sum of their brackets

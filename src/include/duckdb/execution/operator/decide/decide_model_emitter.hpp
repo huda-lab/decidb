@@ -113,7 +113,7 @@ public:
 	void Objective(PhysicalDecide::EvaluatedClauses &evaluated);
 	//! Each helper's members (DecideGlobalSinkState::evaluated_value_links), per group of its `by` key that holds
 	//! one, listed after the objective.
-	void ValueLinks();
+	void ValueLinks(const vector<KeyedMapping> &mappings);
 
 private:
 	//! A helper's members (language/guide.md §7.2): the entries of its G's operand it reads, every decision they read

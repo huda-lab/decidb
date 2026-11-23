@@ -216,9 +216,7 @@ its own. One list would test the kind at every reader. The model dumps keep the 
 (from the DEFINES tag), or `INVALID_INDEX`: the two lower-envelope rows of an ABS (`aux >= inner`, `aux >= -inner`)
 define its auxiliary. A pass that asks what a clause demands of a column skips the rows that define it by that field
 (`DemandedAuxReach`), and `EmitAbsEnvelopes` refuses an envelope row that does not define its auxiliary. The model row
-carries no ABS mark. `FindUnboundedContributor` takes the column it skips as an argument. `PlaceHelpers` reads
-`constraints`, `not_equals`, `quadratics` and the exact `abs_links` in a loop each, as it reads `bilinear_links`, so no
-row is tested for its kind.
+carries no ABS mark. `FindUnboundedContributor` takes the column it skips as an argument.
 
 Two passes read every clause row whichever list holds it, through `SolverInput::ForEachClauseRow`:
 `OpenElasticColumnBox` (the elastic box of a column) and `DemandedAuxReach` (what a row demands of an ABS auxiliary).
@@ -314,7 +312,7 @@ recorded in `rhs_mechanism_offset` as those are (§7), so a diagnosis quotes the
 join its constant (`obj_constant`), as a kept helper's definition carried them into it. A clause skipped the rows
 reading an absent instance (stage 08), so one reaching the builder is an internal error; the objective reads one as
 no value, as it reads the spare column of an absent class (D84). A row over one decision that may fold into its box
-never reads an inlined helper: such a row holds the helper's column (`admitted_lower`, `PlaceHelpers`).
+never reads an inlined helper: the plan keeps the column of a helper such a row reads (`ChooseHelperForms`, stage 05).
 
 ### Quadratic and bilinear constraints
 
@@ -796,37 +794,24 @@ the helper definition's `origin` and `DecideWrittenClause` (the objective when n
 ### Inlining a helper
 
 A helper decision costs a column, a definition row and its reads; written where it is read, it costs none of them, and
-its members' terms stand in each reader instead. An instance of `m` terms read `k` times costs `m·k` nonzeros
-inlined, against `m + 1` for its definition and `k` for its reads, so `InlineReducerValueLinks` (the end of assembly,
-stage 08) inlines a helper where the sum over its instances adds no nonzero (D89): the model only ever loses columns
-and rows. The `SUM` and `AVG` links of a nest -- one whose outer link is a SUM or AVG, and that outer link -- are
-inlined whatever the count (`flattened`), as the deck writes a nest's sums into the rows that read them (pp. 115,
-119), so a region read by two rows is written into both however many members it has. `x >= sum(from 2 previous to previous else 0: x) over (...) - t.w` has one column and one row per input row,
-the windows written into their anchors' rows, where a helper per window doubled both.
-Where it may write a helper in is decided in the same pass, from every reader the model has (`PlaceHelpers`): into
-its readers, when every one is a linear row of a plain clause (no `<>`, Big-M ABS pair, product or
-square, and no bound over one decision that may fold into its box, `admitted_lower`) or the linear objective; or into
-one outer link, when that link's members are its only reader and, if a MIN or MAX, it is pinned on one side, so each
-member stands in one row. Any other reader holds the column: a product or square in a row or the objective, a
-McCormick link, a frame read at another row, and the readers assembly passes in because `SolverInput` does not show
-them (`held`): a bound folded into the helper's box. What it counts is the data, each instance's reads as the builder
-states them: a per-row clause's kept rows, an aggregate's groups (a group's rows reading one instance sum into one row),
-the objective once, an outer SUM's groups and an outer MIN/MAX's members (each stated in a row of its own). A clause's
-read of an absent instance is an internal error; the objective's read of one is no read. Then, innermost first:
+its members' terms stand in each reader instead. Which helper is written in is the plan's
+(`DecideReducerValueDefinition::form`, `ChooseHelperForms`, stage 05; context/opa_rewrite/decisions.md R42 to R44),
+carried on `ReducerValueLinkSpec::form`. `WriteHelpersIn` (the end of assembly, stage 08) applies it and tests no
+reader and no count: a `WRITTEN_IN` SUM or AVG whole, and a `ONE_MEMBER_WRITTEN_IN` MIN or MAX group by group, where
+a group has one member. `x >= sum(from 2 previous to previous else 0: x) over (...) - t.w` has one column and one row
+per input row, the windows written into their anchors' rows, where a helper per window doubled both. A clause's read
+of an absent instance is an internal error; the objective's read of one is no read. Innermost first:
 
 - **Into another helper** (deck pp. 116–119, a group sum under a MAX). A helper read only by another link's members is
   written into them: each member term reading an instance becomes that instance's terms, times the term's
-  coefficient, its constants joining the member's; the link is then gone. An outer MIN/MAX pinned on its closing side
-  may state it natively, over columns, where a member that is an expression costs a column and a row of its own, so
-  such an outer takes a helper only where every instance is read once (`max(sum(x + 1) by (g)) >= 15` keeps a sum two
-  of its members read).
+  coefficient, its constants joining the member's; the link is then gone.
 - **Into rows and the objective** (deck p. 115, the range frame above). Any other is marked `inlined`: its variable's
   scope becomes `INLINED` (§1), and the builder writes its members where a row or the objective reads it (§4). It stays
   among the links through the bound fixed point, so a bound still flows through it to the helpers among its members.
 
-A MIN or MAX helper is linear, and so inlined whole, only where every group has one member, which is then its value:
-a window of one position (`max(from previous to previous else 0: x)`). Where its readers let it be written in, a group of
-one member among others is written in alone (`SolverInput::written_in`, deck p. 112): into the outer link's members,
+A MIN or MAX group of one member is that member (deck p. 112, R44): a window of one position
+(`max(from previous to previous else 0: x)`). Under `ONE_MEMBER_WRITTEN_IN` such a group is written in alone
+(`SolverInput::written_in`), the one fact the data supplies: into the outer link's members,
 or through `inlined_helpers` into the rows reading it, the other groups keeping their columns and definitions. Such an
 instance, and a keyed decision's absent class, owns no column (`VarIndexer::instance_slot`; `HasColumn`,
 `ColumnOrNone`): the builder reads a written-in instance's member wherever it reads the instance, recursively
@@ -834,7 +819,7 @@ instance, and a keyed decision's absent class, owns no column (`VarIndexer::inst
 model, 8 columns and 7 rows (p. 115). Execution lists every member and absence as for any
 helper, so an inlined helper's absence skips the same rows; DIAGNOSE formulates its repair model from the same
 assembly, so it inlines the same helpers, and its findings name the rows as written. Tests: `test_anr_inlining.py`
-(model sizes and answers), `test/common/test_decidb_helper_inlining.cpp` (the pass on hand-built inputs).
+(model sizes and answers), `test/common/test_decidb_helper_form.cpp` (the plan rule), `test/common/test_decidb_helper_inlining.cpp` (`WriteHelpersIn` on hand-built inputs).
 
 ### MIN/MAX objectives
 

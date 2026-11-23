@@ -692,12 +692,13 @@ Tuple terms and reducers mix freely on either side. Each comparison takes one of
   decision** with one instance per `by` group, defined once (it holds its members' `SUM` or `AVG` on the side the
   clause pushes it, or their `MIN` or `MAX`), and the clause is one row per class.
   Example 1 costs N rows of two entries plus one definition row,
-  not N rows of N entries. Where writing a helper's members into the rows that read it adds no nonzero -- an instance
-  of `m` terms read `k` times costs `m·k` written in, `m + 1 + k` defined -- the helper is written in and has no
-  column (D89): example 5's depot sums, two shipments read by two rows, and a range frame's window read by its anchor
-  alone. A bound on a `SUM` or `AVG` helper alone is such a row, not its box, so the running example's region sums are
-  written into its three clause rows (deck pp. 115, 119). The `SUM` and `AVG` reducers of a nest are written in
-  whatever that costs, as the deck flattens them: each region's sum, whatever its size, into every row that reads it.
+  not N rows of N entries. A `SUM` or `AVG` helper whose one reading row holds each instance once is written into
+  that row and has no column (D89): a group's sum read by a clause `per` that group
+  (`per D.depotID: sum(ship) by (D.depotID) <= D.capacity * open`), a sum the objective alone reads, and a range
+  frame's window read by its anchor alone. Example 5's depot sums keep their columns: each depot's shipments read it,
+  a row apiece. The `SUM` and `AVG` reducers of a nest are written in
+  whatever that costs, as the deck flattens them: each region's sum, whatever its size, into every row that reads it
+  (deck pp. 115, 119).
   So is a nested reducer written into the one around it; a
   `MIN`/`MAX` group of one member is that member, written in group by group (deck p. 112); and a group with no member
   has no column. Clauses holding the same reducer over the same rows share one helper and one definition,
@@ -909,10 +910,10 @@ when the model differs: `≡` for the canonical form, `↳` for what each rewrit
 the rows the solver receives. A helper prints as the expression it stands for, never an internal name; the bound
 of a `norm(e, 0)` derived from data prints as `M`. `EXPLAIN` plans without solving; `EXPLAIN ANALYZE` solves and adds
 actual rows and timing, and under a clause what the data made of it: a `↳` line counting the variants of its classes
-(§7.1, D71), one counting the instances it skipped for having no value (§7.4), and one for each helper decision written
-where it is read, with no helper decision (`↳ sum(t.w * x) by (t.product) is written where it is read, with no helper
-decision`; §6.4,
-D89), in place of the plan's line saying it becomes a helper decision.
+(§7.1, D71), one counting the instances it skipped for having no value (§7.4), and one for a `MIN` or `MAX` whose
+every group holds one member, which is written where it is read. A `SUM` or `AVG` written where it is read says so in
+a plain `EXPLAIN` too (`↳ sum(t.w * x) by (t.product) is written where it is read, with no helper decision`; §6.4,
+D89), in place of the line saying it becomes a helper decision.
 
 **Echo.** EXPLAIN, DIAGNOSE and messages quote a clause as typed (case, spacing and comments as written), with the
 `when c per K:` qualifier in front and the defaults `per row:` and `by ()` left out. Text DeciDB reprints itself (a

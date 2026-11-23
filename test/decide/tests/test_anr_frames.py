@@ -1782,7 +1782,7 @@ class TestRangeErrors:
         explained = _explained(
             decidb_cli,
             _edge(
-                "sum(from previous to next: x) over (t.period within t.product) <= 7 "
+                "max(from previous to next: x) over (t.period within t.product) <= 7 "
                 "AND x <= max(from first to last: x) over (t.period) - 1"
             ),
         )

@@ -322,8 +322,9 @@ columns in a scan of their own.
   inherits one the same way, where the frame is built). A sigma field naming a reducer's `by` key reads it as a
   `by` key's read, which keeps the row, so the node grouping by the key raises what it raises: the G, after its
   members' rows. Each helper's members are read once, with its classes, and listed from there;
-  their coefficients are read after the objective. Stage 06 then writes a helper
-  read once where it is read (D89). A frame's term reads its decision at the row the
+  their coefficients are read after the objective. A MIN or MAX whose members read no per-row decision
+  lists equal members once (`ValueLinks`): eight distinct group values are eight link rows, whatever the input's
+  length. Stage 06 then writes a helper where the plan's form says (D89). A frame's term reads its decision at the row the
   frame selects, and has no value where the frame reads nothing or the decision has no instance there
   (`DecideAbsence::TermAt`, `DecideFrameReadsAbsent`), wherever a term's absence is read: a clause's
   rows, the objective's entries, a definition's absence, a helper's members. A range over decisions' helper has a class
@@ -389,12 +390,10 @@ into solver rows.
 
 **Departure from the deck: formulation is stage 06's.** The deck formulates node by
 node (pp. 111-119); here the emitter hands stage 06 one record per row and per value link, and stage 06
-(`InlineReducerValueLinks`, `EmitExtremumLink`) writes the rows. The reason is D89:
-whether a helper is written into its readers depends on every reader and on the implied bounds, so no single node can
-decide it. The models are the deck's: SUM inside SUM is the three rows of p. 119 over the six declared columns,
+(`WriteHelpersIn`, `EmitExtremumLink`) writes the rows, in the form the plan chose for each helper
+(`DecideHelperForm`, stage 05), so no node decides one. The models are the deck's: SUM inside SUM is the three rows of p. 119 over the six declared columns,
 MAX inside SUM the three rows and four envelope rows of p. 115 (`test_anr_nested.py` pins both), the frame the four
-rows of p. 108. Composing SUM and AVG children at G and E nodes would change no model, remove no stage 06 code, and
-hide a nest from D89, which then keeps a nest's helper column it must write in.
+rows of p. 108.
 
 A term that reads a generated decision value names that value's plan-time helper column, and the tree's `reads`
 edges name the G, O or F node that produces it. The nested MAX-inside-SUM example therefore records the E → SUM G →
@@ -828,7 +827,7 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   (`FoldSingletonRows` marks it written) before the rigid box is captured, so a bound a
   clause folds into its box stands, and the static domain check skips it: a helper holds a
   reducer's value, negative wherever its terms are. A refusal in formulation names a helper
-  by its reducer. The end of assembly runs stage 06's `InlineReducerValueLinks` on the final
+  by its reducer. The end of assembly runs stage 06's `WriteHelpersIn` on the final
   rows and objective (`assembly.inline_helpers`, D89). A node-owned G/O output keeps a value
   column for each group with more than one MIN/MAX member and for every SUM/AVG group; a
   singleton MIN/MAX group is written directly at its readers because its value is its member

@@ -15,8 +15,6 @@
 #include "duckdb/common/value_operations/value_operations.hpp"
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
-#include <fstream>
 #include <functional>
 #include <map>
 #include <numeric>
@@ -328,7 +326,7 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	ScaleObjectiveAvg(gstate, num_rows, evaluated);
 	// What the data left of each clause is reported once its clauses and its objective are read.
 	ReportSkippedInstances(gstate);
-	emitter.ValueLinks();
+	emitter.ValueLinks(keyed_mappings);
 	// The bottom-up values the evaluation computed, each node's programs on its entries.
 	if (debug.values) {
 		fprintf(stderr, "DECIDB_VALUES_BEGIN\n%sDECIDB_VALUES_END\n", columns.Dump().c_str());
@@ -409,40 +407,6 @@ void PhysicalDecide::ReportAnEmptyObjective(const SolverInput &input) const {
 	                     "is 0 whatever the decisions: each term has no value or a zero factor on every row");
 }
 
-// The side-by-side check of Phase 6 (context/opa_rewrite/design.md § 4): the form the optimizer chose for each reducer
-// helper against what InlineReducerValueLinks decided from the built model. Each difference is a line of the file
-// DECIDB_FORM_DIFF names. It goes with InlineReducerValueLinks.
-void PhysicalDecide::CompareHelperForms(const SolverInput &input) const {
-	const char *path = std::getenv("DECIDB_FORM_DIFF");
-	if (!path) {
-		return;
-	}
-	for (auto &node : tree->nodes) {
-		if (!node->Linked()) {
-			continue;
-		}
-		auto &definition = tree->Definition(*node)->Cast<DecideReducerValueDefinition>();
-		const auto helper = definition.helper;
-		const bool whole = input.variable_scopes[helper].scope == DecideVarScope::INLINED;
-		const bool singles = helper < input.written_in.size() &&
-		                     std::find(input.written_in[helper].begin(), input.written_in[helper].end(), true) !=
-		                         input.written_in[helper].end();
-		const bool extremum = IsDecideExtremum(definition.reducer);
-		// A MIN or MAX with no group of one member shows nothing of its form.
-		const bool differs = extremum ? (whole || singles) && definition.form != DecideHelperForm::ONE_MEMBER_WRITTEN_IN
-		                              : whole != (definition.form == DecideHelperForm::WRITTEN_IN);
-		if (!differs) {
-			continue;
-		}
-		std::ofstream out(path, std::ios::app);
-		out << (extremum ? "extremum" : "sum") << "\tplan=" << static_cast<int>(definition.form) << "\trun="
-		    << (whole     ? "written_in"
-		        : singles ? "one_member"
-		                  : "variable")
-		    << "\t" << definition.label << "\t" << StringUtil::Replace(display.source_text.text, "\n", " ") << "\n";
-	}
-}
-
 void PhysicalDecide::ReportInlinedHelpers(const SolverInput &input) const {
 	vector<idx_t> linked_nodes;
 	for (idx_t node = 0; node < tree->nodes.size(); node++) {
@@ -453,8 +417,13 @@ void PhysicalDecide::ReportInlinedHelpers(const SolverInput &input) const {
 	std::sort(linked_nodes.begin(), linked_nodes.end(),
 	          [&](idx_t left, idx_t right) { return tree->nodes[left]->definition < tree->nodes[right]->definition; });
 	for (auto node_index : linked_nodes) {
-		auto &definition = *tree->Definition(*tree->nodes[node_index]);
+		auto &definition = tree->Definition(*tree->nodes[node_index])->Cast<DecideReducerValueDefinition>();
 		const auto helper = definition.helper;
+		// A SUM or AVG the plan writes in says so in the plan. What the run adds is the data's: the groups of one
+		// member of a MIN or MAX.
+		if (definition.form == DecideHelperForm::WRITTEN_IN) {
+			continue;
+		}
 		string line;
 		auto kind = LogicalDecide::RewriteAccount::Kind::RUN_TIME;
 		if (input.variable_scopes[helper].scope == DecideVarScope::INLINED) {
@@ -683,30 +652,17 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 
 	solver_input.objective_product_groups = std::move(gstate.evaluated_objective_groups);
 
-	// The helpers written where they are read own no column (stage 06, D89): decided here, on the assembled rows and
-	// objective. The floors and implied bounds above read the helpers' columns and keep only what holds of a decision
-	// or an instance, so the column space is laid out again, and every row read against the old one is read anew.
+	// The helpers the plan writes where they are read own no column (DecideHelperForm). The floors and implied bounds
+	// above read the helpers' columns and keep only what holds of a decision or an instance, so the column space is
+	// laid out again, and every row read against the old one is read anew.
 	phase.Next("assembly.inline_helpers");
-	// What reads a decision's column outside the rows and the objective assembled here: a bound folded into its
-	// column's box.
-	vector<idx_t> held;
-	for (auto &bound : tree->user_singleton_row_bounds) {
-		held.push_back(bound.decide_var_idx);
-	}
-	vector<idx_t> minmax_values;
-	for (auto &link : solver_input.reducer_value_links) {
-		if (IsDecideExtremum(link.reducer)) {
-			minmax_values.push_back(link.value_var);
-		}
-	}
-	if (InlineReducerValueLinks(solver_input, held, minmax_values)) {
+	if (WriteHelpersIn(solver_input)) {
 		ReportInlinedHelpers(solver_input);
 		out_var_indexer = VarIndexer::Build(solver_input);
 		for (auto &ec : solver_input.constraints) {
 			ec.emitted_rows = EmittedRows();
 		}
 	}
-	CompareHelperForms(solver_input);
 	return solver_input;
 }
 

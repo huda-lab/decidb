@@ -3,10 +3,10 @@
 
 The value rewrite makes a reducer -- or a range frame -- over decisions a helper decision,
 defined once per instance (a `by` group, a window) and read where the clause reads the
-reducer. Stage 06 writes a helper's members into the rows, the objective or the other
-helper that read it when that adds no nonzero to the model (an instance of ``m`` terms read
-``k`` times costs ``m * k`` inlined, ``m + 1 + k`` defined), so the helper has no column and
-no definition. A MIN or MAX helper is its member where every group has one (deck p. 112).
+reducer. The plan writes a SUM or AVG helper's members into the rows, the objective or the
+other helper that read it (``ChooseHelperForms``): in a nest of sums, under a MIN or MAX, or
+where one row reads it and holds each instance once. The helper then has no column and no
+definition. A MIN or MAX helper is its member where every group has one (deck p. 112).
 
 Each case pins the model's size, worked out by hand in its docstring, and the answer,
 judged by ``_anr_oracle`` (which reads no SQL). The table is ``test_anr_composition``'s:
@@ -119,13 +119,12 @@ class TestRangeIntoRows:
         body = clause(le(X, Range("sum", FIRST, LAST, X, Over("id")) - Col("w")))
         _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], MAXIMIZE_X)
 
-    def test_windows_shared_by_a_few_rows_are_inlined(self, decidb_cli, scope_solver, tmp_path):
-        """`from first to last within product`: A's window (three terms, three rows) alone
-        would grow, but B's (two, two) and C's (one, one) shrink more -- 14 nonzeros inlined
-        against 15 defined -- and a helper is inlined whole: the rows of x alone, five, as
-        C's is `x >= x - 10`, no row."""
+    def test_a_window_every_row_of_its_timeline_reads_keeps_its_helper(self, decidb_cli, scope_solver, tmp_path):
+        """`from first to last within product` is one window per timeline, which each row of
+        the timeline reads: a helper per product with its definition row, beside a row per
+        row of x."""
         sql = _edge(f"x >= sum(from first to last: x) {TL} - 10")
-        assert _model(decidb_cli, sql, tmp_path) == {"num_vars": 6, "num_rows": 5}
+        assert _model(decidb_cli, sql, tmp_path) == {"num_vars": 6 + 3, "num_rows": 6 + 3}
         body = clause(ge(X, Range("sum", FIRST, LAST, X, TIMELINE) - 10))
         _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], MAXIMIZE_X)
 
