@@ -1719,20 +1719,25 @@ void DecideModelEmitter::ValueLinks(const vector<KeyedMapping> &mappings) {
 		const auto site = tree.OperandOf(node);
 		auto &entries = descent.Containers()[site].parent_slots;
 		auto &members = link_members[node];
-		// Form each G's member expressions from its operand entries. Stage 06 still owns helper
-		// decisions and their lowering, but it no longer needs a dense coefficient column for every
-		// input row to recover the G's groups and members.
-		vector<idx_t> member_entry(num_rows, DConstants::INVALID_INDEX);
-		vector<idx_t> member_group(num_rows, DConstants::INVALID_INDEX);
+		// Each G's members by group, from its operand's entries: each row once, at the entry that read it last, in
+		// the input's order.
+		vector<pair<idx_t, idx_t>> reads;
 		for (auto &read : members.rows) {
-			member_entry[read.first] = read.second;
-			member_group[read.first] = members.group_of_slot[entries[read.second]];
-		}
-		vector<vector<idx_t>> rows_by_group(members.groups);
-		for (idx_t row = 0; row < num_rows; row++) {
-			if (member_group[row] != DConstants::INVALID_INDEX) {
-				rows_by_group[member_group[row]].push_back(row);
+			auto &place = place_of_row[read.first];
+			if (place == DConstants::INVALID_INDEX) {
+				place = reads.size();
+				reads.push_back(read);
+			} else {
+				reads[place].second = read.second;
 			}
+		}
+		for (auto &read : reads) {
+			place_of_row[read.first] = DConstants::INVALID_INDEX;
+		}
+		std::sort(reads.begin(), reads.end());
+		vector<vector<pair<idx_t, idx_t>>> reads_by_group(members.groups);
+		for (auto &read : reads) {
+			reads_by_group[members.group_of_slot[entries[read.second]]].push_back(read);
 		}
 		// Read a term over the entries its own filter keeps, including entries that have no group. Those terms
 		// are evaluated before rows without a helper value are dropped.
@@ -1764,16 +1769,17 @@ void DecideModelEmitter::ValueLinks(const vector<KeyedMapping> &mappings) {
 			}
 		}
 		std::set<vector<double>> listed;
-		for (auto &group_rows : rows_by_group) {
-			if (group_rows.empty()) {
+		for (auto &group_reads : reads_by_group) {
+			if (group_reads.empty()) {
 				continue;
 			}
-			spec.members.AddGroup(group_rows.front());
+			spec.members.AddGroup(group_reads.front().first);
 			listed.clear();
 			const auto avg_scale =
-			    definition.reducer == DecideReducerKind::AVG ? 1.0 / static_cast<double>(group_rows.size()) : 1.0;
-			for (auto row : group_rows) {
-				const auto entry = member_entry[row];
+			    definition.reducer == DecideReducerKind::AVG ? 1.0 / static_cast<double>(group_reads.size()) : 1.0;
+			for (auto &read : group_reads) {
+				const auto row = read.first;
+				const auto entry = read.second;
 				double constant = 0.0;
 				for (idx_t term = 0; term < variables.size(); term++) {
 					if (variables[term] == DConstants::INVALID_INDEX) {
