@@ -323,7 +323,7 @@ struct DecideHelperDefinition {
 	//! hands out with its `when`; its `per` is the key scope whose classes it counts once. With a `frame` it is the
 	//! range's marker (DecideOptimizer::RewriteFrameRanges): the helper has one instance per window of the frame, its
 	//! members the payload at the rows the window reads and, with an `else`, the `else` at the window's anchor once
-	//! per missing position (the O's DecideBody::members and fallback, LowerDecideTree).
+	//! per missing position (the O's DecideBody::members and fallback, DecideTermLowering).
 	BoundDecideReducerExpression &Reducer() const;
 	//! REDUCER_VALUE: "sum", "avg", "min" or "max": the reducer's function, or its frame's (DecideFrameSpec::reducer).
 	string agg_name;

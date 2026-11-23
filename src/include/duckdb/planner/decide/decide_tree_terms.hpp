@@ -20,7 +20,7 @@ namespace duckdb {
 // The tree's term records
 //===--------------------------------------------------------------------===//
 //
-// What stage 05's lowering (LowerDecideTree) makes of each clause, the objective and a helper's
+// What stage 05's lowering (DecideTermLowering) makes of each clause, the objective and a helper's
 // reducer, held in the node that holds it (DecideBody): additive terms, which stage 08 evaluates against the
 // relational input without re-deriving their shape.
 //
@@ -57,7 +57,7 @@ struct DecideTerm {
 	//! the row itself. Its coefficient reads a READ frame column (DecideFrameColumn).
 	//! INVALID_INDEX for every other term.
 	idx_t frame_read = DConstants::INVALID_INDEX;
-	//! The tree's G whose operand entries this term ranges over (DecideTreeConstruction::ReducerChild): written by
+	//! The tree's G whose operand entries this term ranges over (DecideTreeMembersOf): written by
 	//! stage 05 on the terms a reducer produced, INVALID for a term outside every reducer and whenever no tree is
 	//! built. Stage 05 does not read it.
 	idx_t child = DConstants::INVALID_INDEX;
@@ -385,7 +385,7 @@ struct DecideFrameColumn {
 };
 
 //! The values the frame selectors read, as columns after the input's, which stage 05's lowering makes of every frame
-//! read (LowerDecideTree) and the tree holds (DecideTree::frame_reads).
+//! read (DecideTermLowering) and the tree holds (DecideTree::frame_reads).
 struct DecideFrameReads {
 	//! The columns: the first is chunk column `column_base`, the number of columns the input has.
 	vector<DecideFrameColumn> columns;

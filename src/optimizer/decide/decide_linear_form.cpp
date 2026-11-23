@@ -65,118 +65,82 @@ static bool IsReducer(const Expression &expr) {
 // DecideLinearFormBuilder
 //===--------------------------------------------------------------------===//
 
-//! Flattens the canonical clauses and the objective into the tree's
-//! terms, at physical planning. Everything it needs is a type or a structure: the
-//! decision variable list, their scopes, and what earlier passes recorded on
-//! the clauses. It never reads a data row.
+//! The term half of the lowering walk (DecideTermLowering): the terms of each canonical clause, of the objective and of
+//! each helper's members, at physical planning. Everything it needs is a type or a structure: the decision variable
+//! list, their scopes, and what earlier passes recorded on the clauses. It never reads a data row.
 class DecideLinearFormBuilder {
 public:
-	DecideLinearFormBuilder(ClientContext &context, LogicalDecide &op, DecideTreeConstruction &tree)
-	    : context(context), op(op), tree(tree), decide_index(op.decide_index),
-	      canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes, op.bound.keys,
-	                    op.bound.is_boolean_var, op.bound.computed_values),
+	DecideLinearFormBuilder(ClientContext &context, LogicalDecide &op, const DecideTree &tree,
+	                        const DecideReducerNodes &reducers)
+	    : context(context), op(op), tree(tree), reducers(reducers), decide_index(op.decide_index),
 	      splitter(context, op) {
 		// A frame's values are columns after the input's (DecideFrameColumn).
 		frame_reads.column_base = op.children.empty() ? 0 : op.children[0]->types.size();
 	}
 
-	void Build() {
-		for (auto &clause : op.bound.clauses) {
-			AnalyzeConstraint(clause);
+	//! One clause, or one row a function owns, in canonical form: its terms into `constraint`, which holds its facts.
+	void Clause(const BoundDecideClause &clause, DecideConstraint &constraint) {
+		auto &comp = clause.body->Cast<BoundComparisonExpression>();
+		Expression *lhs = UnwrapDecideCasts(*comp.left, decide_index);
+		if (constraint.was_minmax_easy) {
+			// The easy direction of a MIN/MAX (`max(when c: e) by (g) <= cap`)
+			// holds when every member of its reducer does: one row per member, the
+			// reducer's `when` choosing the members, while the bound is reduced over
+			// each `by` group of every kept row. RewriteMinMax kept the reducer so its
+			// `when` and `by` reach this point; a factor on it distributes over the rows.
+			ExtractEasyExtremumTerms(*lhs, constraint);
+		} else if (constraint.lhs_is_aggregate) {
+			// Aggregate constraint: additive aggregate expressions whose reducers carry their own `when`. The
+			// classification comes from the canonical boundary rather than aggregate presence alone, so a data-only
+			// RHS reducer cannot change row semantics.
+			ExtractAggregateConstraintTerms(*lhs, constraint);
+		} else if (lhs->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+			// Simple single-variable constraint (e.g., x <= 5)
+			constraint.lhs_terms.push_back(DecideTerm {
+			    FindDecideVariable(*lhs), make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1))});
+		} else {
+			// Multi-variable per-row constraint with complex LHS
+			// (e.g., z_0 + z_1 = 1, or x + (-3)*z_0 + (-5)*z_1 = 0,
+			//  or POWER(x - target, 2) <= K quadratic constraint)
+			ExtractConstraintTerms(*lhs, constraint, 1);
 		}
-		// Tree-owned nonlinear definition rows are built beneath their F nodes, while their placeholders preserve the
-		// clause-list position. Lower the retained rows through the same compiler as ordinary clauses.
-		for (auto function : tree.Tree().function_nodes) {
-			auto &node = *tree.Tree().nodes[function];
-			if (node.function_kind == DecideFunctionKind::DEFINITION && node.definition_row.body) {
-				AnalyzeConstraint(node.definition_row);
-			}
-		}
-		// The rows a helper definition owns stand after the written constraints, in the order the definitions were
-		// made (an indicator's by RewriteNorm, before every ABS): an L0 indicator's three formulation rows, and an
-		// ABS's two lower-envelope rows (MakeAbsRow), built beneath its F node from the optimizer's record.
-		for (auto &definition : op.helper_definitions) {
-			for (auto &link : definition->links) {
-				AnalyzeConstraint(link);
-			}
-			if (definition->kind != DecideHelperKind::ABS) {
-				continue;
-			}
-			for (auto index : tree.Tree().function_nodes) {
-				auto &node = *tree.Tree().nodes[index];
-				if (node.function_kind != DecideFunctionKind::ABS || node.value_var != definition->helper) {
-					continue;
-				}
-				for (auto &row : node.abs_rows) {
-					AnalyzeConstraint(row);
-				}
-				break;
-			}
-		}
-		if (op.bound.objective.body) {
-			AnalyzeObjective(op.bound.objective);
-		}
-		// The reducers the value rewrite lifted into helper decisions are lowered too; a range frame's helper also
-		// reads its `else`, at the window's anchor.
-		const BoundConstantExpression one(Value::INTEGER(1));
-		link_terms.resize(op.helper_definitions.size());
-		link_fallbacks.resize(op.helper_definitions.size());
-		for (idx_t l = 0; l < op.helper_definitions.size(); l++) {
-			auto &link = *op.helper_definitions[l];
-			if (link.kind != DecideHelperKind::REDUCER_VALUE) {
-				continue;
-			}
-			auto &reducer = link.Reducer();
-			ExtractLinearTerms(*reducer.children[0], link_terms[l]);
-			if (reducer.frame != DConstants::INVALID_INDEX) {
-				AppendFallbackTerms(reducer.frame, one, 1, link_fallbacks[l]);
-			}
-		}
+		CollectLikeTerms(constraint.lhs_terms);
+		SettleWeightSigns(constraint.product_groups);
+		clauses.push_back(&constraint);
+	}
 
-		// Group like terms, once, over every list that becomes a linear solver row.
-		for (auto &clause : lowered_clauses) {
-			CollectLikeTerms(clause.second->lhs_terms);
-			SettleWeightSigns(clause.second->product_groups);
+	//! The objective's records, null for one that reads no decision.
+	unique_ptr<DecideObjective> Objective(const BoundDecideClause &clause) {
+		auto lowered = AnalyzeObjective(clause);
+		if (lowered) {
+			DropNullObjectiveTerms(*lowered);
+			CollectLikeTerms(lowered->terms);
+			SettleWeightSigns(lowered->product_groups);
 		}
-		if (lowered_objective) {
-			DropNullObjectiveTerms(*lowered_objective);
-			CollectLikeTerms(lowered_objective->terms);
-			SettleWeightSigns(lowered_objective->product_groups);
-		}
-		for (idx_t l = 0; l < link_terms.size(); l++) {
-			CollectLikeTerms(link_terms[l]);
-			CollectLikeTerms(link_fallbacks[l]);
-		}
+		objective = lowered.get();
+		return lowered;
+	}
 
-		// Every frame left in an expression execution evaluates is over data -- a frame over
-		// decisions became its terms above -- or the NULL test of a reducer's member, and
-		// becomes the column it reads.
+	//! A reducer the value rewrite lifted into a helper decision: its member terms into `body`; a range frame's
+	//! helper also reads its `else`, at the window's anchor.
+	void Members(DecideHelperDefinition &link, DecideBody &body) {
+		auto &reducer = link.Reducer();
+		ExtractLinearTerms(*reducer.children[0], body.members);
+		if (reducer.frame != DConstants::INVALID_INDEX) {
+			const BoundConstantExpression one(Value::INTEGER(1));
+			AppendFallbackTerms(reducer.frame, one, 1, body.fallback);
+		}
+		CollectLikeTerms(body.members);
+		CollectLikeTerms(body.fallback);
+		links.emplace_back(&link, &body);
+	}
+
+	//! Once every term is split: every frame left in an expression execution evaluates is over data -- a frame over
+	//! decisions became its terms -- or the NULL test of a reducer's member, and becomes the column it reads. The
+	//! frame columns go to the tree.
+	void Frames(DecideTree &into) {
 		LowerFramesInPreparedModel();
-
-		// A recorded bound's repair rows come from its clause, so the repair model would
-		// open its column with nothing enforcing it were its clause not flattened above.
-		idx_t singleton_rows = 0;
-		for (auto &clause : lowered_clauses) {
-			singleton_rows += clause.first.singleton_row;
-		}
-		if (op.user_singleton_row_bounds.size() != singleton_rows) {
-			throw InternalException("DECIDE: %llu singleton-row bounds take their repair rows from their clause, but "
-			                        "%llu such clauses were flattened",
-			                        op.user_singleton_row_bounds.size(), singleton_rows);
-		}
-		// Each clause's records in the root the tree made of its comparison, the objective's in the objective's root.
-		for (auto &clause : lowered_clauses) {
-			tree.TakeClause(*clause.first.leaf, std::move(clause.second), clause.first.singleton_row);
-		}
-		if (lowered_objective) {
-			tree.TakeObjective(std::move(lowered_objective));
-		}
-		for (idx_t l = 0; l < link_terms.size(); l++) {
-			if (op.helper_definitions[l]->kind == DecideHelperKind::REDUCER_VALUE) {
-				tree.TakeLinkTerms(l, std::move(link_terms[l]), std::move(link_fallbacks[l]));
-			}
-		}
-		tree.TakeFrameReads(std::move(frame_reads));
+		into.frame_reads = std::move(frame_reads);
 	}
 
 private:
@@ -497,22 +461,19 @@ private:
 	}
 
 	void LowerFramesOnce() {
-		for (auto &clause : lowered_clauses) {
-			LowerFrames(*clause.second);
+		for (auto *clause : clauses) {
+			LowerFrames(*clause);
 		}
-		if (lowered_objective) {
-			LowerFrames(lowered_objective->when_condition);
-			LowerFrames(lowered_objective->terms);
-			LowerFrames(lowered_objective->product_groups);
+		if (objective) {
+			LowerFrames(objective->when_condition);
+			LowerFrames(objective->terms);
+			LowerFrames(objective->product_groups);
 		}
-		for (idx_t l = 0; l < link_terms.size(); l++) {
-			if (op.helper_definitions[l]->kind != DecideHelperKind::REDUCER_VALUE) {
-				continue;
-			}
-			LowerFrames(link_terms[l]);
-			LowerFrames(link_fallbacks[l]);
-			LowerFrames(op.helper_definitions[l]->Reducer().filter);
-			LowerFrames(op.helper_definitions[l]->when);
+		for (auto &link : links) {
+			LowerFrames(link.second->members);
+			LowerFrames(link.second->fallback);
+			LowerFrames(link.first->Reducer().filter);
+			LowerFrames(link.first->when);
 		}
 	}
 
@@ -759,9 +720,12 @@ private:
 	//! (DecideTerm::child) and the reducer whose `per` qualifies it; a group's forms too.
 	void Stamp(const BoundDecideReducerExpression &agg, vector<DecideTerm> &terms, vector<DecideProductGroup> &groups,
 	           idx_t linear, idx_t group_before) const {
-		const auto node = tree.ReducerChild(agg);
+		// The walk lowered this reducer's node from the same expression.
+		const auto reducer = reducers.find(&agg);
+		D_ASSERT(reducer != reducers.end());
+		const auto node = DecideTreeMembersOf(tree, reducer->second);
 		const auto qualifier_reducer =
-		    agg.per == DConstants::INVALID_INDEX ? DConstants::INVALID_INDEX : tree.ReducerNode(agg);
+		    agg.per == DConstants::INVALID_INDEX ? DConstants::INVALID_INDEX : reducer->second;
 		auto stamp = [&](DecideTerm &term) {
 			term.child = node;
 			if (qualifier_reducer != DConstants::INVALID_INDEX) {
@@ -888,78 +852,6 @@ private:
 		}
 	}
 
-	//! One clause, or one row a function owns.
-	void AnalyzeConstraint(const BoundDecideClause &clause) {
-		auto &expr = *clause.body;
-		switch (expr.GetExpressionClass()) {
-		case ExpressionClass::BOUND_COMPARISON: {
-			auto &written_comp = expr.Cast<BoundComparisonExpression>();
-			BoundDecideClause canonical_envelope;
-			const BoundDecideClause *canonical = &clause;
-			if (clause.helper_row != DecideHelperRow::NONE) {
-				// Function-owned links are generated in their natural form and can put decision terms on both sides.
-				// Canonicalize their linear form like an ordinary constraint, but keep `expr` as the clause identity so
-				// it still joins the root built from the optimizer metadata.
-				canonical_envelope = canonicalizer.CanonicalizeFunctionRow(clause);
-				canonical = &canonical_envelope;
-			}
-			const auto *comp = &canonical->body->Cast<BoundComparisonExpression>();
-
-			// Skip comparisons the optimizer already folded into the column box.
-			// Emitting a DecideConstraint here would add num_rows redundant model
-			// rows. The comparison is still in the tree so EXPLAIN renders it; the
-			// tag is the decision, and it was made by FoldSingletonRows. One whose
-			// repair rows come from its clause is flattened aside, for the repair model
-			// alone (singleton_row_constraints).
-			const bool folded = clause.folded_bound;
-			if (folded && !clause.folded_clause_rows) {
-				break;
-			}
-
-			auto constraint = ReadDecideClauseFacts(context, op, *canonical);
-			Expression *lhs = UnwrapDecideCasts(*comp->left, decide_index);
-
-			if (constraint->was_minmax_easy) {
-				// The easy direction of a MIN/MAX (`max(when c: e) by (g) <= cap`)
-				// holds when every member of its reducer does: one row per member, the
-				// reducer's `when` choosing the members, while the bound is reduced over
-				// each `by` group of every kept row. RewriteMinMax kept the reducer so its
-				// `when` and `by` reach this point; a factor on it distributes over the rows.
-				constraint->lhs_is_aggregate = false;
-				ExtractEasyExtremumTerms(*lhs, *constraint);
-			} else if (constraint->lhs_is_aggregate) {
-				// Aggregate constraint. Handles both legacy single aggregates and
-				// additive aggregate expressions whose reducers carry their own `when`. The
-				// classification comes from the canonical boundary rather than aggregate
-				// presence alone, so a data-only RHS reducer cannot change row semantics.
-				constraint->lhs_is_aggregate = true;
-				ExtractAggregateConstraintTerms(*lhs, *constraint);
-			} else {
-				// Per-row constraint (e.g., x <= 5, or multi-variable: d >= x - c)
-				constraint->lhs_is_aggregate = false;
-
-				if (lhs->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-					// Simple single-variable constraint (e.g., x <= 5)
-					constraint->lhs_terms.push_back(
-					    DecideTerm {FindDecideVariable(*lhs),
-					                make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1))});
-				} else {
-					// Multi-variable per-row constraint with complex LHS
-					// (e.g., z_0 + z_1 = 1, or x + (-3)*z_0 + (-5)*z_1 = 0,
-					//  or POWER(x - target, 2) <= K quadratic constraint)
-					ExtractConstraintTerms(*lhs, *constraint, 1);
-				}
-			}
-
-			lowered_clauses.emplace_back(LoweredClause {&expr, folded}, std::move(constraint));
-			break;
-		}
-
-		default:
-			break;
-		}
-	}
-
 	//===------------------------------------------------------------------===//
 	// Objective
 	//===------------------------------------------------------------------===//
@@ -1055,66 +947,84 @@ private:
 		Stamp(agg, obj.terms, obj.product_groups, before, group_before);
 	}
 
-	void AnalyzeObjective(const BoundDecideClause &clause) {
+	unique_ptr<DecideObjective> AnalyzeObjective(const BoundDecideClause &clause) {
 		auto *expr = UnwrapDecideCasts(*clause.body, decide_index);
 		auto when_cond = clause.scope.when ? clause.scope.when->Copy() : nullptr;
+		unique_ptr<DecideObjective> lowered;
 
 		if (IsReducer(*expr)) {
 			auto &agg = expr->Cast<BoundDecideReducerExpression>();
 
-			lowered_objective = make_uniq<DecideObjective>();
-			auto &objective = lowered_objective;
+			lowered = make_uniq<DecideObjective>();
 
 			// Walk the SUM argument: its linear terms and its product groups, a mixed body
 			// (SUM(POWER(x-t, 2) + penalty*x)) included.
-			ExtractObjectiveBodyTerms(*agg.children[0], *objective, 1, agg.filter.get());
-			ApplyAggregateMetadata(objective->terms, 0, agg);
-			ApplyAggregateMetadata(objective->product_groups, 0, agg);
-			ApplyAvgGroupKey(objective->terms, 0, agg);
-			ApplyAvgGroupKey(objective->product_groups, 0, agg);
-			Stamp(agg, objective->terms, objective->product_groups, 0, 0);
+			ExtractObjectiveBodyTerms(*agg.children[0], *lowered, 1, agg.filter.get());
+			ApplyAggregateMetadata(lowered->terms, 0, agg);
+			ApplyAggregateMetadata(lowered->product_groups, 0, agg);
+			ApplyAvgGroupKey(lowered->terms, 0, agg);
+			ApplyAvgGroupKey(lowered->product_groups, 0, agg);
+			Stamp(agg, lowered->terms, lowered->product_groups, 0, 0);
 
-			objective->when_condition = std::move(when_cond);
+			lowered->when_condition = std::move(when_cond);
 		} else if (DecideCanonicalizer::ContainsReducer(*expr) ||
 		           FindDecideVariable(*expr) != DConstants::INVALID_INDEX) {
 			// The second arm covers an objective with no aggregate at all: decisions
 			// outside every reducer (e.g. `minimize max_shortfall`), read once.
-			lowered_objective = make_uniq<DecideObjective>();
-			ExtractAggregateObjectiveTerms(*expr, *lowered_objective);
-			lowered_objective->when_condition = std::move(when_cond);
+			lowered = make_uniq<DecideObjective>();
+			ExtractAggregateObjectiveTerms(*expr, *lowered);
+			lowered->when_condition = std::move(when_cond);
 		}
+		return lowered;
 	}
 
 private:
 	ClientContext &context;
 	LogicalDecide &op;
-	//! The tree under construction, which names the G each reducer ranges over and takes each clause's records.
-	DecideTreeConstruction &tree;
-	//! A clause's comparison, and whether it is a folded bound's, which the repair model alone reads.
-	struct LoweredClause {
-		const Expression *leaf;
-		bool singleton_row;
-	};
-	//! The clauses in leaf order and the objective, lowered, until Build hands them to the tree.
-	vector<pair<LoweredClause, unique_ptr<DecideConstraint>>> lowered_clauses;
-	unique_ptr<DecideObjective> lowered_objective;
-	//! [link]: a helper's member terms and its frame's `else` terms.
-	vector<vector<DecideTerm>> link_terms;
-	vector<vector<DecideTerm>> link_fallbacks;
+	//! The tree under construction, and the G each reducer of the clause in hand became (the walk's).
+	const DecideTree &tree;
+	const DecideReducerNodes &reducers;
+	//! The records filled, in the order filled, which the tree's nodes hold: the frame passes read them once every
+	//! term is split.
+	vector<DecideConstraint *> clauses;
+	DecideObjective *objective = nullptr;
+	vector<pair<DecideHelperDefinition *, DecideBody *>> links;
 	//! The frame columns the lowering reads (DecideTree::frame_reads).
 	DecideFrameReads frame_reads;
 	idx_t decide_index;
 	DecideTermSplitter splitter;
-	DecideCanonicalizer canonicalizer;
 	//! LowerFramesInPreparedModel's second pass: each reducer over data reading a frame becomes its column.
 	bool lower_aggregates = false;
 	//! Frame aggregate (LogicalDecide::frame_aggregates) -> its column (into DecideFrameReads::columns).
 	unordered_map<idx_t, idx_t> frame_aggregate_slots;
 };
 
-void LowerDecideTree(ClientContext &context, LogicalDecide &decide, DecideTreeConstruction &tree) {
-	DecideLinearFormBuilder builder(context, decide, tree);
-	builder.Build();
+struct DecideTermLowering::Builder : DecideLinearFormBuilder {
+	using DecideLinearFormBuilder::DecideLinearFormBuilder;
+};
+
+DecideTermLowering::DecideTermLowering(ClientContext &context, LogicalDecide &op, const DecideTree &tree,
+                                       const DecideReducerNodes &reducers)
+    : builder(make_uniq<Builder>(context, op, tree, reducers)) {
+}
+
+DecideTermLowering::~DecideTermLowering() {
+}
+
+void DecideTermLowering::Clause(const BoundDecideClause &clause, DecideConstraint &constraint) {
+	builder->Clause(clause, constraint);
+}
+
+unique_ptr<DecideObjective> DecideTermLowering::Objective(const BoundDecideClause &objective) {
+	return builder->Objective(objective);
+}
+
+void DecideTermLowering::Members(DecideHelperDefinition &link, DecideBody &body) {
+	builder->Members(link, body);
+}
+
+void DecideTermLowering::Frames(DecideTree &tree) {
+	builder->Frames(tree);
 }
 
 } // namespace duckdb

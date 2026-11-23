@@ -20,7 +20,7 @@ class SolverBackend;
 struct DecideTree;
 
 //! What model class this query will demand of its solver: the product groups of the clauses and objective lowered into
-//! `tree` (LowerDecideTree), filled into a DecideModelShape and classified (ClassifyDecideModel). A *prediction* of
+//! `tree` (DecideTermLowering), filled into a DecideModelShape and classified (ClassifyDecideModel). A *prediction* of
 //! what `SolverModel::ModelClass()` will report once the rows are in, and it must never predict less — see
 //! SolverModelClass.
 SolverModelClass DeriveDecideModelClass(const LogicalDecide &op, const DecideTree &tree);
@@ -34,7 +34,7 @@ SolverModelClass DeriveDecideModelClass(const LogicalDecide &op, const DecideTre
 //! machine. What differs is whether this machine has a solver that can run it, so
 //! the refusal blames the host.
 //!
-//! Called once, right after LowerDecideTree, which is the first point at
+//! Called once, right after DecideTreeConstruction, which is the first point at
 //! which the shape of every constraint and the objective is settled.
 void RequireDecideSolverSupport(const LogicalDecide &op, const DecideTree &tree);
 

@@ -75,11 +75,6 @@ static DecideTermSite Site(const DecideTree &tree, idx_t holder, idx_t child, id
 	DecideTermSite site;
 	site.node = child == DConstants::INVALID_INDEX ? holder : DecideTreeOperand(tree, child);
 	if (qualifier_scope != DConstants::INVALID_INDEX) {
-		if (qualifier_reducer >= tree.nodes.size() ||
-		    tree.nodes[qualifier_reducer]->qualifier_scope != qualifier_scope ||
-		    tree.nodes[qualifier_reducer]->kind != DecideNodeKind::REDUCER) {
-			throw InternalException("DECIDE tree: a relation-qualified term has no matching reducer occurrence");
-		}
 		site.qualifier_operand = DecideTreeOperand(tree, qualifier_reducer);
 	}
 	return site;
@@ -121,15 +116,15 @@ static void SiteMembers(const DecideTree &tree, idx_t holder, DecideBody &body) 
 	body.fallback_sites.assign(body.fallback.size(), DecideTermSite {site});
 }
 
-//! The clause roots holding a clause, numbered in leaf order: the constraints, then the folded bounds whose repair
-//! rows come from their clause (a folded bound with none holds no clause): the order of the repair group ids.
-static void NumberClauses(DecideTree &tree, const vector<idx_t> &roots) {
-	for (auto root : roots) {
-		auto &node = *tree.nodes[root];
-		tree.constraint_count += node.compiled.clause && !node.folded;
+//! The clause roots holding a clause, numbered in the order made, which a node's index rises in: the constraints, then
+//! the folded bounds whose repair rows come from their clause (a folded bound with none holds no clause): the order of
+//! the repair group ids.
+static void NumberClauses(DecideTree &tree) {
+	for (auto &node : tree.nodes) {
+		tree.constraint_count += node->compiled.clause && !node->folded;
 	}
 	idx_t constraint = 0;
-	for (auto root : roots) {
+	for (idx_t root = 0; root < tree.nodes.size(); root++) {
 		auto &node = *tree.nodes[root];
 		auto &body = node.compiled;
 		if (!body.clause) {
@@ -140,15 +135,27 @@ static void NumberClauses(DecideTree &tree, const vector<idx_t> &roots) {
 		body.order = body.clause_index;
 		SiteClause(tree, root, body);
 	}
+	// A recorded bound's repair rows come from its clause, so the repair model would open its column with nothing
+	// enforcing it were its clause not held.
+	if (tree.user_singleton_row_bounds.size() != tree.singleton_row_count) {
+		throw InternalException("DECIDE: %llu singleton-row bounds take their repair rows from their clause, but "
+		                        "%llu such clauses were flattened",
+		                        tree.user_singleton_row_bounds.size(), tree.singleton_row_count);
+	}
 }
 
-//! Each helper's G or O holds its reducer's members and a frame's else terms (LowerDecideTree).
-static void LinkBodies(DecideTree &tree, const vector<idx_t> &link_nodes) {
-	for (idx_t link = 0; link < link_nodes.size(); link++) {
-		auto &body = tree.nodes[link_nodes[link]]->compiled;
+//! Each REDUCER_VALUE helper's G or O holds its reducer's members and a frame's else terms, numbered in the order the
+//! definitions were made.
+static void LinkBodies(const LogicalDecide &op, DecideTree &tree, const vector<idx_t> &definition_nodes) {
+	idx_t link = 0;
+	for (idx_t i = 0; i < definition_nodes.size(); i++) {
+		if (op.helper_definitions[i]->kind != DecideHelperKind::REDUCER_VALUE) {
+			continue;
+		}
+		auto &body = tree.nodes[definition_nodes[i]]->compiled;
 		body.kind = DecideBodyKind::VALUE_LINK;
-		body.order = link;
-		SiteMembers(tree, link_nodes[link], body);
+		body.order = link++;
+		SiteMembers(tree, definition_nodes[i], body);
 	}
 }
 
@@ -564,16 +571,18 @@ static void BindLayout(DecideTree &tree) {
 } // namespace decide_tree_compile
 
 void CompileDecideTree(ClientContext &context, const LogicalDecide &op, DecideTree &tree,
-                       const DecideTreeSources &sources) {
-	decide_tree_compile::NumberClauses(tree, sources.clause_roots);
-	if (sources.objective_root != DConstants::INVALID_INDEX && tree.nodes[sources.objective_root]->compiled.objective) {
-		auto &body = tree.nodes[sources.objective_root]->compiled;
-		body.kind = DecideBodyKind::OBJECTIVE;
-		body.order = 0;
-		decide_tree_compile::SiteObjective(tree, sources.objective_root, body);
+                       const vector<idx_t> &definition_nodes, const vector<idx_t> &record_nodes) {
+	decide_tree_compile::NumberClauses(tree);
+	for (idx_t i = 0; i < tree.nodes.size(); i++) {
+		auto &body = tree.nodes[i]->compiled;
+		if (body.objective) {
+			body.kind = DecideBodyKind::OBJECTIVE;
+			body.order = 0;
+			decide_tree_compile::SiteObjective(tree, i, body);
+		}
 	}
-	decide_tree_compile::LinkBodies(tree, sources.link_nodes);
-	decide_tree_compile::CompilePrograms(context, op, tree, sources.record_nodes);
+	decide_tree_compile::LinkBodies(op, tree, definition_nodes);
+	decide_tree_compile::CompilePrograms(context, op, tree, record_nodes);
 	decide_tree_compile::BindLayout(tree);
 }
 

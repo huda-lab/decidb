@@ -4,6 +4,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/optimizer/decide/decide_linear_form.hpp"
 #include "duckdb/optimizer/decide/decide_optimizer_internal.hpp"
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
@@ -30,8 +31,10 @@ string DecideTreeReducerName(const BoundDecideReducerExpression &aggregate) {
 	return aggregate.count_scale ? "avg" : StringUtil::Lower(aggregate.function->name);
 }
 
-unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const LogicalDecide &op,
-                                                   const BoundDecideClause &clause) {
+//! The shape, provenance and bound-admission facts of a clause, read once. `clause` is canonical: a clause of SUCH
+//! THAT, or a function-owned row as DecideCanonicalizer::CanonicalizeFunctionRow returns it.
+static unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const LogicalDecide &op,
+                                                          const BoundDecideClause &clause) {
 	auto &comparison = clause.body->Cast<BoundComparisonExpression>();
 	auto facts = make_uniq<DecideConstraint>();
 	facts->comparison_type = comparison.type;
@@ -134,8 +137,8 @@ static DecideSignatureField CopyField(const DecideSignatureField &field) {
 
 class DecideTreeBuilder {
 public:
-	DecideTreeBuilder(ClientContext &context, const LogicalDecide &op) : context(context), op(op) {
-		tree = make_uniq<DecideTree>();
+	DecideTreeBuilder(ClientContext &context, LogicalDecide &op)
+	    : context(context), op(op), tree(make_uniq<DecideTree>()), terms(context, op, *tree, reducer_nodes) {
 		tree->written_sense = op.bound.sense;
 		tree->variable_scopes = op.bound.variable_scopes;
 		tree->keyed_scopes = op.bound.keyed_scopes;
@@ -169,7 +172,7 @@ public:
 		tree->frame_aggregate_nodes.assign(op.frame_aggregates.size(), DConstants::INVALID_INDEX);
 	}
 
-	//! The nodes, their edges, sigma, gates and definitions, before stage 05 lowers the clauses.
+	//! The nodes, their edges, sigma, gates and definitions, and each root's records.
 	void Structure() {
 		RegisterHelperDefinitions();
 		LowerHelperDefinitions();
@@ -185,19 +188,16 @@ public:
 			if (clause.body->GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 				Root(clause);
 			} else if (clause.helper_row == DecideHelperRow::DEFINITION) {
-				const idx_t value_var = clause.defines;
-				if (value_var == DConstants::INVALID_INDEX) {
-					throw InternalException("DECIDE tree: body-definition placeholder has no helper");
-				}
-				auto function =
-				    std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(), [&](idx_t candidate) {
-					    return tree->nodes[candidate]->function_kind == DecideFunctionKind::DEFINITION &&
-					           tree->nodes[candidate]->value_var == value_var;
-				    });
-				if (function == tree->function_nodes.end() || !tree->nodes[*function]->definition_row.body) {
+				// The row stands beneath its F node, at the placeholder's clause position.
+				auto definition = std::find_if(op.helper_definitions.begin(), op.helper_definitions.end(),
+				                               [&](const unique_ptr<DecideHelperDefinition> &candidate) {
+					                               return candidate->kind == DecideHelperKind::DEFINITION &&
+					                                      candidate->helper == clause.defines;
+				                               });
+				if (definition == op.helper_definitions.end()) {
 					throw InternalException("DECIDE tree: body-definition placeholder has no F node");
 				}
-				Root(tree->nodes[*function]->definition_row);
+				Root(MakeDefinitionRow(**definition));
 			}
 		}
 		// The rows a helper definition owns follow every written constraint, in the order the definitions were made
@@ -209,23 +209,23 @@ public:
 				Root(link);
 			}
 			if (definition.kind == DecideHelperKind::ABS) {
-				for (auto &row : tree->nodes[definition_nodes[i]]->abs_rows) {
-					Root(row);
-				}
+				Root(decide_rewrite::MakeAbsRow(context, op, definition, false));
+				Root(decide_rewrite::MakeAbsRow(context, op, definition, true));
 			}
 		}
 		if (op.bound.objective.body) {
 			const Expression *body = op.bound.objective.body.get();
 			const Expression *condition = op.bound.objective.scope.when.get();
 			auto index = NewNode(DecideNodeKind::SCOPE);
-			sources.objective_root = index;
 			auto &node = *tree->nodes[index];
+			reducer_nodes.clear();
 			node.root = node.objective = true;
 			node.per = DecideTreePer::ONE;
 			node.text = op.written_objective.empty() ? Text(*body) : op.written_objective;
 			Gates(index, condition);
 			node.body = Lower(index, *body);
 			UseSignature(node, op.bound.objective.scope.signature);
+			node.compiled.objective = terms.Objective(op.bound.objective);
 			tree->roots.push_back(index);
 		}
 		// A helper or data check can outlive the reading clause (D88). Preserve
@@ -241,6 +241,13 @@ public:
 				AddOrphan(Record(i));
 			}
 		}
+		// Each helper's G or O holds its reducer's members, split after the objective's terms.
+		for (idx_t i = 0; i < op.helper_definitions.size(); i++) {
+			if (op.helper_definitions[i]->kind == DecideHelperKind::REDUCER_VALUE) {
+				terms.Members(*op.helper_definitions[i], tree->nodes[definition_nodes[i]]->compiled);
+			}
+		}
+		terms.Frames(*tree);
 		RemoveInheritedPathGates();
 		Definitions();
 	}
@@ -254,14 +261,12 @@ public:
 			auto &definition = *op.helper_definitions[i];
 			switch (definition.kind) {
 			case DecideHelperKind::ABS: {
-				// The optimizer records the ABS; the tree builds its two rows beneath the F node, as it does a
-				// definition's.
+				// The optimizer records the ABS; the tree builds its two rows beneath the F node (Structure), as it
+				// does a definition's.
 				auto &node = FunctionNode(i, DecideFunctionKind::ABS);
 				node.origin.source_clause_id = definition.origin.source_clause_id;
 				node.abs_exact = definition.exact;
 				node.abs_written = definition.label;
-				node.abs_rows[0] = decide_rewrite::MakeAbsRow(context, op, definition, false);
-				node.abs_rows[1] = decide_rewrite::MakeAbsRow(context, op, definition, true);
 				break;
 			}
 			case DecideHelperKind::BOOLEAN_PRODUCT: {
@@ -289,10 +294,8 @@ public:
 				break;
 			}
 			case DecideHelperKind::DEFINITION: {
-				// The row stands beneath the F node, at the placeholder's clause position.
-				auto &node = FunctionNode(i, DecideFunctionKind::DEFINITION);
+				FunctionNode(i, DecideFunctionKind::DEFINITION);
 				Gates(definition_nodes[i], definition.when.get());
-				node.definition_row = MakeDefinitionRow(definition);
 				break;
 			}
 			case DecideHelperKind::PRODUCT:
@@ -396,60 +399,13 @@ public:
 		return node;
 	}
 
-	//! The bodies from what stage 05 lowered, then the order they read.
+	//! The bodies from the records, then the order they read.
 	unique_ptr<DecideTree> Finish() {
-		for (idx_t i = 0; i < definition_nodes.size(); i++) {
-			if (op.helper_definitions[i]->kind == DecideHelperKind::REDUCER_VALUE) {
-				sources.link_nodes.push_back(definition_nodes[i]);
-			}
-		}
-		sources.record_nodes = record_nodes;
 		tree->frame_nodes = frame_nodes;
-		CompileDecideTree(context, op, *tree, sources);
+		CompileDecideTree(context, op, *tree, definition_nodes, record_nodes);
 		PostOrder();
 		tree->Validate();
 		return std::move(tree);
-	}
-
-	//! The exact G created for this reducer occurrence, before following nested reducer bodies.
-	idx_t ReducerNode(const BoundDecideReducerExpression &reducer) const {
-		auto found = sources.reducer_nodes.find(&reducer);
-		if (found != sources.reducer_nodes.end()) {
-			return found->second;
-		}
-		// Stage 05 lowers the reducers the tree recorded, by address.
-		throw InternalException("DECIDE tree: stage 05 lowers a reducer the tree has no node for: %s",
-		                        reducer.ToString());
-	}
-
-	//! The G a reducer stage 05 lowers ranges over (DecideTreeConstruction::ReducerChild).
-	idx_t ReducerChild(const BoundDecideReducerExpression &reducer) const {
-		return DecideTreeMembersOf(*tree, ReducerNode(reducer));
-	}
-
-	//! DecideTreeConstruction::TakeClause.
-	void TakeClause(const Expression &leaf, unique_ptr<DecideConstraint> clause, bool singleton_row) {
-		auto root = sources.root_of.find(&leaf);
-		D_ASSERT(root != sources.root_of.end());
-		auto &node = *tree->nodes[root->second];
-		D_ASSERT(node.folded == singleton_row && !node.compiled.clause);
-		(void)singleton_row;
-		node.compiled.clause = std::move(clause);
-	}
-
-	void TakeObjective(unique_ptr<DecideObjective> objective) {
-		D_ASSERT(sources.objective_root != DConstants::INVALID_INDEX);
-		tree->nodes[sources.objective_root]->compiled.objective = std::move(objective);
-	}
-
-	void TakeLinkTerms(idx_t link, vector<DecideTerm> members, vector<DecideTerm> fallback) {
-		auto &body = tree->nodes[definition_nodes[link]]->compiled;
-		body.members = std::move(members);
-		body.fallback = std::move(fallback);
-	}
-
-	void TakeFrameReads(DecideFrameReads frame_reads) {
-		tree->frame_reads = std::move(frame_reads);
 	}
 
 	const DecideTree &Tree() const {
@@ -466,10 +422,11 @@ private:
 	vector<idx_t> definition_nodes;
 	vector<idx_t> frame_nodes;
 	vector<idx_t> record_nodes;
-	DecideTreeSources sources;
-	//! Canonical function-link roots live in `sources.reducer_nodes` by expression address. Keep their ASTs alive until
-	//! the linear form builder has resolved those reducers; otherwise the address map holds pointers into freed copies.
-	vector<unique_ptr<Expression>> retained_function_links;
+	//! The G each reducer of the clause in hand became, by its address in that clause: cleared at each root, read by
+	//! the term half as it splits the same clause.
+	DecideReducerNodes reducer_nodes;
+	//! The term half of the walk: stage 05's split of each canonical clause into its root's records.
+	DecideTermLowering terms;
 
 	string Text(const Expression &expression) const {
 		return RenderDecideSource(expression,
@@ -643,11 +600,11 @@ private:
 	}
 
 	void Root(const BoundDecideClause &clause) {
-		auto &comparison = clause.body->Cast<BoundComparisonExpression>();
 		auto &scope = clause.scope;
 		auto index = NewNode(DecideNodeKind::SCOPE);
 		auto &node = *tree->nodes[index];
 		node.root = true;
+		reducer_nodes.clear();
 		// ABS envelopes are built from the optimizer's record rather than written by the user. They are in their
 		// natural form (`aux >= inner` / `aux >= -inner`), which can leave decisions on both sides of the comparison.
 		// Bring these internal rows through the same canonical boundary as ordinary clauses before term extraction.
@@ -673,7 +630,7 @@ private:
 			canonical = &canonical_envelope;
 		}
 		const auto *row = &canonical->body->Cast<BoundComparisonExpression>();
-		node.facts = ReadDecideClauseFacts(context, op, *canonical);
+		auto facts = ReadDecideClauseFacts(context, op, *canonical);
 		node.folded = clause.folded_bound;
 		node.origin = clause.origin;
 		node.text = RootText(node.origin.source_clause_id);
@@ -704,12 +661,6 @@ private:
 			node.definition_function_owner = definition_function;
 			node.hidden = true;
 			node.text = "definition of " + tree->nodes[definition_function]->text;
-			if (node.defined_var != DConstants::INVALID_INDEX && node.defined_var != definition_value) {
-				throw InternalException("DECIDE tree: body definition names a different helper than its F node");
-			}
-			node.defined_var = definition_value;
-			node.facts->defined_var = definition_value;
-			node.facts->kind = ConstraintKind::STRUCTURAL;
 		}
 		idx_t signature = DConstants::INVALID_INDEX;
 		if (scope.HasPer()) {
@@ -717,7 +668,6 @@ private:
 			node.per = node.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
 			signature = scope.signature;
 		}
-		sources.root_of[&comparison] = index;
 		if (!is_abs_envelope && !is_l0_link && !is_definition) {
 			Gates(index, scope.when.get());
 		}
@@ -728,11 +678,11 @@ private:
 			auto function =
 			    std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(), [&](idx_t candidate) {
 				    return tree->nodes[candidate]->function_kind == DecideFunctionKind::ABS &&
-				           tree->nodes[candidate]->value_var == node.facts->defined_var;
+				           tree->nodes[candidate]->value_var == facts->defined_var;
 			    });
 			if (function == tree->function_nodes.end()) {
 				throw InternalException("DECIDE tree: ABS envelope has no function node for helper %llu",
-				                        node.facts->defined_var);
+				                        facts->defined_var);
 			}
 			abs_function = *function;
 			tree->nodes[abs_function]->abs_envelope_roots.push_back(index);
@@ -745,26 +695,23 @@ private:
 			}
 		}
 		UseSignature(node, signature);
-		if (scope.HasPer() && node.key != DConstants::INVALID_INDEX &&
-		    node.facts->kind == ConstraintKind::USER_PARAMETER &&
-		    node.facts->defined_var == DConstants::INVALID_INDEX &&
-		    node.facts->scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
+		if (scope.HasPer() && node.key != DConstants::INVALID_INDEX && facts->kind == ConstraintKind::USER_PARAMETER &&
+		    facts->defined_var == DConstants::INVALID_INDEX &&
+		    facts->scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
 			DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes,
 			                                  op.bound.keys, op.bound.is_boolean_var, op.bound.computed_values);
 			node.merges_classes = canonicalizer.MergesClasses(*row, node.key);
 		}
-		if (!scope.HasPer() && node.facts->scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
+		if (!scope.HasPer() && facts->scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
 			// Its sigma stays what it reads (UseSignature), whose distinct values are its instances.
 			node.per = DecideTreePer::ONE;
 		}
-		sources.clause_roots.push_back(index);
 		auto end = std::remove_if(node.signature.begin(), node.signature.end(), [&](const DecideSignatureField &field) {
 			return field.kind == DecideSignatureFieldKind::DECISION && field.decision == node.defined_var;
 		});
 		node.signature.erase(end, node.signature.end());
-		GroupClass(node);
+		GroupClass(node, *facts);
 		if (is_abs_envelope || is_l0_link || is_definition) {
-			node.facts->defined_var = node.defined_var;
 			if (is_abs_envelope) {
 				Edge(abs_function, index);
 			} else if (is_l0_link) {
@@ -787,8 +734,11 @@ private:
 		} else {
 			tree->roots.push_back(index);
 		}
-		if (canonical_envelope.body) {
-			retained_function_links.push_back(std::move(canonical_envelope.body));
+		// A folded bound holds a clause only when its repair rows come from it, for the repair model alone: emitting
+		// one for a bound already in the column box would add a redundant model row per input row.
+		if (!clause.folded_bound || clause.folded_clause_rows) {
+			terms.Clause(*canonical, *facts);
+			node.compiled.clause = std::move(facts);
 		}
 	}
 
@@ -798,12 +748,12 @@ private:
 	//! group takes their tightest value (D85). A `per K:` keeps its class, which names the classes a row stands for,
 	//! and a kept row in none of them still lies in a group, whose row reads it. The kept rows are grouped by the `by`
 	//! key after the terms are computed, on every kept row: the root and its G's of that key read the key there.
-	void GroupClass(DecideNode &node) {
-		if (!node.facts->lhs_is_aggregate && !node.facts->was_minmax_easy) {
+	void GroupClass(DecideNode &node, const DecideConstraint &facts) {
+		if (!facts.lhs_is_aggregate && !facts.was_minmax_easy) {
 			return;
 		}
 		if (node.per == DecideTreePer::ROW) {
-			node.key = node.facts->group_key;
+			node.key = facts.group_key;
 			node.per = node.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
 		} else {
 			node.holds_rows_in_no_class = true;
@@ -874,11 +824,10 @@ private:
 				throw InternalException("DECIDE tree: a retained expression is missing");
 			}
 			auto lowered = Lower(owner, *op.retained_expressions[retained], carried);
-			// Stage 05 lowers the inlined reducer that names it; it ranges over the nest the copy became.
+			// The term half splits the inlined reducer that names it; it ranges over the nest the copy became.
 			if (lowered->GetExpressionClass() == ExpressionClass::BOUND_REF &&
 			    lowered->Cast<BoundReferenceExpression>().index >= tree->input_column_count) {
-				sources.reducer_nodes[&expression] =
-				    lowered->Cast<BoundReferenceExpression>().index - tree->input_column_count;
+				reducer_nodes[&expression] = lowered->Cast<BoundReferenceExpression>().index - tree->input_column_count;
 			}
 			return lowered;
 		}
@@ -894,7 +843,7 @@ private:
 		}
 		if (expression.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
 			auto reducer = Aggregate(expression.Cast<BoundDecideReducerExpression>());
-			sources.reducer_nodes[&expression] = reducer;
+			reducer_nodes[&expression] = reducer;
 			return Read(owner, reducer, expression.return_type, expression.GetAlias());
 		}
 		if (expression.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
@@ -952,8 +901,8 @@ private:
 			}
 			return Read(owner, function, expression.return_type, expression.GetAlias());
 		}
-		// The children are lowered from the operator's own expressions, so a reducer's address is the one stage 05
-		// lowers (reducer_nodes); the copy only holds the results.
+		// The children are lowered from the clause's own expressions, so a reducer's address is the one the term half
+		// splits (reducer_nodes); the copy only holds the results.
 		auto result = expression.Copy();
 		vector<const Expression *> originals;
 		ExpressionIterator::EnumerateChildren(expression,
@@ -1229,7 +1178,7 @@ private:
 		for (idx_t i = 0; i < tree->nodes.size(); i++) {
 			auto &node = *tree->nodes[i];
 			auto variable = node.defined_var;
-			const bool abs_envelope = node.facts && IsDecideAbsEnvelope(node.facts->helper_row);
+			const bool abs_envelope = node.compiled.clause && IsDecideAbsEnvelope(node.compiled.clause->helper_row);
 			const bool function_link = node.l0_function_owner != DConstants::INVALID_INDEX ||
 			                           node.definition_function_owner != DConstants::INVALID_INDEX;
 			if (variable < definitions.size() && !abs_envelope && !function_link) {
@@ -1304,37 +1253,12 @@ struct DecideTreeConstruction::Builder : decide_tree_build::DecideTreeBuilder {
 	using decide_tree_build::DecideTreeBuilder::DecideTreeBuilder;
 };
 
-DecideTreeConstruction::DecideTreeConstruction(ClientContext &context, const LogicalDecide &op)
+DecideTreeConstruction::DecideTreeConstruction(ClientContext &context, LogicalDecide &op)
     : builder(make_uniq<Builder>(context, op)) {
 	builder->Structure();
 }
 
 DecideTreeConstruction::~DecideTreeConstruction() {
-}
-
-idx_t DecideTreeConstruction::ReducerChild(const BoundDecideReducerExpression &reducer) const {
-	return builder->ReducerChild(reducer);
-}
-
-idx_t DecideTreeConstruction::ReducerNode(const BoundDecideReducerExpression &reducer) const {
-	return builder->ReducerNode(reducer);
-}
-
-void DecideTreeConstruction::TakeClause(const Expression &leaf, unique_ptr<DecideConstraint> clause,
-                                        bool singleton_row) {
-	builder->TakeClause(leaf, std::move(clause), singleton_row);
-}
-
-void DecideTreeConstruction::TakeObjective(unique_ptr<DecideObjective> objective) {
-	builder->TakeObjective(std::move(objective));
-}
-
-void DecideTreeConstruction::TakeLinkTerms(idx_t link, vector<DecideTerm> members, vector<DecideTerm> fallback) {
-	builder->TakeLinkTerms(link, std::move(members), std::move(fallback));
-}
-
-void DecideTreeConstruction::TakeFrameReads(DecideFrameReads frame_reads) {
-	builder->TakeFrameReads(std::move(frame_reads));
 }
 
 const DecideTree &DecideTreeConstruction::Tree() const {

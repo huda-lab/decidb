@@ -82,8 +82,8 @@ struct DecideGroupSites {
 //! The stage-05 list a body was copied from (DecideBody::kind); NONE for a node of entries.
 enum class DecideBodyKind : uint8_t { NONE, CONSTRAINT, OBJECTIVE, VALUE_LINK };
 
-//! f(e1..ep, G1..Gq): the records stage 05's lowering (LowerDecideTree) writes for what a node holds, so a term keeps
-//! its identity, order, label and inputs; and where each is computed, parallel to its term vectors.
+//! f(e1..ep, G1..Gq): the records stage 05's lowering (DecideTermLowering) writes for what a node holds, so a term
+//! keeps its identity, order, label and inputs; and where each is computed, parallel to its term vectors.
 struct DecideBody {
 	//! A constraint root's clause: its terms, product groups, bound, admitted ends and facts.
 	unique_ptr<DecideConstraint> clause;
@@ -122,9 +122,8 @@ struct DecideBody {
 };
 
 //! Composite: E owns entries, G groups an operand E, and O holds ordered positions.
-//! Expressions are owned copies, with source columns resolved to chunk references. The construction borrows the
-//! addresses of the operator's reducers only between building the nodes and stage 05 lowering them
-//! (DecideTreeConstruction); `compiled` holds the terms stage 05 lowered into the node.
+//! Expressions are owned copies, with source columns resolved to chunk references. `compiled` holds the terms the
+//! walk split into the node (DecideTreeConstruction).
 struct DecideNode {
 	explicit DecideNode(DecideNodeKind kind) : kind(kind) {
 	}
@@ -153,8 +152,6 @@ struct DecideNode {
 	unique_ptr<Expression> body;
 	unique_ptr<Expression> rhs;
 	unique_ptr<Expression> fallback;
-	//! The generated helper equation, on the rows its owning condition keeps, one per instance; a child E owns its row.
-	BoundDecideClause definition_row;
 	unique_ptr<Expression> over;
 	//! Every argument is retained: collated extrema have a value and comparison key.
 	vector<unique_ptr<Expression>> arguments;
@@ -177,10 +174,8 @@ struct DecideNode {
 	bool abs_exact = false;
 	//! An ABS F node's call as the user wrote it, which a message about its value points at.
 	string abs_written;
-	//! The two lower-envelope rows this F node owns, `aux >= operand` then `aux >= -operand` (MakeAbsRow), which the
-	//! tree built from the record, and the roots made of them. They carry the operand per row to stage 06, which states
-	//! every row of the ABS from them.
-	BoundDecideClause abs_rows[2];
+	//! The roots of the two lower-envelope rows this F node owns, `aux >= operand` then `aux >= -operand` (MakeAbsRow).
+	//! They carry the operand per row to stage 06, which states every row of the ABS from them.
 	vector<idx_t> abs_envelope_roots;
 	string aggregate;
 	idx_t link = DConstants::INVALID_INDEX;
@@ -212,9 +207,6 @@ struct DecideNode {
 	bool holds_rows_in_no_class = false;
 	//! A hidden root's non-NULL string is the data check's error message.
 	bool value_check = false;
-	//! Immutable clause metadata shared with term lowering. Its term vectors are
-	//! empty: the graph's bodies and child results supply the model's terms.
-	unique_ptr<DecideConstraint> facts;
 	//! Stage 05's terms for what the node holds (CompileDecideTree).
 	DecideBody compiled;
 	//! What its entries compute, and its member tests among them (TEST programs).
@@ -237,7 +229,7 @@ struct DecideTree {
 	//! then the folded bounds whose repair rows come from their clause.
 	idx_t constraint_count = 0;
 	idx_t singleton_row_count = 0;
-	//! The frame columns the clauses' terms read (LowerDecideTree).
+	//! The frame columns the clauses' terms read (DecideTermLowering).
 	DecideFrameReads frame_reads;
 	//! The constraints' records, by clause_index; a folded bound's is none of them.
 	vector<const DecideConstraint *> Constraints() const;
@@ -318,46 +310,18 @@ struct DecideTree {
 	string BodiesToString() const;
 };
 
-//! What the compile reads of the construction: the node each of the operator's reducers became, and the nodes stage
-//! 05's lists bind to, in the order stage 05 walks them.
-struct DecideTreeSources {
-	//! The operator's own reducer -> its G (DecideTreeConstruction's Lower).
-	std::unordered_map<const Expression *, idx_t> reducer_nodes;
-	//! The clause roots in constraint-leaf order, and the root each comparison became.
-	vector<idx_t> clause_roots;
-	std::unordered_map<const Expression *, idx_t> root_of;
-	idx_t objective_root = DConstants::INVALID_INDEX;
-	//! [link] -> its helper's G, or its O for a frame.
-	vector<idx_t> link_nodes;
-	//! [record] -> its G (LogicalDecide::bound_aggregates).
-	vector<idx_t> record_nodes;
-};
-
-//! Builder with a director (plan_decide.cpp): the nodes come from the final clauses, then stage 05's lowering
-//! (LowerDecideTree) writes each clause's records into its root, then the bodies are compiled (language/guide.md
-//! §6.4).
+//! Builder with a director (plan_decide.cpp): one walk over the final clauses, the objective and the helper
+//! definitions makes each node and, from the same canonical expression, the records its root holds
+//! (DecideTermLowering); then the bodies are compiled (language/guide.md §6.4).
 class DecideTreeConstruction {
 public:
 	//! Prepare the plan-time metadata needed to number definition F nodes before MIN/MAX rewrites and term splitting
 	//! read them. The full nodes and their instances are built by the constructor once the optimizer has settled
 	//! clauses.
 	static void PrepareDefinitionFunctions(ClientContext &context, LogicalDecide &op);
-	//! Builds the nodes, their edges, sigma, gates and definitions.
-	DecideTreeConstruction(ClientContext &context, const LogicalDecide &op);
+	//! Builds the nodes, their edges, sigma, gates and definitions, and each root's records.
+	DecideTreeConstruction(ClientContext &context, LogicalDecide &op);
 	~DecideTreeConstruction();
-	//! The node whose operand entries a reducer the lowering reads ranges over.
-	idx_t ReducerChild(const BoundDecideReducerExpression &reducer) const;
-	//! The exact G created for a reducer occurrence, before following nested reducer bodies.
-	idx_t ReducerNode(const BoundDecideReducerExpression &reducer) const;
-	//! The records the lowering made of the clause whose comparison is `leaf`, into the root it became; a folded
-	//! bound's, which the repair model alone reads, into its root too.
-	void TakeClause(const Expression &leaf, unique_ptr<DecideConstraint> clause, bool singleton_row);
-	//! The objective's records, into the objective's root.
-	void TakeObjective(unique_ptr<DecideObjective> objective);
-	//! A helper's member terms and its frame's `else` terms, into its G or O (DecideTreeSources::link_nodes).
-	void TakeLinkTerms(idx_t link, vector<DecideTerm> members, vector<DecideTerm> fallback);
-	//! The frame columns the lowered terms read.
-	void TakeFrameReads(DecideFrameReads frame_reads);
 	//! The tree so far, which the solver gate reads once the clauses are lowered.
 	const DecideTree &Tree() const;
 	//! Numbers the clauses and compiles the bodies, orders the nodes, and validates the tree.
@@ -368,10 +332,11 @@ private:
 	unique_ptr<Builder> builder;
 };
 
-//! Numbers the clause roots in leaf order, finds where each term is computed and compiles its coefficient, bounds and
-//! member tests into programs there.
+//! Numbers the clause roots in the order made, finds where each term is computed and compiles its coefficient, bounds
+//! and member tests into programs there. `definition_nodes`: per helper definition, its node (a REDUCER_VALUE's G or
+//! O holds its members); `record_nodes`: per record (LogicalDecide::bound_aggregates), its G.
 void CompileDecideTree(ClientContext &context, const LogicalDecide &op, DecideTree &tree,
-                       const DecideTreeSources &sources);
+                       const vector<idx_t> &definition_nodes, const vector<idx_t> &record_nodes);
 
 //! A G's operand: its one SCOPE child.
 idx_t DecideTreeOperand(const DecideTree &tree, idx_t reducer);
@@ -384,11 +349,5 @@ idx_t DecideTreeMembersOf(const DecideTree &tree, idx_t reducer);
 
 //! The semantic name a carrier represents, shared by tree consumers.
 string DecideTreeReducerName(const BoundDecideReducerExpression &aggregate);
-
-//! Read shape, provenance and bound-admission facts once. Both graph construction
-//! and term lowering use this function; neither infers a second clause shape. `clause` is canonical: a clause of
-//! SUCH THAT, or a function-owned row as DecideCanonicalizer::CanonicalizeFunctionRow returns it.
-unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const LogicalDecide &op,
-                                                   const BoundDecideClause &clause);
 
 } // namespace duckdb

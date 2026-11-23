@@ -7,7 +7,6 @@
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_tree.hpp"
 #include "duckdb/decidb/solver/ilp_solver.hpp"
-#include "duckdb/optimizer/decide/decide_linear_form.hpp"
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -223,17 +222,14 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	if (op.bound.objective.body) {
 		canonicalizer.VerifyCanonicalObjective(op.bound.objective);
 	}
-	// Lower the verified clauses into the tree's terms. The pass itself is
-	// owned by stage 05 (src/optimizer/decide/decide_linear_form.cpp); it is TRIGGERED
+	// One walk lowers the verified clauses into the tree's nodes and, from the same expressions, each root's terms
+	// (DecideTreeConstruction; the term half is stage 05's, src/optimizer/decide/decide_linear_form.cpp). It runs
 	// here because this is the first point at which column bindings are final. The
 	// lowered terms hold copies of the coefficient subtrees, and RemoveUnusedColumns,
 	// ColumnLifetimeAnalyzer and late materialization all rebind the operator's own
 	// expressions after the DECIDE optimizer runs -- copies taken earlier would keep
 	// bindings that no longer name the right input columns.
-	// The tree's nodes come from the final clauses (DecideTreeConstruction), then stage 05's lowering writes each
-	// clause's records into its root, each reducer's terms naming the G they range over.
 	auto construction = make_uniq<DecideTreeConstruction>(context, op);
-	LowerDecideTree(context, op, *construction);
 	// With the shape of every constraint and the objective settled, check the model
 	// class this query needs against the backend chosen for it. A model class is a
 	// gate, not an optimization -- nothing lowers a quadratic constraint into linear

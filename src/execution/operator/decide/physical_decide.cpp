@@ -559,9 +559,8 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	solver_input.use_native_constructs = use_native_constructs;
 	solver_input.force_native_constructs = force_native_constructs;
 
-	// Bounds were folded in the gstate constructor from simple
-	// `x OP const` / BETWEEN constraints; those comparisons were skipped in
-	// AnalyzeConstraint so we don't re-emit them as per-row model rows.
+	// Bounds were folded in the gstate constructor from simple `x OP const` / BETWEEN constraints; the lowering walk
+	// skips those comparisons, so they are not emitted again as per-row model rows.
 	solver_input.constraint_sources = display.constraint_sources;
 	solver_input.source_text = display.source_text;
 	solver_input.objective_written =

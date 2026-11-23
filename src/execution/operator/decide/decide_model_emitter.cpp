@@ -1040,7 +1040,8 @@ vector<bool> DecideModelEmitter::ReadInReducer(const DecideTerm &term, const Dec
 idx_t DecideModelEmitter::ByReducer(idx_t root) const {
 	auto &node = *tree.nodes[root];
 	for (auto child : node.children) {
-		if (tree.nodes[child]->kind == DecideNodeKind::REDUCER && tree.nodes[child]->key == node.facts->group_key) {
+		if (tree.nodes[child]->kind == DecideNodeKind::REDUCER &&
+		    tree.nodes[child]->key == node.compiled.clause->group_key) {
 			return child;
 		}
 	}
