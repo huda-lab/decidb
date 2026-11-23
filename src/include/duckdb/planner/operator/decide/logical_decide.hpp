@@ -15,6 +15,7 @@
 #include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/decide_solver_capabilities.hpp"
 #include "duckdb/common/decide_numeric_policy.hpp"
+#include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/decide/decide_tree_terms.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/decide/decide_tree_nodes.hpp"
@@ -331,12 +332,21 @@ struct DecideHelperDefinition {
 	//! path key (language/guide.md §5.5), every enclosing reducer's `by` key and its own. INVALID_INDEX for `by ()`
 	//! throughout, every kept row, and for a frame's, whose instances are its windows.
 	idx_t path_key = DConstants::INVALID_INDEX;
-	//! REDUCER_VALUE: the sides that pin the helper, read from the way the clause pushes it and joined over the rows
-	//! that share it; both when the sign of its factor is not known before the query runs or the comparison is `=` or
-	//! `<>`. MIN/MAX: the extremum link's envelope and closing sides (ExtremumLinkSpec). SUM/AVG: `value >= members`
-	//! (`need_envelope`) and `value <= members` (`need_closing`), the equality when both.
-	bool need_envelope = false;
-	bool need_closing = false;
+	//! REDUCER_VALUE: the way the rows that read the helper push it, joined over them (JoinExtremumPush): NONE when
+	//! two push it opposite ways, the sign of its factor is not known before the query runs, or the comparison is `=`
+	//! or `<>`. The side that pins the helper is the one a row would otherwise let it escape through (the epigraph
+	//! form; the Plaisted-Greenbaum polarity of a definition). Pushed down, a MAX needs its envelope (`value >=
+	//! member`) and a MIN its closing side (`value >=` some member, with indicators); a SUM or AVG, which like a MAX
+	//! never decreases when a member grows, needs `value >= members`, its envelope. Pushed up is the mirror, and NONE
+	//! needs both: the extremum link's two sides (ExtremumLinkSpec), the equality of a SUM or AVG.
+	ExtremumPush push = ExtremumPush::NONE;
+	//! REDUCER_VALUE: whether `push` needs the helper's envelope, and its closing side.
+	bool NeedsEnvelope() const {
+		return push == ExtremumPush::NONE || IsEasyExtremum(agg_name != "min", push);
+	}
+	bool NeedsClosing() const {
+		return !IsEasyExtremum(agg_name != "min", push);
+	}
 	//! REDUCER_VALUE: the clause's `per` key (into `keys`, INVALID_INDEX for `per ()`), DECIDE_ROW_KEY for a clause
 	//! with none.
 	idx_t class_key = DECIDE_ROW_KEY;
@@ -368,8 +378,7 @@ struct DecideOwnedBody {
 	//! The sign a term of `expr` must carry, read as a sum from sign +1 (the way a comparison reads as `LHS - RHS`), to
 	//! be pushed down by its owner: +1 under `<=`, `<` and the minimized objective, -1 under `>=` and `>`, and 0 when
 	//! nothing is pushed (`=`, `<>`, a leaf that is no comparison). A definition `t >= q` pushes `q` down, `t <= q` up;
-	//! a REDUCER_VALUE its sides, as the members of its helper are read (DecideHelperDefinition::need_envelope,
-	//! need_closing).
+	//! a REDUCER_VALUE its members as its readers push the helper (DecideHelperDefinition::push).
 	int push = 0;
 	//! The rows the body is read on: the `when` of its clause, of its definition or its link, which a reducer's own
 	//! `when` in the body narrows further. Null for every row. Borrowed from the clause or the definition, or from

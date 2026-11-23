@@ -157,11 +157,6 @@ void RequireLinearOperand(const DecideTermSplitter &splitter, const Expression &
 void AddRewriteAccount(LogicalDecide &decide, idx_t source_clause_id, LogicalDecide::RewriteAccount::Kind kind,
                        string subject);
 
-//! The sides a helper decision holding `agg_name` (a reducer, or a range frame's reducer) pushed `push` needs: its
-//! envelope (`value >= members` for SUM, AVG and MAX, the extremum link's envelope) when pushed its cheap way, its
-//! closing side the other way, both under NONE (DecideHelperDefinition::need_envelope, need_closing).
-void DecideHelperSides(const string &agg_name, ExtremumPush push, bool &need_envelope, bool &need_closing);
-
 //! The helper decision holding `link`'s value, appended to the plan's (LogicalDecide::helper_definitions), its floor
 //! free: whole-numbered when `whole`; one instance per class of `scope` -- a copy of which becomes the helper's own,
 //! naming the link; a `by ()` key is one class, or none when no row holds a member, so a read of it skips its

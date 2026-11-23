@@ -402,21 +402,15 @@ static int ComparisonPush(const Expression &leaf) {
 	}
 }
 
-//! The sign a term of a value link's members must carry to be pushed down, from the sides the link states
-//! (DecideHelperDefinition::need_envelope, need_closing), which join every reader's push (RewriteScopedReducers):
-//! `value >= members` of a SUM, AVG or MAX holds the members down, `value <= members` of a MIN holds them up, and
-//! `value <= members` of a SUM or AVG holds them up as well, the sign it reads them with the other way round. A MIN or
-//! MAX's closing side is the hard direction, encoded with a Big-M over its members, and both sides read the members
-//! from both directions: no sign is pinned, which is 0.
+//! The sign a term of a value link's members must carry to be pushed down: the members are pushed as the helper is
+//! (DecideHelperDefinition::push), a SUM or AVG being linear in them and a MIN or MAX never decreasing when one grows.
+//! A MIN or MAX's closing side is the hard direction, encoded with a Big-M over its members, which reads them from
+//! both directions: no sign is pinned, which is 0, as under no push.
 static int ValueLinkPush(const DecideHelperDefinition &link) {
-	if (link.need_envelope == link.need_closing) {
+	if ((link.agg_name == "min" || link.agg_name == "max") && link.NeedsClosing()) {
 		return 0;
 	}
-	const bool extremum = link.agg_name == "min" || link.agg_name == "max";
-	if (link.need_envelope) {
-		return link.agg_name == "min" ? -1 : 1;
-	}
-	return extremum ? 0 : -1;
+	return link.push == ExtremumPush::DOWN ? 1 : link.push == ExtremumPush::UP ? -1 : 0;
 }
 
 //! The body of `clause`, which the clause list or an L0 indicator (`index`) holds.

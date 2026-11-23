@@ -147,15 +147,12 @@ public:
 		if (spec.reducer == "count") {
 			throw InternalException("DECIDE: a count over decisions reached the range rewrite: %s", spec.text);
 		}
-		bool need_envelope, need_closing;
-		DecideHelperSides(spec.reducer, push, need_envelope, need_closing);
 		// One helper per frame: a BETWEEN's two comparisons, and every rewrite's copy after this pass, read one value
 		// per window. It needs every side any of them does.
 		auto made = helper_of_frame.find(frame);
 		if (made != helper_of_frame.end()) {
 			auto &link = *decide.helper_definitions[made->second];
-			link.need_envelope = link.need_envelope || need_envelope;
-			link.need_closing = link.need_closing || need_closing;
+			link.push = JoinExtremumPush(link.push, push);
 			ReplaceWithDecision(context, decide, link.helper, slot);
 			return;
 		}
@@ -167,8 +164,7 @@ public:
 		link->agg_name = spec.reducer;
 		link->label = spec.spelling;
 		link->body = marker.Copy();
-		link->need_envelope = need_envelope;
-		link->need_closing = need_closing;
+		link->push = push;
 		// One instance per window: a timeline, or a position on one. The key names the instances; execution numbers
 		// them from the frame map.
 		KeyedScopeInfo scope;

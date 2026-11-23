@@ -182,6 +182,11 @@ ExtremumPush ExtremumPushOf(ExpressionType comparison);
 //! The push of a term of `sign` under `outer`, the push of the side it stands in.
 ExtremumPush ExtremumPushOf(ExtremumPush outer, int sign);
 
+//! The push of a term two readers push `a` and `b`: theirs where they agree, NONE where they do not.
+inline ExtremumPush JoinExtremumPush(ExtremumPush a, ExtremumPush b) {
+	return a == b ? a : ExtremumPush::NONE;
+}
+
 //! True when `push` is the cheap direction of a MIN (`is_max` false) or MAX; NONE never is.
 inline bool IsEasyExtremum(bool is_max, ExtremumPush push) {
 	return push == (is_max ? ExtremumPush::DOWN : ExtremumPush::UP);

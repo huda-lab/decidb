@@ -1048,8 +1048,8 @@ private:
 			node.value_var = link.helper;
 			node.value_link_label = link.label;
 			node.value_link_clause = link.origin.source_clause_id;
-			node.value_link_needs_envelope = link.need_envelope;
-			node.value_link_needs_closing = link.need_closing;
+			node.value_link_needs_envelope = link.NeedsEnvelope();
+			node.value_link_needs_closing = link.NeedsClosing();
 			node.qualifier_scope = reducer.per;
 			node.decision_value = true;
 			if (link.helper < tree->value_nodes.size()) {
@@ -1065,8 +1065,8 @@ private:
 		node.aggregate = link.agg_name;
 		node.value_link_label = link.label;
 		node.value_link_clause = link.origin.source_clause_id;
-		node.value_link_needs_envelope = link.need_envelope;
-		node.value_link_needs_closing = link.need_closing;
+		node.value_link_needs_envelope = link.NeedsEnvelope();
+		node.value_link_needs_closing = link.NeedsClosing();
 		node.qualifier_scope = reducer.per;
 		node.key = link.path_key;
 		node.text = link.label;

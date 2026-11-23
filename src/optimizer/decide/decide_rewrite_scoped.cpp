@@ -15,7 +15,7 @@
 // N rows of N terms.
 //
 // A range frame over decisions (language/guide.md §5.6) is a reducer whose groups are the frame's windows, and becomes
-// a helper through the same door (AddValueHelper, DecideHelperSides; RewriteFrameRanges in decide_rewrite_frames.cpp).
+// a helper through the same door (AddValueHelper; RewriteFrameRanges in decide_rewrite_frames.cpp).
 //
 //===----------------------------------------------------------------------===//
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
@@ -47,18 +47,6 @@
 namespace duckdb {
 
 using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
-
-void decide_rewrite::DecideHelperSides(const string &agg_name, ExtremumPush push, bool &need_envelope,
-                                       bool &need_closing) {
-	// Which side pins the helper is the one the row would otherwise let it escape through (the epigraph form; the
-	// Plaisted-Greenbaum polarity of definition F-node preparation). Under `<=` a positive term is pushed down, so a
-	// MAX needs its envelope (`value >= member`) and a MIN its closing side (`value >= some member`, with indicators);
-	// a SUM or AVG, which like a MAX never decreases when a member grows, needs `value >= sum`, its envelope. The
-	// mirror holds for `>=` and for a negative term. An unknown sign, `=` and `<>` need both.
-	const bool easy = IsEasyExtremum(agg_name != "min", push);
-	need_envelope = push == ExtremumPush::NONE || easy;
-	need_closing = push == ExtremumPush::NONE || !easy;
-}
 
 idx_t decide_rewrite::AddValueHelper(LogicalDecide &decide, unique_ptr<DecideHelperDefinition> link,
                                      const KeyedScopeInfo &scope, bool whole, idx_t source_clause_id,
@@ -213,12 +201,9 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	// F6: a diagnosis, and a plan, name the helper by the reducer it holds, `by` included, as written: read before the
 	// reducers inside it become helpers.
 	auto plan_label = RenderDecideSource(agg, names);
-	// Which side pins the helper is the one the row would otherwise let it escape through (DecideHelperSides). A
-	// helper several rows read needs every side any of them does, and the rows read the helper alone: a slack value
-	// is harmless.
+	// The way this reader pushes the helper says which side pins it (DecideHelperDefinition::push). A helper several
+	// rows read needs every side any of them does, and the rows read the helper alone: a slack value is harmless.
 	const ExtremumPush push = ExtremumPushOf(outer, site.sign);
-	bool need_envelope, need_closing;
-	DecideHelperSides(agg_name, push, need_envelope, need_closing);
 
 	// A member is pushed as the helper is, through the sign it carries in the argument: a SUM or AVG is linear in it,
 	// and a MIN or MAX does not decrease when it grows, so either passes its push on (D79).
@@ -256,8 +241,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	idx_t link_idx = helpers.Find(agg, rows.get(), group_key, class_key);
 	if (link_idx != DConstants::INVALID_INDEX) {
 		auto &link = *decide.helper_definitions[link_idx];
-		link.need_envelope |= need_envelope;
-		link.need_closing |= need_closing;
+		link.push = JoinExtremumPush(link.push, push);
 		// Each clause that reads the helper says so in its own plan, once.
 		bool told = false;
 		for (auto &account : decide.rewrite_accounts) {
@@ -279,8 +263,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	link->body = agg.Copy();
 	link->when = std::move(rows);
 	link->class_key = class_key;
-	link->need_envelope = need_envelope;
-	link->need_closing = need_closing;
+	link->push = push;
 
 	// The helper decision: one instance per group of its path key among the rows its path keeps -- `by ()`
 	// throughout is one group, or none when no row holds a member.
