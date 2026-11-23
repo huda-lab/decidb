@@ -455,7 +455,7 @@ const vector<Value> &DecideTreeColumns::Folds(idx_t reducer) {
 		return known->second;
 	}
 	auto &node = *tree.nodes[reducer];
-	const auto operand = DecideTreeOperand(tree, reducer);
+	const auto operand = tree.nodes[reducer]->operand;
 	auto &arguments = tree.nodes[operand]->compiled.arguments;
 	auto &entries = descent.Containers()[operand];
 	// Its members are the operand's entries its member tests keep, each variant of a class once, at its first row,

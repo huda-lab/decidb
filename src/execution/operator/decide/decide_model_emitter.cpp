@@ -303,7 +303,7 @@ KeyedMapping DecideModelEmitter::SignatureMapping(idx_t scope) {
 
 DecideModelEmitter::LinkMembers DecideModelEmitter::Members(idx_t node) {
 	auto &body = tree.nodes[node]->compiled;
-	const auto site = DecideTreeOperand(tree, node);
+	const auto site = tree.nodes[node]->operand;
 	auto &entries = descent.Containers()[site];
 	auto &slots = descent.Containers()[node].groups;
 	// The members are computed on the rows its reducer's `when` and NULL tests keep where every decision they read
@@ -1546,7 +1546,7 @@ void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {
 	vector<idx_t> payload_vars, fallback_vars;
 	const auto payload = read(body.members, body.linear, map.ReadRows(), payload_vars);
 	const auto fallback = read(body.fallback, body.fallback_sites, map.FallbackAnchors(), fallback_vars);
-	DecideListFrameMembers(map, tree_node.aggregate,
+	DecideListFrameMembers(map, tree.ReducerOf(tree_node),
 	                       DecideClauseRefOf(op.display.constraint_sources, op.display.source_text,
 	                                         tree.Definition(tree_node)->origin.source_clause_id),
 	                       tree_node.text, payload, payload_vars, fallback, fallback_vars, out);
@@ -1564,7 +1564,7 @@ void DecideModelEmitter::ValueLinks() {
 		auto &body = tree_node.compiled;
 		auto spec = ReducerValueLinkSpec();
 		spec.value_var = definition.helper;
-		spec.reducer = tree_node.aggregate;
+		spec.reducer = definition.reducer;
 		spec.need_envelope = definition.NeedsEnvelope();
 		spec.need_closing = definition.NeedsClosing();
 		spec.label = definition.label;
@@ -1575,7 +1575,7 @@ void DecideModelEmitter::ValueLinks() {
 			gstate.evaluated_value_links.push_back(std::move(spec));
 			continue;
 		}
-		const auto site = DecideTreeOperand(tree, node);
+		const auto site = tree.nodes[node]->operand;
 		auto &entries = descent.Containers()[site].parent_slots;
 		auto &members = link_members[node];
 		// Form each G's member expressions from its operand entries. Stage 06 still owns helper
@@ -1609,7 +1609,7 @@ void DecideModelEmitter::ValueLinks() {
 			}
 			spec.members.AddGroup(group_rows.front());
 			const auto avg_scale =
-			    tree_node.aggregate == DecideReducerKind::AVG ? 1.0 / static_cast<double>(group_rows.size()) : 1.0;
+			    definition.reducer == DecideReducerKind::AVG ? 1.0 / static_cast<double>(group_rows.size()) : 1.0;
 			for (auto row : group_rows) {
 				const auto entry = member_entry[row];
 				double constant = 0.0;

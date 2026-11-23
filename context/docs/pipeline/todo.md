@@ -28,18 +28,6 @@ every one of them:
 - **Tests** (R32): focused tests in each task's **Done when**; `make decide-test` once at the end of each queue
   group; every other suite in TREE-28.
 
-## TREE-23 — `DecideNode` holds no copy; a G names its operand
-
-- **Problem.** A node still copies facts: a root's `body` and `rhs`, `defined_var`, an F's `origin` and `text`, a
-  linked node's `aggregate`, an O's `function` and `arguments` (grep evidence for the last two). A G's operand is
-  found by scanning its children (`DecideTreeOperand`), with two internal errors.
-- **Change.** Each field with no reader outside the builder goes; each copy is read from the definition or the
-  clause record. A G holds its operand's index. A field judged dead on grep evidence is confirmed by a probe
-  before it is deleted.
-- **Done when.** `DecideTreeOperand` is named nowhere;
-  `./test/decide/run_tests.sh -k "one_pass or frame or abs or minmax or helper or explain"` and
-  `build/release/test/unittest "[decidb]"` pass; the probes are byte-identical.
-
 ## TREE-24 — `DecideNode` is a class per kind
 
 - **Problem.** One struct serves four kinds; a field of one kind can be set on another, and
@@ -47,7 +35,6 @@ every one of them:
 - **Change.** DuckDB's tagged hierarchy: a base with the common fields and `DecideScopeNode`, `DecideReducerNode`,
   `DecideFrameNode`, `DecideFunctionNode`, reached by `Cast<T>()` at sites that already test the kind. `Validate`'s
   cross-kind checks go. The execution files change field access only.
-- **Needs.** TREE-23.
 - **Done when.** `Validate` holds no cross-kind check; the `lizard` figures of `decide_tree.cpp` are reported;
   `./test/decide/run_tests.sh -k "one_pass or frame or abs or minmax or helper or explain or diagnos"` and
   `build/release/test/unittest "[decidb]"` pass; design.md § 3.2.4 describes the classes.

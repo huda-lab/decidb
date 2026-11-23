@@ -238,26 +238,16 @@ public:
 		for (idx_t i = 0; i < op.helper_definitions.size(); i++) {
 			auto &definition = *op.helper_definitions[i];
 			switch (definition.kind) {
-			case DecideHelperKind::ABS: {
-				// The optimizer records the ABS; the tree builds its two rows beneath the F node (Structure), as it
-				// does a definition's.
-				FunctionNode(i).origin.source_clause_id = definition.origin.source_clause_id;
+			case DecideHelperKind::ABS:
+			case DecideHelperKind::BOOLEAN_PRODUCT:
+				FunctionNode(i);
 				break;
-			}
-			case DecideHelperKind::BOOLEAN_PRODUCT: {
-				// The function's body names its two factors; the tree-owned BilinearLinkSpec records are handed to
-				// stage 06 by way of these nodes.
-				FunctionNode(i).origin = definition.origin;
-				break;
-			}
 			case DecideHelperKind::L0_INDICATOR: {
 				auto &links = definition.Cast<DecideL0IndicatorDefinition>().links;
 				if (links.size() != 3) {
 					throw InternalException("DECIDE tree: malformed L0 indicator function");
 				}
-				auto &node = FunctionNode(i);
-				node.text = definition.label;
-				node.origin = links[0].origin;
+				FunctionNode(i).text = definition.label;
 				break;
 			}
 			case DecideHelperKind::DEFINITION: {
@@ -333,7 +323,6 @@ public:
 		auto &node = *tree->nodes[index];
 		node.definition = definition_index;
 		node.root = node.hidden = node.decision_value = true;
-		node.defined_var = helper;
 		node.text = label->second;
 		auto &variable_scope = tree->variable_scopes[helper];
 		if (variable_scope.IsKeyed() || variable_scope.scope == DecideVarScope::INLINED) {
@@ -582,9 +571,7 @@ private:
 		const auto *row = &canonical->body->Cast<BoundComparisonExpression>();
 		auto facts = ReadDecideClauseFacts(context, op, *canonical, definition);
 		node.folded = clause.folded_bound;
-		node.origin = clause.origin;
-		node.text = RootText(node.origin.source_clause_id);
-		node.defined_var = facts->defined_var;
+		node.text = RootText(clause.origin.source_clause_id);
 		if (owned) {
 			// Before the row is lowered: a row a function owns reads its helper as a decision (Lower).
 			Edge(function, index);
@@ -603,7 +590,9 @@ private:
 			Gates(index, scope.when.get());
 		}
 		auto atoms = LowerAtoms(index, *row->left);
-		node.rhs = Lower(index, *row->right, canonical->query_wide_bound);
+		// The bound is evaluated from the clause's record (DecideConstraint::rhs_expr); lowering it here gives the root
+		// the nodes, columns and decisions it reads.
+		Decisions(*Lower(index, *row->right, canonical->query_wide_bound), node.decisions);
 		if (owned) {
 			auto &owner_node = *tree->nodes[function];
 			owner_node.rows.push_back(index);
@@ -623,7 +612,7 @@ private:
 			node.per = DecideTreePer::ONE;
 		}
 		auto end = std::remove_if(node.signature.begin(), node.signature.end(), [&](const DecideSignatureField &field) {
-			return field.kind == DecideSignatureFieldKind::DECISION && field.decision == node.defined_var;
+			return field.kind == DecideSignatureFieldKind::DECISION && field.decision == facts->defined_var;
 		});
 		node.signature.erase(end, node.signature.end());
 		GroupClass(node, *facts);
@@ -850,6 +839,7 @@ private:
 		node.function = unique_ptr_cast<Expression, BoundAggregateExpression>(aggregate.ToAggregate());
 		auto operand = NewNode(DecideNodeKind::SCOPE);
 		Edge(index, operand);
+		tree->nodes[index]->operand = operand;
 		auto &entry = *tree->nodes[operand];
 		entry.text = node.text + " operand";
 		Gates(operand, aggregate.filter.get());
@@ -908,7 +898,6 @@ private:
 		definition_nodes[link_index] = index;
 		auto &node = *tree->nodes[index];
 		node.definition = link_index;
-		node.aggregate = link.reducer;
 		node.qualifier_scope = reducer.per;
 		node.key = link.path_key;
 		node.text = link.label;
@@ -919,6 +908,7 @@ private:
 		}
 		auto operand = NewNode(DecideNodeKind::SCOPE);
 		Edge(index, operand);
+		tree->nodes[index]->operand = operand;
 		auto &entry = *tree->nodes[operand];
 		entry.text = node.text + " operand";
 		Gates(operand, reducer.filter.get());
@@ -953,6 +943,7 @@ private:
 		node.text = Text(reducer);
 		auto operand = NewNode(DecideNodeKind::SCOPE);
 		Edge(index, operand);
+		tree->nodes[index]->operand = operand;
 		auto &entry = *tree->nodes[operand];
 		entry.text = node.text + " operand";
 		Gates(operand, record.reads.get());
@@ -989,22 +980,21 @@ private:
 		// slot of its own, which no timeline is built from (DecideTreeColumns::ReadFrames).
 		node.holds_rows_in_no_class = true;
 		node.text = frame.text;
-		node.aggregate = frame.reducer;
 		Gates(index, frame.rows.get());
 		if (frame.order) {
 			node.over = Resolve(*frame.order);
 		}
 		if (marker && marker->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_FRAME) {
 			auto &aggregate = marker->Cast<BoundDecideFrameExpression>();
-			if (auto fold = DecideFrameFold(frame, aggregate)) {
-				node.function = unique_ptr_cast<Expression, BoundAggregateExpression>(std::move(fold));
-			}
+			// Its payload is its body. A collated extremum's comparison key is lowered for the columns it reads; the
+			// term half folds a range from the frame's own reducer (DecideFrameFold).
 			for (auto &argument : aggregate.children) {
-				node.arguments.push_back(Lower(index, *argument));
-			}
-			if (!node.arguments.empty()) {
-				node.body = node.arguments[0]->Copy();
-				node.decision_value = HasDecision(aggregate);
+				auto lowered = Lower(index, *argument);
+				Decisions(*lowered, node.decisions);
+				if (!node.body) {
+					node.body = std::move(lowered);
+					node.decision_value = HasDecision(aggregate);
+				}
 			}
 		}
 		if (payload && !node.body) {
@@ -1082,11 +1072,19 @@ private:
 		}
 	}
 
+	//! The helper a node defines: an F node's own, or the one whose row a root is (DecideConstraint::defined_var).
+	idx_t DefinedVar(const DecideNode &node) const {
+		if (node.kind == DecideNodeKind::FUNCTION) {
+			return op.helper_definitions[node.definition]->helper;
+		}
+		return node.compiled.clause ? node.compiled.clause->defined_var : DConstants::INVALID_INDEX;
+	}
+
 	void Definitions() {
 		auto &definitions = tree->definition_nodes;
 		for (idx_t i = 0; i < tree->nodes.size(); i++) {
 			auto &node = *tree->nodes[i];
-			auto variable = node.defined_var;
+			auto variable = DefinedVar(node);
 			if (variable < definitions.size() && !OwnedByFunction(node, DecideHelperKind::ABS) &&
 			    !OwnedByFunction(node, DecideHelperKind::L0_INDICATOR) &&
 			    !OwnedByFunction(node, DecideHelperKind::DEFINITION)) {
@@ -1096,7 +1094,7 @@ private:
 		for (idx_t i = 0; i < tree->nodes.size(); i++) {
 			auto &node = *tree->nodes[i];
 			auto &variables = node.decisions;
-			for (auto *expression : {node.body.get(), node.rhs.get(), node.fallback.get()}) {
+			for (auto *expression : {node.body.get(), node.fallback.get()}) {
 				if (expression) {
 					Decisions(*expression, variables);
 				}
@@ -1105,7 +1103,7 @@ private:
 				Decisions(*argument, variables);
 			}
 			for (auto variable : variables) {
-				if (variable != node.defined_var) {
+				if (variable != DefinedVar(node)) {
 					Sources(variable, i);
 				}
 			}
@@ -1203,8 +1201,8 @@ void DecideTree::Validate() const {
 			                            : definition.kind == DecideHelperKind::DEFINITION   ? 1
 			                                                                                : 0;
 			bool invalid = value_var >= value_nodes.size() ||
-			               (!variable_scopes.empty() && value_var >= variable_scopes.size()) ||
-			               node.defined_var != value_var || !node.body || node.rows.size() != expected_rows;
+			               (!variable_scopes.empty() && value_var >= variable_scopes.size()) || !node.body ||
+			               node.rows.size() != expected_rows;
 			for (idx_t r = 0; r < node.rows.size() && !invalid; r++) {
 				const auto root = node.rows[r];
 				invalid = root >= nodes.size() || !nodes[root]->compiled.clause ||
@@ -1336,7 +1334,7 @@ string DecideTree::ToString() const {
 		}
 		result << " key=" << DecideKeyText(keys, node.key);
 		if (node.kind == DecideNodeKind::REDUCER || (node.kind == DecideNodeKind::FRAME && frames[node.frame].range)) {
-			result << " agg=" << StringUtil::Lower(EnumUtil::ToString(node.aggregate));
+			result << " agg=" << StringUtil::Lower(EnumUtil::ToString(ReducerOf(node)));
 		}
 		if (node.kind == DecideNodeKind::FUNCTION) {
 			auto &definition = *definitions[node.definition];

@@ -35,26 +35,9 @@ static constexpr idx_t DECIDE_HOLE_BASE = idx_t(1) << 48;
 
 } // namespace decide_tree_compile
 
-idx_t DecideTreeOperand(const DecideTree &tree, idx_t reducer) {
-	idx_t operand = DConstants::INVALID_INDEX;
-	for (auto child : tree.nodes[reducer]->children) {
-		if (tree.nodes[child]->kind != DecideNodeKind::SCOPE) {
-			continue;
-		}
-		if (operand != DConstants::INVALID_INDEX) {
-			throw InternalException("DECIDE tree: %s has two operands", tree.nodes[reducer]->text);
-		}
-		operand = child;
-	}
-	if (operand == DConstants::INVALID_INDEX) {
-		throw InternalException("DECIDE tree: %s has no operand", tree.nodes[reducer]->text);
-	}
-	return operand;
-}
-
 idx_t DecideTreeMembersOf(const DecideTree &tree, idx_t reducer) {
 	while (true) {
-		const Expression *body = tree.nodes[DecideTreeOperand(tree, reducer)]->body.get();
+		const Expression *body = tree.nodes[tree.nodes[reducer]->operand]->body.get();
 		if (!body || body->GetExpressionClass() != ExpressionClass::BOUND_REF ||
 		    body->Cast<BoundReferenceExpression>().index < tree.input_column_count) {
 			return reducer;
@@ -73,9 +56,9 @@ namespace decide_tree_compile {
 static DecideTermSite Site(const DecideTree &tree, idx_t holder, idx_t child, idx_t qualifier_scope,
                            idx_t qualifier_reducer) {
 	DecideTermSite site;
-	site.node = child == DConstants::INVALID_INDEX ? holder : DecideTreeOperand(tree, child);
+	site.node = child == DConstants::INVALID_INDEX ? holder : tree.nodes[child]->operand;
 	if (qualifier_scope != DConstants::INVALID_INDEX) {
-		site.qualifier_operand = DecideTreeOperand(tree, qualifier_reducer);
+		site.qualifier_operand = tree.nodes[qualifier_reducer]->operand;
 	}
 	return site;
 }
@@ -111,7 +94,7 @@ static void SiteObjective(const DecideTree &tree, idx_t holder, DecideBody &body
 
 //! A G's or an O's members: computed on the G's operand, or on the O, which holds a frame's positions.
 static void SiteMembers(const DecideTree &tree, idx_t holder, DecideBody &body) {
-	const auto site = tree.nodes[holder]->kind == DecideNodeKind::FRAME ? holder : DecideTreeOperand(tree, holder);
+	const auto site = tree.nodes[holder]->kind == DecideNodeKind::FRAME ? holder : tree.nodes[holder]->operand;
 	body.linear.assign(body.members.size(), DecideTermSite {site});
 	body.fallback_sites.assign(body.fallback.size(), DecideTermSite {site});
 }
@@ -269,7 +252,7 @@ public:
 		if (node.kind != DecideNodeKind::REDUCER || node.decision_value || !node.function) {
 			return;
 		}
-		const auto operand = DecideTreeOperand(tree, index);
+		const auto operand = tree.nodes[index]->operand;
 		auto &operand_node = *tree.nodes[operand];
 		for (auto &argument : operand_node.arguments) {
 			operand_node.compiled.arguments.push_back(AddValue(operand, *argument, "a data reducer's argument"));

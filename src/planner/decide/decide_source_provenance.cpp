@@ -835,8 +835,8 @@ vector<DecideFunctionRow> CollectDecideFunctionRows(const DecideTree &tree, cons
 			for (idx_t r = 0; r < node.rows.size(); r++) {
 				const auto root = node.rows[r];
 				auto &clause = tree.nodes[root]->compiled.clause;
-				rows.push_back({tree.nodes[root]->origin.source_clause_id,
-				                RenderFunctionRow(*clause, decide_variables, ctx, indicator, r)});
+				rows.push_back(
+				    {clause->origin.source_clause_id, RenderFunctionRow(*clause, decide_variables, ctx, indicator, r)});
 			}
 		}
 	}

@@ -149,17 +149,21 @@ struct DecideNode {
 	//! Scalar algebra with each child's result replaced by its physical column, input_column_count + child. A
 	//! decision-valued result is a symbolic form; a scalar evaluator must not interpret it as an SQL value.
 	unique_ptr<Expression> body;
-	unique_ptr<Expression> rhs;
 	unique_ptr<Expression> fallback;
 	unique_ptr<Expression> over;
-	//! Every argument is retained: collated extrema have a value and comparison key.
+	//! A G's operand: every argument of its reducer is retained, since a collated extremum has a value and a
+	//! comparison key.
 	vector<unique_ptr<Expression>> arguments;
+	//! A G over data: the aggregate execution folds its operand's entries with.
 	unique_ptr<BoundAggregateExpression> function;
+	//! A G: its operand, the one SCOPE child that holds its members.
+	idx_t operand = DConstants::INVALID_INDEX;
 	//! An F node: the roots of the rows it owns, its children. An ABS's two lower-envelope rows, `aux >= operand` then
 	//! `aux >= -operand` (MakeAbsRow), which carry the operand per row to stage 06; an L0 indicator's link rows; the
 	//! one row that defines a definition's helper. Such a root's `parent` is the F node.
 	vector<idx_t> rows;
-	//! A G's reducer, and a range O's; no reader asks it of another node.
+	//! A G's reducer, where no definition holds it: a linked G's and a range O's are read from the definition and the
+	//! frame (DecideTree::ReducerOf).
 	DecideReducerKind aggregate = DecideReducerKind::SUM;
 	//! The helper definition (DecideTree::definitions) the node holds the value of: an F node's, or the one whose
 	//! helper a linked G or O defines. INVALID_INDEX for every other node.
@@ -172,8 +176,6 @@ struct DecideNode {
 	idx_t frame = DConstants::INVALID_INDEX;
 	//! A G node's relation-qualified scope, whose classes it reads at most once; INVALID_INDEX when unqualified.
 	idx_t qualifier_scope = DConstants::INVALID_INDEX;
-	DecideRowOrigin origin;
-	idx_t defined_var = DConstants::INVALID_INDEX;
 	bool root = false;
 	//! A clause root whose instances are its distinct sigmas over every class: classes whose rows agree on all they
 	//! read are one instance (language/guide.md §7.1). See DecideCanonicalizer::MergesClasses.
@@ -267,6 +269,13 @@ struct DecideTree {
 	//! The helper definitions (LogicalDecide::helper_definitions), one home for every reader: a node names its own by
 	//! `definition`.
 	vector<unique_ptr<DecideHelperDefinition>> definitions;
+	//! The reducer of a G or of a range O: a linked node's is its definition's, an O's its frame's.
+	DecideReducerKind ReducerOf(const DecideNode &node) const {
+		if (node.Linked()) {
+			return definitions[node.definition]->Cast<DecideReducerValueDefinition>().reducer;
+		}
+		return node.kind == DecideNodeKind::FRAME ? frames[node.frame].reducer : node.aggregate;
+	}
 	//! The definition a node holds the value of, null for a node that holds none.
 	const DecideHelperDefinition *Definition(const DecideNode &node) const {
 		return node.definition == DConstants::INVALID_INDEX ? nullptr : definitions[node.definition].get();
@@ -339,9 +348,6 @@ private:
 //! O holds its members); `record_nodes`: per record (LogicalDecide::bound_aggregates), its G.
 void CompileDecideTree(ClientContext &context, const LogicalDecide &op, DecideTree &tree,
                        const vector<idx_t> &definition_nodes, const vector<idx_t> &record_nodes);
-
-//! A G's operand: its one SCOPE child.
-idx_t DecideTreeOperand(const DecideTree &tree, idx_t reducer);
 
 //! The G whose operand entries `reducer`'s terms range over: `reducer` itself, or, while its operand's body is exactly
 //! a read of another G (a nest stage 05 reads inlined), that G. Such a G is over decisions with no helper: stage 05
