@@ -432,7 +432,8 @@ void decide_rewrite::ScopeRowPerInstance(const LogicalDecide &decide, BoundDecid
 	// window say the same.
 	if (scope.IsKeyed()) {
 		auto link = decide.bound.keyed_scopes[scope.keyed_scope_idx].value_link;
-		if (link != DConstants::INVALID_INDEX && decide.helper_definitions[link]->frame != DConstants::INVALID_INDEX) {
+		if (link != DConstants::INVALID_INDEX &&
+		    decide.helper_definitions[link]->Reducer().frame != DConstants::INVALID_INDEX) {
 			return;
 		}
 	}

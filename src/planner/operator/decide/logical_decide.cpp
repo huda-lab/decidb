@@ -8,6 +8,7 @@
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_decide_reducer_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
@@ -329,10 +330,20 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 	bound.EnumerateExpressions([&](unique_ptr<Expression> &expression) { callback(&expression); });
 	// A helper definition holds what a rewrite lifted out of the clauses, or copied beside them.
 	for (auto &definition : helper_definitions) {
-		for (auto *expr : {&definition->body, &definition->filter, &definition->when}) {
-			if (*expr) {
-				callback(expr);
+		if (definition->kind == DecideHelperKind::REDUCER_VALUE) {
+			// The reducer is the helper's definition and no reducer of a clause: a walk reads what it holds.
+			auto &reducer = definition->Reducer();
+			for (auto &child : reducer.children) {
+				callback(&child);
 			}
+			if (reducer.filter) {
+				callback(&reducer.filter);
+			}
+		} else if (definition->body) {
+			callback(&definition->body);
+		}
+		if (definition->when) {
+			callback(&definition->when);
 		}
 		for (auto &link : definition->links) {
 			link.EnumerateExpressions([&](unique_ptr<Expression> &expression) { callback(&expression); });
@@ -352,6 +363,10 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 	for (auto &expression : retained_expressions) {
 		callback(&expression);
 	}
+}
+
+BoundDecideReducerExpression &DecideHelperDefinition::Reducer() const {
+	return body->Cast<BoundDecideReducerExpression>();
 }
 
 idx_t LogicalDecide::HelperCount(DecideHelperKind kind) const {
@@ -434,9 +449,10 @@ void LogicalDecide::EnumerateBodies(const std::function<void(DecideOwnedBody &)>
 		case DecideHelperKind::REDUCER_VALUE: {
 			// A reducer value helper's body belongs to no clause: it is read on the rows its path and its own `when`
 			// keep.
-			DecideOwnedBody body(Owner::HELPER, i, definition.body);
+			auto &reducer = definition.Reducer();
+			DecideOwnedBody body(Owner::HELPER, i, reducer.children[0]);
 			body.push = ValueLinkPush(definition);
-			body.kept_rows = DecideRowsKeptByBoth(definition.when.get(), definition.filter.get());
+			body.kept_rows = DecideRowsKeptByBoth(definition.when.get(), reducer.filter.get());
 			body.rows = body.kept_rows.get();
 			callback(body);
 			break;

@@ -20,6 +20,7 @@
 #include "duckdb/planner/decide/decide_tree_nodes.hpp"
 
 namespace duckdb {
+class BoundDecideReducerExpression;
 
 //! One column of a key: a data expression and how it compares NULL.
 struct DecideKeyElement {
@@ -293,8 +294,9 @@ enum class DecideHelperKind : uint8_t {
 	//! keeps, and the tree builds that row beneath the F node (MakeDefinitionRow).
 	DEFINITION,
 	//! A decision reducer of a scoped comparison in the VALUE shape (CanonicalConstraintClass::VALUE), or a range frame
-	//! over decisions, replaced by the helper that holds `agg_name([when filter] [per K']: body) by (G)` over the rows
-	//! `when` keeps: one instance per G group of those rows, or per window of `frame`, defined once by stage 06 -- an
+	//! over decisions, replaced by the helper that holds the reducer (DecideHelperDefinition::Reducer) over the rows
+	//! `when` keeps: one instance per group of its path key among those rows, or per window of its frame, defined once
+	//! by stage 06 -- an
 	//! equality row per group for SUM/AVG, an extremum link per group for MIN/MAX. One per reducer over one set of
 	//! rows, shared by every row that reads it; its definition belongs to no clause (owner ruling B10), so a DROP of a
 	//! reading clause leaves it and DIAGNOSE reads it as part of the fixed model.
@@ -312,9 +314,8 @@ struct DecideHelperDefinition {
 	//! The helper decision, an index into the decisions. INVALID_INDEX for a PRODUCT.
 	idx_t helper = DConstants::INVALID_INDEX;
 	//! What the helper stands for: an ABS's operand (recorded once the bodies are final, RecordAbsOperands), a
-	//! PRODUCT's expansion, a DEFINITION's body, a REDUCER_VALUE's member -- `e` as bound, the ABS and bilinear
-	//! rewrites applied; with a `frame`, the payload at the rows a window reads. Null for a BOOLEAN_PRODUCT and an
-	//! L0_INDICATOR.
+	//! PRODUCT's expansion, a DEFINITION's body, a REDUCER_VALUE's reducer (Reducer). Null for a BOOLEAN_PRODUCT and
+	//! an L0_INDICATOR.
 	unique_ptr<Expression> body;
 	//! The rows the construct is read on: the `when` its clause keeps that also passes the `when` of each reducer
 	//! around it. Null for every row.
@@ -347,15 +348,19 @@ struct DecideHelperDefinition {
 	//! DEFINITION: how the helper compares with its body (`=`, `>=` or `<=`).
 	ExpressionType relation = ExpressionType::INVALID;
 
-	//! REDUCER_VALUE: "sum", "avg", "min" or "max".
+	//! REDUCER_VALUE: the reducer `body` is, as written where the helper stands. Its argument is the helper's member
+	//! -- `e` as bound, the reducers inside it helpers, the ABS and bilinear rewrites applied -- which EnumerateBodies
+	//! hands out with its `when`; its `per` is the key scope whose classes it counts once. With a `frame` it is the
+	//! range's marker (DecideOptimizer::RewriteFrameRanges): the helper has one instance per window of the frame, its
+	//! members the payload at the rows the window reads and, with an `else`, the `else` at the window's anchor once
+	//! per missing position (the O's DecideBody::members and fallback, LowerDecideTree).
+	BoundDecideReducerExpression &Reducer() const;
+	//! REDUCER_VALUE: "sum", "avg", "min" or "max": the reducer's function, or its frame's (DecideFrameSpec::reducer).
 	string agg_name;
-	//! REDUCER_VALUE: the reducer's own `when`, or null.
-	unique_ptr<Expression> filter;
-	//! REDUCER_VALUE: its own `per K'`, the key scope whose classes it counts once; INVALID_INDEX for per row.
-	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
-	//! REDUCER_VALUE: its path key (language/guide.md §5.5), into `keys`: every enclosing reducer's `by` key and its
-	//! own; INVALID_INDEX for `by ()` throughout, every kept row.
-	idx_t group_key = DConstants::INVALID_INDEX;
+	//! REDUCER_VALUE: the key the helper has one instance per among the rows `when` keeps, into `keys`: the reducer's
+	//! path key (language/guide.md §5.5), every enclosing reducer's `by` key and its own. INVALID_INDEX for `by ()`
+	//! throughout, every kept row, and for a frame's, whose instances are its windows.
+	idx_t path_key = DConstants::INVALID_INDEX;
 	//! REDUCER_VALUE: the sides that pin the helper, read from the way the clause pushes it and joined over the rows
 	//! that share it; both when the sign of its factor is not known before the query runs or the comparison is `=` or
 	//! `<>`. MIN/MAX: the extremum link's envelope and closing sides (ExtremumLinkSpec). SUM/AVG: `value >= members`
@@ -365,11 +370,6 @@ struct DecideHelperDefinition {
 	//! REDUCER_VALUE: the clause's `per` key (into `keys`, INVALID_INDEX for `per ()`), DECIDE_ROW_KEY for a clause
 	//! with none.
 	idx_t class_key = DECIDE_ROW_KEY;
-	//! REDUCER_VALUE: a range frame over decisions (index into `frames`; DecideOptimizer::RewriteFrameRanges): the
-	//! helper has one instance per window of the frame, its members `body` at the rows the window reads and, with an
-	//! `else`, its `else` at the window's anchor once per missing position (the O's DecideBody::members and fallback,
-	//! LowerDecideTree). INVALID_INDEX for a reducer, whose groups are its path key's.
-	idx_t frame = DConstants::INVALID_INDEX;
 };
 
 //! One expression the optimizer reads or rewrites, with what its owner says about it (LogicalDecide::EnumerateBodies).

@@ -138,41 +138,40 @@ vector<ReducerSite> CollectReducerSites(ClientContext &context, const BooleanDec
 	return sites;
 }
 
-//! The helper decisions allocated so far, each with the reducer it holds as written (the
-//! alias carries its `by` key and qualifier). One reducer over one set of rows is one
-//! helper, however many rows read it: an ABS splits a clause into an envelope pair, each
-//! row holding a copy of the reducer, and two helpers pinned on different sides would let
-//! the pair drift apart; two clauses holding the same reducer (`x <= 0.5 * sum(x) AND
-//! x >= 0.1 * sum(x)`) say the same thing twice. The definition belongs to no clause
-//! (owner ruling B10): it is part of the fixed model, so a DROP of a clause that reads the
-//! helper leaves it, and an equality on a helper nothing else reads always holds.
+//! The pass's access to the helper decisions made so far (LogicalDecide::helper_definitions), each holding its
+//! reducer as written. One reducer over one set of rows is one helper, however many rows read it: an ABS splits a
+//! clause into an envelope pair, each row holding a copy of the reducer, and two helpers pinned on different sides
+//! would let the pair drift apart; two clauses holding the same reducer (`x <= 0.5 * sum(x) AND x >= 0.1 * sum(x)`)
+//! say the same thing twice. The definition belongs to no clause (owner ruling B10): it is part of the fixed model,
+//! so a DROP of a clause that reads the helper leaves it, and an equality on a helper nothing else reads always
+//! holds.
 struct Helpers {
 	ClientContext &context;
 	LogicalDecide &decide;
-	vector<unique_ptr<Expression>> reducers; //!< each helper's reducer, as written
-	vector<idx_t> links;                     //!< parallel: its link, into decide.helper_definitions
 
 	//! The class key of a clause: its `per` key, DECIDE_ROW_KEY with no `per`.
 	static idx_t ClassKeyOf(const DecideClauseScope &scope) {
 		return scope.HasPer() ? scope.class_key : DECIDE_ROW_KEY;
 	}
 
-	//! The link holding `agg` as a clause of class key `class_key` reads it over `rows`, grouped by `group_key` -- its
+	//! The link holding `agg` as a clause of class key `class_key` reads it over `rows`, grouped by `path_key` -- its
 	//! path's (language/guide.md §5.5) --, or INVALID_INDEX. A helper is a reducer's value over the rows its path
 	//! keeps, one per group of its path key, so what it stands for is the reducer (DecideExpressionsEqual, which
-	//! ignores aliases, where a reducer's `by` and `per` tags live), that path key, the key scope of its own `per`, the
-	//! rows and the clause's `per` key. Clauses that agree on all five share one helper, however they spell the
-	//! reducer. Other links -- a range frame's (RewriteFrameRanges) -- stand among these.
-	idx_t Find(const BoundDecideReducerExpression &agg, const Expression *rows, idx_t group_key,
-	           idx_t class_key) const {
-		const idx_t qualifier = agg.per;
-		for (idx_t i = 0; i < reducers.size(); i++) {
-			auto &link = *decide.helper_definitions[links[i]];
+	//! leaves out its `per` and tells a range frame's marker, RewriteFrameRanges, from a reducer), the key scope of
+	//! its own `per`, that path key, the rows and the clause's `per` key. Clauses that agree on all five share one
+	//! helper, however they spell the reducer.
+	idx_t Find(const BoundDecideReducerExpression &agg, const Expression *rows, idx_t path_key, idx_t class_key) const {
+		for (idx_t i = 0; i < decide.helper_definitions.size(); i++) {
+			auto &link = *decide.helper_definitions[i];
+			if (link.kind != DecideHelperKind::REDUCER_VALUE) {
+				continue;
+			}
+			auto &held = link.Reducer();
 			// A clause's rows carry copies of its `when`: the same condition.
 			const bool same_rows = rows ? link.when && DecideExpressionsEqual(*link.when, *rows) : !link.when;
-			if (DecideExpressionsEqual(*reducers[i], agg) && link.group_key == group_key &&
-			    link.qualifier_scope_idx == qualifier && same_rows && link.class_key == class_key) {
-				return links[i];
+			if (DecideExpressionsEqual(held, agg) && held.per == agg.per && link.path_key == path_key && same_rows &&
+			    link.class_key == class_key) {
+				return i;
 			}
 		}
 		return DConstants::INVALID_INDEX;
@@ -276,12 +275,8 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	link->agg_name = agg_name;
 	// Its columns are named by the reducer it holds, `by` included: a refusal's remedy bounds that (F6).
 	link->label = plan_label;
-	link->group_key = group_key;
-	link->qualifier_scope_idx = agg.per;
-	link->body = agg.children[0]->Copy();
-	if (agg.filter) {
-		link->filter = agg.filter->Copy();
-	}
+	link->path_key = group_key;
+	link->body = agg.Copy();
 	link->when = std::move(rows);
 	link->class_key = class_key;
 	link->need_envelope = need_envelope;
@@ -292,8 +287,6 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	KeyedScopeInfo scope;
 	scope.key = group_key;
 	link_idx = AddValueHelper(decide, std::move(link), scope, whole, source_clause_id, account_kind);
-	helpers.reducers.push_back(agg.Copy());
-	helpers.links.push_back(link_idx);
 	ReplaceWithDecision(helpers.context, decide, decide.helper_definitions[link_idx]->helper, *site.slot);
 }
 
@@ -491,7 +484,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	const BooleanDecisions booleans {decide.decide_index, decide.bound.is_boolean_var};
 	auto names = DecidePlanNames(decide.bound.source_text, decide.bound.keyed_scopes, decide.bound.keys,
 	                             decide.decide_index, decide.aux_var_expressions, decide.bound.frames);
-	Helpers helpers {optimizer.context, decide, {}, {}};
+	Helpers helpers {optimizer.context, decide};
 
 	// A Boolean factor on a reducer (`b * sum(x)`, canonicalization admits no other decision) is now a product with
 	// the helper. The bilinear rewrite ran before this pass, so it never saw the product: this hands it over, through

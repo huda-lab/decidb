@@ -44,8 +44,12 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 // ---------------------------------------------------------------------------
 
 bool decide_rewrite::BilinearReadsBody(const LogicalDecide &decide, const DecideOwnedBody &body) {
-	return body.owner != DecideOwnedBody::Owner::HELPER ||
-	       decide.helper_definitions[body.index]->frame == DConstants::INVALID_INDEX;
+	if (body.owner != DecideOwnedBody::Owner::HELPER) {
+		return true;
+	}
+	auto &definition = *decide.helper_definitions[body.index];
+	return definition.kind != DecideHelperKind::REDUCER_VALUE ||
+	       definition.Reducer().frame == DConstants::INVALID_INDEX;
 }
 
 void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {

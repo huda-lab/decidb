@@ -126,9 +126,10 @@ public:
 			if (link.kind != DecideHelperKind::REDUCER_VALUE) {
 				continue;
 			}
-			ExtractLinearTerms(*link.body, link_terms[l]);
-			if (link.frame != DConstants::INVALID_INDEX) {
-				AppendFallbackTerms(link.frame, one, 1, link_fallbacks[l]);
+			auto &reducer = link.Reducer();
+			ExtractLinearTerms(*reducer.children[0], link_terms[l]);
+			if (reducer.frame != DConstants::INVALID_INDEX) {
+				AppendFallbackTerms(reducer.frame, one, 1, link_fallbacks[l]);
 			}
 		}
 
@@ -510,7 +511,7 @@ private:
 			}
 			LowerFrames(link_terms[l]);
 			LowerFrames(link_fallbacks[l]);
-			LowerFrames(op.helper_definitions[l]->filter);
+			LowerFrames(op.helper_definitions[l]->Reducer().filter);
 			LowerFrames(op.helper_definitions[l]->when);
 		}
 	}

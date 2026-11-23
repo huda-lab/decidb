@@ -627,12 +627,13 @@ private:
 				for (auto &link : op.helper_definitions) {
 					if (link->kind == DecideHelperKind::REDUCER_VALUE && copy.decision == link->helper) {
 						copy.decision = DConstants::INVALID_INDEX;
-						if (link->frame == DConstants::INVALID_INDEX) {
+						const idx_t frame = link->Reducer().frame;
+						if (frame == DConstants::INVALID_INDEX) {
 							copy.kind = DecideSignatureFieldKind::BY_KEY;
-							copy.key = link->group_key;
+							copy.key = link->path_key;
 						} else {
 							copy.kind = DecideSignatureFieldKind::FRAME;
-							copy.frame = link->frame;
+							copy.frame = frame;
 						}
 						break;
 					}
@@ -1061,8 +1062,9 @@ private:
 			return definition_nodes[link_index];
 		}
 		auto &link = *op.helper_definitions[link_index];
-		if (link.frame != DConstants::INVALID_INDEX) {
-			auto index = Frame(link.frame, nullptr, link.body.get());
+		auto &reducer = link.Reducer();
+		if (reducer.frame != DConstants::INVALID_INDEX) {
+			auto index = Frame(reducer.frame, nullptr, reducer.children[0].get());
 			definition_nodes[link_index] = index;
 			auto &node = *tree->nodes[index];
 			node.link = link_index;
@@ -1071,7 +1073,7 @@ private:
 			node.value_link_clause = link.origin.source_clause_id;
 			node.value_link_needs_envelope = link.need_envelope;
 			node.value_link_needs_closing = link.need_closing;
-			node.qualifier_scope = link.qualifier_scope_idx;
+			node.qualifier_scope = reducer.per;
 			node.decision_value = true;
 			if (link.helper < tree->value_nodes.size()) {
 				tree->value_nodes[link.helper] = index;
@@ -1088,8 +1090,8 @@ private:
 		node.value_link_clause = link.origin.source_clause_id;
 		node.value_link_needs_envelope = link.need_envelope;
 		node.value_link_needs_closing = link.need_closing;
-		node.qualifier_scope = link.qualifier_scope_idx;
-		node.key = link.group_key;
+		node.qualifier_scope = reducer.per;
+		node.key = link.path_key;
 		node.text = link.label;
 		node.decision_value = true;
 		Gates(index, link.when.get());
@@ -1100,16 +1102,14 @@ private:
 		Edge(index, operand);
 		auto &entry = *tree->nodes[operand];
 		entry.text = node.text + " operand";
-		Gates(operand, link.filter.get());
-		if (link.qualifier_scope_idx < op.bound.keyed_scopes.size()) {
-			entry.key = op.bound.keyed_scopes[link.qualifier_scope_idx].key;
+		Gates(operand, reducer.filter.get());
+		if (reducer.per < op.bound.keyed_scopes.size()) {
+			entry.key = op.bound.keyed_scopes[reducer.per].key;
 			entry.per = entry.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
 		}
-		if (link.body) {
-			entry.body = Lower(operand, *link.body);
-		}
-		if (link.qualifier_scope_idx < op.bound.keyed_scopes.size()) {
-			Qualified(operand, link.qualifier_scope_idx);
+		entry.body = Lower(operand, *reducer.children[0]);
+		if (reducer.per < op.bound.keyed_scopes.size()) {
+			Qualified(operand, reducer.per);
 		}
 		return index;
 	}

@@ -166,8 +166,7 @@ public:
 		auto link = make_uniq<DecideHelperDefinition>(DecideHelperKind::REDUCER_VALUE);
 		link->agg_name = spec.reducer;
 		link->label = spec.spelling;
-		link->body = marker.children[0]->Copy();
-		link->frame = frame;
+		link->body = marker.Copy();
 		link->need_envelope = need_envelope;
 		link->need_closing = need_closing;
 		// One instance per window: a timeline, or a position on one. The key names the instances; execution numbers

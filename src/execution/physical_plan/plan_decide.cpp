@@ -184,7 +184,8 @@ static void NameInputColumns(DecideDisplay &display, const DecideTree &tree, Log
 		if (link->kind != DecideHelperKind::REDUCER_VALUE) {
 			continue;
 		}
-		for (auto *expr : {link->body.get(), link->filter.get(), link->when.get()}) {
+		auto &reducer = link->Reducer();
+		for (auto *expr : {reducer.children[0].get(), reducer.filter.get(), link->when.get()}) {
 			if (expr) {
 				harvest(*expr);
 			}
