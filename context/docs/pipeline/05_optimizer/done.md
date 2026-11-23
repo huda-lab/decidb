@@ -111,7 +111,7 @@ backend.
 ### The model-class gate
 
 `RequireDecideSolverSupport` (`decide_solver_gate.cpp`) runs once the prepared linear
-form exists — right after `LowerDecideTree`, the first point at which every
+form exists — right after the lowering walk (`DecideTreeConstruction`), the first point at which every
 constraint's shape and the objective are settled. It compares what the query demands
 against what the chosen backend declares.
 
@@ -269,13 +269,13 @@ graph by binding, not by body; folding looks a link up by its helper; the tree-s
 solver gate read the tree, not the containers; and `RewriteInDomain`, `RewriteMinMax` and folding loop over the clause records, because they read or write a
 record's fields and not only its body.
 
-A later stage-05 lowering, `LowerDecideTree`, belongs to this stage but is
-**triggered during physical planning** — see §1a. It lowers each `REDUCER_VALUE` definition's body
+A later stage-05 lowering, `DecideTermLowering`, belongs to this stage but is
+**run during physical planning**, as the term half of the one lowering walk — see §1a. It lowers each `REDUCER_VALUE` definition's body
 into its helper's G or O.
 
 ---
 
-## 1a. Linear-form flattening — `LowerDecideTree`
+## 1a. Linear-form flattening — `DecideTermLowering`
 
 Turns each canonical comparison and the objective into additive terms:
 `sign * coefficient * variable`, and product groups for the terms of degree 2. This is where DECIDE does its linear
@@ -284,8 +284,10 @@ chains, pushing a divisor into every produced coefficient, folding unary minus,
 stripping binder casts, and multiplying a peeled reducer scale into everything the
 reducer produced.
 
-The output goes into the tree under construction (`DecideTreeConstruction`), not into a model of its own: each
-clause's `DecideConstraint` into the root the tree made of its comparison (`TakeClause`; a folded bound's into its
+One walk lowers a clause once (`DecideTreeConstruction`): it makes the clause's nodes, then hands the same canonical
+clause and its facts to the term half (`DecideTermLowering`: `Clause`, `Objective`, `Members`, `Frames`), which the
+walk owns. The output goes into the tree under construction, not into a model of its own: each
+clause's `DecideConstraint` into the root the walk made of its comparison (a folded bound's into its
 folded root), the optional `DecideObjective` into the objective's root, each helper's terms
 into its G or O, and the frame columns they read into `DecideTree::frame_reads`. So every construct reaches execution
 as lowered terms rather than one path re-deriving its own, and the solver gate reads its model class off the same

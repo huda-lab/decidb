@@ -159,8 +159,10 @@ three steps, where column bindings are final (`plan_decide.cpp:224`):
   and the checks that they agree. [read] 81 internal errors in the three construction files.
 - Kept, because they serve more than the join: the term splitter (three rewrites and the direct rules use it),
   like-term collection, the frame-column registry, and the order of rows the model dumps record.
-- `DecideNode` loses its copies of plan facts and its unread fields, then is split by kind. [read] 60 fields today:
-  20 common, 9 for E, 3 for O, 13 for F, the rest shared by two kinds.
+- `DecideNode` holds no copy of a plan fact and no unread field: the tree holds the helper definitions and a node
+  names its own by index. [read] 38 fields, 13 of them of one kind (5 for E, 4 for G, 3 for O, 1 for F). It stays one
+  struct: `Validate` holds two cross-kind checks, and a class per kind would trade them for a cast at each read of
+  those 13 fields in the three execution files.
 - Programs, layouts, containers and the three execution files do what they do today.
 
 #### 3.2.5 The tree is built once
@@ -284,7 +286,7 @@ goes with the later one.
 | TREE-5 | `FRAME_`, `FRAME_TIGHTEST_BOUND` | the reducer's `frame` field; the clause field `tightest_frame_bound` |
 | TREE-5 | `FRAME_AGGREGATE_` | the data reducer's `frame_aggregate` field, naming its `frame_aggregates` record; the lowered column holds it as `DecideFrameColumn::aggregate` |
 | TREE-6 | `ABS_FUNCTION_`, `ABS_FUNCTION_NEG_`, `BILINEAR_FUNCTION_GROUP_`, `L0_INDICATOR_FUNCTION_`, `DEFINITION_FUNCTION_`, `BODY_DEFINITION`, `L0_AUTO_BOUND`, `L0_WRITTEN_BOUND`, `L0_TOLERANCE` | on a kept call: `BoundFunctionExpression::definition`, a typed reference to its entry of `helper_definitions`. On a row: the clause field `helper_row`; an L0 bound is automatic or written by its definition's `auto_m` |
-| TREE-7 | `FRAME_COLUMN` | the lowering walk, which owns the frame-column registry and makes the references † . The reference is a `BoundReferenceExpression` DuckDB's executor reads, with no field and no frame node to hold an index; its index range is shared with the tree's child reads, and DuckDB's resolver names ordinary references by the bare column name, so a name is not display text |
+| TREE-7 | `FRAME_COLUMN` | nothing: the render of a physical plan reads the source's column count (`DecideSourceNames::source_columns`), and a reference past it, a column the tree computes, prints its name as written |
 | TREE-8 | `NULL_GUARD` | a term's fact, applied when its program is compiled; the direct front end is its second writer † |
 | TREE-9 | the seven helper name prefixes (`ABS_AUX_NAME_`, `VALUE_LINK_NAME_`, …) | none: [read] no code reads a helper's origin from its name. They stay as display names and leave the tag list with the name refusal |
 
@@ -396,7 +398,7 @@ Cleaning this code before the phase that replaces it is work done twice.
 
 | What the review found | Replaced by |
 |---|---|
-| Each clause is lowered twice at planning (`DecideTreeConstruction` and `LowerDecideTree`), joined by expression address; 82 internal cross-checks | Phase 5: the rewrites produce the tree |
+| Each clause was lowered twice at planning, the two joined by expression address; 82 internal cross-checks | Phase 5: the rewrites produce the tree |
 | One AND expression for all clauses, with `when` and `per` as tagged conjunctions | Phase 5: the clause record (ARCH-1) |
 | `norm` bound as a `SUM` with a patched return type; a frame as a tagged aggregate guarded at 28 sites | Phase 5: node classes |
 | `DecideNode` is one struct of 67 fields; `DecideTree::Validate` has complexity 142 | Phase 5: nodes split by kind |

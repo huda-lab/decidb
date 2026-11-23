@@ -84,7 +84,7 @@ innermost first, so a definition reads only helpers of definitions before it. Ev
 |---|---|---|---|---|
 | `ABS` | `abs(e)` over a decision, kept where it is written | the decision that stands for `abs(e)` | the operand | `exact`, `scope` |
 | `PRODUCT` | a written product of two forms over decisions, kept where it is written | none | its expansion: the product distributed over its factors' terms, each product with a Boolean factor read as that `BOOLEAN_PRODUCT`'s helper | — |
-| `BOOLEAN_PRODUCT` | a product of two decisions, one of them Boolean | the decision that stands for the product | none | `first_factor`, `second_factor` |
+| `BOOLEAN_PRODUCT` | a product of two decisions, one of them Boolean | the decision that stands for the product | none | `bool_factor`, `other_factor` (the Boolean decision and the other) |
 | `L0_INDICATOR` | one counted row of `norm(e, 0)` | the indicator | none | `links` (its three rows, clause records), `m`, `auto_m` |
 | `DEFINITION` | a reducer's nonlinear body, kept where it is written | the decision the reducer reads in its place | the body | `relation` |
 | `REDUCER_VALUE` | a decision reducer the value rewrite or a range frame replaced by a helper | the decision that holds its value | the reducer node (`Reducer()`), held once | `agg_name`, `path_key`, `class_key`, `push` |
@@ -142,12 +142,12 @@ innermost first, so a definition reads only helpers of definitions before it. Ev
    obligations of a class for them. `TryGetDecideFrame` (`decide_reducer_path.hpp`) is the one test: the class and the
    field. A frame column is another class, a `BoundReferenceExpression` the lowering makes, so the two are not
    confused.
-4. *A reference to a frame column keeps a mark on its alias* (`FRAME_COLUMN_TAG`): its name is the frame as written,
-   which a message prints as it stands and not as an identifier. The reference is a chunk column DuckDB's executor
-   reads, a `BoundReferenceExpression`, which has no field for the fact. Its index does not tell it either (the tree's
-   child reads are named references in the same range), and a name cannot be display text for every reference:
-   DuckDB's `ColumnBindingResolver` makes the ordinary ones with the column's bare name, which
-   `NameInputColumns` (`plan_decide.cpp`) reads as an identifier.
+4. *A reference to a frame column is told by its position, with no mark*: its name is the frame as written, which a
+   message prints as it stands and not as an identifier. The reference is a chunk column DuckDB's executor reads, a
+   `BoundReferenceExpression`, which has no field for the fact. A source column's reference, which DuckDB's
+   `ColumnBindingResolver` makes with the column's bare name, lies below the source's column count, and every column
+   the tree computes lies past it, so the render of a physical plan reads the count
+   (`DecideSourceNames::source_columns`, set by `PhysicalDecide::Names`) and prints a name past it as written.
 - `src/execution/column_binding_resolver.cpp` — the `LOGICAL_DECIDE` case
 - `src/execution/physical_plan/plan_decide.cpp` — logical → physical
 
@@ -310,7 +310,7 @@ never serialized), and the folded variable box. A `REDUCER_VALUE` entry of `help
 rewrite's helper decision, one per reducer over one set of rows, shared by every clause that reads it: it holds the
 reducer the helper replaced (the node, with its own `when` and `per`), its path key (its `by` key under every enclosing
 one), its SQL as a label, the rows its path keeps, and the way its readers push it; its body's terms are lowered into
-its node's `DecideBody::members` (`LowerDecideTree`); every MIN or MAX over decisions is one.
+its node's `DecideBody::members` (`DecideTermLowering::Members`); every MIN or MAX over decisions is one.
 
 `optimized` marks the boundary between the first two groups and the third. It is
 set before the optimizer's first rewrite and is what takes this plan off the wire —

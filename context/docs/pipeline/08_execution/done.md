@@ -133,9 +133,10 @@ columns in a scan of their own.
   splits from the written conditions into `DecideNode::member_tests`) is
   a member test that carries its columns and adds no σ field. A root in the grouped shape (the aggregate shape, an
   easy extremum) with no `per` is a class of its `by` key (`language/guide.md` §6.4). A root's text is
-  its clause as written. Stage 05 then lowers each clause into the root the tree made of its comparison, the objective
-  into its root and each helper's terms into its G or O (`LowerDecideTree`, one IR: the records
-  stage 08 reads are the ones it writes), naming on each reducer's terms the G they range over (`DecideTerm::child`);
+  its clause as written. The same walk hands each clause, as its root is made, to stage 05's term half, which lowers it
+  into that root, the objective into its root and each helper's terms into its G or O (`DecideTermLowering`, one IR:
+  the records stage 08 reads are the ones it writes), naming on each reducer's terms the G they range over
+  (`DecideTerm::child`, read from the walk's map of the clause in hand);
   the solver gate reads the model class off them; then `decide_tree_compile.cpp` numbers the clause roots, finds the
   node each term is computed on, and compiles each coefficient, bound, admitted end and member test into a program over
   that node's layout, by the rules of `ToChunkReferences`: its carried columns, then the program columns its programs
@@ -312,7 +313,7 @@ columns in a scan of their own.
   none reads no helper, so what reads it there skips its instance. The definitions and the helpers' classes are read in
   the tree's order, which puts what defines a decision before what reads it, a helper no clause reads but through a
   product's auxiliary included (its root of its own). A member's message names the clause that first read the helper, as
-  written (`value_link_clause`). A helper's rows are read where its classes are built, before any clause: the rows its
+  written (its definition's `origin`). A helper's rows are read where its classes are built, before any clause: the rows its
   path keeps (the reading clause's `when`), its reducer's `when` and its members' NULL tests, then its `by` key on every
   row the path keeps. They are read there, in the order of the keyed mappings: every scope in turn, a helper's
   after the definitions of the auxiliaries its members read, then every auxiliary's definitions. The declared scopes
@@ -368,7 +369,13 @@ definitions their F nodes in one loop over `LogicalDecide::helper_definitions`, 
 any body is lowered (`RegisterHelperDefinitions`; declare, then define): an ABS, a Boolean product, an L0 indicator
 and a definition each get one, found by the entry's index (`definition_nodes`). A `PRODUCT` is read where it is kept,
 as its expansion, and a `REDUCER_VALUE` gets its G or O where it is first read (`Link`). The rows the definitions own
-(an L0 indicator's links, an ABS's envelope rows) are rooted after the written clauses in the same order.
+(an L0 indicator's links, an ABS's envelope rows) are rooted after the written clauses in the same order. An F node
+holds those roots in one list (`DecideNode::rows`), and such a root's `parent` is its F node, set before the row is
+lowered so that the row reads its helper as a decision. The finished tree holds the definitions
+(`DecideTree::definitions`, moved from the plan as the frames are), and an F node or a linked G or O names its own by
+index (`DecideNode::definition`): the helper's kind, decision, label, origin, a product's factors and the way an
+extremum's readers push it are read there (`DecideTree::Definition`, `IsFunction`, `OwnedBy`, `ValueVar`), with no copy
+on the node.
 **What the emitter reads.** A node's body is its compiled term records (`DecideBody`, `DecideTerm`,
 `DecideTermSite`); the tree holds no second form of a clause. The E emitter takes a clause's comparison from the
 clause, its right-hand side from the body's RHS program, and each term's variable and coefficient program from the
@@ -558,7 +565,7 @@ excluded rows, since the derived bound is shared across all of a variable's rows
 ## 3. The lowered terms
 
 Execution does **not** flatten expressions. Each clause, the objective and each helper's reducer
-arrives in the tree node that holds it already decomposed into additive terms by `LowerDecideTree` (stage 05,
+arrives in the tree node that holds it already decomposed into additive terms by `DecideTermLowering` (stage 05,
 `src/optimizer/decide/decide_linear_form.cpp`), which writes them into the tree under construction at physical
 planning: a clause's `DecideConstraint` into its root's `DecideBody::clause`, the objective's into the objective
 root's, a helper's members into its G or O (`DecideBody::members`, `fallback`), and the frame
@@ -689,7 +696,8 @@ the `=` message a side table raises for a column; a group with none is marked in
 skipped. A row in no class of the clause's `per` key is not read at all, as `InClassOnly` keeps a column's from being
 read (D5). The value is taken last, just before `DecideAbsence::SkipNullInstances`, and only for a group the clause still holds: a group
 some rule dropped, or a NULL on its left side will, has no instance, so no bound and no `=` check (D68). Its frame
-columns print as the frame is written (`FRAME_COLUMN_TAG`).
+columns print as the frame is written: a column past the source's columns is named by its text
+(`DecideSourceNames::source_columns`).
 
 A reducer over data reading a frame (`DecideFrameColumn::Kind::AGGREGATE`, after every frame column) is computed once
 the frames' columns are computed (in column order, so one may read another): its G folds its operand's entries the

@@ -790,7 +790,7 @@ after the definition rows, so a sum or a Big-M the definition itself overflows n
 TOO_LARGE of a helper link names the clause that first read the helper as written: the refusal, the extremum link, a
 member or group sum past a DOUBLE (`LinearizeReducerValueLinks`), a member's constant (`DecideModelEmitter::ValueLinks`)
 and a member's computed coefficient (`DecideTreeColumns::Numbers`), through `ReducerValueLinkSpec::source_clause_id` or
-`DecideNode::value_link_clause` and `DecideWrittenClause` (the objective when none reads it), on both backends
+the helper definition's `origin` and `DecideWrittenClause` (the objective when none reads it), on both backends
 (`test_invalid_value_message.py`, `HELPER_SUMS`).
 
 ### Inlining a helper
