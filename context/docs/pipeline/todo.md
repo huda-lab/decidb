@@ -4,22 +4,6 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
 `decisions.md`. How to work and the checks: [`../direct_solve/framework/todo.md`](../direct_solve/framework/todo.md)
 § How to work any task in these todo files.
 
-## MODEL-4 — An aggregate root writes its records with no column between
-
-- **Problem.** An aggregate clause is read into columns over its kept rows (`EvaluatedClauseColumns`), sorted into
-  groups (`DecideClauseRowSets`) and copied into records (`DecideWriteClauseRecords`); a per-row clause writes its
-  records directly.
-- **Change.** A root E of an aggregate clause writes one record per group from its container, as `Rows` does per
-  kept row; `EvaluatedClauseColumns`, `DecideClauseRowSets` and `DecideWriteClauseRecords` are deleted with the row
-  loops of `decide_value_extraction.cpp` no reader is left for. A quadratic clause's product groups become terms of
-  its records, so `QuadraticClause::rows` and `data_rows` go. Evaluation stays vectorized (R23).
-- **Done when.** No file under `src/` names `row_group_ids` or `row_coefficients`; model goldens identical;
-  `./test/decide/run_tests.sh -k "scope or anr or when or per or bound or domain or diagnose"`;
-  `build/release/test/unittest "[decidb]"`; `context/opa_rewrite/repro/clauses_times_rows.sql` under
-  `DECIDB_PROFILE=1` no slower and no larger than the figures of `08_execution/done.md` § A clause is read over the
-  rows it keeps; `y <= v` alone over 1,000,000 rows no slower than 85 ms across `execution.tree_model`, implied
-  bounds and the builder's clause rows.
-
 ## MODEL-6 — Terms are split from the finished nodes
 
 - **Problem.** A reducer body is read twice at planning, once for its node and once for its coefficients, and four

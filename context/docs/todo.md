@@ -12,13 +12,10 @@ the owner rules first.
 
 # Phase 6 — The model is written at the nodes
 
-## 6.1 A record per group (one lane)
-- [ ] MODEL-4 An aggregate root writes records with no column between — pipeline/todo.md § MODEL-4
-
-## 6.2 One reading of a reducer body (one lane)
+## 6.1 One reading of a reducer body (one lane)
 - [ ] MODEL-6 Terms are split from the finished nodes — pipeline/todo.md § MODEL-6
 
-## 6.3 Gate (one lane; needs: 6.2)
+## 6.2 Gate (one lane; needs: 6.1)
 - [ ] MODEL-7 Phase 6 gate and docs — pipeline/todo.md § MODEL-7
 
 # Measurements (outside the phases; confirm each start with the owner)

@@ -896,6 +896,16 @@ read and is cleared after it (`Unplace`), so no clause allocates by input length
   its products.
 - **A clause that keeps no row emits no row** (D68), aggregate or per-row.
 
+**Why an aggregate clause is evaluated, grouped, then gathered.** The columns over the kept rows are the vectorized
+evaluation (R23), and the grouping is read from the tree's container slots, not computed again: the sets are one
+linear bucket pass. A record written straight from a reducer's container fits two of the five shapes below, since a
+term beside the reducers, a `per K:` class and a `when` with no key give a kept row a group no reducer's container
+holds. What the path decides is the language's rules (which rows emit a group, D68, `<>` reading every kept row), which
+a walk per group states again. An aggregate clause always holds a group for each kept row, so a clause that keeps
+nothing and a clause with one group are never the same state. A quadratic clause's product groups are columns over the
+same places (`QuadraticClause::rows`, `data_rows`): as lists of terms they take about three times the memory, and
+the objective's, dense over every row, would keep the columns, leaving the builder two readers.
+
 The records are `ClauseRecords` (`../06_model_formulation/done.md` § The rows a clause emits). Measured on
 `context/opa_rewrite/repro/clauses_times_rows.sql` (40 clauses over 2,000,000 rows, each keeping 2,000) against
 columns as long as the input: `execution.tree_model` 25 ms against 534 ms, implied bounds 0 ms against 181 ms, peak
@@ -925,7 +935,8 @@ clause reads:
 
 | Clause | `row_group_ids` | `num_groups` |
 |---|---|---|
-| no `when`, no reducer `when`, no `by`, no `per K:` over the rows shape | empty (fast path — all rows are one implicit group) | 0 |
+| aggregate shape, no `by`, no `when`, no reducer `when` | 0 on every kept row | 1 |
+| rows shape, no `when`, no `per K:` | empty: every kept row emits its own row and no class numbers them | 0 |
 | aggregate shape or easy MIN/MAX, `by (G)` | each row's `by` group, on the rows its reducers read (a kept row some reducer's own `when` keeps; every kept row for `<>`); `INVALID_INDEX` elsewhere | number of groups |
 | aggregate shape or easy MIN/MAX, `by ()`, with a `when` or a reducer's own `when` | 0 on the rows its reducers read, `INVALID_INDEX` elsewhere | 1 |
 | rows shape under `per K:` | the class id on each class's first kept row, `INVALID_INDEX` elsewhere | number of classes |

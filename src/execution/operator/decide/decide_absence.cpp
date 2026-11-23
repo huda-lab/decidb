@@ -89,10 +89,6 @@ void DecideAbsence::SkipEmptyReducers(const vector<const TermFilterState *> &fil
 	if (std::none_of(filters.begin(), filters.end(), filtered)) {
 		return;
 	}
-	if (row_group_ids.empty()) {
-		row_group_ids.assign(num_rows, 0);
-		num_groups = 1;
-	}
 	vector<bool> skipped(num_groups, false);
 	for (auto filter : filters) {
 		if (!filter->has_filter) {

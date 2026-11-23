@@ -56,8 +56,7 @@ public:
 	//! A reducer over no rows has no value, so in the aggregate shape a group in which some reducer reads no row has
 	//! no instance (p. 56). Only a reducer's term carries a filter (its own `when`, its NULL-data and absent-decision
 	//! tests, its de-duplication), so a term with none reads every row of its group. Applied before the group's bound
-	//! and terms are read, so nothing is read for a group that has no instance. `row_group_ids` empty is every row in
-	//! one group.
+	//! and terms are read, so nothing is read for a group that has no instance.
 	static void SkipEmptyReducers(const vector<const TermFilterState *> &filters, idx_t num_rows,
 	                              vector<idx_t> &row_group_ids, idx_t &num_groups);
 	//! A NULL that reaches a comparison unreduced makes that instance NULL, and a NULL instance is skipped (p. 50): in

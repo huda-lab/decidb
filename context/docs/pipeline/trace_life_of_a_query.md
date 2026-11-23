@@ -122,7 +122,7 @@ executed over the buffer, and cast once to `double`:
 - objective: `[-100, -60, -120]`, the term's sign applied
 
 The clause keeps all three rows, so each row's place is its row number. No `when`, `per` or `by`, so
-`row_group_ids` stays empty and `num_groups` is 0 — the fast path. Nothing is NULL, NaN or infinite. The clause emits one row, whose record holds the three terms
+every row is in the clause's one group: `row_group_ids` is `[0, 0, 0]` and `num_groups` is 1. Nothing is NULL, NaN or infinite. The clause emits one row, whose record holds the three terms
 `(x, row, weight)` and the bound 50.
 
 ## Stage 06 — Model formulation

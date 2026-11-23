@@ -271,10 +271,7 @@ void CountProductsOnce(const vector<DecideProductGroup> &groups, vector<Evaluate
 	}
 }
 
-vector<idx_t> FirstRowOfEachGroup(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t num_rows) {
-	if (row_group_ids.empty()) {
-		return num_rows > 0 ? vector<idx_t> {0} : vector<idx_t>();
-	}
+vector<idx_t> FirstRowOfEachGroup(const vector<idx_t> &row_group_ids, idx_t num_groups) {
 	vector<idx_t> first(num_groups, DConstants::INVALID_INDEX);
 	for (idx_t row = 0; row < row_group_ids.size(); row++) {
 		auto group = row_group_ids[row];
@@ -291,8 +288,8 @@ vector<idx_t> FirstRowOfEachGroup(const vector<idx_t> &row_group_ids, idx_t num_
 	return rows;
 }
 
-void CountTupleTermsOncePerGroup(const vector<DecideTerm> &terms, idx_t num_rows, EvaluatedClauseColumns &evaluated) {
-	auto counted = FirstRowOfEachGroup(evaluated.row_group_ids, evaluated.num_groups, num_rows);
+void CountTupleTermsOncePerGroup(const vector<DecideTerm> &terms, EvaluatedClauseColumns &evaluated) {
+	auto counted = FirstRowOfEachGroup(evaluated.row_group_ids, evaluated.num_groups);
 	for (idx_t term_idx = 0; term_idx < terms.size(); term_idx++) {
 		if (CountsOnce(terms[term_idx])) {
 			CountOnce(evaluated.row_coefficients[term_idx], counted);
@@ -302,7 +299,7 @@ void CountTupleTermsOncePerGroup(const vector<DecideTerm> &terms, idx_t num_rows
 
 idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t num_rows, bool grouped) {
 	if (row_group_ids.empty()) {
-		return grouped ? MinValue<idx_t>(num_rows, 1) : num_rows;
+		return num_rows;
 	}
 	if (!grouped) {
 		return NumericCast<idx_t>(std::count_if(row_group_ids.begin(), row_group_ids.end(),
@@ -331,17 +328,6 @@ ClauseRowSets DecideClauseRowSets(const EvaluatedClauseColumns &evaluated, idx_t
 			sets.begin.push_back(sets.rows.size());
 			sets.groups.push_back(groups.empty() ? DConstants::INVALID_INDEX : groups[row]);
 		}
-		return sets;
-	}
-	if (groups.empty()) {
-		// A clause that keeps no row holds no instance (D68).
-		if (num_rows == 0) {
-			return sets;
-		}
-		sets.rows.resize(num_rows);
-		std::iota(sets.rows.begin(), sets.rows.end(), idx_t(0));
-		sets.begin.push_back(num_rows);
-		sets.groups.push_back(DConstants::INVALID_INDEX);
 		return sets;
 	}
 	// A counting sort of the kept rows by group, then the groups that hold a row.
@@ -553,7 +539,8 @@ vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_row
 	} else {
 		grouped_instances = num_rows > 0;
 	}
-	if (!groups && (constraint.scope.when || has_local_filters)) {
+	if (!groups) {
+		// With no `by` key the rows that emit are one group.
 		evaluated.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
 		for (idx_t row = 0; row < num_rows; row++) {
 			evaluated.row_group_ids[row] = emitted(row) ? 0 : DConstants::INVALID_INDEX;
@@ -582,10 +569,6 @@ vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_row
 		}
 		grouped_instances = NumericCast<idx_t>(std::count(classed.begin(), classed.end(), true)) + classes.size() -
 		                    reaching_a_group.size();
-		if (evaluated.row_group_ids.empty() && !classed[0]) {
-			evaluated.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
-			evaluated.num_groups = 0;
-		}
 		for (auto *ids : {&evaluated.row_group_ids, kept_row_group_ids}) {
 			for (idx_t row = 0; ids && row < ids->size(); row++) {
 				if ((*ids)[row] != DConstants::INVALID_INDEX && !classed[group_of(row)]) {

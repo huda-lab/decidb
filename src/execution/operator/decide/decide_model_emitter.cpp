@@ -1282,11 +1282,10 @@ EmittedClause DecideModelEmitter::Groups(idx_t root, bool counted) {
 	if (keyed) {
 		Name(by, kept_groups, evaluated);
 	}
-	// The classes each group's row stands for, which a diagnosis reports one by one (D28). With no `by` key no group
-	// numbers the kept rows, and a clause with no groups is one group of every kept row.
+	// The classes each group's row stands for, which a diagnosis reports one by one (D28).
 	if (tree.diagnose) {
 		evaluated.group_class_set = DecideGroupClassSets(
-		    clause.scope, result.rows, kept_row_group_ids, evaluated.row_group_ids.empty() ? 1 : evaluated.num_groups,
+		    clause.scope, result.rows, kept_row_group_ids, evaluated.num_groups,
 		    [&](vector<idx_t> &class_ids, vector<GroupName> &class_names) {
 			    KeyClasses(root, rows, class_ids, class_names);
 		    },
@@ -1301,7 +1300,7 @@ EmittedClause DecideModelEmitter::Groups(idx_t root, bool counted) {
 	// A decision beside the reducers counts once in each group's row; an easy MIN's or MAX's rows are its members',
 	// whose terms stage 05 reads as written on each.
 	if (clause.lhs_is_aggregate) {
-		CountTupleTermsOncePerGroup(clause.lhs_terms, kept, evaluated);
+		CountTupleTermsOncePerGroup(clause.lhs_terms, evaluated);
 	}
 	const auto bound_null = GroupBound(root, rows, null_rows, result);
 	if (clause.admitted_lower) {
@@ -1378,10 +1377,9 @@ vector<bool> DecideModelEmitter::GroupBound(idx_t root, const vector<pair<idx_t,
 	}
 	if (excludes) {
 		// A group none of whose rows has a bound excludes nothing: its instance has no value.
-		const auto groups = evaluated.row_group_ids.empty() ? idx_t(1) : evaluated.num_groups;
-		vector<bool> bounded(groups, false);
+		vector<bool> bounded(evaluated.num_groups, false);
 		auto group_of = [&](idx_t row) {
-			return evaluated.row_group_ids.empty() ? idx_t(0) : evaluated.row_group_ids[row];
+			return evaluated.row_group_ids[row];
 		};
 		for (idx_t row = 0; row < kept; row++) {
 			const auto group = group_of(row);

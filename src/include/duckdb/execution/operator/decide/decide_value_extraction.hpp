@@ -127,12 +127,12 @@ struct EvaluatedClauseColumns : EvaluatedConstraint {
 	//! size 0 for any other constraint.
 	CoefficientColumn admitted_lower;
 	CoefficientColumn admitted_upper;
-	//! Row→group mapping: the clause's `by` groups, classes or kept rows.
-	//! Empty = all rows in one implicit group (fast path: no `when`, no key)
-	//! DConstants::INVALID_INDEX = row excluded (dropped by the `when`, or outside its group)
-	//! 0..K-1 = group assignment
+	//! Each kept row's group, 0..num_groups-1: the clause's `by` groups or classes, or the one group of a clause with
+	//! neither. DConstants::INVALID_INDEX = row excluded (outside every group, or its instance has no value).
+	//! An aggregate clause always holds one entry per kept row. A per-row clause leaves it empty where every kept
+	//! row emits and no class numbers its rows.
 	vector<idx_t> row_group_ids;
-	idx_t num_groups = 0; // 0 = ungrouped, >0 = number of distinct groups
+	idx_t num_groups = 0;
 };
 
 //! The kept rows of each row a clause emits, by place, rows[begin[e] .. begin[e + 1]), and its group: a group of an
@@ -157,15 +157,14 @@ void DecideWriteClauseRecords(EvaluatedClauseColumns &evaluated, const ClauseRow
 void CountProductsOnce(const vector<DecideProductGroup> &groups, vector<EvaluatedProductGroup> &evaluated,
                        const vector<bool> *kept, idx_t num_rows);
 
-//! The first row of each group of a clause in the aggregate shape: every row for `row_group_ids` empty (one group),
-//! none for a group with no row.
-vector<idx_t> FirstRowOfEachGroup(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t num_rows);
+//! The first row of each group of a clause in the aggregate shape, none for a group with no row.
+vector<idx_t> FirstRowOfEachGroup(const vector<idx_t> &row_group_ids, idx_t num_groups);
 
 //! A clause's terms outside its reducers in the aggregate shape, counted on the first row of each of its groups.
-void CountTupleTermsOncePerGroup(const vector<DecideTerm> &terms, idx_t num_rows, EvaluatedClauseColumns &evaluated);
+void CountTupleTermsOncePerGroup(const vector<DecideTerm> &terms, EvaluatedClauseColumns &evaluated);
 
-//! The instances `row_group_ids` names: in the aggregate shape each group a row stands in, else each row in a group.
-//! Empty is every row in one group.
+//! The instances `row_group_ids` names: in the aggregate shape (`grouped`) each group a row stands in, else each row
+//! in a group, every row where a per-row clause numbers none.
 idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t num_rows, bool grouped);
 
 //! A clause's evaluation before its rows are read (EvaluatedConstraint): its facts, its repair group, and each term's
