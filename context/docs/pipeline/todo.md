@@ -61,19 +61,6 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   within a tenth of the 40 plain clauses'; `./test/decide/run_tests.sh -k "anr or frame or scope or per"`; model
   goldens identical.
 
-## MODEL-15 — The objective is a coefficient per instance
-
-- **Problem.** The objective reaches stage 06 in three forms: a column over every input row per term with
-  `objective_variable_indices`, `ObjectiveMembers` triples for its terms on a written-in helper, and product groups
-  as columns. The builder reads both linear forms (`ilp_model_builder.cpp:549-579`), and
-  `ReportAnEmptyObjective` both. The objective is one row, so its linear part is one coefficient per column.
-- **Change.** The emitter sums the objective's linear terms into one coefficient per instance of each decision it
-  reads, and the constant; stage 06 copies them to their columns. `objective_coefficients`,
-  `objective_variable_indices` and `ObjectiveMembers` go.
-- **Done when.** `./test/decide/run_tests.sh -k "objective or anr or avg or minmax"`;
-  `build/release/test/unittest "[decidb]"`; model goldens identical; a per-row objective over 2,000,000 rows peaks no
-  higher than before.
-
 ## MODEL-16 — Stage 06's bound passes walk instances, and absence is looked up once per decision
 
 - **Problem.** `DecidePropagateImpliedBounds` loops over every input row for each decision of each `<=` or `=`
@@ -96,7 +83,6 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
 - **Change.** One type for the rows a reader holds (place, data row, entry) and one reader that returns a term's
   values and NULL mask in it; the seven sites call it. One reader of product groups serves a clause and the
   objective.
-- **Needs.** MODEL-15.
 - **Done when.** Model goldens identical; `./test/decide/run_tests.sh -k "scope or anr or when or per or quadratic or
   avg or null or absent"`; lizard over `decide_model_emitter.cpp`: `Rows`, `Groups` and `ValueLinks` beside 32, 22
   and 30.

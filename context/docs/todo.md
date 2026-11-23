@@ -18,7 +18,6 @@ the owner rules first.
 
 ## 6.3 Instances, not input rows (one lane)
 - [ ] MODEL-14 A helper has no array as long as the input — pipeline/todo.md § MODEL-14
-- [ ] MODEL-15 The objective is a coefficient per instance — pipeline/todo.md § MODEL-15
 - [ ] MODEL-16 Bound passes walk instances; absence looked up once — pipeline/todo.md § MODEL-16
 
 ## 6.4 The emitter's structure (one lane; needs: 6.3)

@@ -1964,35 +1964,78 @@ void DecideModelEmitter::WriteMembersIn(EvaluatedConstraint &clause) const {
 	}
 }
 
-void DecideModelEmitter::ObjectiveMembers() {
+void DecideModelEmitter::ObjectiveCoefficients() {
 	auto &term_variables = gstate.objective_variable_indices;
 	auto &term_columns = gstate.evaluated_objective_coefficients;
-	auto &out = gstate.objective_members;
-	vector<idx_t> kept_variables;
-	vector<CoefficientColumn> kept_columns;
+	auto &sums = gstate.objective_coefficients;
+	const auto written =
+	    DecideClauseRefOf(op.display.constraint_sources, op.display.source_text, DConstants::INVALID_INDEX);
+	sums.resize(tree.variable_scopes.size() + gstate.frame_reads.size());
+	// A decision's instances: a frame read is read per row.
+	auto add = [&](idx_t variable, idx_t instance, double coefficient) {
+		auto &of_variable = sums[variable];
+		if (of_variable.empty()) {
+			const bool plan = variable < tree.variable_scopes.size();
+			auto scope = plan ? tree.variable_scopes[variable] : DecideVarScopeInfo::Row();
+			of_variable.assign(scope.IsGlobal()  ? 1
+			                   : scope.IsKeyed() ? (*keyed)[scope.keyed_scope_idx].num_classes
+			                                     : num_rows,
+			                   0.0);
+		}
+		AddCoefficient(of_variable[instance], coefficient, written);
+	};
+	// Its terms on the helpers written where they are read, as one row: their members' terms, and the constants the
+	// members carry.
+	vector<idx_t> variables, instances;
+	vector<double> coefficients;
+	vector<bool> written_in(term_variables.size(), false);
 	for (idx_t t = 0; t < term_variables.size(); t++) {
 		const idx_t variable = term_variables[t];
 		if (variable >= written_helper_of.size() || written_helper_of[variable] == DConstants::INVALID_INDEX) {
-			kept_variables.push_back(variable);
-			kept_columns.push_back(std::move(term_columns[t]));
 			continue;
 		}
+		written_in[t] = true;
 		const auto instance = InstanceOfRow(variable);
 		for (idx_t row = 0; row < num_rows; row++) {
 			const double coefficient = term_columns[t].Get(row);
 			if (coefficient != 0.0) {
-				out.variables.push_back(variable);
-				out.instances.push_back(instance.At(row));
-				out.coefficients.push_back(coefficient);
+				variables.push_back(variable);
+				instances.push_back(instance.At(row));
+				coefficients.push_back(coefficient);
 			}
 		}
 	}
-	term_variables = std::move(kept_variables);
-	term_columns = std::move(kept_columns);
-	vector<idx_t> begin {0, out.variables.size()};
+	vector<idx_t> begin {0, variables.size()};
 	vector<double> constant {0.0};
-	WriteMembersIn(begin, out.variables, out.instances, out.coefficients, constant, true);
-	gstate.objective_member_constant = constant[0];
+	WriteMembersIn(begin, variables, instances, coefficients, constant, true);
+	// A term with no decision (a data column) moves no optimum: it is the objective's constant. Summed without a
+	// check: no solve reads it, and a sum past a DOUBLE only makes the reported value infinite.
+	gstate.objective_constant = tree.objective_constant_offset + constant[0];
+	for (idx_t t = 0; t < term_variables.size(); t++) {
+		const idx_t variable = term_variables[t];
+		auto &column = term_columns[t];
+		if (variable == DConstants::INVALID_INDEX) {
+			for (idx_t row = 0; row < num_rows; row++) {
+				gstate.objective_constant += column.Get(row);
+			}
+		} else if (!written_in[t]) {
+			// Every row's coefficient counts. A term beside the reducers counts once: its coefficient is kept on
+			// one row and is 0 on the others (CountTupleTermsOnce).
+			const auto instance = InstanceOfRow(variable);
+			for (idx_t row = 0; row < num_rows; row++) {
+				const double coefficient = column.Get(row);
+				if (coefficient != 0.0) {
+					add(variable, instance.At(row), coefficient);
+				}
+			}
+		}
+		column = CoefficientColumn();
+	}
+	for (idx_t u = 0; u < variables.size(); u++) {
+		add(variables[u], instances[u], coefficients[u]);
+	}
+	term_variables.clear();
+	term_columns.clear();
 }
 
 } // namespace duckdb

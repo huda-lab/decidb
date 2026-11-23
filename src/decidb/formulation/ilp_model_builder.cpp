@@ -580,36 +580,16 @@ static void BuildModelObjective(SolverModel &model, SolverInput &input, const Va
 	}
 	model.obj_constant = input.objective_constant;
 
-	if (!input.objective_variable_indices.empty()) {
-		for (idx_t term_idx = 0; term_idx < input.objective_variable_indices.size(); term_idx++) {
-			idx_t decide_var_idx = input.objective_variable_indices[term_idx];
-			// Every row's coefficient counts. A term beside the reducers counts once: execution kept its
-			// coefficient on one row and zeroed the others (CountOnce, decide_value_extraction.cpp).
-			auto &col = input.objective_coefficients[term_idx];
-			// A term with no decision (a data column) moves no optimum: it is the objective's constant. Summed
-			// without a check: no solve reads it, and a sum past a DOUBLE only makes the reported value infinite.
-			if (decide_var_idx == DConstants::INVALID_INDEX) {
-				for (idx_t row = 0; row < num_rows; row++) {
-					model.obj_constant += col.Get(row);
-				}
-				continue;
-			}
-			// Accumulated: a keyed decision maps many rows onto one column.
-			for (idx_t row = 0; row < num_rows; row++) {
-				const double coefficient = col.Get(row);
-				if (coefficient != 0.0) {
-					AddCoefficient(model.obj_coeffs[indexer.Get(decide_var_idx, row)], coefficient,
-					               input.objective_written);
-				}
+	// Its linear part, a coefficient per instance (SolverInput::objective_coefficients). Accumulated: a frame read's
+	// instances share its base decision's columns.
+	for (idx_t var = 0; var < input.objective_coefficients.size(); var++) {
+		auto &instances = input.objective_coefficients[var];
+		for (idx_t inst = 0; inst < instances.size(); inst++) {
+			if (instances[inst] != 0.0) {
+				AddCoefficient(model.obj_coeffs[indexer.InstanceColumn(var, inst)], instances[inst],
+				               input.objective_written);
 			}
 		}
-	}
-	// Its terms on the helpers written where they are read: their members, whose constants stage 08 added to the
-	// objective's.
-	auto &members = input.objective_members;
-	for (idx_t t = 0; t < members.variables.size(); t++) {
-		AddCoefficient(model.obj_coeffs[indexer.InstanceColumn(members.variables[t], members.instances[t])],
-		               members.coefficients[t], input.objective_written);
 	}
 
 	//===--------------------------------------------------------------------===//

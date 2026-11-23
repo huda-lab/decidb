@@ -142,20 +142,13 @@ TEST_CASE("Stage 06 lays out and defines the helper instances that keep a column
 		CHECK(indexer.Get(1, 2) == ROWS);
 	}
 
-	SECTION("the objective's terms on a helper written where it is read are added to its columns") {
-		// MINIMIZE x + (2 * h per row), h written in: stage 08 lists 2 * (x0 + 2 x1) twice and 2 * (x2 + x3) twice.
+	SECTION("the objective's coefficient of an instance is its column's, and a helper written in has none") {
+		// MINIMIZE x + (2 * h per row), h written in: stage 08 summed x's instances with h's members', twice each.
 		SolverInput input = MakeInput(2);
 		input.written_in.resize(2);
 		input.written_in[1] = {true, true};
-		input.objective_variable_indices = {0};
-		input.objective_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, ROWS));
+		input.objective_coefficients = {{5.0, 9.0, 5.0, 5.0}, {}};
 		input.objective_constant = 2.0; // 2 * 0.5, read by rows 0 and 1
-		auto &members = input.objective_members;
-		for (idx_t reader = 0; reader < 2; reader++) {
-			members.variables.insert(members.variables.end(), {0, 0, 0, 0});
-			members.instances.insert(members.instances.end(), {0, 1, 2, 3});
-			members.coefficients.insert(members.coefficients.end(), {2.0, 4.0, 2.0, 2.0});
-		}
 		VarIndexer indexer = VarIndexer::Build(input);
 		SolverModel model = SolverModel::Build(input, indexer);
 		CHECK(model.obj_constant == Approx(2.0));

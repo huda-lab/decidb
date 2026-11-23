@@ -52,11 +52,7 @@ SolverInput MakeUnboundedTwoVariableInput() {
 	input.num_rows = 1;
 	input.num_decide_vars = 2;
 	input.variable_types = {LogicalType::DOUBLE, LogicalType::DOUBLE};
-	input.objective_variable_indices = {0, 1};
-	input.objective_coefficients = {
-	    CoefficientColumn::MakeScalar(-1.0, input.num_rows),
-	    CoefficientColumn::MakeScalar(-1.0, input.num_rows),
-	};
+	input.objective_coefficients = {{-1.0}, {-1.0}};
 	return input;
 }
 

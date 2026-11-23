@@ -161,8 +161,12 @@ therefore holds a helper open below, so a diagnosis never lifts a floor it never
 
 ## 3. Objective
 
-A flat `obj_coeffs` of size `total_vars`, zero-initialized. For each term,
-`objective_coefficients[term][row]` is placed at `Get(var_idx, row)`.
+A flat `obj_coeffs` of size `total_vars`, zero-initialized. The objective is one row, so its linear part reaches
+stage 06 as one coefficient per instance of each decision it reads (`SolverInput::objective_coefficients[decision]
+[instance]`), which the builder places at `InstanceColumn(decision, instance)`. Stage 08 sums the objective's terms
+into it (`DecideModelEmitter::ObjectiveCoefficients`): the terms' columns over the input's rows are its working state
+and are freed there, a decision with one instance per class costs one number per class, and a helper written where
+it is read is its members. The objective's constant arrives whole in `objective_constant`.
 
 For a keyed variable, every row of a class maps to the same column, and their
 coefficients **accumulate** — which is exactly right: one keyed decision participates
@@ -816,9 +820,8 @@ nothing:
 - **A clause's records** name the members' decisions where a term read a written-in instance, the members' constants
   in the record's constant. `EvaluatedConstraint::members_written_in` says a row may then name one column in several
   terms, so the builder sums its terms per column, and `variable_indices` lists the decisions the rows name.
-- **The objective's terms on such a helper** arrive as `SolverInput::objective_members`, a list of
-  `(decision, instance, coefficient)` the builder adds to the columns' coefficients; the constants they carry are in
-  `objective_constant`.
+- **The objective's terms on such a helper** are summed into its members' instances by stage 08
+  (`SolverInput::objective_coefficients`, §3); the constants they carry are in `objective_constant`.
 - **The column layout** gives a written-in instance no column (`SolverInput::written_in`, §1).
 
 `x >= sum(from 2 previous to previous else 0: x) over (...) - t.w` has one column and one row per input row, the

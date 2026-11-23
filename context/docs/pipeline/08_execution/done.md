@@ -835,8 +835,8 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   group has one member, the other groups going to stage 06 as a link. `WriteMembersIn` then rewrites each list of
   terms that names a written-in instance, replacing the term by the instance's members times its coefficient and
   adding their constants to the row's: a clause's records as `Rows` and `Groups` finish them (an ABS envelope's rows
-  among them), a later helper's members, and the objective's terms (`ObjectiveMembers`,
-  `SolverInput::objective_members`). One function serves the three, since a clause's records and a helper's members
+  among them), a later helper's members, and the objective's terms (`ObjectiveCoefficients`, which then sums
+  every term of the objective per instance, `SolverInput::objective_coefficients`). One function serves the three, since a clause's records and a helper's members
   delimit their terms the same way. Stage 06 receives `written_in`, the instances with no column, and lays its columns
   out once. A clause row or a member that reads a written-in helper where it has no member is an internal error; the
   objective's read of one is no read (D84).
@@ -1200,8 +1200,8 @@ The row starts from its clause: `InitializeEvaluatedConstraint` sets its `proven
 of its bound. The model builder copies that record into each row it states.
 
 When the objective is quadratic, the same evaluation runs on `product_groups` **in
-addition to** `terms`, not instead of: the linear terms fill `objective_coefficients` /
-`objective_variable_indices`, and `DecideModelEmitter::Objective` fills `objective_product_groups`
+addition to** `terms`, not instead of: the linear terms are read as columns and summed per instance
+(`ObjectiveCoefficients`), and `DecideModelEmitter::Objective` fills `objective_product_groups`
 for the quadratic half. Each term's filter — its own
 `when` with the objective's folded in — applies to each list independently.
 

@@ -62,12 +62,14 @@ public:
 	vector<ReducerValueLinkSpec> evaluated_value_links;
 	//! Per helper, the instances written where they are read; moved into SolverInput::written_in.
 	vector<vector<bool>> written_in;
-	//! The objective's terms on those helpers, as their members' terms, and the constant they carry; moved into
-	//! SolverInput::objective_members and added to its objective_constant.
-	ObjectiveMembers objective_members;
-	double objective_member_constant = 0.0;
+	//! The objective's linear terms as they are read, a column over the input's rows each, with the decision each
+	//! reads: the emitter's working state, which DecideModelEmitter::ObjectiveCoefficients sums and frees.
 	vector<CoefficientColumn> evaluated_objective_coefficients; // [term_idx]
 	vector<idx_t> objective_variable_indices;
+	//! The objective's linear part per instance and its constant; moved into SolverInput::objective_coefficients and
+	//! ::objective_constant.
+	vector<vector<double>> objective_coefficients;
+	double objective_constant = 0.0;
 
 	//! The objective's product groups, evaluated; moved into SolverInput::objective_product_groups.
 	vector<EvaluatedProductGroup> evaluated_objective_groups;

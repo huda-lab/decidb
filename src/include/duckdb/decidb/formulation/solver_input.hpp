@@ -408,8 +408,8 @@ struct AbsLinkSpec {
 //! The members a helper decision is defined from, listed per group -- one group per instance of the helper -- in flat
 //! arrays: group `g` defines instance `group_instances[g]` and holds members [group_begin[g], group_begin[g + 1]);
 //! member `m` is `constants[m]` plus the terms [member_begin[m], member_begin[m + 1]), each `coefficients[t]` times
-//! instance `instances[t]` of decision `variables[t]`. Listed rather than given as rows with a group each, because the groups may share
-//! rows: a range frame's windows (language/guide.md §5.6) overlap where a `by` key's groups partition.
+//! instance `instances[t]` of decision `variables[t]`. Listed rather than given as rows with a group each, because the
+//! groups may share rows: a range frame's windows (language/guide.md §5.6) overlap where a `by` key's groups partition.
 struct ReducerValueMembers {
 	//! Per group, the instance of the helper it defines.
 	vector<idx_t> group_instances;
@@ -462,15 +462,6 @@ struct ReducerValueLinkSpec {
 	//! A range frame's helper, one instance per window (D78), rather than a reducer's.
 	bool frame = false;
 	ReducerValueMembers members;
-};
-
-//! The objective's terms on a helper the plan writes where it is read (DecideHelperForm), as stage 08 wrote them:
-//! `coefficients[t]` times instance `instances[t]` of decision `variables[t]`, the helper's members where the instance
-//! is written in and the helper itself where it keeps its column.
-struct ObjectiveMembers {
-	vector<idx_t> variables;
-	vector<idx_t> instances;
-	vector<double> coefficients;
 };
 
 //! A construct handed to the backend whole, instead of being lowered into rows.
@@ -707,12 +698,14 @@ struct SolverInput {
 	//! 08 did not write where they are read. Consumed (moved into `constraints` or emitted as extremum links) by the
 	//! formulation pass.
 	vector<ReducerValueLinkSpec> reducer_value_links;
-	// Linear objective
-	vector<CoefficientColumn> objective_coefficients; // [term_idx] = column of length num_rows
-	vector<idx_t> objective_variable_indices;         // [term_idx]
-	ObjectiveMembers objective_members;
-	//! The constant canonicalization peeled off the objective (LogicalDecide::objective_constant_offset). The model
-	//! builder adds the constants it meets in the terms to it (SolverModel::obj_constant).
+	//! The objective's linear part: per decision, numbered as a term names one (a frame read after the plan's), the
+	//! coefficient of each of its instances, and none for a decision the objective reads no instance of. The objective
+	//! is one row, so stage 08 sums its terms per instance: a helper the plan writes where it is read is its members
+	//! here (DecideHelperForm).
+	vector<vector<double>> objective_coefficients;
+	//! The objective's constant: what canonicalization peeled off it (LogicalDecide::objective_constant_offset), its
+	//! terms that read no decision, and the constants of the helpers written into it. The model builder adds the
+	//! constants of its product groups (SolverModel::obj_constant).
 	double objective_constant = 0.0;
 
 	//! The objective's terms of degree 2, summed into the objective's Q.

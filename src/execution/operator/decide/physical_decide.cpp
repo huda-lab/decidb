@@ -327,7 +327,7 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	// qualified as they are read.
 	emitter.Objective(evaluated);
 	ScaleObjectiveAvg(gstate, num_rows, evaluated);
-	emitter.ObjectiveMembers();
+	emitter.ObjectiveCoefficients();
 	// What the data left of each clause is reported once its clauses and its objective are read.
 	ReportSkippedInstances(gstate);
 	// The bottom-up values the evaluation computed, each node's programs on its entries.
@@ -400,9 +400,10 @@ void PhysicalDecide::ReportAnEmptyObjective(const SolverInput &input) const {
 	auto nonzero = [](double coefficient) {
 		return coefficient != 0.0;
 	};
-	if (std::any_of(input.objective_coefficients.begin(), input.objective_coefficients.end(), reads) ||
-	    std::any_of(input.objective_members.coefficients.begin(), input.objective_members.coefficients.end(),
-	                nonzero) ||
+	if (std::any_of(input.objective_coefficients.begin(), input.objective_coefficients.end(),
+	                [&](const vector<double> &instances) {
+		                return std::any_of(instances.begin(), instances.end(), nonzero);
+	                }) ||
 	    std::any_of(input.objective_product_groups.begin(), input.objective_product_groups.end(),
 	                [&](const EvaluatedProductGroup &group) { return reads(group.weight); }) ||
 	    std::any_of(input.global_obj_coeffs.begin(), input.global_obj_coeffs.end(), nonzero)) {
@@ -649,10 +650,8 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	SyncFrameReadBoxes(solver_input);
 	phase.Next("assembly.objective_and_avg");
 	// Objective (linear part)
-	solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
-	solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
-	solver_input.objective_members = std::move(gstate.objective_members);
-	solver_input.objective_constant = tree->objective_constant_offset + gstate.objective_member_constant;
+	solver_input.objective_coefficients = std::move(gstate.objective_coefficients);
+	solver_input.objective_constant = gstate.objective_constant;
 
 	solver_input.objective_product_groups = std::move(gstate.evaluated_objective_groups);
 

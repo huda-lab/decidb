@@ -25,8 +25,7 @@ SolverInput MakeBaseInput(idx_t num_rows, idx_t num_vars, bool diagnose = true) 
 	input.num_rows = num_rows;
 	input.num_decide_vars = num_vars;
 	input.variable_types.assign(num_vars, LogicalType::DOUBLE);
-	input.objective_variable_indices = {0};
-	input.objective_coefficients = {CoefficientColumn::MakeScalar(1.0, num_rows)};
+	input.objective_coefficients = {duckdb::vector<double>(num_rows, 1.0)};
 	return input;
 }
 

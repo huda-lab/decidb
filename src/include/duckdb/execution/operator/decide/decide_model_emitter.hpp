@@ -122,9 +122,10 @@ public:
 	//! one it writes where it is read (DecideHelperForm) is kept here, and each reader's term on it is written as its
 	//! members (WriteMembersIn), so stage 06 meets no read of it.
 	void ValueLinks();
-	//! The objective's terms on a helper the plan writes where it is read, as its members' terms
-	//! (DecideGlobalSinkState::objective_members), once the objective's columns are final.
-	void ObjectiveMembers();
+	//! The objective's linear part as one coefficient per instance of each decision it reads, and its constant
+	//! (DecideGlobalSinkState::objective_coefficients, ::objective_constant), once the objective's columns are final.
+	//! A term on a helper the plan writes where it is read is that helper's members.
+	void ObjectiveCoefficients();
 
 private:
 	//! A helper's members (language/guide.md §7.2): the entries of its G's operand it reads, every decision they read
