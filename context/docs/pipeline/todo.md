@@ -45,17 +45,6 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   `build/release/test/unittest "[decidb]"`; the corpus query of `test/decide/golden/corpus.sql` line 717's
   neighbour (`per grp: sum(x) by (grp) <= budget / 10 * open`) has 6 columns and 3 rows.
 
-## MODEL-11 — The tree is verified in debug builds, once
-
-- **Problem.** `DecideTree::Validate` (`decide_tree.cpp:1176-1318`, complexity 75, 18 internal errors) checks in
-  every release query what the builder above it built; no test reaches a message of it. The emitter repeats three of
-  its checks (`decide_model_emitter.cpp:118`, `589-595`, `676-682`). The canonical form's verifier runs under
-  `#ifdef DEBUG` (`VerifyCanonical`).
-- **Change.** `Validate` runs in debug builds, as `VerifyCanonical` does; a check a type or the builder's own
-  control flow makes impossible is deleted, in `Validate` and in the emitter.
-- **Done when.** `./test/decide/run_tests.sh -k "one_pass_tree or scope or abs"`;
-  `build/release/test/unittest "[decidb]"`; lizard over `decide_tree.cpp` beside 75.
-
 ## MODEL-12 — The model's constraints have one struct each, and one mapping from a comparison to a sense
 
 - **Problem.** `SolverModel::GeneralConstraint` holds the four fields of `GeneralConstraintSpec`,

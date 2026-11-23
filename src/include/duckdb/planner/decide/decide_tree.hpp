@@ -395,8 +395,9 @@ struct DecideTree {
 	//! (DecideModelEmitter::CheckDomain).
 	vector<DecisionDomain> domains;
 
-	//! Reject dangling edges, cycles, invalid keys and non-physical source reads.
-	void Validate() const;
+	//! In a debug build, what the builder guarantees: no dangling edge, cycle, invalid key or read that is no source
+	//! column, and each function node's rows as its helper's kind states them (LogicalOperator::Verify).
+	void Verify() const;
 	//! Stable plan-order dump of nodes, sigma, routing and computation dependencies.
 	string ToString() const;
 	//! Each body's terms with the node they range over and where they are computed (`decide_debug` `bodies`).

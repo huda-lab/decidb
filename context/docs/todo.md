@@ -17,7 +17,6 @@ the owner rules first.
 - [ ] MODEL-8 The helper of a link whose data may split its classes (decision) — pipeline/todo.md § MODEL-8
 
 ## 6.2 Code with no reader (one lane)
-- [ ] MODEL-11 The tree is verified in debug builds, once — pipeline/todo.md § MODEL-11
 - [ ] MODEL-12 One struct per model constraint, one comparison mapping — pipeline/todo.md § MODEL-12
 
 ## 6.3 Instances, not input rows (one lane)

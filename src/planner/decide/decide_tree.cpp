@@ -342,7 +342,7 @@ public:
 		CompileDecideTree(context, op, *tree, definition_nodes, record_nodes);
 		PostOrder();
 		tree->definitions = std::move(op.helper_definitions);
-		tree->Validate();
+		tree->Verify();
 		return std::move(tree);
 	}
 
@@ -1162,7 +1162,8 @@ unique_ptr<DecideTree> DecideTreeConstruction::Finish() {
 	return builder->Finish();
 }
 
-void DecideTree::Validate() const {
+void DecideTree::Verify() const {
+#ifdef DEBUG
 	vector<idx_t> position(nodes.size(), DConstants::INVALID_INDEX);
 	if (eval_order.size() != nodes.size()) {
 		throw InternalException("DECIDE tree post-order does not cover every node");
@@ -1200,8 +1201,6 @@ void DecideTree::Validate() const {
 			if (invalid) {
 				throw InternalException("DECIDE tree has an invalid function node %llu", i);
 			}
-		}
-		if (node.kind == DecideNodeKind::FUNCTION) {
 			DecideVarScopeInfo scope;
 			if (!variable_scopes.empty()) {
 				scope = variable_scopes[value_var];
@@ -1304,6 +1303,7 @@ void DecideTree::Validate() const {
 			throw InternalException("DECIDE tree has an invalid root");
 		}
 	}
+#endif
 }
 
 string DecideTree::ToString() const {

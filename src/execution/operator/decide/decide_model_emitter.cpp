@@ -115,10 +115,6 @@ const vector<bool> &DecideModelEmitter::ReadEntriesOf(const DecideTermSite &term
 	if (qualifier_scope == DConstants::INVALID_INDEX) {
 		return candidates;
 	}
-	if (qualifier_scope >= tree.keyed_scopes.size() || term_site.node >= tree.nodes.size() ||
-	    term_site.qualifier_operand >= tree.nodes.size()) {
-		throw InternalException("DECIDE model emitter: invalid relation-qualified term site");
-	}
 	// The same keyed scope can occur in several nested reducers. Read the operand of this exact occurrence so a
 	// sibling's `when` or `by` cannot select or drop this term's rows.
 	const auto &qualified = columns.Tested(term_site.qualifier_operand);
@@ -471,9 +467,6 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 void DecideModelEmitter::FunctionAbsence(idx_t function) {
 	const auto &node = *tree.nodes[function];
 	const auto variable = tree.ValueVar(node);
-	if (variable >= gstate.absent_reads.size()) {
-		throw InternalException("DECIDE model emitter: invalid function absence source");
-	}
 	if (variable < tree.variable_scopes.size() && tree.variable_scopes[variable].IsGlobal()) {
 		return;
 	}
@@ -586,15 +579,7 @@ void DecideModelEmitter::Constraints() {
 			continue;
 		}
 		for (auto root : node.Cast<DecideFunctionNode>().rows) {
-			if (root >= tree.nodes.size()) {
-				throw InternalException("DECIDE model emitter: ABS F node has an invalid envelope root");
-			}
-			const auto clause_index = tree.nodes[root]->compiled.clause_index;
-			if (clause_index >= roots.size() || roots[clause_index] != root ||
-			    abs_function_of_clause[clause_index] != DConstants::INVALID_INDEX) {
-				throw InternalException("DECIDE model emitter: ABS envelope row is not uniquely indexed");
-			}
-			abs_function_of_clause[clause_index] = function;
+			abs_function_of_clause[tree.nodes[root]->compiled.clause_index] = function;
 		}
 	}
 	// The rows `M * z >= e` and `M * z >= -e` of a count of nonzeros written with no M, by clause.
@@ -687,13 +672,6 @@ void DecideModelEmitter::AbsEnvelope(idx_t function, idx_t root, bool counted) {
 	auto &node = *tree.nodes[function];
 	auto &definition = tree.Definition(node)->Cast<DecideAbsDefinition>();
 	const auto &envelopes = node.Cast<DecideFunctionNode>().rows;
-	if (root >= tree.nodes.size() || std::find(envelopes.begin(), envelopes.end(), root) == envelopes.end()) {
-		throw InternalException("DECIDE model emitter: invalid ABS F envelope ownership");
-	}
-	auto &clause = *tree.nodes[root]->compiled.clause;
-	if (clause.defined_var != definition.helper) {
-		throw InternalException("DECIDE model emitter: ABS F envelope belongs to a different auxiliary");
-	}
 	auto link = std::find_if(gstate.evaluated_abs_links.begin(), gstate.evaluated_abs_links.end(),
 	                         [&](const AbsLinkSpec &candidate) { return candidate.aux_idx == definition.helper; });
 	if (link == gstate.evaluated_abs_links.end()) {

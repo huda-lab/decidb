@@ -169,7 +169,7 @@ columns in a scan of their own.
   at its own rank. A decision's `per` key and a reducer's `by` key alike (`per g: x` with `sum(x) by (g)`) are one
   key (`FindOrCreateDecideKey`), read once per row and hashed twice: the decision's classes in their layout's map
   (`FindDecisionGroups`), the reducer's slots in the key's dictionary (`FindGroups`). No test counts either.
-  `DecideTree::Validate` checks at plan time that the descent reads of a row only its nodes' own `when`
+  `DecideTree::Verify` checks at plan time, in a debug build, that the descent reads of a row only its nodes' own `when`
   parts, keys and bare input columns: a carried column, a program column and a σ value are each an input column. A
   node's entries are columns (`DecideNodeContainer`): per entry its row, its enclosing slot, its slot and, for a set E
   alone, its instance, and its values in `DecideColumns`, chunks of 2,048 rows held in memory, so that a window of
