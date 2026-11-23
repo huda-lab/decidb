@@ -230,14 +230,16 @@ struct ConstraintProvenance {
 
 //! Represents an evaluated constraint ready for the solver
 //! The rows a clause emits, one record each: an aggregate clause's groups that hold a row, in the order of their
-//! numbers (one row in all for a clause of no groups), a per-row clause's kept rows. Row e reads decision
-//! `variables[t]` at data row `rows[t]`, times `coefficients[t]`, for t in [term_begin[e], term_begin[e + 1]), as a
-//! helper's members are listed (ReducerValueLinkSpec::members): a term per data row its group holds, none where the
-//! coefficient is 0. The model builder resolves them to solver columns (ClauseEmittedRows).
+//! numbers (one row in all for a clause of no groups), a per-row clause's kept rows. Row e reads instance
+//! `instances[t]` of decision `variables[t]`, times `coefficients[t]`, for t in [term_begin[e], term_begin[e + 1]), as
+//! a helper's members are listed (ReducerValueLinkSpec::members): a term per data row its group holds, none where the
+//! coefficient is 0. The node that writes a term knows the instance its row reads (a decision per row: the row; a
+//! keyed one: the row's class; a query-wide one: 0; a frame read: the row it is read at, VarIndexer::InstanceColumn),
+//! so stage 06 finds a term's column with no map from data rows.
 struct ClauseRecords {
 	vector<idx_t> term_begin {0};
 	vector<idx_t> variables;
-	vector<idx_t> rows;
+	vector<idx_t> instances;
 	vector<double> coefficients;
 	//! The part of the row's left side that reads no decision, which the builder moves to its bound.
 	vector<double> constants;
@@ -259,6 +261,16 @@ struct ClauseRecords {
 	//! The bound the row imposes on its decisions: its right side less the constant part of its left.
 	double EffectiveBound(idx_t e) const {
 		return bounds[e] - constants[e];
+	}
+	//! The instance of `variable` row e names, which a row that defines an auxiliary always does (its term on the
+	//! auxiliary has coefficient 1).
+	idx_t InstanceOf(idx_t e, idx_t variable) const {
+		for (idx_t t = term_begin[e]; t < term_begin[e + 1]; t++) {
+			if (variables[t] == variable) {
+				return instances[t];
+			}
+		}
+		throw InternalException("DECIDE: a row names no instance of decision %llu", variable);
 	}
 };
 
@@ -394,25 +406,26 @@ struct AbsLinkSpec {
 };
 
 //! The members a helper decision is defined from, listed per group -- one group per instance of the helper -- in flat
-//! arrays: group `g` is read at `group_rows[g]` and holds members [group_begin[g], group_begin[g + 1]); member `m` is
-//! `constants[m]` plus the terms [member_begin[m], member_begin[m + 1]), each `coefficients[t]` times decision
-//! `variables[t]` read at `rows[t]`. Listed rather than given as rows with a group each, because the groups may share
+//! arrays: group `g` defines instance `group_instances[g]` and holds members [group_begin[g], group_begin[g + 1]);
+//! member `m` is `constants[m]` plus the terms [member_begin[m], member_begin[m + 1]), each `coefficients[t]` times
+//! instance `instances[t]` of decision `variables[t]`. Listed rather than given as rows with a group each, because the groups may share
 //! rows: a range frame's windows (language/guide.md §5.6) overlap where a `by` key's groups partition.
 struct ReducerValueMembers {
-	vector<idx_t> group_rows;
+	//! Per group, the instance of the helper it defines.
+	vector<idx_t> group_instances;
 	vector<idx_t> group_begin {0};
 	vector<double> constants;
 	vector<idx_t> member_begin {0};
 	vector<idx_t> variables;
-	vector<idx_t> rows;
+	vector<idx_t> instances;
 	vector<double> coefficients;
 
 	idx_t GroupCount() const {
-		return group_rows.size();
+		return group_instances.size();
 	}
-	//! Open group `g`, read at `row`: the members added next are its.
-	void AddGroup(idx_t row) {
-		group_rows.push_back(row);
+	//! Open the group of the helper's instance `instance`: the members added next are its.
+	void AddGroup(idx_t instance) {
+		group_instances.push_back(instance);
 		group_begin.push_back(group_begin.back());
 	}
 	//! Open a member of the last group, with `constant`: the terms added next are its.
@@ -422,16 +435,16 @@ struct ReducerValueMembers {
 		group_begin.back()++;
 	}
 	//! A term of the last member.
-	void AddTerm(idx_t variable, idx_t row, double coefficient) {
+	void AddTerm(idx_t variable, idx_t instance, double coefficient) {
 		variables.push_back(variable);
-		rows.push_back(row);
+		instances.push_back(instance);
 		coefficients.push_back(coefficient);
 		member_begin.back()++;
 	}
 };
 
 //! A helper decision of the value rewrite (DecideHelperKind::REDUCER_VALUE), evaluated: its members per group, each a
-//! linear expression over decisions read at rows (an AVG's carry its 1/n) -- a `by` group's rows, or what a range
+//! linear expression over instances of decisions (an AVG's carry its 1/n) -- a `by` group's rows, or what a range
 //! frame's window reads. A SUM or AVG helper is defined by one row per group over the members and the helper's own
 //! term, on the sides the clauses push it against: `value >= members` (`need_envelope`), `value <= members`
 //! (`need_closing`), the equality when both; a MIN/MAX helper is pinned by an extremum link per group instead
@@ -452,11 +465,11 @@ struct ReducerValueLinkSpec {
 };
 
 //! The objective's terms on a helper the plan writes where it is read (DecideHelperForm), as stage 08 wrote them:
-//! `coefficients[t]` times decision `variables[t]` at data row `rows[t]`, the helper's members where the instance is
-//! written in and the helper itself where it keeps its column.
+//! `coefficients[t]` times instance `instances[t]` of decision `variables[t]`, the helper's members where the instance
+//! is written in and the helper itself where it keeps its column.
 struct ObjectiveMembers {
 	vector<idx_t> variables;
-	vector<idx_t> rows;
+	vector<idx_t> instances;
 	vector<double> coefficients;
 };
 

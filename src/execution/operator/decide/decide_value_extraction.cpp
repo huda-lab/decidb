@@ -353,7 +353,7 @@ ClauseRowSets DecideClauseRowSets(const EvaluatedClauseColumns &evaluated, idx_t
 }
 
 void DecideWriteClauseRecords(EvaluatedClauseColumns &evaluated, const ClauseRowSets &sets, const vector<idx_t> &rows,
-                              const DecideClauseRef &written) {
+                              const vector<DecideInstanceOfRow> &instances, const DecideClauseRef &written) {
 	auto &records = evaluated.records;
 	const idx_t count = sets.groups.size();
 	const bool admits = evaluated.admitted_lower.logical_size != 0;
@@ -374,7 +374,7 @@ void DecideWriteClauseRecords(EvaluatedClauseColumns &evaluated, const ClauseRow
 					AddCoefficient(records.constants[e], coefficient, written);
 				} else if (coefficient != 0.0) {
 					records.variables.push_back(variable);
-					records.rows.push_back(rows[sets.rows[k]]);
+					records.instances.push_back(instances[t].At(rows[sets.rows[k]]));
 					records.coefficients.push_back(coefficient);
 				}
 			}
@@ -782,7 +782,8 @@ void DecideMapRowsInNoClass(KeyedMapping &mapping) {
 	}
 }
 
-void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx_t> &variables, idx_t row, double scale,
+void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx_t> &variables,
+                      const vector<DecideInstanceOfRow> &instances, idx_t row, double scale,
                       const DecideClauseRef &clause, ReducerValueMembers &out) {
 	double constant = 0.0;
 	for (idx_t t = 0; t < variables.size(); t++) {
@@ -797,7 +798,7 @@ void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx
 	for (idx_t t = 0; t < variables.size(); t++) {
 		const double c = columns[t].Get(row) * scale;
 		if (variables[t] != DConstants::INVALID_INDEX && c != 0.0) {
-			out.AddTerm(variables[t], row, c);
+			out.AddTerm(variables[t], instances[t].At(row), c);
 		}
 	}
 }

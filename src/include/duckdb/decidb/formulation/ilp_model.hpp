@@ -111,18 +111,19 @@ struct VarIndexer {
 		}
 	}
 
-	//! Flat column for the inst-th instance of a variable, where
-	//! inst < NumInstances(var_idx). Unlike Get(), which resolves through a result
-	//! row, this walks a variable's own instances — rows for row-scoped variables,
-	//! class ids for keyed ones, and the single column for a scalar.
+	//! Flat column of instance `inst` of a variable, which a term names (ClauseRecords::instances): a row for a
+	//! row-scoped variable, a class for a keyed one, 0 for a query-wide one. A frame read has no column of its own:
+	//! its instance is the row it is read at, and its column its base decision's at the row its frame selects.
 	inline idx_t InstanceColumn(idx_t var_idx, idx_t inst) const {
 		switch (var_scope[var_idx]) {
 		case DecideVarScope::ROW:
 			return inst * num_row_vars + row_var_offset[var_idx];
 		case DecideVarScope::GLOBAL:
 			return scalar_var_index[var_idx];
-		case DecideVarScope::FRAME_READ:
-			throw InternalException("DECIDE: a frame read has no instance of its own");
+		case DecideVarScope::FRAME_READ: {
+			auto &read = frame_reads[var_idx - first_frame_read];
+			return Get(read.base, read.rows[inst]);
+		}
 		default: {
 			if (var_idx < instance_slot.size() && !instance_slot[var_idx].empty()) {
 				const idx_t slot = instance_slot[var_idx][inst];
@@ -145,6 +146,16 @@ struct VarIndexer {
 			auto &read = frame_reads[var_idx - first_frame_read];
 			var_idx = read.base;
 			row = read.rows[row];
+		}
+	}
+
+	//! A term on a frame read is a term on its base decision, at the instance the row its frame selects reads; any
+	//! other term is itself.
+	inline void ResolveInstance(idx_t &var_idx, idx_t &inst) const {
+		if (var_scope[var_idx] == DecideVarScope::FRAME_READ) {
+			auto &read = frame_reads[var_idx - first_frame_read];
+			var_idx = read.base;
+			inst = InstanceOf(var_idx, read.rows[inst]);
 		}
 	}
 
@@ -223,8 +234,8 @@ struct VarIndexer {
 	static VarIndexer Build(const SolverInput &input);
 };
 
-//! The box a reader that tells the instances of a decision apart takes, by the data row that reads the instance. A
-//! reader that takes the decision's box instead is sound, only looser.
+//! The box a reader that tells the instances of a decision apart takes, by the instance a term names. A reader that
+//! takes the decision's box instead is sound, only looser.
 //!
 //! Two views, and a reader picks one. The rigid view (the default) refines the floor by the instance's own floor
 //! (SolverInput::instance_lower_bounds), which holds against any box. The formulation view (`reach`) also lowers the
@@ -235,21 +246,19 @@ struct InstanceBox {
 	const VarIndexer &indexer;
 	bool reach = false;
 
-	//! The floor of `var` as data row `row` reads it, against the box floors `box_lower`.
-	double LowerOfRow(idx_t var, idx_t row, const vector<double> &box_lower) const {
-		indexer.ResolveRead(var, row);
-		idx_t instance = indexer.InstanceOf(var, row);
+	//! The floor of instance `instance` of `var`, against the box floors `box_lower`.
+	double LowerOf(idx_t var, idx_t instance, const vector<double> &box_lower) const {
+		indexer.ResolveInstance(var, instance);
 		double floor = input.InstanceLower(var, instance, box_lower);
 		return reach ? std::max(floor, InstanceReachLower(input.instance_reach_lower, var, instance)) : floor;
 	}
 
-	//! The ceiling of `var` as data row `row` reads it, against the box ceilings `box_upper`.
-	double UpperOfRow(idx_t var, idx_t row, const vector<double> &box_upper) const {
+	//! The ceiling of instance `instance` of `var`, against the box ceilings `box_upper`.
+	double UpperOf(idx_t var, idx_t instance, const vector<double> &box_upper) const {
 		if (!reach) {
 			return box_upper[var];
 		}
-		indexer.ResolveRead(var, row);
-		idx_t instance = indexer.InstanceOf(var, row);
+		indexer.ResolveInstance(var, instance);
 		return std::min(box_upper[var], InstanceReachUpper(input.instance_reach_upper, var, instance));
 	}
 };

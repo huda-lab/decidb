@@ -17,10 +17,9 @@ the owner rules first.
 - [ ] MODEL-8 The helper of a link whose data may split its classes (decision) — pipeline/todo.md § MODEL-8
 
 ## 6.3 Instances, not input rows (one lane)
-- [ ] MODEL-13 A term names the instance it reads — pipeline/todo.md § MODEL-13
-- [ ] MODEL-14 A helper has no array as long as the input — pipeline/todo.md § MODEL-14 (needs: MODEL-13)
-- [ ] MODEL-15 The objective is a coefficient per instance — pipeline/todo.md § MODEL-15 (needs: MODEL-13)
-- [ ] MODEL-16 Bound passes walk instances; absence looked up once — pipeline/todo.md § MODEL-16 (needs: MODEL-13)
+- [ ] MODEL-14 A helper has no array as long as the input — pipeline/todo.md § MODEL-14
+- [ ] MODEL-15 The objective is a coefficient per instance — pipeline/todo.md § MODEL-15
+- [ ] MODEL-16 Bound passes walk instances; absence looked up once — pipeline/todo.md § MODEL-16
 
 ## 6.4 The emitter's structure (one lane; needs: 6.3)
 - [ ] MODEL-17 The emitter reads a term in one place — pipeline/todo.md § MODEL-17

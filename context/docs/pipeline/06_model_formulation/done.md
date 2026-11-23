@@ -253,9 +253,18 @@ sends a query-wide term to the accumulator, since its one column would collide w
 A clause reaches stage 06 as one record per row it emits (`EvaluatedConstraint::records`, `ClauseRecords`): an
 aggregate clause's groups that hold a row (one row in all for a clause of no groups), a per-row clause's kept rows (a
 kept row, a member of an easy MIN/MAX, or under `per K:` a class's first kept row). A record holds the row's terms as
-`(decision, data row, coefficient)`, the form a helper's members are listed in; the constant part of its left side;
+`(decision, instance, coefficient)`, the form a helper's members are listed in; the constant part of its left side;
 its bound; the values it admits when it bounds one decision; its group, which names it and its class set; and its
-first data row. Every reader of a clause reads the records: implied bounds, the Big-M and range walks
+first data row.
+
+**A term names the instance it reads.** The instance is the row for a decision per row, the row's class for a keyed
+one, 0 for a query-wide one, and the row it is read at for a frame read, whose column is its base decision's at the row
+its frame selects. The node that writes a term holds the row, so stage 08 reads the instance there
+(`DecideInstanceOfRow`), and stage 06 finds a term's column from the decision and the instance alone
+(`VarIndexer::InstanceColumn`), as LLVM's machine IR names a register and not the source line that set it. A
+helper's group names the instance it defines (`ReducerValueMembers::group_instances`), and a row that defines an
+auxiliary names the auxiliary's instance in its own term (`ClauseRecords::InstanceOf`). The data row of a record is
+kept for a diagnosis, which names the row (`ClauseRecords::data_rows`). Every reader of a clause reads the records: implied bounds, the Big-M and range walks
 (`DecideRowSignedRange`, `DecideRowTermRange`), `<>`, ABS, the lifted floors, the diagnosis and the builder. None
 reads an array as long as the input or regroups one. The emitter writes them (`DecideModelEmitter::Rows` for a
 per-row clause, `DecideWriteClauseRecords` for an aggregate one; `../08_execution/done.md` § A clause is read over the
@@ -808,7 +817,7 @@ nothing:
   in the record's constant. `EvaluatedConstraint::members_written_in` says a row may then name one column in several
   terms, so the builder sums its terms per column, and `variable_indices` lists the decisions the rows name.
 - **The objective's terms on such a helper** arrive as `SolverInput::objective_members`, a list of
-  `(decision, data row, coefficient)` the builder adds to the columns' coefficients; the constants they carry are in
+  `(decision, instance, coefficient)` the builder adds to the columns' coefficients; the constants they carry are in
   `objective_constant`.
 - **The column layout** gives a written-in instance no column (`SolverInput::written_in`, §1).
 

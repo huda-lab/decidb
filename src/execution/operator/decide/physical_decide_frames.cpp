@@ -748,8 +748,9 @@ KeyedMapping DecideFrameWindowMapping(const DecideFrameMap &map) {
 
 void DecideListFrameMembers(const DecideFrameMap &map, DecideReducerKind aggregate, const DecideClauseRef &clause,
                             const string &frame_text, const vector<CoefficientColumn> &payload,
-                            const vector<idx_t> &payload_vars, const vector<CoefficientColumn> &fallback,
-                            const vector<idx_t> &fallback_vars, ReducerValueMembers &out) {
+                            const vector<idx_t> &payload_vars, const vector<DecideInstanceOfRow> &payload_instances,
+                            const vector<CoefficientColumn> &fallback, const vector<idx_t> &fallback_vars,
+                            const vector<DecideInstanceOfRow> &fallback_instances, ReducerValueMembers &out) {
 	const bool extremum = IsDecideExtremum(aggregate);
 	const bool is_avg = aggregate == DecideReducerKind::AVG;
 	for (idx_t w = 0; w < map.WindowCount(); w++) {
@@ -761,14 +762,15 @@ void DecideListFrameMembers(const DecideFrameMap &map, DecideReducerKind aggrega
 			throw InternalException("DECIDE: %s's window reads nothing but is not absent", frame_text);
 		}
 		const double share = is_avg ? 1.0 / static_cast<double>(values) : 1.0;
-		out.AddGroup(map.window_anchor[w]);
+		// A window is an instance of the frame's helper (DecideFrameWindowMapping).
+		out.AddGroup(w);
 		map.ForEachRead(w, [&](idx_t row, idx_t times) {
-			DecideListMember(payload, payload_vars, row, (extremum ? 1.0 : static_cast<double>(times)) * share, clause,
-			                 out);
+			DecideListMember(payload, payload_vars, payload_instances, row,
+			                 (extremum ? 1.0 : static_cast<double>(times)) * share, clause, out);
 		});
 		const idx_t fallbacks = map.WindowFallbacks(w);
 		if (fallbacks > 0) {
-			DecideListMember(fallback, fallback_vars, map.window_anchor[w],
+			DecideListMember(fallback, fallback_vars, fallback_instances, map.window_anchor[w],
 			                 (extremum ? 1.0 : static_cast<double>(fallbacks)) * share, clause, out);
 		}
 	}

@@ -38,7 +38,7 @@ SolverInput MakeInput(idx_t num_vars) {
 	return input;
 }
 
-//! `h`: group 0 is `x0 + 2 x1 + 0.5`, group 1 is `x2 + x3`.
+//! `h`: instance 0 is `x0 + 2 x1 + 0.5`, instance 1 is `x2 + x3`.
 ReducerValueLinkSpec SumOfX() {
 	ReducerValueLinkSpec link;
 	link.value_var = 1;
@@ -50,7 +50,7 @@ ReducerValueLinkSpec SumOfX() {
 	members.AddTerm(0, 0, 1.0);
 	members.AddMember(0.0);
 	members.AddTerm(0, 1, 2.0);
-	members.AddGroup(2);
+	members.AddGroup(1);
 	members.AddMember(0.0);
 	members.AddTerm(0, 2, 1.0);
 	members.AddMember(0.0);
@@ -63,7 +63,8 @@ EvaluatedConstraint XLessH() {
 	EvaluatedConstraint ec;
 	ec.variable_indices = {0, 1};
 	for (idx_t row = 0; row < ROWS; row++) {
-		AddRecord(ec, {RecordTerm {0, row, 1.0}, RecordTerm {1, row, -1.0}}, 10.0);
+		// h's instance is the row's group.
+		AddRecord(ec, {RecordTerm {0, row, 1.0}, RecordTerm {1, row / 2, -1.0}}, 10.0);
 	}
 	ec.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
 	return ec;
@@ -152,7 +153,7 @@ TEST_CASE("Stage 06 lays out and defines the helper instances that keep a column
 		auto &members = input.objective_members;
 		for (idx_t reader = 0; reader < 2; reader++) {
 			members.variables.insert(members.variables.end(), {0, 0, 0, 0});
-			members.rows.insert(members.rows.end(), {0, 1, 2, 3});
+			members.instances.insert(members.instances.end(), {0, 1, 2, 3});
 			members.coefficients.insert(members.coefficients.end(), {2.0, 4.0, 2.0, 2.0});
 		}
 		VarIndexer indexer = VarIndexer::Build(input);
@@ -171,7 +172,7 @@ TEST_CASE("Stage 06 lays out and defines the helper instances that keep a column
 		link.members.AddGroup(0);
 		link.members.AddMember(0.0);
 		link.members.AddTerm(0, 0, 1.0);
-		link.members.AddGroup(2);
+		link.members.AddGroup(1);
 		link.members.AddMember(0.0);
 		link.members.AddTerm(0, 2, 1.0);
 		link.members.AddMember(0.0);

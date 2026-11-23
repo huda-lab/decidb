@@ -128,7 +128,7 @@ static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer, cons
 		vector<int> indices;
 		vector<double> coefficients;
 		for (idx_t t = records.term_begin[e]; t < records.term_begin[e + 1]; t++) {
-			indices.push_back(static_cast<int>(indexer.Get(records.variables[t], records.rows[t])));
+			indices.push_back(static_cast<int>(indexer.InstanceColumn(records.variables[t], records.instances[t])));
 			coefficients.push_back(records.coefficients[t]);
 		}
 

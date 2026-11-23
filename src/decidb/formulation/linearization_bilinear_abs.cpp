@@ -234,7 +234,8 @@ double ReadAbsArgument(const AbsLinkSpec &link, const VarIndexer &indexer, idx_t
 	argument.BeginSparse(records.term_begin[e + 1] - records.term_begin[e], written);
 	for (idx_t t = records.term_begin[e]; t < records.term_begin[e + 1]; t++) {
 		if (records.variables[t] != link.aux_idx) {
-			argument.Add(static_cast<int>(indexer.Get(records.variables[t], records.rows[t])), records.coefficients[t]);
+			argument.Add(static_cast<int>(indexer.InstanceColumn(records.variables[t], records.instances[t])),
+			             records.coefficients[t]);
 		}
 	}
 	argument.Flush(columns, coefficients);
@@ -268,7 +269,8 @@ void ExpandAbs(SolverInput &input, const VarIndexer &indexer, const AbsLinkSpec 
 		vector<int> columns;
 		vector<double> coefficients;
 		const double k = ReadAbsArgument(link, indexer, e, written, argument, columns, coefficients);
-		const int aux = static_cast<int>(indexer.Get(link.aux_idx, operand.records.data_rows[e]));
+		const int aux =
+		    static_cast<int>(indexer.InstanceColumn(link.aux_idx, operand.records.InstanceOf(e, link.aux_idx)));
 		const int sign = static_cast<int>(AddGlobalBinaryAux(input, indexer, 0.0, link.label));
 
 		// `aux + sum c x + A1 * y <= k + A1`, which is `aux - inner <= A1 * (1 - y)`.
@@ -357,7 +359,8 @@ void StateAbsNatively(SolverInput &input, const VarIndexer &indexer, const Insta
 
 		GeneralConstraint gc;
 		gc.kind = GeneralConstraintKind::ABS;
-		gc.result_column = static_cast<int>(indexer.Get(link.aux_idx, operand.records.data_rows[e]));
+		gc.result_column =
+		    static_cast<int>(indexer.InstanceColumn(link.aux_idx, operand.records.InstanceOf(e, link.aux_idx)));
 		gc.argument_columns.push_back(static_cast<int>(t_idx));
 		gc.provenance.origin = operand.provenance.origin;
 		input.general_constraints.push_back(std::move(gc));

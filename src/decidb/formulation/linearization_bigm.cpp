@@ -36,8 +36,8 @@ double DecideRowTermRange(const ClauseRecords &records, idx_t e, const vector<do
 		if (coef < 1e-15) {
 			continue;
 		}
-		double lb = instances.LowerOfRow(records.variables[t], records.rows[t], lower_bounds);
-		double ub = instances.UpperOfRow(records.variables[t], records.rows[t], upper_bounds);
+		double lb = instances.LowerOf(records.variables[t], records.instances[t], lower_bounds);
+		double ub = instances.UpperOf(records.variables[t], records.instances[t], upper_bounds);
 		if (DecideIsOpenAbove(ub) || DecideIsOpenBelow(lb)) {
 			has_unbounded = true;
 			continue;
@@ -69,18 +69,18 @@ SignedRowRange decide_linearize::DecideRowSignedRange(const EvaluatedConstraint 
 	auto variable = [&](idx_t t) {
 		return records.variables[begin + t];
 	};
-	auto row = [&](idx_t t) {
-		return records.rows[begin + t];
+	auto instance = [&](idx_t t) {
+		return records.instances[begin + t];
 	};
 	return SignedRowRange::Of(
 	    records.term_begin[e + 1] - begin, variable,
 	    // The row's constant is its bound's (ClauseRecords::EffectiveBound), and `skip_idx` is left out: read as zero.
 	    [&](idx_t t) { return variable(t) == skip_idx ? 0.0 : records.coefficients[begin + t]; },
 	    [&](idx_t t) {
-		    return instances ? instances->LowerOfRow(variable(t), row(t), lower_bounds) : lower_bounds[variable(t)];
+		    return instances ? instances->LowerOf(variable(t), instance(t), lower_bounds) : lower_bounds[variable(t)];
 	    },
 	    [&](idx_t t) {
-		    return instances ? instances->UpperOfRow(variable(t), row(t), upper_bounds) : upper_bounds[variable(t)];
+		    return instances ? instances->UpperOf(variable(t), instance(t), upper_bounds) : upper_bounds[variable(t)];
 	    });
 }
 

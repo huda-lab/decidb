@@ -321,7 +321,7 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	emitter.KeyedMappings(keyed_mappings);
 	// The helpers first: a clause, the objective or another helper that reads one the plan writes in reads its
 	// members.
-	emitter.ValueLinks(keyed_mappings);
+	emitter.ValueLinks();
 	emitter.Constraints();
 	// A relation-qualified reducer reads each class's first entry, its first row, so the objective's columns are
 	// qualified as they are read.

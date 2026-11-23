@@ -307,7 +307,29 @@ void DecideModelEmitter::KeyedMappings(vector<KeyedMapping> &mappings) {
 			mappings[scope] = SignatureMapping(scope);
 		}
 	}
+	keyed = &mappings;
 	ReadAbsence(mappings);
+}
+
+DecideInstanceOfRow DecideModelEmitter::InstanceOfRow(idx_t variable) const {
+	DecideInstanceOfRow instance;
+	// A frame read is numbered past the plan's decisions and is read per row.
+	if (variable < tree.variable_scopes.size()) {
+		auto &scope = tree.variable_scopes[variable];
+		instance.query_wide = scope.IsGlobal();
+		if (scope.IsKeyed()) {
+			instance.class_of_row = (*keyed)[scope.keyed_scope_idx].row_to_class.data();
+		}
+	}
+	return instance;
+}
+
+vector<DecideInstanceOfRow> DecideModelEmitter::InstancesOfRows(const vector<idx_t> &variables) const {
+	vector<DecideInstanceOfRow> instances;
+	for (auto variable : variables) {
+		instances.push_back(InstanceOfRow(variable));
+	}
+	return instances;
 }
 
 KeyedMapping DecideModelEmitter::SignatureMapping(idx_t scope) {
@@ -788,6 +810,8 @@ EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
 	}
 	const auto terms = term_values.data();
 	const auto decisions = variables.data();
+	const auto instances_of_rows = InstancesOfRows(variables);
+	const auto term_instances = instances_of_rows.data();
 	const idx_t term_count = variables.size();
 	for (idx_t place = 0; place < kept; place++) {
 		if (groups && groups[place] == DConstants::INVALID_INDEX) {
@@ -803,7 +827,7 @@ EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
 				AddCoefficient(constant, coefficient, written);
 			} else if (coefficient != 0.0) {
 				records.variables.push_back(decisions[t]);
-				records.rows.push_back(row);
+				records.instances.push_back(term_instances[t].At(row));
 				records.coefficients.push_back(coefficient);
 			}
 		}
@@ -1318,7 +1342,8 @@ EmittedClause DecideModelEmitter::Groups(idx_t root, bool counted) {
 	}
 	// The clause's rows, from its columns: one per group that holds a row.
 	result.sets = DecideClauseRowSets(evaluated, kept);
-	DecideWriteClauseRecords(evaluated, result.sets, result.rows, Written(clause));
+	DecideWriteClauseRecords(evaluated, result.sets, result.rows, InstancesOfRows(evaluated.variable_indices),
+	                         Written(clause));
 	WriteMembersIn(evaluated);
 	Unplace(result.rows);
 	return result;
@@ -1680,10 +1705,11 @@ void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {
 	DecideListFrameMembers(map, tree.ReducerOf(tree_node),
 	                       DecideClauseRefOf(op.display.constraint_sources, op.display.source_text,
 	                                         tree.Definition(tree_node)->origin.source_clause_id),
-	                       tree_node.text, payload, payload_vars, fallback, fallback_vars, out);
+	                       tree_node.text, payload, payload_vars, InstancesOfRows(payload_vars), fallback,
+	                       fallback_vars, InstancesOfRows(fallback_vars), out);
 }
 
-void DecideModelEmitter::ValueLinks(const vector<KeyedMapping> &mappings) {
+void DecideModelEmitter::ValueLinks() {
 	// Reducer definitions are emitted from their G/O nodes, children first, each member term in its place; node-owned
 	// metadata supplies the helper's formulation sides, qualifier and label.
 	for (auto node : tree.eval_order) {
@@ -1703,7 +1729,7 @@ void DecideModelEmitter::ValueLinks(const vector<KeyedMapping> &mappings) {
 		spec.frame = tree_node.kind == DecideNodeKind::FRAME;
 		if (spec.frame) {
 			FrameMembers(node, spec.members);
-			HandLink(std::move(spec), definition.form, mappings);
+			HandLink(std::move(spec), definition.form);
 			continue;
 		}
 		const auto site = tree.OperandOf(node);
@@ -1743,27 +1769,19 @@ void DecideModelEmitter::ValueLinks(const vector<KeyedMapping> &mappings) {
 		// decision: two rows of a group then read the same instances (a nested reducer's value, a keyed decision). A
 		// frame read is a read per row: its variable is numbered past the plan's (DecideGlobalSinkState::ReadVariable).
 		bool distinct = IsDecideExtremum(definition.reducer);
-		vector<const KeyedMapping *> instances(variables.size(), nullptr);
+		const auto instances = InstancesOfRows(variables);
 		for (idx_t t = 0; t < variables.size() && distinct; t++) {
-			auto &term = body.members[t];
-			if (term.variable_index == DConstants::INVALID_INDEX) {
-				continue;
-			}
-			auto &scope = tree.variable_scopes[term.variable_index];
-			if (term.frame_read != DConstants::INVALID_INDEX) {
-				distinct = scope.IsGlobal();
-			} else if (scope.IsKeyed()) {
-				instances[t] = &mappings[scope.keyed_scope_idx];
-			} else {
-				distinct = scope.IsGlobal();
-			}
+			distinct =
+			    variables[t] == DConstants::INVALID_INDEX || instances[t].query_wide || instances[t].class_of_row;
 		}
 		std::set<vector<double>> listed;
-		for (auto &group_reads : reads_by_group) {
+		for (idx_t group = 0; group < reads_by_group.size(); group++) {
+			auto &group_reads = reads_by_group[group];
 			if (group_reads.empty()) {
 				continue;
 			}
-			spec.members.AddGroup(group_reads.front().first);
+			// A group's number is its helper's instance (HelperMapping).
+			spec.members.AddGroup(group);
 			listed.clear();
 			const auto avg_scale =
 			    definition.reducer == DecideReducerKind::AVG ? 1.0 / static_cast<double>(group_reads.size()) : 1.0;
@@ -1785,8 +1803,7 @@ void DecideModelEmitter::ValueLinks(const vector<KeyedMapping> &mappings) {
 					for (idx_t term = 0; term < variables.size(); term++) {
 						if (variables[term] != DConstants::INVALID_INDEX) {
 							member.push_back(coefficients[term][entry]);
-							member.push_back(instances[term] ? static_cast<double>(instances[term]->row_to_class[row])
-							                                 : 0);
+							member.push_back(static_cast<double>(instances[term].At(row)));
 						}
 					}
 					if (!listed.insert(std::move(member)).second) {
@@ -1800,12 +1817,12 @@ void DecideModelEmitter::ValueLinks(const vector<KeyedMapping> &mappings) {
 					}
 					const auto coefficient = coefficients[term][entry] * avg_scale;
 					if (coefficient != 0.0) {
-						spec.members.AddTerm(variables[term], row, coefficient);
+						spec.members.AddTerm(variables[term], instances[term].At(row), coefficient);
 					}
 				}
 			}
 		}
-		HandLink(std::move(spec), definition.form, mappings);
+		HandLink(std::move(spec), definition.form);
 	}
 	// The helpers' sizes, which DECIDB_PROFILE reports.
 	if (helper_counts.helpers > 0) {
@@ -1817,11 +1834,10 @@ void DecideModelEmitter::ValueLinks(const vector<KeyedMapping> &mappings) {
 	}
 }
 
-void DecideModelEmitter::HandLink(ReducerValueLinkSpec &&spec, DecideHelperForm form,
-                                  const vector<KeyedMapping> &mappings) {
+void DecideModelEmitter::HandLink(ReducerValueLinkSpec &&spec, DecideHelperForm form) {
 	auto &members = spec.members;
 	// A helper listed before it that the plan writes in is its members here too.
-	WriteMembersIn(members.member_begin, members.variables, members.rows, members.coefficients, members.constants,
+	WriteMembersIn(members.member_begin, members.variables, members.instances, members.coefficients, members.constants,
 	               false);
 	helper_counts.helpers++;
 	helper_counts.instances += members.GroupCount();
@@ -1833,25 +1849,24 @@ void DecideModelEmitter::HandLink(ReducerValueLinkSpec &&spec, DecideHelperForm 
 	}
 	auto &scope = tree.variable_scopes[spec.value_var];
 	WrittenHelper helper;
-	helper.mapping = scope.IsGlobal() ? nullptr : &mappings[scope.keyed_scope_idx];
 	helper.whole = !IsDecideExtremum(spec.reducer);
 	helper.label = spec.label;
-	helper.group_of_instance.assign(helper.mapping ? helper.mapping->num_classes : 1, DConstants::INVALID_INDEX);
+	helper.group_of_instance.assign(scope.IsGlobal() ? 1 : (*keyed)[scope.keyed_scope_idx].num_classes,
+	                                DConstants::INVALID_INDEX);
 	// A SUM or AVG is its members; a MIN or MAX group of one member is that member (deck p. 112, R44), the one fact
 	// of the data read here. The other groups keep their columns and their links.
 	ReducerValueMembers linked;
 	for (idx_t g = 0; g < members.GroupCount(); g++) {
 		const idx_t first = members.group_begin[g], last = members.group_begin[g + 1];
 		if (helper.whole || last - first == 1) {
-			const idx_t row = members.group_rows[g];
-			helper.group_of_instance[helper.mapping ? helper.mapping->row_to_class[row] : 0] = g;
+			helper.group_of_instance[members.group_instances[g]] = g;
 			continue;
 		}
-		linked.AddGroup(members.group_rows[g]);
+		linked.AddGroup(members.group_instances[g]);
 		for (idx_t m = first; m < last; m++) {
 			linked.AddMember(members.constants[m]);
 			for (idx_t t = members.member_begin[m]; t < members.member_begin[m + 1]; t++) {
-				linked.AddTerm(members.variables[t], members.rows[t], members.coefficients[t]);
+				linked.AddTerm(members.variables[t], members.instances[t], members.coefficients[t]);
 			}
 		}
 	}
@@ -1873,7 +1888,7 @@ void DecideModelEmitter::HandLink(ReducerValueLinkSpec &&spec, DecideHelperForm 
 	}
 }
 
-bool DecideModelEmitter::WriteMembersIn(vector<idx_t> &begin, vector<idx_t> &variables, vector<idx_t> &rows,
+bool DecideModelEmitter::WriteMembersIn(vector<idx_t> &begin, vector<idx_t> &variables, vector<idx_t> &instances,
                                         vector<double> &coefficients, vector<double> &constants,
                                         bool absent_reads_nothing) const {
 	auto helper_of = [&](idx_t variable) {
@@ -1883,26 +1898,25 @@ bool DecideModelEmitter::WriteMembersIn(vector<idx_t> &begin, vector<idx_t> &var
 	                 [&](idx_t variable) { return helper_of(variable) != DConstants::INVALID_INDEX; })) {
 		return false;
 	}
-	vector<idx_t> out_begin {0}, out_variables, out_rows;
+	vector<idx_t> out_begin {0}, out_variables, out_instances;
 	vector<double> out_coefficients;
-	auto add = [&](idx_t variable, idx_t row, double coefficient) {
+	auto add = [&](idx_t variable, idx_t instance, double coefficient) {
 		out_variables.push_back(variable);
-		out_rows.push_back(row);
+		out_instances.push_back(instance);
 		out_coefficients.push_back(coefficient);
 	};
 	for (idx_t e = 0; e + 1 < begin.size(); e++) {
 		for (idx_t t = begin[e]; t < begin[e + 1]; t++) {
 			const auto entry = helper_of(variables[t]);
 			if (entry == DConstants::INVALID_INDEX) {
-				add(variables[t], rows[t], coefficients[t]);
+				add(variables[t], instances[t], coefficients[t]);
 				continue;
 			}
 			auto &helper = written_helpers[entry];
-			const idx_t instance = helper.mapping ? helper.mapping->row_to_class[rows[t]] : 0;
-			const idx_t group = helper.group_of_instance[instance];
+			const idx_t group = helper.group_of_instance[instances[t]];
 			const double coefficient = coefficients[t];
 			if (group == DConstants::INVALID_INDEX && !helper.whole) {
-				add(variables[t], rows[t], coefficient);
+				add(variables[t], instances[t], coefficient);
 				continue;
 			}
 			if (coefficient == 0.0) {
@@ -1918,7 +1932,7 @@ bool DecideModelEmitter::WriteMembersIn(vector<idx_t> &begin, vector<idx_t> &var
 			for (idx_t m = members.group_begin[group]; m < members.group_begin[group + 1]; m++) {
 				constants[e] += coefficient * members.constants[m];
 				for (idx_t u = members.member_begin[m]; u < members.member_begin[m + 1]; u++) {
-					add(members.variables[u], members.rows[u], coefficient * members.coefficients[u]);
+					add(members.variables[u], members.instances[u], coefficient * members.coefficients[u]);
 				}
 			}
 		}
@@ -1926,15 +1940,15 @@ bool DecideModelEmitter::WriteMembersIn(vector<idx_t> &begin, vector<idx_t> &var
 	}
 	begin = std::move(out_begin);
 	variables = std::move(out_variables);
-	rows = std::move(out_rows);
+	instances = std::move(out_instances);
 	coefficients = std::move(out_coefficients);
 	return true;
 }
 
 void DecideModelEmitter::WriteMembersIn(EvaluatedConstraint &clause) const {
 	auto &records = clause.records;
-	if (!WriteMembersIn(records.term_begin, records.variables, records.rows, records.coefficients, records.constants,
-	                    false)) {
+	if (!WriteMembersIn(records.term_begin, records.variables, records.instances, records.coefficients,
+	                    records.constants, false)) {
 		return;
 	}
 	// Its decisions are those its rows name: a helper written in gives way to its members'.
@@ -1963,11 +1977,12 @@ void DecideModelEmitter::ObjectiveMembers() {
 			kept_columns.push_back(std::move(term_columns[t]));
 			continue;
 		}
+		const auto instance = InstanceOfRow(variable);
 		for (idx_t row = 0; row < num_rows; row++) {
 			const double coefficient = term_columns[t].Get(row);
 			if (coefficient != 0.0) {
 				out.variables.push_back(variable);
-				out.rows.push_back(row);
+				out.instances.push_back(instance.At(row));
 				out.coefficients.push_back(coefficient);
 			}
 		}
@@ -1976,7 +1991,7 @@ void DecideModelEmitter::ObjectiveMembers() {
 	term_columns = std::move(kept_columns);
 	vector<idx_t> begin {0, out.variables.size()};
 	vector<double> constant {0.0};
-	WriteMembersIn(begin, out.variables, out.rows, out.coefficients, constant, true);
+	WriteMembersIn(begin, out.variables, out.instances, out.coefficients, constant, true);
 	gstate.objective_member_constant = constant[0];
 }
 

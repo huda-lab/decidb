@@ -121,7 +121,7 @@ public:
 	//! read. A helper the plan keeps a column for is handed to stage 06 (DecideGlobalSinkState::evaluated_value_links);
 	//! one it writes where it is read (DecideHelperForm) is kept here, and each reader's term on it is written as its
 	//! members (WriteMembersIn), so stage 06 meets no read of it.
-	void ValueLinks(const vector<KeyedMapping> &mappings);
+	void ValueLinks();
 	//! The objective's terms on a helper the plan writes where it is read, as its members' terms
 	//! (DecideGlobalSinkState::objective_members), once the objective's columns are final.
 	void ObjectiveMembers();
@@ -161,8 +161,6 @@ private:
 	struct WrittenHelper {
 		ReducerValueMembers members;
 		vector<idx_t> group_of_instance;
-		//! The classes of its key; null for a query-wide helper, which has the one instance.
-		const KeyedMapping *mapping = nullptr;
 		bool whole = false;
 		string label;
 	};
@@ -176,7 +174,13 @@ private:
 	HelperCounts helper_counts;
 
 	//! Hands a listed helper to stage 06, or keeps the instances its plan form writes where they are read.
-	void HandLink(ReducerValueLinkSpec &&spec, DecideHelperForm form, const vector<KeyedMapping> &mappings);
+	void HandLink(ReducerValueLinkSpec &&spec, DecideHelperForm form);
+	//! The keyed scopes' classes (KeyedMappings), which a term's instance is read from.
+	const vector<KeyedMapping> *keyed = nullptr;
+	//! How a data row gives the instance of `variable`, a plan decision or a frame read (ReadVariable), and of each of
+	//! `variables`; of no decision (INVALID_INDEX), nothing a reader asks for.
+	DecideInstanceOfRow InstanceOfRow(idx_t variable) const;
+	vector<DecideInstanceOfRow> InstancesOfRows(const vector<idx_t> &variables) const;
 	//! Writes each term of a list that reads a written-in instance as that instance's members, scaled by the term's
 	//! coefficient, their constants added to the constant of the term's row: `begin` delimits the rows, as a clause's
 	//! records and a helper's members do. A read of an instance with no member has no value: the objective drops it

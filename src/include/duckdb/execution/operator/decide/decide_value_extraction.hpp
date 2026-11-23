@@ -34,6 +34,17 @@ using DecideChunkLeaf = std::function<unique_ptr<Expression>(const Expression &e
 unique_ptr<Expression> ToChunkReferences(const Expression &expr, ClientContext &context,
                                          const DecideChunkLeaf &leaf = nullptr);
 
+//! How a data row gives the instance of one decision it reads, which a term names (ClauseRecords::instances): the row
+//! itself for a decision per row and for a frame read, the row's class for a keyed decision, 0 for a query-wide one.
+struct DecideInstanceOfRow {
+	const idx_t *class_of_row = nullptr;
+	bool query_wide = false;
+
+	idx_t At(idx_t row) const {
+		return query_wide ? 0 : class_of_row ? class_of_row[row] : row;
+	}
+};
+
 //! `expr` constant-folded once by DuckDB's own rule, as the expression rewriter folds a query's own expressions.
 unique_ptr<Expression> DecideFoldConstants(unique_ptr<Expression> expr, ClientContext &context);
 
@@ -141,10 +152,10 @@ ClauseRowSets DecideClauseRowSets(const EvaluatedClauseColumns &evaluated, idx_t
 
 //! Writes the record of each row `evaluated` emits (EvaluatedConstraint::records) from its columns: the one place the
 //! rows stage 06 reads are made. A row's terms are listed term by term, each over the row's kept rows, which `rows`
-//! gives the data row of, by place. `written` names the clause when the left side's constant grows past a DOUBLE
-//! (AddCoefficient).
+//! gives the data row of, by place, and `instances` the instance each term's decision has there. `written` names the
+//! clause when the left side's constant grows past a DOUBLE (AddCoefficient).
 void DecideWriteClauseRecords(EvaluatedClauseColumns &evaluated, const ClauseRowSets &sets, const vector<idx_t> &rows,
-                              const DecideClauseRef &written);
+                              const vector<DecideInstanceOfRow> &instances, const DecideClauseRef &written);
 
 //! The objective's product groups outside its reducers (`MAXIMIZE sum(x) + s * u`), counted on its first kept row as
 //! a linear term there is: their weight; one inside a reducer sums over its rows.
@@ -293,10 +304,11 @@ void DecideNameVariants(const vector<DecideSignatureField> &fields, idx_t class_
 //! decision: it maps to one spare class, so that every row has an id (KeyedMapping::absent_class).
 void DecideMapRowsInNoClass(KeyedMapping &mapping);
 
-//! One member: the terms whose coefficients `columns` and variables `variables` are read at `row`, each coefficient
-//! times `scale`, those of no decision its constant. A constant past a DOUBLE points at `clause`, the one that reads
-//! the helper.
-void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx_t> &variables, idx_t row, double scale,
+//! One member: the terms whose coefficients `columns` and variables `variables` are read at `row`, each on the
+//! instance `instances` gives there and its coefficient times `scale`, those of no decision its constant. A constant
+//! past a DOUBLE points at `clause`, the one that reads the helper.
+void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx_t> &variables,
+                      const vector<DecideInstanceOfRow> &instances, idx_t row, double scale,
                       const DecideClauseRef &clause, ReducerValueMembers &out);
 
 //! The least and the greatest of the values added, as ORDER BY places them (NULL last), so a message naming them does

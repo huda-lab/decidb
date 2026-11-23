@@ -284,7 +284,7 @@ const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const VarInd
 			if (coefficient == 0.0) {
 				continue;
 			}
-			const auto column = static_cast<int>(indexer.Get(records.variables[t], records.rows[t]));
+			const auto column = static_cast<int>(indexer.InstanceColumn(records.variables[t], records.instances[t]));
 			if (own_columns) {
 				out.columns.push_back(column);
 				out.values.push_back(coefficient);
@@ -608,8 +608,8 @@ static void BuildModelObjective(SolverModel &model, SolverInput &input, const Va
 	// objective's.
 	auto &members = input.objective_members;
 	for (idx_t t = 0; t < members.variables.size(); t++) {
-		AddCoefficient(model.obj_coeffs[indexer.Get(members.variables[t], members.rows[t])], members.coefficients[t],
-		               input.objective_written);
+		AddCoefficient(model.obj_coeffs[indexer.InstanceColumn(members.variables[t], members.instances[t])],
+		               members.coefficients[t], input.objective_written);
 	}
 
 	//===--------------------------------------------------------------------===//
@@ -782,7 +782,7 @@ static void BuildModelClauseRows(SolverModel &model, SolverInput &input, const V
 
 		// Linear terms from the constraint LHS
 		for (idx_t t = records.term_begin[e]; t < records.term_begin[e + 1]; t++) {
-			int var_idx = static_cast<int>(indexer.Get(records.variables[t], records.rows[t]));
+			int var_idx = static_cast<int>(indexer.InstanceColumn(records.variables[t], records.instances[t]));
 			AddCoefficient(linear_accum[var_idx], records.coefficients[t], written);
 		}
 

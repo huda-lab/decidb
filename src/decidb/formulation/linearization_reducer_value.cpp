@@ -127,7 +127,7 @@ void DeriveReducerValueBounds(SolverInput &input, const VarIndexer &indexer) {
 				continue;
 			}
 			auto group_reach = GroupReach(link, input, group);
-			auto instance = indexer.InstanceOf(value_var, members.group_rows[group]);
+			auto instance = members.group_instances[group];
 			reach[instance].Cover(group_reach);
 			reached[instance] = true;
 			box.Cover(group_reach);
@@ -320,7 +320,8 @@ void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer) {
 					const double c = members.coefficients[t];
 					if (std::abs(c) >= 1e-15) {
 						const idx_t var = members.variables[t];
-						member.push_back(MakeMemberTerm(input, var, indexer.Get(var, members.rows[t]), c));
+						member.push_back(
+						    MakeMemberTerm(input, var, indexer.InstanceColumn(var, members.instances[t]), c));
 					}
 				}
 				if (extremum) {
@@ -353,11 +354,11 @@ void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer) {
 			if (span.first == span.last) {
 				continue;
 			}
-			if (!indexer.HasColumn(var, indexer.InstanceOf(var, members.group_rows[group]))) {
+			if (!indexer.HasColumn(var, members.group_instances[group])) {
 				continue; // written into its readers as its one member: no column to box
 			}
 			any = true;
-			const idx_t column = indexer.Get(var, members.group_rows[group]);
+			const idx_t column = indexer.InstanceColumn(var, members.group_instances[group]);
 			auto lo = column_lo.find(column);
 			auto hi = column_hi.find(column);
 			every_lo = every_lo && lo != column_lo.end();
@@ -403,8 +404,9 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 			member_terms.BeginForDecisions(indexer, members.member_begin[m + 1] - members.member_begin[m], written);
 			for (idx_t t = members.member_begin[m]; t < members.member_begin[m + 1]; t++) {
 				if (members.coefficients[t] != 0.0) {
-					member_terms.Add(static_cast<int>(indexer.Get(members.variables[t], members.rows[t])),
-					                 -members.coefficients[t]);
+					member_terms.Add(
+					    static_cast<int>(indexer.InstanceColumn(members.variables[t], members.instances[t])),
+					    -members.coefficients[t]);
 				}
 			}
 			member_terms.Flush(member.indices, member.coefficients);
@@ -415,7 +417,7 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 			if (span.first == span.last) {
 				continue;
 			}
-			const idx_t group_row = members.group_rows[group];
+			const idx_t instance = members.group_instances[group];
 			if (!IsExtremum(link)) {
 				// `value - sum of members' expressions` against `sum of their constants`: the side the clauses push
 				// the value against (`value >= sum` when they push it down, `value <= sum` when up), the equality only
@@ -426,21 +428,22 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 				for (idx_t m = span.first; m < span.last; m++) {
 					for (idx_t t = members.member_begin[m]; t < members.member_begin[m + 1]; t++) {
 						if (members.coefficients[t] != 0.0) {
-							sum_terms.Add(static_cast<int>(indexer.Get(members.variables[t], members.rows[t])),
-							              -members.coefficients[t]);
+							sum_terms.Add(
+							    static_cast<int>(indexer.InstanceColumn(members.variables[t], members.instances[t])),
+							    -members.coefficients[t]);
 						}
 					}
 					AddCoefficient(constants, members.constants[m], written);
 				}
 				MinMaxLinkRow sum;
 				sum_terms.Flush(sum.indices, sum.coefficients);
-				auto rc = sum.LeftHandSide(static_cast<int>(indexer.Get(value_var, group_row)));
+				auto rc = sum.LeftHandSide(static_cast<int>(indexer.InstanceColumn(value_var, instance)));
 				rc.sense = link.need_envelope && link.need_closing ? '=' : link.need_envelope ? '>' : '<';
 				rc.rhs = constants;
 				rc.provenance.kind = ConstraintKind::STRUCTURAL;
 				rc.provenance.origin.source_clause_id = link.source_clause_id;
 				input.global_constraints.push_back(std::move(rc));
-				RefuseOverflowedReach(input, link, group, indexer.InstanceOf(value_var, group_row));
+				RefuseOverflowedReach(input, link, group, instance);
 				continue;
 			}
 			AuxRange family;
@@ -448,7 +451,7 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 				family.Cover(MemberReach(members, m, input));
 			}
 			ExtremumLinkSpec spec;
-			spec.result_column = indexer.Get(value_var, group_row);
+			spec.result_column = indexer.InstanceColumn(value_var, instance);
 			spec.is_max = is_max;
 			spec.need_envelope = link.need_envelope;
 			spec.need_closing = link.need_closing;
@@ -456,7 +459,6 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 			// MIN): the helper's box end against the family's far end. The end is this
 			// group's own instance's (its reach, DeriveReducerValueBounds), not the
 			// decision's cover of every group's.
-			const idx_t instance = indexer.InstanceOf(value_var, group_row);
 			const double value_hi = input.InstanceBoxUpper(value_var, instance, input.upper_bounds);
 			const double value_lo = input.InstanceBoxLower(value_var, instance, input.lower_bounds);
 			const bool value_hi_open = value_hi >= 1e20;

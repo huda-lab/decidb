@@ -45,31 +45,17 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   `build/release/test/unittest "[decidb]"`; the corpus query of `test/decide/golden/corpus.sql` line 717's
   neighbour (`per grp: sum(x) by (grp) <= budget / 10 * open`) has 6 columns and 3 rows.
 
-## MODEL-13 — A term names the instance it reads
-
-- **Problem.** A term between execution and stage 06 is `(decision, data row, coefficient)` (`ClauseRecords`,
-  `ReducerValueMembers`, `ObjectiveMembers`), and stage 06 finds its column by looking the row up
-  (`VarIndexer::Get(var, row)`: 16 uses, `InstanceOf`: 12, `ColumnOrNone`: 3, in four files). Every decision that is
-  not per row therefore carries an array as long as the input (`KeyedMapping::row_to_class`), one per helper
-  (`HelperMapping`), copied by `VarIndexer::Build`: 40 clauses that each read a helper over 2,000,000 rows peak at
-  2.41 GB against 1.09 GB for one, with 185 ms against 26 ms in `execution.tree_model` and 52 ms in the layout. The
-  node that writes a term holds the instance: its container's slot.
-- **Change.** A term is `(decision, instance, coefficient)`: the row for a per-row decision, the class for a keyed
-  one, 0 for a query-wide one. The emitter writes it; stage 06 reads the column by `InstanceColumn`. A record keeps
-  its first data row for a diagnosis (`ClauseRecords::data_rows`). `WriteMembersIn` reads the instance off the term.
-- **Done when.** No reader of a term in `src/decidb` calls `Get(var, row)`; model goldens identical;
-  `./test/decide/run_tests.sh -k "scope or anr or per or frame or abs or not_equal or diagnose"`;
-  `build/release/test/unittest "[decidb]"`.
-
 ## MODEL-14 — A helper has no array as long as the input
 
-- **Problem.** See MODEL-13: with terms naming instances, a helper's `row_to_class` has no reader in stage 06, and a
-  helper is never an output column.
+- **Problem.** A term names its instance (`06_model_formulation/done.md` § A term names the instance it reads), so
+  stage 06 reads no helper's `row_to_class`, and a helper is never an output column. Each helper still holds an array
+  as long as the input (`HelperMapping`), which `VarIndexer::Build` copies: 40 clauses that each read a helper over
+  2,000,000 rows peak at 2.41 GB against 1.09 GB for one, with 185 ms against 26 ms in `execution.tree_model` and
+  52 ms in the layout. `instance_floors.cpp` reads a floor's instance through the record's data row.
 - **Change.** A helper's scope holds its number of instances and no row map; only a declared keyed decision keeps
   `row_to_class`, for the output. `VarIndexer` reads the mappings it is given and copies none. A frame read's base
   instance is resolved where its term is written, if every reader of `SolverInput::frame_reads` can then go
   (`DecideVarScope::FRAME_READ`, `ResolveRead`: 22 uses in stage 06); say in the task's commit which.
-- **Needs.** MODEL-13.
 - **Done when.** `context/opa_rewrite/repro/clauses_times_rows.sql` with each clause written
   `when g = k: 2 * x <= sum(w * x) + 1`, 40 clauses over 2,000,000 rows: peak memory and `execution.tree_model`
   within a tenth of the 40 plain clauses'; `./test/decide/run_tests.sh -k "anr or frame or scope or per"`; model
@@ -84,7 +70,6 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
 - **Change.** The emitter sums the objective's linear terms into one coefficient per instance of each decision it
   reads, and the constant; stage 06 copies them to their columns. `objective_coefficients`,
   `objective_variable_indices` and `ObjectiveMembers` go.
-- **Needs.** MODEL-13.
 - **Done when.** `./test/decide/run_tests.sh -k "objective or anr or avg or minmax"`;
   `build/release/test/unittest "[decidb]"`; model goldens identical; a per-row objective over 2,000,000 rows peaks no
   higher than before.
@@ -97,7 +82,6 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   (`decide_model_emitter.cpp:766`, `1107`, `1143`, `1440`, `1622`).
 - **Change.** The bound pass walks the instances a clause's rows name. What makes a decision absent at a row is
   resolved once per decision before its terms are read.
-- **Needs.** MODEL-13.
 - **Done when.** `./test/decide/run_tests.sh -k "bound or absent or null or bigm"`; model goldens identical;
   `repro/clauses_times_rows.sql` under `DECIDB_PROFILE=1`: `assembly.implied_bounds` and `execution.tree_model` no
   higher than `08_execution/done.md` § A clause is read over the rows it keeps.
