@@ -536,7 +536,8 @@ unchanged. A bound below the column's floor is applied too: the box is empty, wh
 proves the model infeasible, and the solver says so (the model builder closes one under
 the floor by rounding alone). The pass reads each clause's rows as the builder
 emits them (`ClauseEmittedRows`, also read by the `<>` expansion), so a bound and the rows it is derived from
-cannot disagree.
+cannot disagree. Whether a clause bounds every instance of a decision is asked of the decision's instances
+(`VarIndexer::TermInstances`), never of the input's rows, so a clause costs what it emits.
 
 `a_r` is the variable's **combined** coefficient at that row. A variable can hold
 several additive terms of one constraint (`2*ship + 3*ship <= 10`, or two reducers
@@ -763,8 +764,7 @@ helper's top less every other term's floor where the definition states `value >=
 at least its floor less every other's top where it states `value <= members`; a MAX's
 envelope keeps every member under its top, a MIN's over its floor. Repeated columns of one
 group are summed first (`CombineColumns`: `sum(t.w * max(x))` is `2m + m`), and one box
-covers every instance, so it tightens only when every instance was bounded, by the loosest. The pass walks a
-decision's instances (`VarIndexer::TermInstances`), never the input's rows, so a clause costs what it emits.
+covers every instance, so it tightens only when every instance was bounded, by the loosest.
 The box is a bound on the helper's columns, so an instance with none -- a one-member MIN/MAX
 group written into its readers -- neither tightens it nor is bounded by it: its readers bound
 its member directly.
