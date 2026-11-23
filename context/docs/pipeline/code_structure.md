@@ -11,7 +11,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 
 | Path | Stage | Contents |
 |---|---|---|
-| `common/enums/decide.hpp` | all | `DecideSense`, `DecideExpression`, `DecideVarScope` (`ROW` / `ENTITY` / `SCALAR`) and `DecideVarScopeInfo`, `ConstraintKind`, every DECIDE tag constant and the tag helpers |
+| `common/enums/decide.hpp` | all | `DecideSense`, `DecideExpression`, `DecideVarScope` (`ROW` / `ENTITY` / `SCALAR`) and `DecideVarScopeInfo`, `ConstraintKind`, the DECIDE tag constants (a frame's and a function's) and the tag helpers |
 | `common/decide_source_info.hpp` | 03 | `DecideSourceText` — the DECIDE tail's text and spans; `ConstraintSourceInfo` — the source display registry entry |
 | `common/decide_solver_capabilities.hpp` | 07 answers, 03/05/06/08 read | `SolverConstructSupport`, `SolverModelClass`, `DecideModelShape` and `ClassifyDecideModel` (the one classifier of a model's shape), `IsNonconvexProductGroup` — the backend differences upstream stages branch on. In `common/` because stage 07 answers it but four stages above read it |
 | `parser/decide/parsed_decide.hpp` | 01, 02 read | The parsed DECIDE part of a `SelectNode`: `DecideScope`, `DecideDeclaration`, `DecideClause`, `ParsedDecide` |
@@ -31,6 +31,9 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `planner/decide/decide_source_provenance.hpp` | 03 | Source capture and rendering |
 | `planner/decide/decide_cast_policy.hpp` | 04 | `UnwrapDecideCasts`, `StripCastsForIdentity`, `GetBareDecideColumnRef` |
 | `planner/decide/decide_tree_terms.hpp` | 05/08 | The tree's term records — stage 05's lowered terms and `DecideProductGroup`s in the tree's nodes, stage 08's coefficients |
+| `planner/expression/bound_decide_reducer_expression.hpp` | 02 to 05 | `BoundDecideReducerExpression` — a reducer and the aggregate a frame binds to, with its facts as fields; `DecideNorm` |
+| `planner/expression/bound_decide_null_test_expression.hpp` | 04 to 08 | `BoundDecideNullTestExpression` — an `IS NOT NULL` test a reducer's rows gain beside its written `when` |
+| `planner/decide/decide_tree_nodes.hpp` | 03 to 05 | What reads a reducer's facts off any expression (`IsDecideNormMarker`, `DecideFactsEqual`), `DecideWrittenName`, and `DecideComputedValue` with its two lookups |
 | `optimizer/decide/decide_optimizer.hpp` | 05 | The rewrite passes |
 | `optimizer/decide/decide_linear_form.hpp` | 05 | Flattening into `decide.prepared`; the last DECIDE optimization pass |
 | `optimizer/decide/decide_solver_gate.hpp` | 05 | Backend choice, the native-construct mask, and the plan-time model-class gate |

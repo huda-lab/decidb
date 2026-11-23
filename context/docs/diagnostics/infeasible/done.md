@@ -315,8 +315,8 @@ has been stamped explicitly. `SHARED_SCALAR` = the complete canonical RHS is one
 query-wide value shared across every row the clause emits; `PER_ROW_DATA` = genuine per-row or
 per-group **data** RHS (`x <= col`). Physical evaluation (`DescribeBound`) sets it on
 `EvaluatedConstraint::provenance`, which every linear and quadratic builder site copies into its rows. It sets it
-directly for constants and otherwise consumes the canonical RHS's `QUERY_WIDE_BOUND_TAG`;
-foldable composite expressions receive that tag at canonicalization. A constant is shared unless
+directly for constants and otherwise reads the clause's `query_wide_bound` (`DecideConstraint::query_wide_bound`);
+a clause with a foldable composite bound has it set at canonicalization. A constant is shared unless
 it is what canonicalization left of a written bound that reads data: `x <= cap * o` becomes
 `x - cap * o <= 0`, and `ConstraintSourceInfo::source_rhs_reads_data`, recorded on the tree as
 written, keeps it `PER_ROW_DATA`, in the data tier and per row in `expanded`, as `x <= cap` is. The
@@ -447,7 +447,8 @@ preferred when it can restore feasibility.
   `SUM(2*keepS)`). A row with no source clause lists its terms (`FormatTerms`). A grouped clause renders as that one
   clause for every group, kept distinguishable by the `group` column (see "Group identity" below). An AVG row's slack is
   already in AVG units, because the AVG→SUM rewrite pre-scales row coefficients by `1/N_g` (coefficient evaluation
-  divides the terms of an AVG-tagged reducer by the rows it reads in its group), so it is reported raw, with no `/N_g`.
+  divides the terms of a reducer whose `count_scale` is set by the rows it reads in its group), so it is reported raw,
+  with no `/N_g`.
 - **Strict `<` / `>`.** The δ offset (`< K → <= ceil(K)-1`, `> K → >= floor(K)+1`) is baked into
   `rhs` at the δ site (`ApplyComparisonSense`, `ilp_model_builder.cpp`), which also sets
   `provenance.strict` + `provenance.typed_k` (the user's literal: a constant moved off the body,
@@ -1006,10 +1007,10 @@ domain rigid:
 ### Scalar-subquery bound provenance
 
 A scalar subquery becomes a column ref after `PlanSubqueries`, so correlation provenance is
-collected from **both comparison sides** before flattening. The flattened value receives
-`QUERY_WIDE_VALUE_TAG` when uncorrelated or `ROW_VARYING_SUBQUERY_TAG` when correlated.
+collected from **both comparison sides** before flattening. The flattened value is recorded as an entry of
+`BoundDecide::computed_values`, `query_wide` when uncorrelated.
 `DecideCanonicalizer` then classifies the complete rebuilt RHS after side swapping and term
-migration: an all-query-wide bound receives `QUERY_WIDE_BOUND_TAG`; any row-varying component
+migration: an all-query-wide bound sets the clause's `query_wide_bound`; any row-varying component
 keeps it `PER_ROW_DATA`. Physical evaluation consumes that root classification through
 the row's `shape` rather than inferring provenance from the original RHS position.
 Diagnostics therefore treat `x <= (SELECT 5)` and `(SELECT 5) >= x` identically, while mixed or

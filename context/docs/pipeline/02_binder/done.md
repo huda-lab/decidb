@@ -228,14 +228,15 @@ function, scalar or aggregate, to its primary. A subquery is left as written.
   the shape check, and every rewrite and direct-solve rule. So `multiply(x, v)` answers as `x * v`,
   `MINIMIZE multiply(sum(x), 2)` as `MINIMIZE sum(x) * 2`, and `add(x, 0.5) < 3` as `x + 0.5 < 3`.
   A function DECIDE accepts over a decision is accepted under each of its names.
-- **The written name is display only.** The call keeps the name the user wrote in a tag (`__written_name_<name>__`,
-  `WRITTEN_NAME_TAG_PREFIX`). `DecideWrittenName` reads it: the DECIDE renderer, `ToString` of a bound function or
-  aggregate, and messages print it, and `GetName` strips every DECIDE tag (`StripDecideTags`). Two calls that differ
-  only in the tag are equal, so `pow(v, 2)` and `power(v, 2)` in one product are a square, and `mean` and `avg` of one
-  body share a helper.
+- **The written name is display only.** The call keeps the name the user wrote in a field, `written_name`: on
+  `FunctionExpression` from the respelling, on `BoundFunctionExpression` beside `is_operator`, and on
+  `BoundDecideReducerExpression`. It is copied and serialized and left out of `Equals` and `Hash`. `DecideWrittenName`
+  and `BoundDecideReducerExpression::WrittenName` read it: the DECIDE renderer, `ToString` of a bound function or
+  reducer, and messages print it. Two calls that differ only in it are equal, so `pow(v, 2)` and `power(v, 2)` in one
+  product are a square, and `mean` and `avg` of one body share a helper.
 
 The respelling runs here, not in the canonicalizer, because the binder's own checks read names (a reducer's kind, a
-norm) before stage 04 runs. A plan reads the written name from the tag, since cutting it from the source text fails
+norm) before stage 04 runs. A plan reads the written name from the field, since cutting it from the source text fails
 for an infix `^`.
 
 ---
@@ -243,7 +244,9 @@ for an infix `^`.
 ## 3. Reducers
 
 `IsDecideAggregateName` recognizes `SUM`, `AVG`, `MIN`, `MAX` as DECIDE reducers, and `DecideBinder::BindAggregate`
-binds them for both clause binders; the optimizer, not the binder, decides their formulation. Two rules hold at every
+binds them for both clause binders as a `BoundDecideReducerExpression` (`../03_logical_plan/done.md`, The bound
+expression classes): `FunctionBinder` picks the overload, the return type and the argument casts, and the node takes
+them. The optimizer, not the binder, decides their formulation. Two rules hold at every
 position, a constraint side, beside another term, under a `by` or in the objective:
 
 - A reducer takes exactly one argument: `max(x, 2)` is DuckDB's top-n aggregate, which returns a list
@@ -253,16 +256,18 @@ position, a constraint side, beside another term, under a `by` or in the objecti
   decision, so 'sum(cap)' has no rows to reduce"*. Once and once per row are different problems, and neither reading is
   chosen silently. `sum(x + cap)` and `sum(cost * cap)` are not refused. The same rule holds for a `norm` and for a
   range frame's reducer, with no exemption: once and once per row are different problems for
-  them too. `norm(e, p)` binds as an inert `SUM` marker tagged with its order (`NORM_MARKER_TAG_PREFIX`), which stage
-  05 lowers; the marker takes the location of the `norm(...)` call, so an error at the marker points at it. `COUNT`
+  them too. `norm(e, p)` binds as a reducer with no function whose `norm` field (`DecideNorm`) holds its order and,
+  for `norm(e, 0, M)`, its bound; the binder types its body through `SUM`'s overloads and then drops the function.
+  Stage 04 replaces the orders 1, 2 and 'inf', and an L0 norm of data, by their definitions, and stage 05 lowers an L0
+  norm of a decision. The node takes the location of the `norm(...)` call, so an error at it points there. `COUNT`
   binds as data only: `COUNT(x)` over a decision is refused (*"COUNT over a decision is not supported"*).
 
 ### A reducer's own `when` and `per`
 
 A reducer written with a scope or a `by` is a `DecideReducerExpression` (`../01_parser/done.md` §3).
 `DecideBinder::BindReducer` binds its call, then its scope. The condition binds as data, cast to `BOOLEAN`,
-onto `BoundAggregateExpression::filter`, which physical extraction copies onto each
-term the reducer produces. A `per K` becomes a `__qualified_by_<i>__` tag on the exact
+onto `BoundDecideReducerExpression::filter`, which physical extraction copies onto each
+term the reducer produces. A `per K` sets the node's `per` to the exact
 key scope of `K` (`FindOrCreateKeyScope`; an empty key for `per ()`), whose classes the
 reducer counts once. `per row` adds nothing. The `by` key binds last (§4a).
 
@@ -270,7 +275,7 @@ reducer counts once. `per row` adds nothing. The `by` key binds last (§4a).
 
 A reducer whose own key names a relation, `sum(per D: expr)` (../../language/guide.md §5.3), is a relation-qualified
 reducer. The relation's stored columns form the key (`AddRelationColumns`), and `FindOrCreateKeyScope` finds or creates
-the key's scope, whose index the tag `__qualified_by_<i>__` on the aggregate's alias carries.
+the key's scope, whose index the reducer's `per` field holds.
 Nothing is checked against the body at bind time: a body that reads more than `D` holds -- a column of another
 relation, a per-row decision -- is one value per variant of each tuple (D71), which the signature of stage 04 records.
 Refused at bind time: a key element that is not a column or a relation of the FROM clause, and on the decision side a
@@ -471,11 +476,11 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 | `per K: C` | the record of C with `scope.per` set and `scope.class_key` K's entry of the key table (`INVALID_INDEX` for `per ()`, which has no entry); `per_location` is the `per`'s, where the parser kept the key as written |
 | `when c per K: C` | the record of C with both |
 | `per row: C`, `agg(per row: e)`, `per row: x(TYPE)` | nothing: the default written out (`DecidePer::ROW`); a `per row:` clause binds to its body, which keeps its own query location |
-| `agg(...) by (G)` | the aggregate tagged `__group_key_<i>__`, naming `BoundSelectNode::decide.keys[i]`, whose `written_as_by` is set; `by ()` adds nothing |
+| `agg(...) by (G)` | the reducer's `by` = i, naming `BoundSelectNode::decide.keys[i]`, whose `written_as_by` is set; `by ()` leaves it `INVALID_INDEX` |
 | `agg(when c: e)` | the aggregate's `filter` (§3) |
-| `agg(per K': e)` | a `__qualified_by_<i>__` tag on an exact key scope (§3) |
+| `agg(per K': e)` | the reducer's `per`: an exact key scope (§3) |
 | `MAXIMIZE when c: E` | the objective's record with `scope.when` = c |
-| `outer(per k: inner(e) by (k))` | a nested reducer like any other (D81): `outer` qualified by k, `inner` tagged with its `by` |
+| `outer(per k: inner(e) by (k))` | a nested reducer like any other (D81): `outer` with its `per` k, `inner` with its `by` |
 
 - `BindClause` binds the body, the condition as data, the key through
   `BindKey` (a declaration key's resolution into the key table; a column element keeps
@@ -519,8 +524,9 @@ order key"*).
 
 `DecideBinder::BindDecideFrame` binds the frame onto the aggregate that reads its payload at the selected rows: the
 range's reducer (`sum`, `avg`, `min`, `max` or `count`), else `first`, which reads the one row a point selects. It
-records a `DecideFrameSpec` (`logical_decide.hpp`) on the clause's frame list, the aggregate tagged
-`__frame_<i>__` and with the frame as written (its defaults left out) as a source fragment of its own: the anchors and
+records a `DecideFrameSpec` (`logical_decide.hpp`) on the clause's frame list, the aggregate (a
+`BoundDecideReducerExpression`, `BindFrameAggregate`) tagged `__frame_<i>__` on its alias and with the frame as written
+(its defaults left out) as a source fragment of its own: the anchors and
 their `k`, `every`, `all`, the fallback (a number, *"else ''a'' is not a number"*, whose doubled quote is the text's own plus the sentence's; `else NULL` written, or one
 that folds to NULL, is none, D86), the order key bound as
 plain SQL, `desc`, `cyclic`, and the `within` key, resolved as a `per` key is into the one key table

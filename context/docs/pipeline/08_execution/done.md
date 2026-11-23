@@ -129,7 +129,8 @@ columns in a scan of their own.
   whose structural rows need their own execution scope. An F represents ABS, a Boolean product, an L0 indicator, or a
   nonlinear reducer-body definition. The emitter reads its instances from the top-down tree and attaches its
   structural rows beneath it; the stage-06 linearizers consume the evaluated rows and links. An E's σ
-  is the binder's signature of its clause; a generated NULL test is
+  is the binder's signature of its clause; a generated NULL test (a `BoundDecideNullTestExpression`, which the tree
+  splits from the written conditions into `DecideNode::member_tests`) is
   a member test that carries its columns and adds no σ field. A root in the grouped shape (the aggregate shape, an
   easy extremum) with no `per` is a class of its `by` key (`language/guide.md` §6.4). A root's text is
   its clause as written. Stage 05 then lowers each clause into the root the tree made of its comparison, the objective
@@ -867,9 +868,10 @@ row or group sum from the RHS.
 - **Reducer** — a side-table column of the source by now (`RewriteRhsAggregates`),
   read like an expression.
 
-The canonical RHS classification decides which: a bound tagged
-`QUERY_WIDE_BOUND_TAG` is a shared scalar; anything with a row-varying component
-stays data-backed.
+The canonical RHS classification decides which: a clause whose `query_wide_bound` is set
+(`BoundDecideClause::query_wide_bound`, carried by the lowering to `DecideConstraint::query_wide_bound`) has a shared
+scalar; anything with a row-varying component stays data-backed. Stage 08 reads the clause's fields and inspects no
+expression for it.
 
 ### `when`, `by` and `per` → `row_group_ids`
 
@@ -987,7 +989,7 @@ group (§4a).
 
 ### AVG scaling
 
-`AVG` was rewritten to `SUM` by the optimizer and tagged `AVG_REWRITE_TAG`. Terms
+`AVG` was rewritten to `SUM` by the optimizer, with the reducer's `count_scale` set. Terms
 marked `avg_scale` are divided by the number of rows the reducer reads in the row's group
 (`ScaleAvgRows`):
 

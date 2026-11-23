@@ -74,10 +74,12 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   `DecideBinder::BindExpression` refuses a subquery that references a decision (`ExpressionContainsDecideVariable`).
 - **NULL.** A reducer reads its argument as the same SQL aggregate does: it skips a row whose summand is NULL, so
   `AVG(cap)` and `AVG(w * x)` divide by the rows kept. `DecideCanonicalizer::SkipNullData` (`Binder::PlanDecide`, after
-  canonicalization and before any rewrite copies a filter) ANDs a tagged `e IS NOT NULL` into a reducer's filter for
+  canonicalization and before any rewrite copies a filter) ANDs an `e IS NOT NULL` under a
+  `BoundDecideNullTestExpression` into a reducer's filter for
   each data factor of its summand, so the term masks and AVG's row count do the skipping. Where DuckDB's statistics
   prove the factor never NULL, `StatisticsPropagator` folds the test to TRUE (its LOGICAL_DECIDE case, as it folds a
-  filter's `IS NOT NULL`); the folded constant keeps its tag, and stage 08 reads no filter for it. A reducer over data
+  filter's `IS NOT NULL`); the node keeps the folded constant as its test, and stage 08 reads no filter for it. A
+  reducer over data
   whose every value is NULL is NULL. A NULL that reaches a constraint unreduced (a bound, an unreduced coefficient, a factor
   on an aggregate) marks its row in `ExtractDoubleColumn`'s `null_rows`, and `DecideAbsence::SkipNullInstances` cuts the instance
   that row reaches: one row of a row constraint, the whole group of a grouped one. In the objective,
@@ -126,7 +128,8 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   read one number computed in DuckDB's own types, and nothing is computed on a dropped row. `AVG` on a bound keeps its
   fractional value: the AVG→SUM rewrite skips an `AVG` with no decision. Tests: `test_cons_rhs_aggregate.py`.
 - **`AVG`.** Binding keeps `AVG` (and its `DOUBLE` type, so a fractional bound survives coercion). The optimizer
-  rewrites it to `SUM` tagged `AVG_REWRITE_TAG`; execution scales linear coefficients and the weight of each product
+  rewrites it to `SUM` with `count_scale` set on the reducer; execution scales linear coefficients and the weight of
+  each product
   group (a square or a product of decisions) by `1/n`. In a nested objective read in place, `avg` inside scales each
   row by `1/n_g`. Flat `MAXIMIZE AVG(e)` has the same argmax as `SUM(e)`, but mixed terms keep their own scaling, so
   `AVG(a) + SUM(b)` is not `SUM(a) + SUM(b)`. Tests: `test_avg.py`.
@@ -186,8 +189,10 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
 - **`IN` on a decision** binds as a marker; `RewriteInDomain` (`decide_rewrite_norm_in.cpp`) lowers it to K binaries
   with `Σ z = 1` and `x = Σ v·z`. `x IN (0, 1)` on a `BOOL` is dropped; `x IN (v)` becomes `x = v`. Large K grows the
   model; a range is cheaper when it fits.
-- **`norm`.** The binder keeps it as a marker; canonicalization replaces orders 1, 2 and `'inf'` with their
-  definitions (keeping a display tag so text reads `norm(...)`), and `RewriteNorm` lowers order 0. Desugaring after
+- **`norm`.** The binder keeps it as a marker (a reducer with no function); canonicalization replaces orders 1, 2 and
+  `'inf'` with their
+  definitions (keeping the order in the reducer's `norm` field so text reads `norm(...)`), and `RewriteNorm` lowers
+  order 0. Desugaring after
   binding means types, scopes and casts are already resolved, and every later stage sees ordinary terms. A norm may
   sit under `+`, `*` or a cast at any depth; `VerifyNormMarkersLowered` fails the query rather than let a marker
   through, where it would read as the plain `SUM(e)` it is built on. A norm inside another aggregate is refused.

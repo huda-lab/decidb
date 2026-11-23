@@ -20,8 +20,10 @@ per objective part. A rule must decline a problem with a not-proved IR node in a
 rewrite cannot follow from a gap in the front end. A decline carries no reason: the rule applies or it does not.
 
 Not proved covers what the binder admits and no rule models: a per-row term the splitter cannot read, an order-0 norm (it needs indicator
-variables), a norm tag the front end does not expect, a `per K:` in front of a per-row clause, a clause whose reducer value became a helper decision
-(`VALUE_REWRITE_TAG`), an objective holding a nested reducer (D81) and an objective with a variant signature (produced once, D72, which
+variables), a norm marker of an order the front end does not expect, a `per K:` in front of a per-row clause, a clause
+whose reducer value became a helper decision
+(the VALUE shape, `BoundDecideClause::shape`), an objective holding a nested reducer (`holds_reducer`, D81) and an
+objective with a variant signature (produced once, D72, which
 the DECIDE operator checks). A reducer's own `per` whose body has variants (`KeyedScopeInfo::signature`, D71) makes the
 whole IR not proved; every scope check the bound-side rewrite appends is a row check the plan makes.
 The reader trusts the invariants of the bound tree for everything else (one source child, the four reducers, comparison
@@ -62,9 +64,10 @@ mark it not proved.
   instance (D68).
 - The term splitter that breaks `SUM(2*x - x)` into linear terms is shared with the solver path
   (`src/planner/decide/decide_term_split.cpp`), so the two paths cannot read one term differently.
-- `norm(e, p)` is replaced by its definition when the query is canonicalized (L0 stays a marker). The binder tags the
-  resulting `SUM`, and a rule that read the tag as a plain sum would answer wrongly, so a rule refuses anything it
-  does not prove.
+- `norm(e, p)` is replaced by its definition when the query is canonicalized (an L0 norm of a decision stays a marker: a
+  reducer with
+  no function, which is no SUM and reads as a not-proved part). A definition means what it says, so a rule reads it as
+  the SUM or MAX it is; a rule refuses anything it does not prove.
 - Estimates (row counts) never prove an IR node.
 
 Details: `direct_ir.cpp` and the IR types in `direct_rule.hpp`. The C++ cases in `test_decidb_direct_ir.cpp` list what

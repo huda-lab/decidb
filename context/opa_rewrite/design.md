@@ -108,9 +108,9 @@ own: its body and its scope each have one.
 |---|---|---|---|
 | `BoundDecide` | struct | decisions with their scopes, keys, keyed scopes, frames, clauses, the objective clause, sense, constant offset, source text | 13 fields copied one by one from `BoundSelectNode` to `LogicalDecide` |
 | `BoundDecideClause` | struct | scope, body (the comparison), origin, and the facts of § 3.3 contract 4 | an AND child, its wrapper tags, `constraint_sources[i]` |
-| `BoundDecideReducerExpression` | `Expression` | kind (SUM, AVG, MIN, MAX, COUNT, NORM with its order and bound), the operand's scope, `arguments`, `by` key index, the bound aggregate function, written name | a `BoundAggregateExpression` with `__group_key_`, `__qualified_by_`, `__decide_norm_`, `__written_norm_` tags; `norm` as a SUM with a patched return type |
-| `BoundDecideFrameExpression` | `Expression` | a frame index and the payload | a tagged aggregate carrying `__frame_<i>__` |
-| `BoundDecideValueExpression` | `Expression` | a computed value read whole, and what it is: an uncorrelated subquery, a correlated one, or a recorded bound reducer and its record | `__query_wide_value__`, `__row_varying_subquery__`, `__bound_reducer__` on a leaf † |
+| `BoundDecideReducerExpression` | `Expression` | the bound aggregate function with its bind data (none for a norm no definition has replaced, which its `norm` field names with its order and bound), `children`, `filter` (its `when` and its members' NULL tests, each a `BoundDecideNullTestExpression`), `by` key index, own `per` scope index, written name, and what the rewrites record (`count_scale`, `holds_reducer`, `retained`). Every DECIDE aggregate is one, a frame's included, which keeps its `__frame_<i>__` tag until TREE-5 | a `BoundAggregateExpression` with `__group_key_`, `__qualified_by_`, `__decide_norm_`, `__written_norm_` tags; `norm` as a SUM with a patched return type |
+| `BoundDecideFrameExpression` | `Expression` | a frame index and the payload | a `BoundDecideReducerExpression` whose alias carries `__frame_<i>__` |
+| `BoundDecide::computed_values` | table of `DecideComputedValue` | a computed value read whole, found by equality with its `value`: whether it is one value for the whole query, and whether it is a flattened subquery. No node wraps the read (R25) | `__query_wide_value__`, `__row_varying_subquery__`, `__bound_reducer__` on a leaf |
 
 - **Existing types are reused.** A clause's scope is today's `DecideClauseScope` (`decide_tree_terms.hpp:107`) and
   its origin is today's `DecideRowOrigin` (`decide_source_info.hpp:203`), held by the clause from binding on.
@@ -275,11 +275,11 @@ goes with the later one.
 | TREE-3 | `SOURCE_CLAUSE_`, `REMOVAL_GROUP_`, `BETWEEN_LOWER`, `BETWEEN_UPPER`, `STRUCTURAL_CONSTRAINT`, `DEFINES_`, `OBJECTIVE_ROW` | the clause's origin |
 | TREE-3 | `MINMAX_EASY_REWRITE`, `SINGLETON_ROW_BOUND`, `SINGLETON_ROW_CLAUSE_ROWS` | clause fields |
 | TREE-4 | `VALUE_REWRITE`, `GROUP_KEY_` | on a comparison: clause fields (TREE-3). On a reducer: reducer fields |
-| TREE-4 | `QUALIFIED_REDUCER_SCOPE_`, `NORM_MARKER_`, `WRITTEN_NORM_`, `AVG_REWRITE`, `SKIP_NULL` | reducer fields: the operand's `per`, kind, written kind, the count scale, the NULL tests kept apart from the written `when` |
-| TREE-4 | `TREE_RETAINED_EXPRESSION_`, `TREE_REDUCER_SCOPE_`, `TREE_REDUCER_KEY_` | none: the reducer keeps its own scope and key |
-| TREE-4 | `QUERY_WIDE_VALUE`, `ROW_VARYING_SUBQUERY`, `BOUND_REDUCER` | the value node † |
+| TREE-4 | `QUALIFIED_REDUCER_SCOPE_`, `NORM_MARKER_`, `WRITTEN_NORM_`, `AVG_REWRITE`, `SKIP_NULL` | reducer fields: the operand's `per`, `norm` (a marker's order and bound, a definition's written order), the count scale. A NULL test is its own node in the reducer's filter, `BoundDecideNullTestExpression` |
+| TREE-4 | `TREE_RETAINED_EXPRESSION_`, `TREE_REDUCER_SCOPE_`, `TREE_REDUCER_KEY_` | the reducer's `retained` field; `FrameAggregate::per` on the record; none (it had no writer) |
+| TREE-4 | `QUERY_WIDE_VALUE`, `ROW_VARYING_SUBQUERY`, `BOUND_REDUCER` | an entry of `BoundDecide::computed_values`; the guard around a recorded reducer's value holds a `BoundDecideNullTestExpression` |
 | TREE-4 | `QUERY_WIDE_BOUND` | a clause field |
-| TREE-4 | `WRITTEN_NAME_` | on a reducer: a field. On a scalar call (`@`, `**`): the text at its location, or its own name if the binder stops renaming † |
+| TREE-4 | `WRITTEN_NAME_` | on a reducer: a field. On a scalar call (`@`, `**`): a display field `written_name` on `BoundFunctionExpression`, beside `is_operator` |
 | TREE-5 | `FRAME_`, `FRAME_COLUMN`, `FRAME_TIGHTEST_BOUND` | the frame node's index; a clause field for the tightest bound |
 | TREE-5 | `FRAME_AGGREGATE_` | a field of the data reducer naming its `frame_aggregates` record |
 | TREE-6 | `ABS_FUNCTION_`, `ABS_FUNCTION_NEG_`, `BILINEAR_FUNCTION_GROUP_`, `L0_INDICATOR_FUNCTION_`, `DEFINITION_FUNCTION_`, `BODY_DEFINITION`, `L0_AUTO_BOUND`, `L0_WRITTEN_BOUND`, `L0_TOLERANCE` | the function node and its definition |

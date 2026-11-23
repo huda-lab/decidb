@@ -54,8 +54,8 @@ DECIDE machinery.
 
 ## Stage 03 — Logical plan
 
-No scalar subqueries, so `PlanSubqueries` does nothing and both provenance sets
-are empty. `LogicalDecide` is built above the filter:
+No scalar subqueries, so `PlanSubqueries` does nothing and `computed_values`
+is empty. `LogicalDecide` is built above the filter:
 
 ```
 LogicalDecide  [x]

@@ -22,32 +22,15 @@ order, one at a time. Rules for every one of them:
   `ExpressionIterator::EnumerateChildren`, a case in `LogicalOperatorVisitor::VisitExpression`, `IsFoldable()`
   false, and copy, equality, hash and generated serialization.
 
-## TREE-4 — Reducer node and value node
-
-- **Problem.** A reducer is a `BoundAggregateExpression` whose alias carries its `by` key, its own `per`, a norm's
-  order and bound, and rewrite marks; `norm` is a SUM with a patched return type (`decide_binder.cpp:1232`). A
-  flattened subquery or a recorded bound reducer is a leaf told apart by a provenance tag, read as far as stage 08
-  (`decide_value_extraction.cpp:324`). DuckDB's statistics pass reads `SKIP_NULL_TAG`
-  (`propagate_decide.cpp:8`).
-- **Change.** `BoundDecideReducerExpression` and `BoundDecideValueExpression` (design.md § 3.2.2), each with the
-  four obligations. The reducer holds its kind, the operand's scope, `arguments`, its `by` key, a function-only
-  aggregate (as `DecideBoundAggregate` does, `logical_decide.hpp:226`), its written name, the count scale of a
-  rewritten AVG, and its NULL tests apart from the written `when`. The binder builds it
-  (`decide_binder.cpp:848`); `DecideReducerGroupKey` and its neighbours read fields.
-- **Done when.** Goldens identical; the serializer mode passes; `make decide-test-debug` and the debug C++ tests
-  report nothing; a C++ test of copy and equality for each class; the 15 tags design.md § 3.5 lists for TREE-4 are
-  named nowhere.
-
 ## TREE-5 — Frame node
 
-- **Problem.** A frame is a tagged aggregate (`first(e)`, or the range's reducer) whose alias carries an index
-  into `frames` (`decide_binder.cpp:1065`), told from an ordinary aggregate by `TryGetDecideFrame` and
+- **Problem.** A frame is a `BoundDecideReducerExpression` (`first(e)`, or the range's reducer) whose alias carries
+  an index into `frames` (`BindFrameAggregate`, `decide_binder.cpp`), told from a reducer by `TryGetDecideFrame` and
   `ContainsDecideFrame` at each site. A data reducer that reads a frame, a frame column and a clause's tightest
   frame bound are three more tags.
 - **Change.** `BoundDecideFrameExpression`: a frame index and the payload, with the four obligations. The `frames`
   table stays (R25). The guards become class checks. The tightest bound is a clause field; a data reducer names
   its `frame_aggregates` record by a field.
-- **Needs.** TREE-4.
 - **Done when.** Goldens identical; the frame tests and the serializer mode pass; `FRAME_TAG_PREFIX`,
   `FRAME_COLUMN_TAG`, `FRAME_AGGREGATE_TAG_PREFIX` and `FRAME_TIGHTEST_BOUND_TAG` are named nowhere.
 

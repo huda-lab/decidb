@@ -16,7 +16,8 @@ It contains no solver-specific structures and no execution mechanics.
 
 **`BoundDecide`** (`logical_decide.hpp`) is the bound DECIDE part of a query: the decisions (`variables`,
 `is_boolean_var`, `variable_scopes`), `keys`, `keyed_scopes`, `frames`, `clauses` with their
-`constraint_sources`, `objective`, `sense`, `objective_constant_offset`, `source_text` and `signatures`.
+`constraint_sources`, `objective`, `sense`, `objective_constant_offset`, `source_text`, `signatures` and
+`computed_values`.
 
 `clauses` is a `vector<BoundDecideClause>` (`decide_tree_terms.hpp`), one record per row of SUCH THAT, in written
 order with the rows a rewrite adds after them; `objective` is one more record, with a null `body` when the query
@@ -43,6 +44,52 @@ moves it whole into `LogicalDecide::bound`. The operator keeps what is its own b
 objective's texts, `source_columns`, `optimized`, the solver choice and the tables the rewrites fill.
 `BoundDecide::EnumerateExpressions` is the one list of its expressions; subquery planning (`PlanSubqueries`) and
 `LogicalDecide::EnumerateExpressions` both call it.
+
+**The bound expression classes.** Inside a clause's `body` two classes are DECIDE's own; everything else is DuckDB's.
+
+| Class | What it is | Holds |
+|---|---|---|
+| `BoundDecideReducerExpression` (`planner/expression/bound_decide_reducer_expression.hpp`) | a reducer (`sum`, `avg`, `min`, `max`, `count`, `norm`), and the aggregate a frame binds to | `function` and `bind_info` (the overload `FunctionBinder` picked; `function` is null for a norm no definition has replaced), `children` (none for `count(*)`, two for a collated MIN or MAX), `filter` (the rows it reads); and its facts: `by` (an index into `keys`), `per` (an index into `keyed_scopes`), `norm` (`DecideNorm`: order and the L0 bound), `written_name`, `count_scale`, `holds_reducer`, `retained` |
+| `BoundDecideNullTestExpression` (`bound_decide_null_test_expression.hpp`) | an `IS NOT NULL` test a reducer's rows gain beside its written `when` (`DecideCanonicalizer::SkipNullData`), and the test around a recorded reducer's value (`RhsBoundRewriter::InKey`) | `test`: the `IS NOT NULL`, or TRUE once the statistics prove it |
+
+- **The reducer is laid out as DuckDB's `BoundWindowExpression` is**: the bound aggregate function with its bind data,
+  its arguments, and the clause-like parts as fields. It is no SQL aggregate: no `LogicalAggregate` computes it and
+  DuckDB's executor never reaches it. The tree lowers it, and where DuckDB runs an aggregate (a tree G node, a frame
+  column, a direct rule's plan) `ToAggregate()` makes the `BoundAggregateExpression` it names.
+- **`Equals` compares what the reducer computes**: its type, function, arguments, rows and bind data. A norm with no
+  function is the norm its order and bound name, so it does not equal the SUM over its body. The facts the rewrites
+  record (`by`, `per`, `count_scale`, `holds_reducer`, `retained`, and the norm a definition was written as) are left
+  out, as DuckDB leaves out an alias, and `FactsEqual` (`DecideFactsEqual` for any two nodes) compares them where they
+  are structure. `written_name` is display only and is in neither.
+- **Each owes DuckDB the obligations of an `Expression` class**: a case in `ExpressionIterator::EnumerateChildren`
+  (the reducer's `children` and `filter`; the test), a no-op case in `LogicalOperatorVisitor::VisitExpression`,
+  `IsFoldable()` false, and copy, equality, hash and serialization (`expression.json`; the reducer's body is written by
+  hand, as `BoundAggregateExpression`'s is, because a function is serialized by name). The NULL test has one more:
+  `ExpressionExecutor` executes it by forwarding to `test`, since it stands in filters DuckDB runs.
+- **The NULL tests are found by class.** `StatisticsPropagator::FoldSkipNullTests` (the `LOGICAL_DECIDE` case,
+  `propagate_decide.cpp`) replaces a test the statistics prove with its constant, as DuckDB folds a filter's
+  `IS NOT NULL`. When the tree is built, a test that `KeepsEveryRow()` is dropped and the others are split from the
+  written conditions into `DecideNode::member_tests`, so stage 08 reads no tag and no filter shape to tell them.
+
+**A value read whole is a table entry.** `computed_values` holds each flattened scalar subquery and each reducer over
+data the objective reads as one value (§2), and a read is told by equality with its entry.
+
+**Where the bound structure departs from `context/opa_rewrite/design.md` § 3.2.2 and § 3.5.**
+
+1. *A member NULL test is its own node, not a field of the reducer.* `BoundDecideNullTestExpression` is a Decorator
+   over the test, as PostgreSQL's `RestrictInfo` is over a conjunct of a qual: it travels inside the conjunction and
+   executes as the test. A helper row inherits the tests of every reducer above it, so a field would have had to become
+   the type of every rows predicate (a clause's `when`, a term's filter, a link's rows), each a pair. With a node the
+   filter stays one conjunction on every carrier and a reader asks the class.
+2. *A value read whole is an entry of `BoundDecide::computed_values`, not a node.* This is the design's own rule that a
+   shared thing is a table named by index (R25), as `keys` and `frames` are. A wrapper node would sit between a
+   flattened column and everything that matches a bound by shape (`StripCastsForIdentity`, `UnwrapDecideCasts`,
+   `KeyHolds`), each of which would need a look-through, and DuckDB's executor would need a case for it.
+3. *Every DECIDE aggregate, a frame's included, is one `BoundDecideReducerExpression`*, as DuckDB's
+   `BoundWindowExpression` is one class for every window function. One bind path makes them all
+   (`DecideBinder::BindAggregate`; `BindFrameAggregate` for a frame's), and a frame's aggregate carries reducer facts,
+   so a second class would be a two-class case in every function that reads a reducer. A frame keeps its
+   `__frame_<i>__` mark on `alias` until it has a node of its own.
 - `src/execution/column_binding_resolver.cpp` — the `LOGICAL_DECIDE` case
 - `src/execution/physical_plan/plan_decide.cpp` — logical → physical
 
@@ -77,23 +124,23 @@ So the operator is built in this order:
    `SubqueryType::SCALAR`, partitioned by `IsCorrelated()`. The owning *slot* is
    held, not the node — `PlanSubqueries` replaces the node in place.
 2. **Flatten** with `PlanSubqueries`.
-3. **Read back** what each slot became, peeling casts for identity
-   (`StripCastsForIdentity`), and record the resulting table index in
-   `query_wide_table_indexes` or `correlated_subquery_table_indexes`.
-4. **Tag** each flattened value with `QUERY_WIDE_VALUE_TAG` or
-   `ROW_VARYING_SUBQUERY_TAG`, so the same semantic fact survives copies and
-   optimizer-generated re-canonicalization even where the table-index sets are
-   unavailable.
-5. **Canonicalize** constraints and objective, then verify (stage 04), then run the shape check on the canonical
+3. **Read back** what each slot became and **record** a copy of it as an entry of
+   `BoundDecide::computed_values` (`DecideComputedValue`, `decide_tree_nodes.hpp`): the `value` a clause reads,
+   `query_wide` for an uncorrelated subquery, and `subquery`. The table is one of the expressions
+   `BoundDecide::EnumerateExpressions` lists, so DuckDB's passes rebind an entry with the clauses, and a read of the
+   value equals its entry (`Expression::Equals`) wherever a rewrite copies it. `IsDecideQueryWideValue` and
+   `DecideHoldsSubqueryValue` are the two lookups; the canonicalizer, the optimizer and the tree hold the vector by
+   reference, so an entry a rewrite appends is seen.
+4. **Canonicalize** constraints and objective, then verify (stage 04), then run the shape check on the canonical
    spelling (stage 04, `../04_canonicalizer/done.md` §3.11).
 
 The objective is collected too, and must be: an uncorrelated `(SELECT k) * MAX(x)`
 is otherwise indistinguishable from a row-varying column and hits the fail-safe
 default, which rejects it for varying per row when it does not.
 
-`correlated_subquery_table_indexes` never changes a decision — a correlated
+A correlated subquery's entry (`query_wide` false) never changes a decision — a correlated
 subquery is row-varying by construction and the fail-safe default would reject it
-anyway. It exists so the rejection can name what the user wrote instead of
+anyway. It exists so a message about a bound that holds one states the evaluated number instead of
 `SUBQUERY`.
 
 ### Step 2 flattens unconditionally, including inside another flattening
@@ -163,7 +210,8 @@ for one written on its own, which the written one keeps when both name it), sort
 by binding, then other expressions by text), and `written_as_by` when a `by` names it. The
 empty key (`per ()`, `by ()`) has no entry: it is `INVALID_INDEX`. A key holding
 a subquery is recognised by its text instead, since bound subqueries do not compare. A reducer's
-`__group_key_<i>__` tag names its `by` key, and a clause's `scope.class_key` its `per` key (`INVALID_INDEX` is
+`by` field (`BoundDecideReducerExpression::by`) names its `by` key, and a clause's `scope.class_key` its `per` key
+(`INVALID_INDEX` is
 `per ()`).
 `keyed_scopes` holds the key scopes, one per key that keys decisions or a reducer's own
 `per` (`KeyedScopeInfo`: the key, the decisions it keys). `variable_scopes` points each

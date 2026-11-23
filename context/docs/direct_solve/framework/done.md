@@ -529,7 +529,8 @@ rank window or a verified, streamed plan) and run on the same two central files.
   (`test/sql/optimizer/expression/`) and `test_left_join_perfect_hash` (`test/sql/join/left_outer/`), and
   `test/common/test_decidb_perfect_hash_join.cpp` (which join types the executor takes).
 - C++: `test_decidb_direct_ir.cpp` (every IR node kind and not-proved parts: a per-row term the splitter cannot read, an
-  order-0 norm in a reducer, and a norm tag it does not expect, each as a not-proved part, not an exception),
+  order-0 norm in a reducer, and a norm marker of an order it does not expect, each as a not-proved part, not an
+  exception),
   `test_decidb_direct_rule_driver.cpp` (stub rules: one rule applying, fallback when no rule applies, a rule that
   applies beside one that does not, two rules applying as an internal error, an IR the front end could not read offered
   to no rule, mismatched slot, a shared plan fragment handed an input that does not fit, each way a substitute can

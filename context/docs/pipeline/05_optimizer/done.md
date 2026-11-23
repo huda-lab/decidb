@@ -196,8 +196,10 @@ none (`abs(x - max(t.id) by (t.g))`), is recorded the same way, over its path fr
 in the argument and in the NULL test `SkipNullData` put in the filter. It is read there as a coefficient, so its
 argument's check refuses an infinity as well as a NaN (`read_as`, `DecideValueRole::COEFFICIENT`); a bound's refuses a
 NaN only. The column takes the query location of the reducer it stands for (`DecideReplaces`), so a message
-quotes `max(cap) by (g)` as written and never calls it a column, and carries `BOUND_REDUCER_TAG`, so a signature reads
-it as its key alone and the tree reads it whole. A frame selector's value
+quotes `max(cap) by (g)` as written and never calls it a column. The guard over it that is NULL outside the
+reducer's groups holds a `BoundDecideNullTestExpression` (`RhsBoundRewriter::InKey`), which settles membership only,
+so a signature reads the value as its key alone; one the objective reads with no `by` is an entry of
+`BoundDecide::computed_values` marked `query_wide`, which the tree reads whole. A frame selector's value
 is a column stage 08 computes from the rows it selects, so no side table reads one: a frame in a row-wise bound stays
 in it, read as a column is, so an infinite value is a bound as a column's is (guide §3);
 in a bound of a clause over groups it stays only where it has one value per group -- a
@@ -213,8 +215,10 @@ clause read in another shape is not in the aggregate shape, and a clause read in
 relation unless that was `=`, whose bound is the tightest of both directions. Nothing else is verified this way.
 An `=` bound's checks are scope checks made before any rule runs: its NaN check, then its `=` check (two values in
 one group, `AddDisagreementCheck`): one check per `by` group, whose message names the group and points at the bound
-(R15), made before any rule can; the NaN check stands with it, so every path raises the same error of the two. Every other data bound's NaN check is a scope check too. A check copies the value it reads with its tags (`NanMessage`,
-`AddAbsValueCheck`): the tree reads a frame, a reducer and a query-wide value by their tags. The `=` check speaks only
+(R15), made before any rule can; the NaN check stands with it, so every path raises the same error of the two. Every
+other data bound's NaN check is a scope check too. A check copies the value it reads whole (`NanMessage`,
+`AddAbsValueCheck`): the tree reads a frame by its tag, a reducer by its node and a query-wide value by its entry of
+`computed_values`. The `=` check speaks only
 where each of the clause's reducers with a `when` of its own keeps a row of the group: a group with none holds no
 instance and constrains nothing, so
 its bound is not read (guide §7.4), as a frame's is not. A reducer over data whose argument reads a frame stays a reducer over the rows it
@@ -238,7 +242,7 @@ term splitter use them:
 |---|---|---|
 | 1 | `TagAtomicRemovalGroups` | Gives each source clause a written-order identity before any one-to-many rewrite, so a diagnostic repair removes a clause's rows together. |
 | 2 | `RewriteFrameRanges` | Each range frame over decisions becomes a helper decision per window before later rewrites copy clauses, so they read an ordinary keyed decision. |
-| 3 | `RewriteNorm` | Lowers the NORM marker, including L0 indicator metadata, and removes display tags from desugared L1/L2/infinity norms. |
+| 3 | `RewriteNorm` | Lowers the NORM marker, including L0 indicator metadata, and clears the written order (`norm`) of desugared L1/L2/infinity norms. |
 | 4 | `RewriteInDomain` | Lowers bound DECIDE-variable IN markers to indicator metadata. |
 | 5 | `RewriteBilinear` | The one bilinear pass: retains Boolean products and records their expansions and product F-node specs. A product a later pass exposes is tagged where it appears (8, 11), through the same entry. |
 | 6 | `RewriteMinMax` | Tags the easy identity of a MIN or MAX (`max(e) <= K`) and splits an equality on one, before any pass reads the clause's direction. |
@@ -589,11 +593,11 @@ that deciding sign per row at execution time is not warranted.
 
 ### NORM and IN — `RewriteNorm` / `RewriteInDomain`
 
-The binder keeps `norm(...)` as an aggregate-shaped DECIDE marker, so it takes a
+The binder keeps `norm(...)` as a reducer with no function (a marker), so it takes a
 `by (G)` and reads the rows its clause's `when` keeps as any reducer does.
 Canonicalization (stage 04) replaces L1, L2, and infinity norms with `SUM(ABS)`,
-`SUM(POWER(_, 2))`, and `MAX(ABS)`, tagged with their written order for display only;
-`RewriteNorm` drops that tag, so every layer after it shows the definition the solver
+`SUM(POWER(_, 2))`, and `MAX(ABS)`, which keep their written order in the `norm` field for display only;
+`RewriteNorm` clears it, so every layer after it shows the definition the solver
 receives. L0 needs indicator variables, so it reaches this pass as a marker and emits
 its Boolean indicator and exact forward/reverse links. Lowering swaps the marker for a
 `SUM` of indicators under any factor the canonicalizer peeled (`2 * norm(e, 0) <= 6`), so
@@ -838,7 +842,7 @@ convex QP on both solvers); every other term takes the weight as a factor. Linea
 stage 06 writes in (D89).
 
 One helper per **reducer over one set of rows**: a second site holding the same reducer (`DecideExpressionsEqual`,
-which ignores aliases, where the `by` and `per` tags live) with the same path key, the same key scope of its own
+which leaves out a reducer's `by` and `per`, as `Equals` does) with the same path key, the same key scope of its own
 `per`, over the same rows and under the same `per` key of its clause reuses the first helper (`Helpers::Find`),
 whichever clause it is in and however it spells the reducer. The rows `RewriteAbs` derived from one clause
 each hold a copy of the reducer (`aux >= sum(e) by (g) - 40`, `aux >= 40 - sum(e) by (g)`),
@@ -870,7 +874,7 @@ known, so only the `BOOL` factor keeps the push.
 **The objective** is walked the same way when stage 04 gave its record the VALUE shape
 (a reducer under a `BOOL` factor): `MAXIMIZE b * sum(x)` replaces `sum(x)` by a helper
 pushed by the term's sign in the minimization, and the product is one auxiliary the objective reads
-once. A reducer stage 04 tagged for holding a reducer (D81) becomes a helper the same way,
+once. A reducer stage 04 marked as holding a reducer (`holds_reducer`, D81) becomes a helper the same way,
 the reducers inside it helpers keyed by their paths, so the objective reads the outermost
 helper once: `MINIMIZE max(per g: sum(x) by (g))` is a helper per `g` and one over them.
 A reducer a function reads (`0 * sum(x) + abs(sum(x) - 2)`; any node but a sum, a product or a cast) becomes a helper
@@ -1005,14 +1009,14 @@ supported"*, at the comparison). The test is `RequireLinearOperand`, which an AB
 
 ### AVG → SUM — `RewriteAvgToSum`
 
-Replaces a decision-bearing `AVG` with `SUM`, tagged `AVG_REWRITE_TAG` so
+Replaces a decision-bearing `AVG` with `SUM`, its `count_scale` set so
 coefficient evaluation divides the terms by the number of rows the reducer reads in its
 group: the kept rows of its `by` group, less those its own `when` drops, one per class
 under its own `per`. A **decision-free** `AVG` is
 skipped: there is nothing to linearize, and rebinding it as `SUM` would redeclare
 it with `SUM`'s integral type while its value stays fractional. The swap happens under
 any factor the canonicalizer peeled (`2 * avg(x) >= 4`), so a clause an AVG was rewritten in goes back through `CanonicalizeClause`, and the
-objective through `SetObjective`, which canonicalize it again. Keeping the tag on
+objective through `SetObjective`, which canonicalize it again. Keeping the field on
 objective terms is what makes a mixed `AVG(a) + SUM(b)` preserve true AVG
 semantics.
 

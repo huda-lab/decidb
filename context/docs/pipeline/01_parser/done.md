@@ -286,7 +286,8 @@ It is built only where a scope is written inside a call or a `by` follows it; a 
 `SelectNode` through `ParsedDecide::EnumerateExpressions`: the keys of the declarations, and each clause's scope and
 body.
 
-The binder binds the scopes and reducers into the bound clause records and the reducers' tags (`../02_binder/done.md` §4a).
+The binder binds the scopes and reducers into the bound clause records and the reducer nodes' fields
+(`../02_binder/done.md` §4a).
 
 **Source spans.** The grammar wraps every expression of a DECIDE clause in one decorator reduction
 (`a_expr: a_expr_body` and `b_expr: b_expr_body` call `noteDecideExpr`), the one place that sees an expression with its

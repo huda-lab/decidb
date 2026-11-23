@@ -5,8 +5,8 @@ to the solver, and why each layer does what it does. Stage details are in `../RE
 
 ## The design in one paragraph
 
-A scope is data attached to a clause, not a rewrite of it. The binder wraps a clause in a `when` and a `per` marker and
-tags each reducer with its own filter, key and `by` key; the canonicalizer reads those markers once to choose the
+A scope is data attached to a clause, not a rewrite of it. The binder records a clause's `when` and `per` on its
+record and each reducer's own filter, key and `by` key on its node; the canonicalizer reads them once to choose the
 clause's shape and to build the data checks; execution partitions rows by each key and reads only the rows a `when`
 keeps. No layer turns a scoped clause into a different unscoped one, so EXPLAIN, DIAGNOSE and messages can always quote
 the clause the user wrote.
@@ -41,15 +41,14 @@ the clause the user wrote.
   entry in `scope.class_key` (`INVALID_INDEX` for `per ()`). A scoped clause may hold a parenthesized `AND` of
   comparisons, each of which takes the scope. The
   record takes the location of the `per` (`per_location`), where the parser kept the key's text, so a message quotes the key as written.
-- **Reducers.** `DecideBinder::BindReducer` puts the inner `when` on `BoundAggregateExpression::filter` and tags
-  an inner `per` with its key scope (`MakeQualifiedReducerTag`). It registers the `by` key in
+- **Reducers.** `DecideBinder::BindReducer` puts the inner `when` on `BoundDecideReducerExpression::filter` and sets
+  the node's `per` to the key scope of an inner `per`. It registers the `by` key in
   `LogicalDecide::keys` (one entry per key; keys compare as sets, a key holding a subquery by its text,
-  `FindOrCreateDecideKey`) and tags the reducer `MakeGroupKeyTag`. Tags are
-  composable (`AddDecideTag`, `HasDecideTag`), because a keyed `AVG` is tagged by the binder and again by the AVG→SUM
-  rewrite.
+  `FindOrCreateDecideKey`) and sets the node's `by` to its index. Each fact is a field of its own, so the binder's
+  `per` and the AVG→SUM rewrite's `count_scale` stand on one node without meeting.
 - **Objective.** `DecideObjectiveBinder::BindObjective` wraps a front `when` the same way; `per ()` adds
-  nothing. `outer(per k: inner(e) by (k))` binds as any nested reducer (D81): `outer` qualified by `k`, `inner`
-  tagged with its `by` key.
+  nothing. `outer(per k: inner(e) by (k))` binds as any nested reducer (D81): `outer` with its `per` `k`, `inner`
+  with its `by` key.
 - A `CASE WHEN` that reads no decision is data wherever it stands, a per-row coefficient as `COALESCE` over data is; a
   `when` condition, a key and a `by` key are SQL over the rows and accept one. A `CASE` over a decision is refused by
   the shape check after canonicalization (*"CASE over a decision is not supported"*,
@@ -70,7 +69,7 @@ its shape ([guide.md §6.4](guide.md#64-how-a-clause-becomes-model-rows)):
 The shape is decided here, once, because a later layer that re-decided it would need its own copy of these rules; the
 canonicalizer never opens a term, so a filtered or grouped reducer is one atom to it.
 
-- **VALUE.** The comparison is stamped `VALUE_REWRITE_TAG`. `DecideOptimizer::RewriteScopedReducers`
+- **VALUE.** The clause's record holds the shape (`BoundDecideClause::shape`). `DecideOptimizer::RewriteScopedReducers`
   (`decide_rewrite_scoped.cpp`) replaces each decision reducer with a helper decision (`__value_<n>__`, reused for a
   repeated occurrence in the same clause) and records it in `LogicalDecide::reducer_value_links`. The helper is
   `INTEGER` when the reducer's value is whole (`DecideValueIsWholeNumbered`, the same test stage 04's integer step
@@ -106,7 +105,8 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
 ## Optimizer
 
 - `RewriteScopedReducers` (VALUE shape, above), after `RewriteBilinear` and before the MIN/MAX passes. It also takes
-  nested reducers (guide §5.5): the canonicalizer gives a clause that holds a nest the VALUE shape, and tags the
+  nested reducers (guide §5.5): the canonicalizer gives a clause that holds a nest the VALUE shape, and sets
+  `holds_reducer` on the
   outermost reducer of each nest in the objective (`TagNestedObjectiveReducers`, D81). Every reducer of a nest becomes
   a helper decision keyed by its path key (`DecideReducerPath`, `FindOrCreateDecidePathKey`), innermost first, over
   the rows its path keeps; a member is pinned on the side its readers push it, through `MIN` and `MAX` as through

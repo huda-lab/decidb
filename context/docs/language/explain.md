@@ -80,12 +80,12 @@ canonical and rewritten layers quote every located subtree that reads no decisio
 which canonicalization and the rewrites reshape. A reprinted node
 prints its operator and quotes its children; a cast with no location is display noise and prints as its child. The
 canonical layer prints the respelled product, and a message never searches for the other layer's text. A reprinted
-call prints the name the user wrote, which the binder keeps in a tag when it renames an alias to its primary
+call prints the name the user wrote, which the binder keeps in a field (`written_name`) when it renames an alias to its
+primary
 (`DecideWrittenName`, `../pipeline/02_binder/done.md` § One spelling per function): `pow(x - v, 2)` reprints as `pow`
 and `@(x - v)` as `@`, also in the ABS rewrite's account label.
 `Expression::ToString()` is not used because the bound tree is not the query: it carries casts the binder inserted,
-prints functions in call form, and keeps pipeline tags in aliases that `GetName()` prints verbatim
-(`__group_key_0__`).
+prints functions in call form, and keeps a frame's and a function's tags in aliases (`__frame_0__`).
 
 **The style** (D32): quoted text as typed, in the user's case; a reprinted node (a rewritten row, the decision structure
 of a layer) with reducers, `norm` and keywords in lower case; the `when c per K:` qualifier in front; a
