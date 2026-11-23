@@ -932,7 +932,7 @@ the objective's, dense over every row, would keep the columns, leaving the build
 
 The records are `ClauseRecords` (`../06_model_formulation/done.md` § The rows a clause emits). Measured on
 `context/opa_rewrite/repro/clauses_times_rows.sql` (40 clauses over 2,000,000 rows, each keeping 2,000) against
-columns as long as the input: `execution.tree_model` 25 ms against 534 ms, implied bounds 0 ms against 181 ms, peak
+columns as long as the input: `execution.tree_model` 32 ms against 534 ms, implied bounds 0 ms against 181 ms, peak
 memory 1.03 GB against 2.78 GB. A clause that keeps every row gains nothing from places and pays for its records:
 `y <= v` alone over 1,000,000 rows spends 103 ms in `execution.tree_model` against 53 ms, and 66 ms against 82 ms in
 implied bounds and the builder's clause rows.

@@ -371,36 +371,35 @@ Ruled by the owner (`decisions.md` R21 to R26):
 
 The design, its measurements and the tasks: [review/ARCH-2-design.md](review/ARCH-2-design.md). Rulings R42 to R46.
 
-- **Three owners (R42).** The optimizer chooses the form of every lowering and stamps it on the plan. A node repeats
-  that form once per group and decides nothing. `FormulateModel` supplies what needs the box (Big-M constants, a
-  `<>` disjunction, a hard MIN or MAX) and stays a pure function of the records and a box, re-runnable for
-  `DIAGNOSE` without reading data. Pattern: instruction selection, emission, legalization.
+- **Three owners (R42).** The optimizer chooses the form of every lowering and stamps it on the plan: a helper's
+  form, an AVG under `<>` kept as sums. A node repeats that form once per group and decides nothing. Stage 06
+  supplies what needs the data's numbers, through two entry points: `PrepareModel` settles the column box once for
+  a query, and `FormulateModel` supplies what needs a box (Big-M constants, a `<>` disjunction, a hard MIN or MAX)
+  and stays a pure function of the records and a box, re-runnable for `DIAGNOSE` without reading data. Pattern:
+  instruction selection, emission, legalization.
 - **The node rule (R43, R44).** A SUM or AVG passes its members up when every reader takes a linear expression and
   it is in a nest of sums or each instance has one reading row by construction; otherwise it is a variable with a
   definition row per group. A MIN or MAX is a variable with a link per group, and a group of one member is that
-  member. The optimizer sets the form on the helper's definition; how a MIN or MAX is pinned depends on which way
-  its readers push it (`ExtremumPush`), as today.
+  member. The optimizer sets the form on the helper's definition (`decide_helper_form.cpp`): the rule lists the
+  readers that take a linear expression, and any other place the plan names the helper keeps its column. How a MIN
+  or MAX is pinned depends on which way its readers push it (`ExtremumPush`).
 - **Helpers stay declared at planning (R45).** Their names in `EXPLAIN` and `DIAGNOSE` do not change.
-- **A record per group, not per input row.** Today the emitter scatters node values into arrays as long as the
-  input and stage 06 regroups them. [reproduced], `repro/clauses_times_rows.sql`: over 2 million rows, going from 1
-  clause to 40 takes evaluation from 44 ms to 638 ms and peak memory from 1.1 GB to 2.5 GB, while the solve goes
-  from 198 ms to 250 ms. A member of a G is one distinct instance of its child, where a MIN or MAX over group values
-  lists one per input row today.
-- **Terms are split from the finished nodes (R46)**, prototype first.
-- **Delete:** `WriteHelpersIn`, the inlined variable scope and the second column layout,
-  the emitter's input-length vectors, `ClauseRows` and `ClauseEmittedRows`' regrouping, the row loops of
-  `decide_value_extraction.cpp`.
-- **Survives:** routing, containers, the key map, data programs and folds, frames, the no-value rule
+- **A record per row a clause emits, not per input row.** The emitter writes each clause's rows as records
+  (`ClauseRecords`) straight into the solver input. A term is a decision, an instance and a coefficient, and stage
+  06 finds its column from the instance alone; a helper holds its class for the rows that read it. A decision read
+  through a frame is a term on that decision at the instance of the row the frame selects.
+  [measured] `repro/clauses_times_rows.sql`, 2 million rows: 1 clause spends 29 ms writing the model
+  (`execution.tree_model`) at a peak of 0.99 GB, 40 clauses 32 ms at 1.03 GB; 40 clauses that each read a helper,
+  38 ms at 1.27 GB, the difference in memory being the solver's own.
+- **The planner reads a clause twice**: the tree walk builds nodes and the term half builds terms, one extraction
+  for a clause and the objective (`DecideTermLists`). Joining the two readings is an open decision (R46,
+  `context/docs/pipeline/todo.md` § MODEL-6).
+- **Shared with Phase 5:** routing, containers, the key map, data programs and folds, frames, the no-value rule
   (`DecideAbsence`), plan-time helper allocation, the linearizers of stage 06.
 
 **Departures from the deck (R-D).** Formulation has three owners where the deck's node does all of it; a lone SUM
 is written into its readers by structure, not by a count; AVG, COUNT, ABS, products, L0, norms, `<>` and quadratic
 terms each have a node rule the deck does not give.
-
-**How to change it safely.** The old and the new model building run side by side in a debug build and the models
-are compared row by row over the suite; the old path is deleted in the task that makes the comparison empty. An
-earlier attempt composed values at the nodes beside stage 06; it changed no model and removed no code, and was
-reverted.
 
 ## 5. Direct solve and the tree
 

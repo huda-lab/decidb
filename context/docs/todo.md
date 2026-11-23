@@ -16,6 +16,5 @@ the owner rules first.
 - [ ] MODEL-6 One reading of a reducer body (decision) — pipeline/todo.md § MODEL-6
 - [ ] MODEL-8 The helper of a link whose data may split its classes (decision) — pipeline/todo.md § MODEL-8
 - [ ] MODEL-24 The owner of a clause's emitted rows (decision) — pipeline/todo.md § MODEL-24
+- [ ] MODEL-7 The model-writing time of the clauses benchmark (decision) — pipeline/todo.md § MODEL-7
 
-## 6.6 Gate (one lane)
-- [ ] MODEL-7 Phase 6 gate and docs — pipeline/todo.md § MODEL-7

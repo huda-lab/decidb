@@ -61,13 +61,13 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   read; 1 moves the same state behind more plumbing and 2 pays time for no reader's gain.
 - **Done when.** Model goldens identical; `./test/decide/run_tests.sh -k "bound or not_equal or diagnose"`.
 
-## MODEL-7 — Phase 6 gate and docs
+## MODEL-7 — The model-writing time of the clauses benchmark
 
-- **Change.** design.md § 4 and stages 05, 06 and 08 state the system as it is. `language/guide.md` states that an
-  exact ABS or a MIN or MAX whose Big-M the data do not bound is solved natively on Gurobi and refused on HiGHS
-  (`NativeConstructPolicy::Use`, `formulate_model.cpp:157`).
-- **Needs.** Every task above that is not a decision.
-- **Done when.** `make decide-test`; `DECIDB_FORCE_SOLVER=highs make decide-test`;
-  `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`; the debug build's suite; `unittest "[decidb]"` in both builds;
-  `repro/clauses_times_rows.sql` and its helper form no slower in evaluation time or peak memory than
-  `08_execution/done.md` states; `make format-check`.
+- **Decision needed.** Whether 7 ms of model-writing time is traced to its commit.
+- **Problem.** `context/opa_rewrite/repro/clauses_times_rows.sql` spends 32 ms in `execution.tree_model` for 40
+  clauses over 2,000,000 rows, 29 ms for one clause; the phase started from 25 ms for 40. Peak memory is equal
+  (1.03 GB) and the query takes about 850 ms. The time is in what one clause already pays over every row (the
+  objective's terms and the bound on `x`), not in the clauses.
+- **Options.** (1) Bisect the phase's commits on the benchmark and remove the cause. (2) Leave it.
+- **Recommendation.** 2, unless a profile shows one plain cause: the difference is under 1% of the query.
+- **Done when.** `DECIDB_PROFILE=1` on the benchmark reads 25 ms or the owner rules it closed.

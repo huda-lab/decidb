@@ -1,8 +1,8 @@
--- design.md section 4 (step 5): evaluation scales with clauses times rows, not with what the clauses keep.
--- 2,000,000 rows; each clause keeps 2,000. Run with DECIDB_PROFILE=1 and read execution.tree_model,
--- execution.assemble_input and gurobi.optimize; /usr/bin/time -l gives peak memory.
---   1 clause:   tree_model  44 ms, assemble_input   5 ms, optimize 198 ms, peak 1.1 GB
---   40 clauses: tree_model 638 ms, assemble_input 173 ms, optimize 250 ms, peak 2.5 GB
+-- design.md section 4: writing the model scales with what the clauses keep, not with clauses times rows.
+-- 2,000,000 rows; each clause keeps 2,000. Run with DECIDB_PROFILE=1 and read execution.tree_model and
+-- gurobi.optimize; /usr/bin/time -l gives peak memory.
+--   1 clause:   tree_model 29 ms, optimize 168 ms, peak 0.99 GB
+--   40 clauses: tree_model 32 ms, optimize 207 ms, peak 1.03 GB
 -- The first statement is the 1-clause run; comment it out to time the second alone.
 SET decide_direct_solve = 'off';
 CREATE TABLE t AS SELECT i AS id, (i % 1000) AS g, (i * 7 % 5 + 1)::DOUBLE AS w, (i % 4 + 1)::DOUBLE AS v

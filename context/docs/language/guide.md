@@ -206,6 +206,10 @@ data and unaffected.
   `SUM(x) <> K·n`.
 - **`IN`** on a column is a filter; on a decision it restricts the decision to the listed values. `IN` on a reducer is
   not supported.
+- **`ABS`** over a decision: a clause that holds it down (`abs(x - 5) <= 2`, `MINIMIZE sum(abs(x - 5))`) needs nothing
+  more. One that pushes it up or pins it (`abs(x - 5) >= 2`, `=`) needs, on HiGHS, a finite bound on the decisions
+  inside, written or inferred; the message names the variable (*"'x' has no finite bound, which ABS needs"*). Gurobi
+  needs none. The hard direction of `MIN` and `MAX` follows the same rule (§5).
 - **Degree**: a term has at most two decision factors. Linear terms, products of two decisions (§4) and squares
   (`POWER(linear, 2)`, `linear ** 2`, `linear * linear`) are allowed, and every spelling of one polynomial answers
   alike: `2*x*x`, `x*2*x` and `2*POWER(x, 2)` are one term, and `(x+y)*(y+x)` is `POWER(x + y, 2)`. `POWER(e, n)` over a
