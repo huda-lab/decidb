@@ -709,7 +709,7 @@ void DecideModelEmitter::Route(EmittedClause &&clause, bool folded) {
 	} else if (row.comparison_type == ExpressionType::COMPARE_NOTEQUAL) {
 		NotEqualClause not_equal;
 		// An aggregate `<>` excludes every value its group's rows give, each once; an AVG's terms stay sums, so its
-		// values are scaled by the group's size instead (KeepAvgAsSumUnderNotEqual).
+		// values are scaled by the group's size instead (DecideConstraint::avg_scales_bound).
 		for (idx_t e = 0; row.lhs_is_aggregate && e < sets.groups.size(); e++) {
 			const auto first = NumericCast<int64_t>(not_equal.excluded.size());
 			const double scale = clause.avg_rhs_scale ? static_cast<double>(sets.begin[e + 1] - sets.begin[e]) : 1.0;
@@ -1379,7 +1379,7 @@ EmittedClause DecideModelEmitter::Groups(idx_t root, bool counted) {
 	if (clause.admitted_lower) {
 		Admit(body, evaluated);
 	}
-	result.avg_rhs_scale = HoistAvgIntoNotEqualBound(clause, filters);
+	result.avg_rhs_scale = clause.avg_scales_bound;
 	ScaleAvgTerms(clause, filters, kept, evaluated);
 	Polynomial(root, rows, filters, null_rows, result);
 	if (!bound_null.empty()) {

@@ -24,14 +24,14 @@ its programs). Model building, the solve and the diagnoses live with their stage
 | Function | Phase |
 |---|---|
 | `EvaluateTree` | 1–2 — the evaluation (§1a): the tree's descent over the buffered rows (`DecideDescent`), each node's programs over its entries (`DecideTreeColumns`), and the model emitter (`DecideModelEmitter`), which writes the key scopes' classes, the clauses, the objective and the helper decisions' members as stage 06 reads them |
-| `BuildSolverInput` | 3a — assembles `SolverInput`, everything model building reads, settles the column box, builds the `VarIndexer` |
+| `BuildSolverInput` | 3a — adds the plan's facts and the declared column box to `SolverInput`, builds the `VarIndexer`, then calls stage 06's once-per-query step (`PrepareModel`), which settles the box |
 | `FormulateModel` (`formulate_model.cpp`) | 3b — derives the constants and emits the rows, against a given box |
 | `FinalizeSolveResult` | 3 — calls `SolveDecide` (`decide_solve.cpp`: the solve, and at a time limit the prompt to continue or the incumbent), switches on the terminal (`SOLVED`/`UNBOUNDED`/`INFEASIBLE`/`UNDIAGNOSED`), and hands the diagnosis off or finishes `gstate` |
 | `UnboundedTerminal`, `InfeasibleTerminal` (`decide_diagnostic_terminals.cpp`) | under `DIAGNOSE` only — the engines a failure runs; the infeasible one formulates the repair model, 3b again against the widened box (`FormulateElasticModel`) |
 
 `EvaluateTree` writes what the model reads of the data into the `SolverInput` itself: the model emitter holds it and
 fills its clauses, links, mappings and objective, so the sink state mirrors none of them and `BuildSolverInput` adds
-the plan's facts and settles the box. `FormulateModel` reads `SolverInput`, the box and the column space and nothing else: the
+the plan's facts and the declared box, which `PrepareModel` settles. `FormulateModel` reads `SolverInput`, the box and the column space and nothing else: the
 declared names and the native-construct policy are on `SolverInput` (`variable_names`, `use_native_constructs`), and
 a row whose `M` the box gives names its indicator (`EvaluatedConstraint::sized_indicator`). Nothing in it depends on a variable bound, so the
 formulation pass runs twice against two boxes from one input.
@@ -278,7 +278,7 @@ columns in a scan of their own.
   definition reads a NULL unreduced or a decision with no instance (`absent_reads`, D88): the definitions are read in
   `eval_order`, which puts what defines a decision before what reads it, and a row reading an auxiliary with no value
   skips its instance, as the objective drops its term there. An AVG under `<>`
-  multiplies its bound by its group's count (`HoistAvgIntoNotEqualBound`). An easy MIN or MAX, which its direction
+  the plan keeps as sums (`DecideConstraint::avg_scales_bound`) multiplies its bound by its group's count. An easy MIN or MAX, which its direction
   drives (`DecideConstraint::was_minmax_easy`), is a clause in the grouped shape: a model row per member of its G,
   grouped by its `by` key, whose terms are read as written on the member's own row, not counted once in its group. Its
   bound on one decision is admitted on each member (`DecideModelEmitter::Admit`), an entry of its term's site, the
@@ -568,8 +568,7 @@ an instance keeps is known only from the data, so direct solve declines every su
 ### Implied bounds from constraint data
 
 Once coefficients are numbers, a second, data-driven source of column bounds
-becomes available. Stage 08 invokes it — `DecidePropagateImpliedBounds()` — but
-does not own it: the pass is pure over `SolverInput` and lives at stage 06. See
+becomes available: `DecidePropagateImpliedBounds()`, a pass of stage 06's `PrepareModel`, pure over `SolverInput`. See
 [`../06_model_formulation/done.md`](../06_model_formulation/done.md) §9.
 
 The call is ordered here, immediately after the singleton-row bounds are resolved and
@@ -1251,10 +1250,9 @@ clause or objective that reads the helper's column.
 PHASE 3 is two passes, split by *what each one reads* rather than by where it sits
 in the sequence.
 
-`BuildSolverInput` **assembles**. It moves the evaluated constraints, objective and
-links off `gstate`, builds the `VarIndexer`, resolves the variable types and the
-column box (the folded bounds, the `lower_bounds` sentinel, the rigid snapshot, the
-floors a `when` lowers, then `DecidePropagateImpliedBounds`). The objective's AVG scaling
+`BuildSolverInput` **assembles**. It builds the `VarIndexer` and resolves the variable types and the
+declared column box (the folded bounds, the `lower_bounds` sentinel, the rigid snapshot), then calls `PrepareModel`
+(stage 06: the ABS envelopes, the floors a `when` lowers, then `DecidePropagateImpliedBounds`). The objective's AVG scaling
 runs before it, where the objective is read (`DecideModelEmitter::Objective`). It runs
 exactly once per query.
 

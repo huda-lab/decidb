@@ -186,8 +186,8 @@ private:
 	void EvaluateTree(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows, SolverInput &input) const;
 
 	//! BuildSolverInput: what `solver_input` holds beside what EvaluateTree wrote into it — the plan's facts, the
-	//! variable types and the column box, implied-bound propagation, and the flat column space. Runs once per query:
-	//! the box it settles is the one the formulation pass below is then handed.
+	//! variable types, the column box as the plan declares it and the flat column space — then stage 06's
+	//! once-per-query step (PrepareModel). The box that leaves is the one the formulation pass below is handed.
 	void BuildSolverInput(idx_t num_rows, SolverInput &solver_input, VarIndexer &out_var_indexer) const;
 
 	//! FinalizeSolveResult, solve and readback: the solve (SolveDecide), the RouteSolveResult switch and its four

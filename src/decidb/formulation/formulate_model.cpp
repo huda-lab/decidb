@@ -12,6 +12,16 @@
 
 namespace duckdb {
 
+void PrepareModel(SolverInput &input, const VarIndexer &var_indexer, const vector<DecideBoundBox> &boxes) {
+	EmitAbsEnvelopes(input);
+	DecideProfileScope phase("assembly.lifted_floors");
+	ResolveLiftedFloors(input, var_indexer, boxes);
+	phase.Next("assembly.implied_bounds");
+	FloorBilinearAuxiliaries(input);
+	DeriveReducerValueBounds(input, var_indexer);
+	DecidePropagateImpliedBounds(input, var_indexer);
+}
+
 void FormulateModel(SolverInput &input, const FormulationBox &box, VarIndexer &var_indexer) {
 	DecideProfileScope phase("formulation.abs_bounds");
 	idx_t num_rows = input.num_rows;

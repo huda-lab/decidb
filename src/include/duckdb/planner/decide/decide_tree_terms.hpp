@@ -296,6 +296,10 @@ struct DecideConstraint {
 	idx_t lifted_floor = DConstants::INVALID_INDEX;
 	double lifted_floor_k = 0.0;
 
+	//! An AVG under `<>` whose terms stay sums: each group's bound is multiplied by the group's count instead
+	//! (DecideTermLowering::Clause).
+	bool avg_scales_bound = false;
+
 	//! The terms of degree 2, one group per product the left side holds: a constraint with any is a quadratic row.
 	vector<DecideProductGroup> product_groups;
 

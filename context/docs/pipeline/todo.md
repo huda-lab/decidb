@@ -45,20 +45,21 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   `build/release/test/unittest "[decidb]"`; the corpus query of `test/decide/golden/corpus.sql` line 717's
   neighbour (`per grp: sum(x) by (grp) <= budget / 10 * open`) has 6 columns and 3 rows.
 
-## MODEL-19 — Stage 06 has one driver, and the AVG under `<>` is the optimizer's choice
+## MODEL-24 — The owner of a clause's emitted rows
 
-- **Problem.** `PhysicalDecide::BuildSolverInput` runs stage 06 passes in an order that matters
-  (`physical_decide.cpp:613-655`: the ABS envelopes, the rigid box, `ResolveLiftedFloors`,
-  `FloorBilinearAuxiliaries`, `DeriveReducerValueBounds`, `DecidePropagateImpliedBounds`), and `FormulateModel` runs
-  `DeriveReducerValueBounds` again: a construct is wired into two files of two layers.
-  `HoistAvgIntoNotEqualBound` (`decide_value_extraction.cpp`) chooses how an AVG under `<>` is encoded at run time
-  from plan facts alone (R42). `EvaluatedConstraint::emitted_rows` is a `mutable` cache stage 06 keeps inside the
-  record it is handed.
-- **Change.** One entry point in `src/decidb/formulation` for what needs no box, called before `FormulateModel`;
-  `PhysicalDecide` calls the pair. The optimizer stamps the AVG encoding on the clause. Stage 06 holds its own cache
-  of emitted rows.
-- **Done when.** `./test/decide/run_tests.sh -k "bound or floor or abs or not_equal or avg or diagnose"`;
-  `build/release/test/unittest "[decidb]"`; model goldens identical.
+- **Decision needed.** Where the rows a clause emits are kept between the passes that read them.
+- **Problem.** `ClauseEmittedRows` sums a clause's terms per solver column once and keeps the result on the record
+  (`EvaluatedConstraint::emitted_rows`, `mutable`, dropped by a copy). Three passes read it: implied-bound
+  propagation (`PrepareModel`), the aggregate `<>` expansion (`FormulateModel`) and `SolverModel::Build`, which
+  takes it. A pass that edits a record after the first read leaves the kept rows stale; the one that does
+  (`FormulateModel` sizing a `norm(e, 0)` row) edits rows the first reader skips.
+- **Options.** (1) A stage 06 object holds the rows by clause, passed to `PrepareModel`, `FormulateModel`,
+  `SolveDecide` and `Build`: four signatures and the diagnosis copy carry it, and a key that survives
+  `input.constraints` growing. (2) Each reader sums afresh: no kept state, the per-column sum runs twice for every
+  `<=` and `=` clause. (3) Leave the rows on the record.
+- **Recommendation.** 3. The rows are a function of the record and the column space, both fixed before the first
+  read; 1 moves the same state behind more plumbing and 2 pays time for no reader's gain.
+- **Done when.** Model goldens identical; `./test/decide/run_tests.sh -k "bound or not_equal or diagnose"`.
 
 ## MODEL-20 — The helper-form rule names the readers that take members
 

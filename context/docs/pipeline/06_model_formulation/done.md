@@ -20,6 +20,11 @@ SQL-expression canonicalization and knows nothing about any backend.
 - `src/include/duckdb/decidb/formulation/ilp_model.hpp` — `VarIndexer`, `SolverModel`, `ModelConstraint`
 - `src/include/duckdb/decidb/formulation/solver_input.hpp` — the input contract
 
+Stage 06 has two entry points (`formulate_model.cpp`), and `PhysicalDecide` calls the pair. `PrepareModel` runs once
+for a query, on the model as the emitter wrote it and the box the plan declares: the ABS envelopes join the rows,
+the floors a `when` lowers are resolved, products and helpers are floored, and implied bounds are propagated, in that
+order. `FormulateModel` runs once for each box the model is formulated against.
+
 `Build()` takes `SolverInput` by **non-const** reference so raw global constraints
 can be moved rather than copied, plus a pre-built `VarIndexer` threaded in from
 `PhysicalDecide::Finalize()` so it is constructed exactly once.

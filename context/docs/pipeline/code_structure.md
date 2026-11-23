@@ -104,7 +104,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `execution/physical_plan/plan_decide.cpp` | 03/08 | Logical → physical, entity key indices, verification |
 | `execution/operator/decide/physical_decide.cpp` | 08 | Materialization, evaluation, emission, assembly, the switch over the solve's outcome, readback |
 | `execution/operator/decide/physical_decide_frames.cpp` | 08 | The frame maps: each frame's timelines and the values it reads |
-| `decidb/formulation/formulate_model.cpp` | 06 | `FormulateModel`: the constants and rows against a box, a function of `SolverInput` alone |
+| `decidb/formulation/formulate_model.cpp` | 06 | `PrepareModel`: the rows that need no box and the settled column box, once per query. `FormulateModel`: the constants and rows against a box, a function of `SolverInput` alone |
 | `decidb/formulation/ilp_model_builder.cpp` | 06 | `SolverModel::Build`: columns, objective, raw rows, clause rows |
 | `decidb/formulation/ilp_linearization.cpp` | 06 | `LowerDecideConstructs`, global-auxiliary allocation |
 | `decidb/formulation/linearization_bigm.cpp` | 06 | Big-M sizing and the per-row range walks |

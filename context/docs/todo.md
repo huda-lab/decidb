@@ -15,9 +15,9 @@ the owner rules first.
 ## 6.0 Owner decisions
 - [ ] MODEL-6 One reading of a reducer body (decision) — pipeline/todo.md § MODEL-6
 - [ ] MODEL-8 The helper of a link whose data may split its classes (decision) — pipeline/todo.md § MODEL-8
+- [ ] MODEL-24 The owner of a clause's emitted rows (decision) — pipeline/todo.md § MODEL-24
 
 ## 6.5 Layering (one lane)
-- [ ] MODEL-19 Stage 06 has one driver; the AVG under `<>` is the optimizer's — pipeline/todo.md § MODEL-19
 - [ ] MODEL-20 The helper-form rule names the readers that take members — pipeline/todo.md § MODEL-20
 - [ ] MODEL-21 One term extraction for a clause and the objective — pipeline/todo.md § MODEL-21
 

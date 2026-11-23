@@ -29,7 +29,6 @@
 #include "duckdb/decidb/solver/decide_solve.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/decidb/formulation/formulate_model.hpp"
-#include "duckdb/decidb/formulation/ilp_linearization.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
@@ -534,11 +533,6 @@ void PhysicalDecide::BuildSolverInput(idx_t num_rows, SolverInput &solver_input,
 		solver_input.upper_bounds[var] = tree->singleton_row_boxes[var].upper;
 	}
 
-	// Everything below this point is stage 06 working on the evaluated model. Each ABS arrives as the record stage 05
-	// made of it, with its two envelope rows evaluated, and they join the model here, before any pass reads the rows:
-	// implied-bound propagation reads `aux >= inner` of `ABS(x) <= 3` as a bound on x.
-	EmitAbsEnvelopes(solver_input);
-
 	// The rigid box, captured before any propagation runs and with every user-folded
 	// direction re-opened. What is left is the intrinsic domain alone — the only part of
 	// the column box that survives infeasibility diagnosis unchanged, and therefore the
@@ -558,25 +552,8 @@ void PhysicalDecide::BuildSolverInput(idx_t num_rows, SolverInput &solver_input,
 		}
 	}
 
-	// A constant lower bound under a `when` replaces the default floor of 0 on the instances its rows reach. After the
-	// rigid box is captured, which it re-opens for the decisions it lowers, and before any pass reads the box.
-	phase.Next("assembly.lifted_floors");
-	ResolveLiftedFloors(solver_input, out_var_indexer, tree->singleton_row_boxes);
-	phase.Next("assembly.implied_bounds");
-
-	// Data-driven implied-bound propagation: derive finite upper bounds for
-	// otherwise-unbounded variables from non-negative `<=`/`=` constraints (the
-	// knapsack/budget pattern), so the downstream Big-M can be finite and tight.
-	// Only provably-implied bounds are applied; the feasible region is unchanged.
-	// Seed reducer-value bounds first: a SUM/MAX helper over nonnegative decisions is itself nonnegative, which lets
-	// this pass safely propagate a root equality's finite upper bound back through nested helpers. A product has no
-	// default floor (AddBooleanProduct), so it is floored at its factor's first, once the lifted floors have lowered
-	// the factors: `b * x` over x >= 0 is a non-negative term of a budget row.
-	FloorBilinearAuxiliaries(solver_input);
-	if (!solver_input.reducer_value_links.empty()) {
-		DeriveReducerValueBounds(solver_input, out_var_indexer);
-	}
-	DecidePropagateImpliedBounds(solver_input, out_var_indexer);
+	// Stage 06 from here: what it settles once for the query, before the model is formulated against a box.
+	PrepareModel(solver_input, out_var_indexer, tree->singleton_row_boxes);
 }
 
 //===--------------------------------------------------------------------===//

@@ -290,12 +290,6 @@ void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<bool> &f
 void ScaleAvgTerms(const DecideConstraint &constraint, const vector<TermFilterState> &filters, idx_t num_rows,
                    EvaluatedClauseColumns &evaluated);
 
-//! An AVG under `<>`: dividing its terms by their group's count gives fractional coefficients, which the `<>`
-//! expansion's integer step refuses. So a left side of linear terms that are all AVG keeps them as sums, and the
-//! bound is multiplied by each group's count instead (NotEqualClause::excluded; this returns whether it is): `filters`
-//! then scale nothing. A mixed left side keeps the division, which may still be refused.
-bool HoistAvgIntoNotEqualBound(const DecideConstraint &constraint, vector<TermFilterState> &filters);
-
 //! The bound of a clause over groups that reads a frame and may differ within a group
 //! (BoundDecideClause::tightest_frame_bound, D85): each group's instance takes its tightest value among all its kept
 //! rows where the bound has one, a row its reducers' own `when`s drop included (a group's every kept row bounds it) --

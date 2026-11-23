@@ -103,6 +103,7 @@ public:
 			ExtractConstraintTerms(*lhs, constraint, 1);
 		}
 		CollectLikeTerms(constraint.lhs_terms);
+		KeepAvgAsSumUnderNotEqual(constraint);
 		SettleWeightSigns(constraint.product_groups);
 		clauses.push_back(&constraint);
 	}
@@ -589,6 +590,25 @@ private:
 	//===------------------------------------------------------------------===//
 	// Reducer metadata and peeled scales
 	//===------------------------------------------------------------------===//
+
+	//! An AVG under `<>`: dividing its terms by their group's count gives fractional coefficients, which the `<>`
+	//! expansion's integer step refuses. So a left side of linear terms that are all AVG keeps them as sums, and each
+	//! group's bound is multiplied by the group's count instead (DecideConstraint::avg_scales_bound). A mixed left
+	//! side keeps the division, which may still be refused.
+	static void KeepAvgAsSumUnderNotEqual(DecideConstraint &constraint) {
+		auto &terms = constraint.lhs_terms;
+		auto averaged = [](const DecideTerm &term) {
+			return term.avg_scale;
+		};
+		if (constraint.comparison_type != ExpressionType::COMPARE_NOTEQUAL || !constraint.lhs_is_aggregate ||
+		    terms.empty() || !std::all_of(terms.begin(), terms.end(), averaged)) {
+			return;
+		}
+		for (auto &term : terms) {
+			term.avg_scale = false;
+		}
+		constraint.avg_scales_bound = true;
+	}
 
 	//! A reducer's count scale, qualifier and reduction on every term or product group extracted from its body since
 	//! `begin`.

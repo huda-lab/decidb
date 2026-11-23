@@ -1065,6 +1065,11 @@ canonicalized again. A **decision-free** `AVG` is a value execution computes and
 objective terms is what makes a mixed `AVG(a) + SUM(b)` preserve true AVG
 semantics.
 
+Under `<>` the division gives fractional coefficients, which the `<>` expansion's integer step refuses. So the linear
+form keeps a left side whose linear terms are all AVG as sums and stamps the clause
+(`DecideConstraint::avg_scales_bound`, `KeepAvgAsSumUnderNotEqual`): execution multiplies each group's bound by the
+group's count. A mixed left side keeps the division.
+
 ### Range frames — `RewriteFrameRanges`
 
 A range over decisions, `agg(from F1 to F2 ...: e) over (...)` (`../../language/guide.md` §5.6, D78), is a reducer

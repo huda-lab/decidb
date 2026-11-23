@@ -628,22 +628,6 @@ void ScaleAvgTerms(const DecideConstraint &constraint, const vector<TermFilterSt
 	}
 }
 
-bool HoistAvgIntoNotEqualBound(const DecideConstraint &constraint, vector<TermFilterState> &filters) {
-	if (constraint.comparison_type != ExpressionType::COMPARE_NOTEQUAL || !constraint.lhs_is_aggregate ||
-	    constraint.lhs_terms.empty()) {
-		return false;
-	}
-	for (idx_t term_idx = 0; term_idx < constraint.lhs_terms.size(); term_idx++) {
-		if (!filters[term_idx].avg_scale) {
-			return false;
-		}
-	}
-	for (idx_t term_idx = 0; term_idx < constraint.lhs_terms.size(); term_idx++) {
-		filters[term_idx].avg_scale = false;
-	}
-	return true;
-}
-
 vector<idx_t> DecideGroupClassSets(const DecideClauseScope &scope, const vector<idx_t> &rows,
                                    const vector<idx_t> &kept_row_group, idx_t groups,
                                    const std::function<void(vector<idx_t> &, vector<GroupName> &)> &classes,
