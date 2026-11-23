@@ -27,7 +27,7 @@ bool IsDecideNormMarker(const Expression &expr, DecideNorm &norm) {
 
 bool IsDecideNormMarker(const Expression &expr) {
 	return expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER &&
-	       !expr.Cast<BoundDecideReducerExpression>().function;
+	       expr.Cast<BoundDecideReducerExpression>().kind == DecideReducerKind::NORM;
 }
 
 DecideHelperRef DecideDefinitionOf(const Expression &expr) {

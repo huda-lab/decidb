@@ -76,12 +76,10 @@ void CollectRangeSigns(ClientContext &context, const LogicalDecide &decide, uniq
 			return false;
 		}
 		auto &reducer = node->Cast<BoundDecideReducerExpression>();
-		// A norm has no function: it is no sum to look through and no extremum.
-		auto name = reducer.function ? StringUtil::Lower(reducer.function->name) : string();
-		if (name == "sum" || name == "avg") {
+		if (reducer.kind == DecideReducerKind::SUM || reducer.kind == DecideReducerKind::AVG) {
 			return false;
 		}
-		const int member_sign = name == "min" || name == "max" ? node_sign : 0;
+		const int member_sign = IsDecideExtremum(reducer.kind) ? node_sign : 0;
 		for (auto &child : reducer.children) {
 			WalkPolarity(context, booleans, child, member_sign, holds, visit);
 		}
@@ -102,7 +100,7 @@ void PointsInQuadraticTermsAsRanges(ClientContext &context, LogicalDecide &decid
 		    BoundExpressionReferencesDecide(expr, decide.decide_index)) {
 			auto &spec = decide.bound.frames[frame];
 			spec.range = true;
-			spec.reducer = "sum";
+			spec.reducer = DecideReducerKind::SUM;
 			spec.to = spec.from;
 			spec.to_k = spec.from_k;
 		}
@@ -144,7 +142,7 @@ public:
 		auto sign = signs.find(slot.get());
 		const auto push = sign == signs.end() ? ExtremumPush::NONE : ExtremumPushOf(outer, sign->second);
 		auto &spec = decide.bound.frames[frame];
-		if (spec.reducer == "count") {
+		if (spec.reducer == DecideReducerKind::COUNT) {
 			throw InternalException("DECIDE: a count over decisions reached the range rewrite: %s", spec.text);
 		}
 		// One helper per frame: a BETWEEN's two comparisons, and every rewrite's copy after this pass, read one value
@@ -161,7 +159,7 @@ public:
 			throw InternalException("DECIDE: a range frame marker reads no payload: %s", spec.text);
 		}
 		auto link = make_uniq<DecideHelperDefinition>(DecideHelperKind::REDUCER_VALUE);
-		link->agg_name = spec.reducer;
+		link->reducer = spec.reducer;
 		link->label = spec.spelling;
 		link->body = marker.Copy();
 		link->push = push;

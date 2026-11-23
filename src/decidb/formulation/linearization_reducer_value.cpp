@@ -29,7 +29,7 @@ using namespace decide_linearize; // NOLINT: internal DECIDE linearization helpe
 namespace {
 
 bool IsExtremum(const ReducerValueLinkSpec &link) {
-	return link.agg_name == "min" || link.agg_name == "max";
+	return IsDecideExtremum(link.reducer);
 }
 
 //! The members of group `group`: [first, last).
@@ -795,7 +795,7 @@ void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer) {
 				if (extremum) {
 					// A MAX's envelope keeps every member at or under the helper's top, a
 					// MIN's at or over its floor.
-					const bool is_max = link.agg_name == "max";
+					const bool is_max = link.reducer == DecideReducerKind::MAX;
 					BoundTermsOfASum(CombineColumns(input, member), members.constants[m], is_max ? -INF : value_lo,
 					                 is_max ? value_hi : INF, is_helper, column_lo, column_hi);
 					continue;
@@ -887,7 +887,7 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 				continue;
 			}
 		}
-		const bool is_max = link.agg_name == "max";
+		const bool is_max = link.reducer == DecideReducerKind::MAX;
 		const idx_t value_var = link.value_var;
 		// The clause as the user wrote it, quoted once for every group's refusal.
 		const auto written = DecideWrittenClause(input, link.source_clause_id);

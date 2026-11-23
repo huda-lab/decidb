@@ -1563,7 +1563,7 @@ void DecideModelEmitter::ValueLinks() {
 		auto &body = tree_node.compiled;
 		auto spec = ReducerValueLinkSpec();
 		spec.value_var = definition.helper;
-		spec.agg_name = tree_node.aggregate;
+		spec.reducer = tree_node.aggregate;
 		spec.need_envelope = definition.NeedsEnvelope();
 		spec.need_closing = definition.NeedsClosing();
 		spec.label = definition.label;
@@ -1607,7 +1607,8 @@ void DecideModelEmitter::ValueLinks() {
 				continue;
 			}
 			spec.members.AddGroup(group_rows.front());
-			const auto avg_scale = tree_node.aggregate == "avg" ? 1.0 / static_cast<double>(group_rows.size()) : 1.0;
+			const auto avg_scale =
+			    tree_node.aggregate == DecideReducerKind::AVG ? 1.0 / static_cast<double>(group_rows.size()) : 1.0;
 			for (auto row : group_rows) {
 				const auto entry = member_entry[row];
 				double constant = 0.0;

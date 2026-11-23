@@ -69,63 +69,31 @@ void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {
 }
 
 // ---------------------------------------------------------------------------
-// AVG → SUM rewrite
+// AVG's account
 // ---------------------------------------------------------------------------
 
-void DecideOptimizer::RewriteAvgToSum(LogicalDecide &decide) {
-	// Rewrites mutate in place, so a clause and the objective are rewritten where they sit, and one an AVG was
-	// rewritten in goes back through the canonicalizing boundary.
-	vector<BoundDecideClause *> rewritten;
-	decide.EnumerateBodies([&](DecideOwnedBody &body) {
-		if ((body.owner == DecideOwnedBody::Owner::CLAUSE || body.owner == DecideOwnedBody::Owner::OBJECTIVE) &&
-		    RewriteAvgInExpression(body.expr, decide, body.Origin())) {
-			rewritten.push_back(body.clause.get());
-		}
-	});
-	for (auto clause : rewritten) {
-		if (clause == &decide.bound.objective) {
-			decide.SetObjective(optimizer.context, std::move(decide.bound.objective));
-		} else {
-			decide.CanonicalizeClause(optimizer.context, *clause);
-		}
+//! Records the account of each AVG over decisions under `expr`. One over data is a value execution computes, and one
+//! inside a definition's body belongs to that definition.
+static void AccountAvgs(const Expression &expr, LogicalDecide &decide, const DecideRowOrigin &origin) {
+	if (DecideDefinitionOf(expr).Is(DecideHelperKind::DEFINITION)) {
+		return;
 	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER &&
+	    expr.Cast<BoundDecideReducerExpression>().kind == DecideReducerKind::AVG &&
+	    BoundExpressionReferencesDecide(expr, decide.decide_index)) {
+		AddRewriteAccount(decide, origin.source_clause_id, LogicalDecide::RewriteAccount::Kind::AVG_SUM,
+		                  RenderForPlan(expr, decide));
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { AccountAvgs(child, decide, origin); });
 }
 
-bool DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide,
-                                             const DecideRowOrigin &origin) {
-	if (DecideDefinitionOf(*expr).Is(DecideHelperKind::DEFINITION)) {
-		return false; // AVG syntax inside this body belongs to the tree F node's definition expression
-	}
-	if (expr->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
-		auto &agg = expr->Cast<BoundDecideReducerExpression>();
-		// The rewrite linearizes an AVG over decisions. One over data is a value execution computes: the bound's is a
-		// placeholder column already (RewriteRhsAggregates), and a frame's marker or a reducer reading a frame stays an
-		// aggregate until the frames are lowered (MakeFrameAggregate).
-		if (StringUtil::CIEquals(agg.function->name, "avg") &&
-		    BoundExpressionReferencesDecide(agg, decide.decide_index)) {
-			AddRewriteAccount(decide, origin.source_clause_id, LogicalDecide::RewriteAccount::Kind::AVG_SUM,
-			                  RenderForPlan(agg, decide));
-			auto new_sum = BindSumOver(optimizer, agg.children[0]->Copy(), agg.filter.get());
-
-			// The count scale tells the execution layer to apply AVG's row-count denominator.
-			// For a single objective AVG this is optimization-equivalent to SUM,
-			// but additive objective expressions can mix AVG with SUM or filtered
-			// aggregates, so preserving the scale is required for correct semantics.
-			// The SUM keeps the AVG's name and facts: its `per` still names the classes the SUM reads one row of.
-			new_sum->alias = agg.alias;
-			new_sum->Cast<BoundDecideReducerExpression>().CopyFacts(agg);
-			new_sum->Cast<BoundDecideReducerExpression>().count_scale = true;
-
-			expr = std::move(new_sum);
-			return true;
+void DecideOptimizer::AccountAvg(LogicalDecide &decide) {
+	decide.EnumerateBodies([&](DecideOwnedBody &body) {
+		if (body.owner == DecideOwnedBody::Owner::CLAUSE || body.owner == DecideOwnedBody::Owner::OBJECTIVE) {
+			AccountAvgs(*body.expr, decide, body.Origin());
 		}
-	}
-
-	bool rewritten = false;
-	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		rewritten = RewriteAvgInExpression(child, decide, origin) || rewritten;
 	});
-	return rewritten;
 }
 
 } // namespace duckdb

@@ -37,13 +37,6 @@ namespace decide_rewrite {
 //! checked once, and the place the first raises at stays (the first error reached is the one raised).
 void AddValueCheck(LogicalDecide &decide, unique_ptr<Expression> check);
 
-//! Map an aggregate's SQL name onto the objective aggregate enum.
-
-//! Whether a lower-cased aggregate name is MIN or MAX.
-inline bool IsExtremumName(const string &name) {
-	return name == "min" || name == "max";
-}
-
 //! `SUM(body)` bound as a reducer, reading the rows `filter` keeps (null: every row).
 unique_ptr<Expression> BindSumOver(Optimizer &optimizer, unique_ptr<Expression> body, const Expression *filter);
 

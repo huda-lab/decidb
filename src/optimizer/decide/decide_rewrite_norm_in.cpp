@@ -53,7 +53,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		    auto *definition = expr->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER
 		                           ? &expr->Cast<BoundDecideReducerExpression>()
 		                           : nullptr;
-		    if (definition && definition->function && definition->norm) {
+		    if (definition && definition->kind != DecideReducerKind::NORM && definition->norm) {
 			    auto &norm = definition->norm;
 			    // The canonical text has been rendered; from here the clause is formulated, and every layer after this
 			    // one shows the definition the solver receives rather than the norm it came from. Canonicalization

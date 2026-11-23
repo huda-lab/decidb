@@ -202,8 +202,7 @@ static bool IsBoundAvgAggregate(const Expression &expr) {
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER) {
 		return false;
 	}
-	auto &agg = expr.Cast<BoundDecideReducerExpression>();
-	return agg.function && StringUtil::CIEquals(agg.function->name, "avg");
+	return expr.Cast<BoundDecideReducerExpression>().kind == DecideReducerKind::AVG;
 }
 
 //! Is `expr` provably whole-numbered from declared types alone?
@@ -241,16 +240,11 @@ static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoi
 	}
 	case ExpressionClass::BOUND_DECIDE_REDUCER: {
 		auto &agg = expr.Cast<BoundDecideReducerExpression>();
-		if (!agg.function) {
-			// A norm is whole when its body is: a count, a sum or a largest of whole values.
+		// A norm is whole when its body is: a count, a sum or a largest of whole values.
+		if (agg.kind == DecideReducerKind::NORM || (IsDecideExtremum(agg.kind) && agg.children.size() == 1)) {
 			return DecideSideIsWholeNumbered(*agg.children[0], false, decide_index, true);
 		}
-		const auto &name = agg.function->name;
-		const bool extremum = StringUtil::CIEquals(name, "min") || StringUtil::CIEquals(name, "max");
-		if (extremum && agg.children.size() == 1) {
-			return DecideSideIsWholeNumbered(*agg.children[0], false, decide_index, true);
-		}
-		if (StringUtil::CIEquals(name, "sum")) {
+		if (agg.kind == DecideReducerKind::SUM) {
 			return DecideSideIsWholeNumbered(*agg.children[0], false, decide_index, addends_count);
 		}
 		return DecideTypeIsWholeNumbered(expr.return_type);

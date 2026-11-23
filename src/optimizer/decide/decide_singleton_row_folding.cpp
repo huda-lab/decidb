@@ -284,7 +284,8 @@ bool DecideReadSingletonRow(ClientContext &context, const LogicalDecide &decide,
 	// A SUM or AVG helper stands for the sum of its members, which a row may read in their place (D89, deck pp. 115,
 	// 119): a bound on it is a row that reads it, not its box.
 	for (auto &link : decide.helper_definitions) {
-		if (link->helper == out.var_idx && (link->agg_name == "sum" || link->agg_name == "avg")) {
+		if (link->helper == out.var_idx && link->kind == DecideHelperKind::REDUCER_VALUE &&
+		    !IsDecideExtremum(link->reducer)) {
 			return false;
 		}
 	}

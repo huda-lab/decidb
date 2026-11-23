@@ -26,8 +26,8 @@ decides shape, parses SQL, executes relations, or calls a solver.
 an objective it rewrote through `LogicalDecide::SetObjective`; each re-canonicalizes and re-verifies that one record.
 The canonicalizer's refusals are raised there, at the pass that made the shape: `RewriteRhsAggregates` replaces a
 data reducer by a column of its value, so the objective it changed is canonicalized at once, and a factor that
-varies per row on an objective reducer is refused then. `RewriteNorm` and `RewriteAvgToSum` canonicalize the clauses
-they lowered a marker or an AVG in; `RewriteScopedReducers` each clause it put a helper in. A pass whose output is
+varies per row on an objective reducer is refused then. `RewriteNorm` canonicalizes the clauses
+it lowered a marker in; `RewriteScopedReducers` each clause it put a helper in. A pass whose output is
 canonical as it writes it (a range's helper, a product's tag, the relation of an easy extremum's other half, an ABS's
 tag, a folded bound's mark) reinstalls nothing. A debug build verifies every clause when the plan is made
 (`VerifyCanonical`).
@@ -249,7 +249,7 @@ term splitter use them:
 | 7 | `DecideTreeConstruction::PrepareDefinitionFunctions` | Registers definition F-node specs and reserves scoped helper columns before the value rewrite consumes their reads. |
 | 8 | `RewriteScopedReducers` | The value rewrite: a VALUE-shape comparison's reducers, and every other MIN or MAX the easy identity left, become helper decisions. |
 | 9 | `RewriteNotEqual` | Creates `<>` indicators. |
-| 10 | `RewriteAvgToSum` | Scales AVG values into SUM terms after the value rewrite. |
+| 10 | `AccountAvg` | Records the account of each AVG over decisions, which stays an AVG. |
 | 11 | `RewriteAbs` | Decides which ABS is exact from its body's owner, once the rewrites that join a helper's readers (2, 7, 8) have run. Allocates the ABS helpers, records each ABS in `helper_definitions` for the tree and stage 06, and adds the check of each ABS argument's data. It emits no row and no indicator. Hands each body whose ABS got a helper back to the bilinear entry. |
 | 12 | `FoldSingletonRows` | Must be last of all — see below. |
 
@@ -616,7 +616,7 @@ expression container, not only comparisons and conjunctions, because a norm is a
 scalar and a regularizer is normally written as one term of a larger expression —
 `MINIMIZE SUM(cost*x) + 0.5 * norm(x - base, 1)`, `2 * norm(e, 1) <= K`. The
 descent is `ExpressionIterator::EnumerateChildren`, the same generic recursion
-`RewriteAbs` and `RewriteAvgToSum` use. A marker cannot sit beneath another
+`RewriteAbs` uses. A marker cannot sit beneath another
 aggregate, because the binder rejects `SUM(norm(...))` before this pass runs.
 
 **The marker must not outlive this layer**, and `VerifyNormMarkersLowered` asserts
@@ -1016,16 +1016,13 @@ formulation and is refused here (*"<> over a product or a power of decisions is 
 supported"*, at the comparison). The test is `RequireLinearOperand`, which an ABS's operand takes too (see
 `RewriteAbs`, above). This is the only check: stage 06 does not repeat it.
 
-### AVG → SUM — `RewriteAvgToSum`
+### AVG's account — `AccountAvg`
 
-Replaces a decision-bearing `AVG` with `SUM`, its `count_scale` set so
-coefficient evaluation divides the terms by the number of rows the reducer reads in its
+A decision-bearing `AVG` in a clause or the objective stays an `AVG` (R33): its kind tells the linear form to mark its
+terms `avg_scale`, so coefficient evaluation divides them by the number of rows the reducer reads in its
 group: the kept rows of its `by` group, less those its own `when` drops, one per class
-under its own `per`. A **decision-free** `AVG` is
-skipped: there is nothing to linearize, and rebinding it as `SUM` would redeclare
-it with `SUM`'s integral type while its value stays fractional. The swap happens under
-any factor the canonicalizer peeled (`2 * avg(x) >= 4`), so a clause an AVG was rewritten in goes back through `CanonicalizeClause`, and the
-objective through `SetObjective`, which canonicalize it again. Keeping the field on
+under its own `per`. The pass records the `AVG_SUM` account EXPLAIN prints, and changes no expression, so nothing is
+canonicalized again. A **decision-free** `AVG` is a value execution computes and has no account. Keeping the mark on
 objective terms is what makes a mixed `AVG(a) + SUM(b)` preserve true AVG
 semantics.
 

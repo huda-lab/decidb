@@ -141,6 +141,18 @@ static void ValidateNoScopeSpelling(const ParsedExpression &expr, const DecideSo
 }
 
 //! SUM, AVG, MIN or MAX: the reducers a scope may stand inside.
+//! `call`, a reducer or a norm, reads a body that holds the same value on every row.
+static BinderException NoRowsToReduce(const FunctionExpression &call, const DecideSourceText *text) {
+	return BinderException(call, "'%s' is a query-wide decision, so '%s' has no rows to reduce",
+	                       DecideWrittenSql(*call.children[0], text), DecideWrittenSql(call, text));
+}
+
+//! The kind of the reducer the catalog aggregate `name` is: `count_star` is the COUNT of every row.
+static DecideReducerKind ReducerKindOf(const string &name) {
+	return name == "count_star" ? DecideReducerKind::COUNT
+	                            : EnumUtil::FromString<DecideReducerKind>(StringUtil::Upper(name));
+}
+
 static bool IsDecideAggregateName(const string &name) {
 	auto lname = StringUtil::Lower(name);
 	return lname == "sum" || lname == "avg" || lname == "min" || lname == "max";
@@ -788,9 +800,7 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 	// once or once per row, which are different problems. A norm and a frame's range reduce as any reducer does.
 	if (IsDecideAggregateName(func.name) && ExpressionContainsDecideVariable(*aggr.children[0], variables) &&
 	    IsRowInvariantExpression(*aggr.children[0])) {
-		auto text = qualifier_context->source_text;
-		return BindResult(BinderException(aggr, "'%s' is a query-wide decision, so '%s' has no rows to reduce",
-		                                  DecideWrittenSql(*aggr.children[0], text), DecideWrittenSql(aggr, text)));
+		return BindResult(NoRowsToReduce(aggr, qualifier_context->source_text));
 	}
 
 	// COUNT over a DECIDE variable is degenerate: decision variables are never null, so
@@ -835,7 +845,7 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 
 	// 3. Create the BoundDecideReducerExpression itself.
 	auto bound_aggregate = make_uniq<BoundDecideReducerExpression>(
-	    function_binder.BindAggregateFunction(bound_function, std::move(children)));
+	    ReducerKindOf(func.name), function_binder.BindAggregateFunction(bound_function, std::move(children)));
 	bound_aggregate->alias = aggr.alias;
 	bound_aggregate->written_name = aggr.written_name;
 	// Note: We are NOT storing this aggregate in a BoundSelectNode. We are returning it directly.
@@ -963,8 +973,9 @@ unique_ptr<Expression> DecideBinder::BindFrameAggregate(const string &name, uniq
 	}
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(payload));
-	auto result = make_uniq<BoundDecideReducerExpression>(function_binder.BindAggregateFunction(
-	    entry.functions.GetFunctionByOffset(offset.GetIndex()), std::move(children)));
+	auto result = make_uniq<BoundDecideReducerExpression>(
+	    ReducerKindOf(name), function_binder.BindAggregateFunction(
+	                             entry.functions.GetFunctionByOffset(offset.GetIndex()), std::move(children)));
 	if (from) {
 		result->SetAlias(from->GetAlias());
 		result->CopyFacts(*from);
@@ -1010,7 +1021,7 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 		if (!IsDecideAggregateName(name) && name != "count") {
 			throw NotImplementedException(frame, "a range frame reducing with '%s' is not supported", frame.reducer);
 		}
-		spec.reducer = name;
+		spec.reducer = ReducerKindOf(name);
 		vector<unique_ptr<ParsedExpression>> arguments;
 		arguments.push_back(std::move(frame.payload));
 		unique_ptr<ParsedExpression> call = make_uniq<FunctionExpression>(name, std::move(arguments));
@@ -1192,32 +1203,33 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
 			return BindResult(NotImplementedException(order_argument, "norm order '%s' is not supported",
 			                                          DecideWrittenSql(order_argument, text)));
 		}
-		// An L0 norm of a decision stays a marker for the optimizer, which gives it indicators; no row reads it as a
-		// value.
-		const bool stays_a_marker =
-		    norm.IsCount() && ExpressionContainsDecideVariable(*function.children[0], variables);
-		vector<unique_ptr<ParsedExpression>> marker_children;
-		marker_children.push_back(std::move(function.children[0]));
-		// The system's SUM by name: a norm is DECIDE syntax, so a user's `sum` macro does not capture it.
-		auto sum = make_uniq<FunctionExpression>(SYSTEM_CATALOG, DEFAULT_SCHEMA, "sum", std::move(marker_children));
-		sum->alias = function.alias;
-		sum->SetQueryLocation(function.GetQueryLocation());
-		expr_ptr = std::move(sum);
-		auto result = BindFunction(expr_ptr, depth);
-		if (result.HasError()) {
-			return result;
+		// A norm reduces as any reducer does: its body has rows to reduce.
+		auto &written_body = *function.children[0];
+		if (ExpressionContainsDecideVariable(written_body, variables) && IsRowInvariantExpression(written_body)) {
+			return BindResult(NoRowsToReduce(function, text));
 		}
-		auto &marker = *GetBoundAggregate(*result.expression);
-		marker.function.reset();
-		marker.bind_info.reset();
-		marker.norm = norm;
-		if (!stays_a_marker) {
-			// The norm's value is its definition's, which what reads it binds to. Its type needs only the body's: a
-			// body holding a subquery cannot be copied until planning has run.
-			auto body = make_uniq<BoundReferenceExpression>(marker.children[0]->return_type, 0U);
-			marker.return_type = DecideNormDefinition(context, std::move(body), norm)->return_type;
+		auto body_text = DecideWrittenSql(written_body, text);
+		auto body_location = written_body.GetQueryLocation();
+		auto body = BindExpression(function.children[0], depth);
+		if (body.HasError()) {
+			return body;
 		}
-		return result;
+		if (!body.expression->return_type.IsNumeric()) {
+			return BindResult(BinderException(body_location, "'%s' is not a number", body_text));
+		}
+		// The norm's value is its definition's, which what reads it binds to. Its type needs only the body's: a body
+		// holding a subquery cannot be copied until planning has run.
+		auto type =
+		    DecideNormDefinition(context, make_uniq<BoundReferenceExpression>(body.expression->return_type, 0U), norm)
+		        ->return_type;
+		vector<unique_ptr<Expression>> children;
+		children.push_back(std::move(body.expression));
+		auto marker = make_uniq<BoundDecideReducerExpression>(DecideReducerKind::NORM, std::move(type), nullptr,
+		                                                      std::move(children), nullptr, nullptr);
+		marker->norm = norm;
+		marker->alias = function.alias;
+		marker->SetQueryLocation(function.GetQueryLocation());
+		return BindResult(std::move(marker));
 	}
 	// Check if this is an aggregate function
 	QueryErrorContext error_context(expr_ptr->GetQueryLocation());

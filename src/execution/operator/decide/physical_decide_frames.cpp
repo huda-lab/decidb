@@ -746,12 +746,12 @@ KeyedMapping DecideFrameWindowMapping(const DecideFrameMap &map) {
 	return mapping;
 }
 
-void DecideListFrameMembers(const DecideFrameMap &map, const string &aggregate, const DecideClauseRef &clause,
+void DecideListFrameMembers(const DecideFrameMap &map, DecideReducerKind aggregate, const DecideClauseRef &clause,
                             const string &frame_text, const vector<CoefficientColumn> &payload,
                             const vector<idx_t> &payload_vars, const vector<CoefficientColumn> &fallback,
                             const vector<idx_t> &fallback_vars, ReducerValueMembers &out) {
-	const bool extremum = aggregate == "min" || aggregate == "max";
-	const bool is_avg = aggregate == "avg";
+	const bool extremum = IsDecideExtremum(aggregate);
+	const bool is_avg = aggregate == DecideReducerKind::AVG;
 	for (idx_t w = 0; w < map.WindowCount(); w++) {
 		if (map.WindowAbsent(w)) {
 			continue;

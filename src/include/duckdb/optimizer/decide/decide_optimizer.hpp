@@ -39,7 +39,7 @@ class Optimizer;
 //!   - RewriteScopedReducers: each decision reducer of a VALUE-shape comparison, and every other MIN/MAX in a
 //!     constraint or the objective, becomes a helper decision defined per group
 //!   - RewriteNotEqual: creates indicator variables for <> constraints
-//!   - RewriteAvgToSum: rewrites AVG(expr) → SUM(expr) with alias tag for RHS scaling
+//!   - AccountAvg: records the account of each AVG over decisions, which stays an AVG
 //!   - RewriteAbs: detects ABS(expr) over decide vars, creates auxiliary REAL vars, retains the written function with
 //!     its linearization constraints, and decides each ABS's encoding once, from the push its owner gives it, after
 //!     every rewrite that joins a helper's readers has run
@@ -111,18 +111,9 @@ private:
 	//! whose key has a NULL-skipping column, never contributes to a global bound.
 	void FoldSingletonRowsInClause(BoundDecideClause &clause, LogicalDecide &decide);
 
-	//! Rewrite decision-bearing AVG(expr) aggregates to SUM(expr) with alias tagging.
-	//! Execution scales extracted AVG terms by the active row count.
-	void RewriteAvgToSum(LogicalDecide &decide);
-
-	//! Helper: recursively walk a bound expression tree, replacing AVG aggregates with SUM.
-	//! The replacement says so (BoundDecideReducerExpression::count_scale) so coefficient evaluation can scale terms.
-	//! A decision-free AVG is skipped: there is nothing to linearize, and rebinding it as SUM
-	//! would redeclare it with SUM's integral type while its value stays fractional.
-	//! `origin` is the clause the walk stands in (the objective's origin for the
-	//! objective), under which each rewritten AVG's account is recorded.
-	//! Whether it rewrote an AVG under `expr`.
-	bool RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide, const DecideRowOrigin &origin);
+	//! Records the account of each AVG over decisions in a clause or the objective. The reducer stays an AVG: the
+	//! linear form scales its terms by its row count.
+	void AccountAvg(LogicalDecide &decide);
 
 	//! The value rewrite (language/guide.md §6.4): a decision reducer of a comparison in
 	//! the VALUE shape (BoundDecideClause::shape) becomes a helper decision defined once per `by`

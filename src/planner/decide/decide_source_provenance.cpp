@@ -322,7 +322,7 @@ static string RenderAggregate(const BoundDecideReducerExpression &agg, const Ren
 }
 
 const Expression *DecideWrittenNormBody(const BoundDecideReducerExpression &reducer) {
-	return reducer.function ? DecideNormBody(reducer, reducer.norm) : nullptr;
+	return reducer.kind == DecideReducerKind::NORM ? nullptr : DecideNormBody(reducer, reducer.norm);
 }
 
 const Expression *DecideNormBody(const BoundDecideReducerExpression &reducer, const DecideNorm &norm) {

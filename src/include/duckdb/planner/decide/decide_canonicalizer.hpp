@@ -469,10 +469,9 @@ private:
 	//! definition, or nullptr when there is none to replace.
 	unique_ptr<Expression> DesugarNorms(const Expression &expr) const;
 	void DesugarNormsInPlace(unique_ptr<Expression> &expr) const;
-	unique_ptr<Expression> BindAggregate(const string &name, unique_ptr<Expression> child) const;
-	//! `name(child)` carrying `from`'s alias and `when`: a reducer spelled anew keeps its tags and scope.
-	unique_ptr<Expression> RebindReducer(const BoundDecideReducerExpression &from, const string &name,
-	                                     unique_ptr<Expression> child) const;
+	unique_ptr<Expression> BindAggregate(DecideReducerKind kind, unique_ptr<Expression> child) const;
+	//! `from`'s kind over `child`, carrying its alias, facts and `when`.
+	unique_ptr<Expression> RebindReducer(const BoundDecideReducerExpression &from, unique_ptr<Expression> child) const;
 	unique_ptr<Expression> CanonicalizeComparisonInternal(const Expression &comparison) const;
 	//! `value_shape`: a reducer stands under a Boolean decision, so the value rewrite holds it in a helper decision.
 	unique_ptr<Expression> CanonicalizeObjectiveInternal(const Expression &objective, double &out_constant_offset,

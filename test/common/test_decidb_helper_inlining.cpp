@@ -41,7 +41,7 @@ SolverInput MakeInput(idx_t num_vars) {
 ReducerValueLinkSpec SumOfX() {
 	ReducerValueLinkSpec link;
 	link.value_var = 1;
-	link.agg_name = "sum";
+	link.reducer = DecideReducerKind::SUM;
 	link.label = "sum(x) by (g)";
 	auto &members = link.members;
 	members.AddGroup(0);
@@ -72,7 +72,7 @@ EvaluatedConstraint XLessH() {
 ReducerValueLinkSpec ClosingMaxOfH(duckdb::vector<idx_t> rows) {
 	ReducerValueLinkSpec outer;
 	outer.value_var = 2;
-	outer.agg_name = "max";
+	outer.reducer = DecideReducerKind::MAX;
 	outer.label = "max(sum(x) by (g))";
 	outer.need_closing = true;
 	outer.members.AddGroup(0);
@@ -270,7 +270,7 @@ TEST_CASE("DeciDB helper inlining", "[decidb][formulation][inlining]") {
 		input.variable_scopes[1] = DecideVarScopeInfo::Global();
 		ReducerValueLinkSpec link;
 		link.value_var = 1;
-		link.agg_name = "sum";
+		link.reducer = DecideReducerKind::SUM;
 		link.members.AddGroup(0);
 		for (idx_t r = 0; r < 3; r++) {
 			link.members.AddMember(0.0);
@@ -293,7 +293,7 @@ TEST_CASE("DeciDB helper inlining", "[decidb][formulation][inlining]") {
 		input.reducer_value_links.push_back(SumOfX());
 		ReducerValueLinkSpec outer;
 		outer.value_var = 2;
-		outer.agg_name = "max";
+		outer.reducer = DecideReducerKind::MAX;
 		outer.need_envelope = true;
 		outer.members.AddGroup(0);
 		outer.members.AddMember(0.0);
@@ -339,7 +339,7 @@ TEST_CASE("DeciDB helper inlining", "[decidb][formulation][inlining]") {
 		SolverInput input = MakeInput(2);
 		ReducerValueLinkSpec link;
 		link.value_var = 1;
-		link.agg_name = "max";
+		link.reducer = DecideReducerKind::MAX;
 		link.need_envelope = true;
 		link.members.AddGroup(0);
 		link.members.AddMember(0.0);

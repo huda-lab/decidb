@@ -553,7 +553,7 @@ void DecideFrameSpec::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<string>(118, "order_name", order_name);
 	serializer.WritePropertyWithDefault<idx_t>(119, "partition_key", partition_key, DConstants::INVALID_INDEX);
 	serializer.WritePropertyWithDefault<string>(120, "partition_subject", partition_subject);
-	serializer.WritePropertyWithDefault<string>(121, "reducer", reducer);
+	serializer.WriteProperty<DecideReducerKind>(121, "reducer", reducer);
 	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(122, "order_collation", order_collation);
 	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(144, "reduce", reduce);
 	serializer.WritePropertyWithDefault<string>(123, "spelling", spelling);
@@ -581,7 +581,7 @@ DecideFrameSpec DecideFrameSpec::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadPropertyWithDefault<string>(118, "order_name", result.order_name);
 	deserializer.ReadPropertyWithExplicitDefault<idx_t>(119, "partition_key", result.partition_key, DConstants::INVALID_INDEX);
 	deserializer.ReadPropertyWithDefault<string>(120, "partition_subject", result.partition_subject);
-	deserializer.ReadPropertyWithDefault<string>(121, "reducer", result.reducer);
+	deserializer.ReadProperty<DecideReducerKind>(121, "reducer", result.reducer);
 	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(122, "order_collation", result.order_collation);
 	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(144, "reduce", result.reduce);
 	deserializer.ReadPropertyWithDefault<string>(123, "spelling", result.spelling);

@@ -59,15 +59,15 @@ TEST_CASE("Canonicalization replaces norm with its definition and keeps the writ
 	Connection con(db);
 	struct Case {
 		const char *objective;
-		const char *reducer;
+		DecideReducerKind reducer;
 	};
-	for (auto &test :
-	     {Case {"norm(x - t, 1)", "sum"}, Case {"norm(x - t, 2)", "sum"}, Case {"norm(x, 'inf')", "max"}}) {
+	for (auto &test : {Case {"norm(x - t, 1)", DecideReducerKind::SUM}, Case {"norm(x - t, 2)", DecideReducerKind::SUM},
+	                   Case {"norm(x, 'inf')", DecideReducerKind::MAX}}) {
 		CanonicalObjective objective(con, test.objective);
 		auto atoms = ReadCanonicalAtoms(*objective.decide->bound.objective.body, objective.decide->decide_index);
 		REQUIRE(atoms.size() == 1);
 		auto &aggregate = atoms[0].term->Cast<BoundDecideReducerExpression>();
-		REQUIRE(StringUtil::Lower(aggregate.function->name) == test.reducer);
+		REQUIRE(aggregate.kind == test.reducer);
 		REQUIRE(!IsDecideNormMarker(aggregate));
 		REQUIRE(aggregate.norm.order != DecideNorm::Order::NONE);
 	}

@@ -1304,7 +1304,7 @@
       {
         "id": 121,
         "name": "reducer",
-        "type": "string"
+        "type": "DecideReducerKind"
       },
       {
         "id": 122,

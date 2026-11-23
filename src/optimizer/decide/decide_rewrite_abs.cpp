@@ -179,7 +179,7 @@ static vector<bool> FindBoxedHelpers(LogicalDecide &decide) {
 		}
 	};
 	for (idx_t i = 0; i < definitions.size(); i++) {
-		if (IsExtremumName(definitions[i]->agg_name) && definitions[i]->NeedsClosing()) {
+		if (IsDecideExtremum(definitions[i]->reducer) && definitions[i]->NeedsClosing()) {
 			box(i);
 		}
 	}

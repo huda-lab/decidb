@@ -138,7 +138,7 @@ void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &r
 	RunPass("optimizer.scoped_reducers", &decide, [&] { RewriteScopedReducers(decide); });
 	VerifyExtremumBodiesLinear(optimizer.context, decide);
 	RunPass("optimizer.not_equal", &decide, [&] { RewriteNotEqual(decide); });
-	RunPass("optimizer.avg", &decide, [&] { RewriteAvgToSum(decide); });
+	RunPass("optimizer.avg", &decide, [&] { AccountAvg(decide); });
 	// Last of the rewrites that join a helper's readers: each ABS takes its encoding from the push its body's owner
 	// gives it.
 	RunPass("optimizer.abs", &decide, [&] { RewriteAbs(decide); });
@@ -158,7 +158,8 @@ unique_ptr<Expression> decide_rewrite::BindSumOver(Optimizer &optimizer, unique_
                                                    const Expression *filter) {
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(body));
-	auto sum = make_uniq<BoundDecideReducerExpression>(optimizer.BindAggregateFunction("sum", std::move(children)));
+	auto sum = make_uniq<BoundDecideReducerExpression>(DecideReducerKind::SUM,
+	                                                   optimizer.BindAggregateFunction("sum", std::move(children)));
 	if (filter) {
 		sum->filter = filter->Copy();
 	}
@@ -346,7 +347,7 @@ static void VerifyExtremumBodiesLinear(ClientContext &context, LogicalDecide &de
 	DecideTermSplitter splitter(context, decide);
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
 		if (body.owner == DecideOwnedBody::Owner::HELPER &&
-		    IsExtremumName(decide.helper_definitions[body.index]->agg_name) && !splitter.IsLinear(*body.expr)) {
+		    IsDecideExtremum(decide.helper_definitions[body.index]->reducer) && !splitter.IsLinear(*body.expr)) {
 			throw InternalException("DECIDE MIN/MAX member '%s' is not linear", body.expr->ToString());
 		}
 	});

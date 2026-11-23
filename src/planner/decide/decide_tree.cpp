@@ -27,10 +27,6 @@
 
 namespace duckdb {
 
-string DecideTreeReducerName(const BoundDecideReducerExpression &aggregate) {
-	return aggregate.count_scale ? "avg" : StringUtil::Lower(aggregate.function->name);
-}
-
 //! The shape, provenance and bound-admission facts of a clause, read once. `clause` is canonical: a clause of SUCH
 //! THAT, or a function-owned row as DecideCanonicalizer::CanonicalizeFunctionRow returns it.
 static unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const LogicalDecide &op,
@@ -865,7 +861,7 @@ private:
 	idx_t Aggregate(const BoundDecideReducerExpression &aggregate) {
 		auto index = NewNode(DecideNodeKind::REDUCER);
 		auto &node = *tree->nodes[index];
-		node.aggregate = DecideTreeReducerName(aggregate);
+		node.aggregate = aggregate.kind;
 		node.text = Text(aggregate);
 		node.decision_value = HasDecision(aggregate);
 		node.key = aggregate.by;
@@ -938,7 +934,7 @@ private:
 		definition_nodes[link_index] = index;
 		auto &node = *tree->nodes[index];
 		node.definition = link_index;
-		node.aggregate = link.agg_name;
+		node.aggregate = link.reducer;
 		node.qualifier_scope = reducer.per;
 		node.key = link.path_key;
 		node.text = link.label;
@@ -978,7 +974,7 @@ private:
 			reducer.children.push_back(argument->Copy());
 		}
 		node.function = unique_ptr_cast<Expression, BoundAggregateExpression>(reducer.ToAggregate());
-		node.aggregate = DecideTreeReducerName(reducer);
+		node.aggregate = reducer.kind;
 		node.key = record.key;
 		node.text = Text(reducer);
 		auto operand = NewNode(DecideNodeKind::SCOPE);
@@ -1368,8 +1364,8 @@ string DecideTree::ToString() const {
 			result << (node.objective ? " objective" : node.hidden ? " definition" : " root");
 		}
 		result << " key=" << DecideKeyText(keys, node.key);
-		if (!node.aggregate.empty()) {
-			result << " agg=" << node.aggregate;
+		if (node.kind == DecideNodeKind::REDUCER || (node.kind == DecideNodeKind::FRAME && frames[node.frame].range)) {
+			result << " agg=" << StringUtil::Lower(EnumUtil::ToString(node.aggregate));
 		}
 		if (node.kind == DecideNodeKind::FUNCTION) {
 			auto &definition = *definitions[node.definition];

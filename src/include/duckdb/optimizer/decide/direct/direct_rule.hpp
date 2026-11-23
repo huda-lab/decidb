@@ -82,15 +82,6 @@ struct DirectIRKeyedScope {
 	vector<DirectKeyElement> key;
 };
 
-enum class DirectReducer : uint8_t {
-	//! A row-level part: per-row constraint algebra, or a query-wide decision beside reducers.
-	NONE,
-	SUM,
-	AVG,
-	MIN,
-	MAX
-};
-
 //! Whether every expression of `a` is one of `b`'s: the groups of `b` are no coarser than `a`'s. A key is a set of
 //! expressions, so its order says nothing (FindOrCreateDecideKey), and the empty key is within every key.
 inline bool DirectKeyWithin(const vector<DirectKeyElement> &a, const vector<DirectKeyElement> &b) {
@@ -119,7 +110,11 @@ struct DirectPart {
 	//! A query-wide factor canonicalization left on the reducer; null for none.
 	unique_ptr<Expression> scale;
 	bool scale_divides = false;
-	DirectReducer reducer = DirectReducer::NONE;
+	//! Whether the part is a reducer's. Else it is row-level: per-row constraint algebra, or a query-wide decision
+	//! beside reducers.
+	bool reduced = false;
+	//! A reducer's part: its kind.
+	DecideReducerKind reducer = DecideReducerKind::SUM;
 	//! The reducer's `by` key (`sum(x) by (g)`): the groups it reduces, one value each. Empty without one. Every
 	//! reducer of an aggregate clause shares it, and a clause's rows are one constraint per group.
 	vector<DirectKeyElement> by;
@@ -134,7 +129,7 @@ struct DirectPart {
 	//! sign, factor and filter are the rule's to read. An objective part has no `by` key: the front end refuses an
 	//! objective with one, which is produced once (D72).
 	bool IsPlainSum() const {
-		return reducer == DirectReducer::SUM && qualifier == DConstants::INVALID_INDEX;
+		return reduced && reducer == DecideReducerKind::SUM && qualifier == DConstants::INVALID_INDEX;
 	}
 };
 

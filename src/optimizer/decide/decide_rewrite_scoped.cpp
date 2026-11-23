@@ -88,7 +88,7 @@ struct ReducerSite {
 	bool under_function;
 
 	bool IsExtremum() const {
-		return IsExtremumName(StringUtil::Lower((*slot)->Cast<BoundDecideReducerExpression>().function->name));
+		return IsDecideExtremum((*slot)->Cast<BoundDecideReducerExpression>().kind);
 	}
 };
 
@@ -198,7 +198,6 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
                     const ReducerSite &site) {
 	auto &decide = helpers.decide;
 	auto &agg = (*site.slot)->Cast<BoundDecideReducerExpression>();
-	auto agg_name = StringUtil::Lower(agg.function->name);
 	// F6: a diagnosis, and a plan, name the helper by the reducer it holds, `by` included, as written: read before the
 	// reducers inside it become helpers.
 	auto plan_label = RenderDecideSource(agg, names);
@@ -257,7 +256,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	}
 
 	auto link = make_uniq<DecideHelperDefinition>(DecideHelperKind::REDUCER_VALUE);
-	link->agg_name = agg_name;
+	link->reducer = agg.kind;
 	// Its columns are named by the reducer it holds, `by` included: a refusal's remedy bounds that (F6).
 	link->label = plan_label;
 	link->path_key = group_key;
@@ -282,8 +281,8 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_ptr<Expression> &slot) {
 	auto &outer = slot->Cast<BoundDecideReducerExpression>();
 	const idx_t qualifier = outer.per;
-	if (!StringUtil::CIEquals(outer.function->name, "sum") || outer.children.size() != 1 ||
-	    outer.by != DConstants::INVALID_INDEX || qualifier >= decide.bound.keyed_scopes.size()) {
+	if (outer.kind != DecideReducerKind::SUM || outer.children.size() != 1 || outer.by != DConstants::INVALID_INDEX ||
+	    qualifier >= decide.bound.keyed_scopes.size()) {
 		return false;
 	}
 	auto *body = UnwrapDecideCasts(*outer.children[0], decide.decide_index);
@@ -291,8 +290,7 @@ bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_
 		return false;
 	}
 	auto &inner = body->Cast<BoundDecideReducerExpression>();
-	const bool sum_or_avg =
-	    StringUtil::CIEquals(inner.function->name, "sum") || StringUtil::CIEquals(inner.function->name, "avg");
+	const bool sum_or_avg = inner.kind == DecideReducerKind::SUM || inner.kind == DecideReducerKind::AVG;
 	if (!sum_or_avg || inner.children.size() != 1 || DecideCanonicalizer::ContainsReducer(*inner.children[0]) ||
 	    inner.per != DConstants::INVALID_INDEX) {
 		return false;
@@ -356,7 +354,7 @@ void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 	// form is weighted inside, by the root, since a weight is never negative: the objective stays a sum of squares.
 	auto swap = [&](unique_ptr<Expression> &slot) {
 		auto &outer = slot->Cast<BoundDecideReducerExpression>();
-		if (!outer.function || !StringUtil::CIEquals(outer.function->name, "sum") || outer.children.size() != 1 ||
+		if (outer.kind != DecideReducerKind::SUM || outer.children.size() != 1 ||
 		    outer.per != DConstants::INVALID_INDEX) {
 			return;
 		}
@@ -365,8 +363,8 @@ void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 			return;
 		}
 		auto &inner = body->Cast<BoundDecideReducerExpression>();
-		const bool avg = StringUtil::CIEquals(inner.function->name, "avg");
-		if ((!avg && !StringUtil::CIEquals(inner.function->name, "sum")) || inner.children.size() != 1 ||
+		const bool avg = inner.kind == DecideReducerKind::AVG;
+		if ((!avg && inner.kind != DecideReducerKind::SUM) || inner.children.size() != 1 ||
 		    inner.per != DConstants::INVALID_INDEX || DecideCanonicalizer::ContainsReducer(*inner.children[0]) ||
 		    ContainsDecideFrame(*inner.children[0]) || (inner.filter && ContainsDecideFrame(*inner.filter)) ||
 		    splitter.IsLinear(*inner.children[0])) {
@@ -376,8 +374,8 @@ void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 		auto group_count = [&](unique_ptr<Expression> summand) {
 			vector<unique_ptr<Expression>> children;
 			children.push_back(std::move(summand));
-			auto count =
-			    make_uniq<BoundDecideReducerExpression>(optimizer.BindAggregateFunction("sum", std::move(children)));
+			auto count = make_uniq<BoundDecideReducerExpression>(
+			    DecideReducerKind::SUM, optimizer.BindAggregateFunction("sum", std::move(children)));
 			count->by = group_key;
 			return real(std::move(count));
 		};
@@ -438,8 +436,8 @@ void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 		};
 		vector<unique_ptr<Expression>> children;
 		children.push_back(weigh(*inner.children[0]));
-		auto swapped =
-		    make_uniq<BoundDecideReducerExpression>(optimizer.BindAggregateFunction("sum", std::move(children)));
+		auto swapped = make_uniq<BoundDecideReducerExpression>(
+		    DecideReducerKind::SUM, optimizer.BindAggregateFunction("sum", std::move(children)));
 		auto &reducer = *swapped;
 		if (outer.filter) {
 			reducer.filter = outer.filter->Copy();
@@ -517,7 +515,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		}
 		const bool direct_outer_is_sum =
 		    direct_outer->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER &&
-		    StringUtil::CIEquals(direct_outer->Cast<BoundDecideReducerExpression>().function->name, "sum");
+		    direct_outer->Cast<BoundDecideReducerExpression>().kind == DecideReducerKind::SUM;
 		const bool nested_outer_has_unfiltered_reducers =
 		    !nested_outer_sites.empty() &&
 		    std::all_of(nested_outer_sites.begin(), nested_outer_sites.end(), [](const ReducerSite &site) {

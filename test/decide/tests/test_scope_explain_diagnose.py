@@ -139,7 +139,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
             "ship(INT)",
             "per D.region: avg(ship) by (D.region) >= 10",
             "avg(ship)by(D.region)becomesasumdividedbyitsrowcount",
-            "perD.region:sum(ship)by(D.region)>=10",
+            None,
             None,
             id="avg",
         ),

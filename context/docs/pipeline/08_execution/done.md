@@ -1002,7 +1002,7 @@ group (§4a).
 
 ### AVG scaling
 
-`AVG` was rewritten to `SUM` by the optimizer, with the reducer's `count_scale` set. Terms
+The linear form marks the terms of an AVG reducer (`DecideReducerKind::AVG`) `avg_scale`. Terms
 marked `avg_scale` are divided by the number of rows the reducer reads in the row's group
 (`ScaleAvgRows`):
 

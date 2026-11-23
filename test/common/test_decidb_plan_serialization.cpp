@@ -538,8 +538,8 @@ TEST_CASE("A placed range frame survives a serialization round trip", "[decidb]"
 	REQUIRE(before != nullptr);
 	REQUIRE(before->bound.frames.size() == 2);
 	REQUIRE(before->bound.frames[0].range);
-	REQUIRE(before->bound.frames[0].reducer == "sum");
-	REQUIRE(before->bound.frames[1].reducer == "avg");
+	REQUIRE(before->bound.frames[0].reducer == DecideReducerKind::SUM);
+	REQUIRE(before->bound.frames[1].reducer == DecideReducerKind::AVG);
 	REQUIRE(before->bound.frames[1].fallback != nullptr);
 
 	auto copied = RoundTrip(con, *plan);
@@ -1039,14 +1039,16 @@ TEST_CASE("A bound DECIDE reducer copies every field and compares by what it com
 				return;
 			}
 			auto &reducer = expression.Cast<Reducer>();
-			(!reducer.function ? marker : reducer.function->name == "sum" ? sum : avg) = &reducer;
+			(reducer.kind == DecideReducerKind::NORM  ? marker
+			 : reducer.kind == DecideReducerKind::SUM ? sum
+			                                          : avg) = &reducer;
 		});
 	}
 	REQUIRE(sum);
 	REQUIRE(avg);
 	REQUIRE(marker);
 	REQUIRE(sum->filter);
-	REQUIRE(avg->function->name == "avg");
+	REQUIRE(avg->kind == DecideReducerKind::AVG);
 	REQUIRE(marker->norm.order == DecideNorm::Order::L0);
 	REQUIRE(marker->norm.bound == 9);
 
@@ -1058,7 +1060,6 @@ TEST_CASE("A bound DECIDE reducer copies every field and compares by what it com
 	source.per = 2;
 	source.norm.order = DecideNorm::Order::L1;
 	source.written_name = "total";
-	source.count_scale = true;
 	source.holds_reducer = true;
 	source.retained = 3;
 	source.frame_aggregate = 5;
@@ -1099,7 +1100,6 @@ TEST_CASE("A bound DECIDE reducer copies every field and compares by what it com
 	REQUIRE(changed([&](Reducer &r) { r.by = 0; }) == another_fact);
 	REQUIRE(changed([&](Reducer &r) { r.per = 0; }) == another_fact);
 	REQUIRE(changed([&](Reducer &r) { r.norm.order = DecideNorm::Order::INF; }) == another_fact);
-	REQUIRE(changed([&](Reducer &r) { r.count_scale = false; }) == another_fact);
 	REQUIRE(changed([&](Reducer &r) { r.holds_reducer = false; }) == another_fact);
 	REQUIRE(changed([&](Reducer &r) { r.retained = 0; }) == another_fact);
 	REQUIRE(changed([&](Reducer &r) { r.frame_aggregate = 0; }) == another_fact);
@@ -1124,10 +1124,13 @@ TEST_CASE("A bound DECIDE reducer copies every field and compares by what it com
 	marker_copy.norm.order = DecideNorm::Order::L1;
 	REQUIRE(!marker_copy.Equals(*marker));
 	// It is not the SUM over its body, whichever of the two is asked.
-	marker_copy.norm = marker->norm;
-	marker_copy.function = make_uniq<AggregateFunction>(*sum->function);
-	REQUIRE(!marker_copy.Equals(*marker));
-	REQUIRE(!marker->Equals(marker_copy));
+	duckdb::vector<duckdb::unique_ptr<Expression>> body;
+	body.push_back(marker->children[0]->Copy());
+	Reducer summed(DecideReducerKind::SUM, marker->return_type, make_uniq<AggregateFunction>(*sum->function),
+	               std::move(body), nullptr, nullptr);
+	summed.norm = marker->norm;
+	REQUIRE(!summed.Equals(*marker));
+	REQUIRE(!marker->Equals(summed));
 }
 
 TEST_CASE("A DECIDE member NULL test copies and compares as itself, not as the test it wraps", "[decidb]") {

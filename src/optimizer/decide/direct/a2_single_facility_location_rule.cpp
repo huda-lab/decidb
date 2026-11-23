@@ -536,7 +536,7 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 	auto &part = ir.objective.parts[0];
 	if (part.terms.size() != 1 || !part.terms[0].IsAbs()) {
 		condition.loss = ProveSquare(ir, context, part);
-	} else if (part.reducer == DirectReducer::MAX) {
+	} else if (part.reduced && part.reducer == DecideReducerKind::MAX) {
 		condition.loss = ProveMaxAbsolute(ir, context, part);
 	} else {
 		condition.loss = ProveAbsolute(ir, context, part);

@@ -303,24 +303,14 @@ private:
 
 	void ReadReducer(const BoundDecideReducerExpression &aggregate, DirectPart &part) const {
 		D_ASSERT(aggregate.children.size() == 1);
-		if (!aggregate.function) {
+		if (aggregate.kind == DecideReducerKind::NORM) {
 			// Canonicalization replaced every order but 0 with its definition. Order 0 needs indicator variables, so no
 			// rule models it.
 			MarkNotProved(part.status);
 			return;
 		}
-		auto name = StringUtil::Lower(aggregate.function->name);
-		if (name == "sum") {
-			part.reducer = DirectReducer::SUM;
-		} else if (name == "avg") {
-			part.reducer = DirectReducer::AVG;
-		} else if (name == "min") {
-			part.reducer = DirectReducer::MIN;
-		} else {
-			// The binder admits no other reducer in a DECIDE clause.
-			D_ASSERT(name == "max");
-			part.reducer = DirectReducer::MAX;
-		}
+		part.reduced = true;
+		part.reducer = aggregate.kind;
 		const idx_t group_key = aggregate.by;
 		if (group_key != DConstants::INVALID_INDEX && !ReadKey(group_key, part.by)) {
 			MarkNotProved(part.status);
@@ -333,7 +323,7 @@ private:
 		splitter.Split(*aggregate.children[0], 1, part.terms);
 		// A SUM skips a row whose data is NULL by reading its terms as 0 there, which every rule reads as it reads any
 		// coefficient; the written `when` stays the reducer's.
-		if (part.filter && part.reducer == DirectReducer::SUM) {
+		if (part.filter && part.reducer == DecideReducerKind::SUM) {
 			vector<unique_ptr<Expression>> tests;
 			part.filter = TakeSkipNullTests(std::move(part.filter), tests);
 			if (!tests.empty()) {
@@ -523,7 +513,7 @@ const DirectPart *DirectIRConstraint::PlainSum() const {
 		return nullptr;
 	}
 	auto &part = lhs[0];
-	if (part.sign != 1 || part.scale || part.reducer != DirectReducer::SUM ||
+	if (part.sign != 1 || part.scale || !part.reduced || part.reducer != DecideReducerKind::SUM ||
 	    part.qualifier != DConstants::INVALID_INDEX) {
 		return nullptr;
 	}

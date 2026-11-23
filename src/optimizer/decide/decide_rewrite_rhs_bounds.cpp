@@ -196,8 +196,8 @@ private:
 			AddDisagreementCheck(clause.group_key, *comparison.right, text, SpanOf(location),
 			                     OwnWhens(*comparison.left));
 		}
-		auto function = DecideIsUpperBound(comparison.type) ? "min" : "max";
-		comparison.right = calc.Out(InKey(clause.group_key, RecordOver(function, *comparison.right, clause.group_key)));
+		auto tightest = DecideIsUpperBound(comparison.type) ? DecideReducerKind::MIN : DecideReducerKind::MAX;
+		comparison.right = calc.Out(InKey(clause.group_key, RecordOver(tightest, *comparison.right, clause.group_key)));
 		// The bound is replaced by a column of its value, which a message quotes as it quotes the bound.
 		if (location.IsValid()) {
 			comparison.right->SetQueryLocation(location);
@@ -311,7 +311,7 @@ private:
 			AddValueCheck(ArgumentCheck(reducer, reducer.children[0].get(), Reads(path, reducer.filter.get()), path));
 		}
 		// The reducer's function over its arguments alone: its key and its `per` are the record's.
-		auto marker = make_uniq<BoundDecideReducerExpression>(reducer.ToAggregate());
+		auto marker = make_uniq<BoundDecideReducerExpression>(reducer.kind, reducer.ToAggregate());
 		auto &aggregate = *marker;
 		for (auto &child : aggregate.children) {
 			ReplaceReducers(child, path.Below(reducer));
@@ -358,12 +358,9 @@ private:
 	//! it.
 	unique_ptr<Expression> ArgumentCheck(const BoundDecideReducerExpression &reducer, const Expression *argument,
 	                                     const ExprPtr &reads, const DecideReducerPath &path) {
-		auto name = StringUtil::Lower(reducer.function->name);
-		D_ASSERT(name == "count" || name == "count_star" || name == "min" || name == "max" || name == "arg_min" ||
-		         name == "arg_max" || name == "sum" || name == "avg");
-		// Canonicalization gave every norm of data its definition, and the AVG rewrite of `<>` runs after this pass.
-		D_ASSERT(!reducer.count_scale);
-		if (!argument || name == "count") {
+		// Canonicalization gave every norm of data its definition.
+		D_ASSERT(reducer.kind != DecideReducerKind::NORM);
+		if (!argument || reducer.kind == DecideReducerKind::COUNT) {
 			return nullptr;
 		}
 		// A norm's definition can hide a NaN (an L0 count's SIGN reads it as 0), so the value checked is the body.
@@ -422,12 +419,12 @@ private:
 
 	//! The aggregate `function` of `argument` over the kept rows of each group of `key`, read as a column of its side
 	//! table (the one record is shared with an equal one).
-	ExprPtr RecordOver(const char *function, const Expression &argument, idx_t key) {
+	ExprPtr RecordOver(DecideReducerKind kind, const Expression &argument, idx_t key) {
 		vector<unique_ptr<Expression>> children;
 		children.push_back(argument.Copy());
 		DecideBoundAggregate record;
-		auto reducer =
-		    make_uniq<BoundDecideReducerExpression>(optimizer.BindAggregateFunction(function, std::move(children)));
+		auto reducer = make_uniq<BoundDecideReducerExpression>(
+		    kind, optimizer.BindAggregateFunction(StringUtil::Lower(EnumUtil::ToString(kind)), std::move(children)));
 		reducer->children.clear();
 		record.function = std::move(reducer);
 		record.arguments.push_back(argument.Copy());
@@ -473,7 +470,7 @@ private:
 	                          const vector<const Expression *> &reads) {
 		vector<ExprPtr> held;
 		for (auto *read : reads) {
-			held.push_back(RecordOver("bool_or", *read, by));
+			held.push_back(RecordOver(DecideReducerKind::MAX, *read, by));
 		}
 		// The key's columns as the query writes them, each once, with their value on the row.
 		vector<string> names;
@@ -484,10 +481,10 @@ private:
 				values.push_back(calc.Of(*element.expression));
 			}
 		}
-		AddValueCheck(
-		    calc.Out(DecideCheckOnKeptRows(calc, Kept(),
-		                                   BoundDisagreement(text, place, RecordOver("min", bound, by),
-		                                                     RecordOver("max", bound, by), held, names, values))));
+		AddValueCheck(calc.Out(DecideCheckOnKeptRows(
+		    calc, Kept(),
+		    BoundDisagreement(text, place, RecordOver(DecideReducerKind::MIN, bound, by),
+		                      RecordOver(DecideReducerKind::MAX, bound, by), held, names, values))));
 	}
 
 	//! Whether `bound` has one value in each group of `keys` among the kept rows: it reads data only through reducers

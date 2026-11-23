@@ -1212,6 +1212,28 @@ DecideFrameAnchor EnumUtil::FromString<DecideFrameAnchor>(const char *value) {
 	return static_cast<DecideFrameAnchor>(StringUtil::StringToEnum(GetDecideFrameAnchorValues(), 4, "DecideFrameAnchor", value));
 }
 
+const StringUtil::EnumStringLiteral *GetDecideReducerKindValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+		{ static_cast<uint32_t>(DecideReducerKind::SUM), "SUM" },
+		{ static_cast<uint32_t>(DecideReducerKind::AVG), "AVG" },
+		{ static_cast<uint32_t>(DecideReducerKind::MIN), "MIN" },
+		{ static_cast<uint32_t>(DecideReducerKind::MAX), "MAX" },
+		{ static_cast<uint32_t>(DecideReducerKind::COUNT), "COUNT" },
+		{ static_cast<uint32_t>(DecideReducerKind::NORM), "NORM" }
+	};
+	return values;
+}
+
+template<>
+const char* EnumUtil::ToChars<DecideReducerKind>(DecideReducerKind value) {
+	return StringUtil::EnumToString(GetDecideReducerKindValues(), 6, "DecideReducerKind", static_cast<uint32_t>(value));
+}
+
+template<>
+DecideReducerKind EnumUtil::FromString<DecideReducerKind>(const char *value) {
+	return static_cast<DecideReducerKind>(StringUtil::StringToEnum(GetDecideReducerKindValues(), 6, "DecideReducerKind", value));
+}
+
 const StringUtil::EnumStringLiteral *GetDecidePerValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 	    {static_cast<uint32_t>(DecidePer::NONE), "NONE"},

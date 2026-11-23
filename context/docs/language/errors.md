@@ -75,6 +75,7 @@ keeps ([guide.md §5.5](guide.md#55-reducers-inside-reducers--the-path-rule)).
 | `COUNT` over a decision | NI | `COUNT over a decision is not supported` | the call |
 | A reducer or `norm` with the wrong number of arguments, at any position (`x <= max(v, 2)`: DuckDB's two-argument `MAX` is not a reducer) | Binder | `'sum()' has 0 arguments` (`1 argument`; `'max(v, 2)' has 2 arguments`) | the call |
 | A window function anywhere in a clause | Binder | `a window function is not allowed in a DECIDE clause` | the window call |
+| A `norm` whose body is not a number (text, a truth value, `NULL`) | Binder | `'q' is not a number` | the body |
 | A `norm` whose order is not a constant | Binder | `the order of 'q' is not a constant` | the order |
 | A `norm` order other than 0, 1, 2 or `'inf'` | NI | `norm order '3' is not supported` | the order |
 | A bound on a `norm` that is not of order 0, or one that is not a positive constant | Binder | `only norm order 0 takes a bound` · `the bound of 'q' is not a positive constant` | the argument |

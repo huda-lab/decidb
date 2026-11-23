@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/function/aggregate_function.hpp"
 #include "duckdb/planner/expression.hpp"
 
@@ -45,13 +46,15 @@ public:
 	static constexpr const ExpressionClass TYPE = ExpressionClass::BOUND_DECIDE_REDUCER;
 
 public:
-	BoundDecideReducerExpression(LogicalType return_type, unique_ptr<AggregateFunction> function,
-	                             vector<unique_ptr<Expression>> children, unique_ptr<Expression> filter,
-	                             unique_ptr<FunctionData> bind_info);
-	//! The reducer `aggregate` (a BoundAggregateExpression) is over a clause's rows.
-	explicit BoundDecideReducerExpression(unique_ptr<Expression> aggregate);
+	BoundDecideReducerExpression(DecideReducerKind kind, LogicalType return_type,
+	                             unique_ptr<AggregateFunction> function, vector<unique_ptr<Expression>> children,
+	                             unique_ptr<Expression> filter, unique_ptr<FunctionData> bind_info);
+	//! The reducer of kind `kind` that `aggregate` (a BoundAggregateExpression) is over a clause's rows.
+	BoundDecideReducerExpression(DecideReducerKind kind, unique_ptr<Expression> aggregate);
 
-	//! The bound overload; null for a norm no definition has replaced, which `norm` names. Canonicalization replaces
+	//! What it does with its rows. Every reader asks this; the function below is what DuckDB runs for it.
+	const DecideReducerKind kind;
+	//! The bound overload ToAggregate hands DuckDB; none for a NORM, which `norm` names. Canonicalization replaces
 	//! the orders 1, 2 and 'inf', and an L0 norm of data, by their definitions; DecideOptimizer::RewriteNorm lowers an
 	//! L0 norm of a decision.
 	unique_ptr<AggregateFunction> function;
@@ -69,15 +72,13 @@ public:
 	//! The keyed scope of its own `per`, `sum(per K: e)`: an index into LogicalDecide::keyed_scopes, whose entry
 	//! supplies the classes it takes one value from. INVALID_INDEX for none.
 	idx_t per = DConstants::INVALID_INDEX;
-	//! The norm it is (no `function`), or the norm its definition was written as (`SUM(ABS(e))` for 1,
+	//! The norm it is (a NORM), or the norm its definition was written as (`SUM(ABS(e))` for 1,
 	//! `SUM(POWER(e, 2))` for 2, `MAX(ABS(e))` for 'inf'): the tree means what it says, and this lets the canonical
 	//! text read as written, until RewriteNorm clears it.
 	DecideNorm norm;
 	//! The name it was written under when the binder renamed the call to its primary (`mean` for `avg`). Display
 	//! only: two reducers that differ in it are equal.
 	string written_name;
-	//! It is the SUM an AVG became (DecideOptimizer's AVG rewrite): its terms scale by its row count.
-	bool count_scale = false;
 	//! It is an objective's reducer over a decision reducer: the canonicalizer sets it once, and
 	//! DecideOptimizer::RewriteScopedReducers replaces the reducer by a helper decision.
 	bool holds_reducer = false;
@@ -97,9 +98,7 @@ public:
 	//! Whether the two agree on those facts, the written name apart. Equals leaves them out, as it does an alias.
 	bool FactsEqual(const BoundDecideReducerExpression &other) const;
 	//! The name it was written under.
-	const string &WrittenName() const {
-		return written_name.empty() ? function->name : written_name;
-	}
+	string WrittenName() const;
 
 	bool IsAggregate() const override {
 		return true;

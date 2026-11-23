@@ -660,7 +660,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	}
 	vector<idx_t> minmax_values;
 	for (auto &link : solver_input.reducer_value_links) {
-		if (link.agg_name == "min" || link.agg_name == "max") {
+		if (IsDecideExtremum(link.reducer)) {
 			minmax_values.push_back(link.value_var);
 		}
 	}

@@ -451,7 +451,7 @@ struct ReducerValueMembers {
 //! (ExtremumLinkSpec), on the same two sides. A group with no member defines nothing.
 struct ReducerValueLinkSpec {
 	idx_t value_var = DConstants::INVALID_INDEX;
-	string agg_name;
+	DecideReducerKind reducer = DecideReducerKind::SUM;
 	bool need_envelope = false;
 	bool need_closing = false;
 	//! The reducer as written, for the rows and columns a diagnosis names.

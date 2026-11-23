@@ -118,8 +118,8 @@ struct KeyedScopeInfo {
 struct DecideFrameSpec {
 	//! A range, agg(from F1 to F2 ...: e); else a point, at(F: e)
 	bool range = false;
-	//! A range's reducer, lower case: sum, avg, min, max or count; empty for a point
-	string reducer;
+	//! A range's reducer; a point has none and no reader asks
+	DecideReducerKind reducer = DecideReducerKind::SUM;
 	//! A range's reducer as the binder bound it over what the frame reads (BoundDecideFrameExpression::children), each
 	//! argument a reference to that child's position: the aggregate execution folds a window of data with. Null for a
 	//! point, and for the range a point becomes (PointsInQuadraticTermsAsRanges), which is over decisions.
@@ -334,8 +334,8 @@ struct DecideHelperDefinition {
 	idx_t Frame() const;
 	//! REDUCER_VALUE: what the helper reduces, the reducer's argument or the frame's payload.
 	unique_ptr<Expression> &Member() const;
-	//! REDUCER_VALUE: "sum", "avg", "min" or "max": the reducer's function, or its frame's (DecideFrameSpec::reducer).
-	string agg_name;
+	//! REDUCER_VALUE: SUM, AVG, MIN or MAX: the reducer's kind, or its frame's (DecideFrameSpec::reducer).
+	DecideReducerKind reducer = DecideReducerKind::SUM;
 	//! REDUCER_VALUE: the key the helper has one instance per among the rows `when` keeps, into `keys`: the reducer's
 	//! path key (language/guide.md §5.5), every enclosing reducer's `by` key and its own. INVALID_INDEX for `by ()`
 	//! throughout, every kept row, and for a frame's, whose instances are its windows.
@@ -350,10 +350,10 @@ struct DecideHelperDefinition {
 	ExtremumPush push = ExtremumPush::NONE;
 	//! REDUCER_VALUE: whether `push` needs the helper's envelope, and its closing side.
 	bool NeedsEnvelope() const {
-		return push == ExtremumPush::NONE || IsEasyExtremum(agg_name != "min", push);
+		return push == ExtremumPush::NONE || IsEasyExtremum(reducer != DecideReducerKind::MIN, push);
 	}
 	bool NeedsClosing() const {
-		return !IsEasyExtremum(agg_name != "min", push);
+		return !IsEasyExtremum(reducer != DecideReducerKind::MIN, push);
 	}
 	//! REDUCER_VALUE: the clause's `per` key (into `keys`, INVALID_INDEX for `per ()`), DECIDE_ROW_KEY for a clause
 	//! with none.

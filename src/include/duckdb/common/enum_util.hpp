@@ -144,6 +144,8 @@ enum class DecideFrameAnchor : uint8_t;
 
 enum class DecidePer : uint8_t;
 
+enum class DecideReducerKind : uint8_t;
+
 enum class DecideVariableType : uint8_t;
 
 enum class DecideVarScope : uint8_t;
@@ -591,6 +593,9 @@ const char* EnumUtil::ToChars<DecideSense>(DecideSense value);
 
 template<>
 const char* EnumUtil::ToChars<DecideFrameAnchor>(DecideFrameAnchor value);
+
+template<>
+const char* EnumUtil::ToChars<DecideReducerKind>(DecideReducerKind value);
 
 template<>
 const char* EnumUtil::ToChars<DecidePer>(DecidePer value);
@@ -1183,6 +1188,9 @@ DecideSense EnumUtil::FromString<DecideSense>(const char *value);
 
 template<>
 DecideFrameAnchor EnumUtil::FromString<DecideFrameAnchor>(const char *value);
+
+template<>
+DecideReducerKind EnumUtil::FromString<DecideReducerKind>(const char *value);
 
 template<>
 DecidePer EnumUtil::FromString<DecidePer>(const char *value);

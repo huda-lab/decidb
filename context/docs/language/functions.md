@@ -126,9 +126,9 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   `RewriteRhsAggregates`: each bound reducer becomes a DuckDB window column partitioned by its `by` key over the kept
   rows (a keyed reducer counts the first row of each class via `ROW_NUMBER`). So the solver and direct solve
   read one number computed in DuckDB's own types, and nothing is computed on a dropped row. `AVG` on a bound keeps its
-  fractional value: the AVG→SUM rewrite skips an `AVG` with no decision. Tests: `test_cons_rhs_aggregate.py`.
-- **`AVG`.** Binding keeps `AVG` (and its `DOUBLE` type, so a fractional bound survives coercion). The optimizer
-  rewrites it to `SUM` with `count_scale` set on the reducer; execution scales linear coefficients and the weight of
+  fractional value. Tests: `test_cons_rhs_aggregate.py`.
+- **`AVG`.** Binding keeps `AVG` (and its `DOUBLE` type, so a fractional bound survives coercion). The reducer stays an `AVG`
+  (`DecideReducerKind::AVG`) to the linear form, which marks its terms `avg_scale`; execution scales linear coefficients and the weight of
   each product
   group (a square or a product of decisions) by `1/n`. In a nested objective read in place, `avg` inside scales each
   row by `1/n_g`. Flat `MAXIMIZE AVG(e)` has the same argmax as `SUM(e)`, but mixed terms keep their own scaling, so

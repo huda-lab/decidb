@@ -446,8 +446,8 @@ preferred when it can restore feasibility.
   coefficient. Rebuilding the text from the matrix would quote arithmetic the user never wrote (`0.5*x + 0.5*x`,
   `SUM(2*keepS)`). A row with no source clause lists its terms (`FormatTerms`). A grouped clause renders as that one
   clause for every group, kept distinguishable by the `group` column (see "Group identity" below). An AVG row's slack is
-  already in AVG units, because the AVG→SUM rewrite pre-scales row coefficients by `1/N_g` (coefficient evaluation
-  divides the terms of a reducer whose `count_scale` is set by the rows it reads in its group), so it is reported raw,
+  already in AVG units, because an AVG's row coefficients are scaled by `1/N_g` (coefficient evaluation
+  divides the terms of an AVG reducer by the rows it reads in its group), so it is reported raw,
   with no `/N_g`.
 - **Strict `<` / `>`.** The δ offset (`< K → <= ceil(K)-1`, `> K → >= floor(K)+1`) is baked into
   `rhs` at the δ site (`ApplyComparisonSense`, `ilp_model_builder.cpp`), which also sets

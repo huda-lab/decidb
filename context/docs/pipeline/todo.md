@@ -28,24 +28,6 @@ every one of them:
 - **Tests** (R32): focused tests in each task's **Done when**; `make decide-test` once at the end of each queue
   group; every other suite in TREE-28.
 
-## TREE-10 — A reducer holds its kind; a norm is bound as itself
-
-- **Problem.** `BoundDecideReducerExpression` has no kind. About 25 readers compare `function->name` strings
-  (`decide_rewrite_scoped.cpp:284,294,359,368`, `decide_linear_form.cpp:788,931`, `decide_tree.cpp:31`,
-  `decide_canonicalizer.cpp:1364`, `direct/direct_ir.cpp:317`). AVG has two encodings (`avg`, and SUM with
-  `count_scale`). A string `agg_name` and the direct path's `DirectReducer` enum repeat the fact. The binder types a
-  norm through SUM's overloads, resets `function` to null and patches the return type
-  (`decide_binder.cpp:1187-1204`); a null `function` is the norm marker, guarded at about 18 sites.
-- **Change.** One enum (SUM, AVG, MIN, MAX, COUNT, NORM) set where the node is built, read by every reader. The
-  binder binds a norm's body as a scalar and takes its type from the norm's definition. `agg_name`,
-  `DecideTreeReducerName`, `IsDecideNormMarker`, the name comparisons and the null-function guards go. One encoding
-  of AVG (R33): the node is an AVG from the binder to lowering; `RewriteAvgInExpression` only records its account;
-  `count_scale` and the SUM rebind go; the linear form scales a kind-AVG reducer's terms. `DecideFrameSpec::reducer`
-  is the same enum. The form is `context/opa_rewrite/review/TREE-10-form.md`.
-- **Done when.** No reader compares a reducer's function name; `./test/decide/run_tests.sh -k "norm or avg or
-  minmax or reducer or count"` and `build/release/test/unittest "[decidb]"` pass; design.md § 3.2.2 names the kind; `language/explain.md` shows an AVG clause with
-  its account line and no rewritten `sum(...)` layer; every test that pins that layer is listed in the report.
-
 ## TREE-11 — Reducer equality and hash hold every fact
 
 - **Problem.** `BoundDecideReducerExpression::Equals` and `Hash` leave out `by`, `per`, `frame`, `count_scale` and
@@ -55,7 +37,6 @@ every one of them:
   `decide_tree_definition.cpp:168`. `BoundFunctionExpression::definition` is outside equality too.
 - **Change.** Every fact that changes what a node computes is part of `Equals` and `Hash`. The parallel protocol
   and the alias comparison go. A caller that relied on the loose equality is found and stated, not worked around.
-- **Needs.** TREE-10.
 - **Done when.** `DecideFactsEqual` and `FactsEqual` are named nowhere; `./test/decide/run_tests.sh -k "reducer or
   by or per or frame or like_term or canonical"` and `build/release/test/unittest "[decidb]"` pass.
 

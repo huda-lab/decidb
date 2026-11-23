@@ -49,16 +49,16 @@ objective's texts, `source_columns`, `optimized`, the solver choice and the tabl
 
 | Class | What it is | Holds |
 |---|---|---|
-| `BoundDecideReducerExpression` (`planner/expression/bound_decide_reducer_expression.hpp`) | a reducer (`sum`, `avg`, `min`, `max`, `count`, `norm`), and the aggregate a frame binds to | `function` and `bind_info` (the overload `FunctionBinder` picked; `function` is null for a norm no definition has replaced), `children` (none for `count(*)`, two for a collated MIN or MAX), `filter` (the rows it reads); and its facts: `by` (an index into `keys`), `per` (an index into `keyed_scopes`), `norm` (`DecideNorm`: order and the L0 bound), `written_name`, `count_scale`, `holds_reducer`, `retained`, `frame` (an index into `frames`, for the aggregate a frame binds to), `frame_aggregate` (an index into `LogicalDecide::frame_aggregates`, for a reducer over data whose argument reads a frame) |
+| `BoundDecideReducerExpression` (`planner/expression/bound_decide_reducer_expression.hpp`) | a reducer (`sum`, `avg`, `min`, `max`, `count`, `norm`) | `kind` (`DecideReducerKind`, set where the node is built; every reader asks it), `function` and `bind_info` (the overload `FunctionBinder` picked, which DuckDB runs; none for a NORM), `children` (none for `count(*)`, two for a collated MIN or MAX), `filter` (the rows it reads); and its facts: `by` (an index into `keys`), `per` (an index into `keyed_scopes`), `norm` (`DecideNorm`: order and the L0 bound), `written_name`, `holds_reducer`, `retained`, `frame_aggregate` (an index into `LogicalDecide::frame_aggregates`, for a reducer over data whose argument reads a frame) |
 | `BoundDecideNullTestExpression` (`bound_decide_null_test_expression.hpp`) | an `IS NOT NULL` test a reducer's rows gain beside its written `when` (`DecideCanonicalizer::SkipNullData`), and the test around a recorded reducer's value (`RhsBoundRewriter::InKey`) | `test`: the `IS NOT NULL`, or TRUE once the statistics prove it |
 
 - **The reducer is laid out as DuckDB's `BoundWindowExpression` is**: the bound aggregate function with its bind data,
   its arguments, and the clause-like parts as fields. It is no SQL aggregate: no `LogicalAggregate` computes it and
   DuckDB's executor never reaches it. The tree lowers it, and where DuckDB runs an aggregate (a tree G node, a frame
   column, a direct rule's plan) `ToAggregate()` makes the `BoundAggregateExpression` it names.
-- **`Equals` compares what the reducer computes**: its type, function, arguments, rows and bind data. A norm with no
-  function is the norm its order and bound name, so it does not equal the SUM over its body. The facts the rewrites
-  record (`by`, `per`, `count_scale`, `holds_reducer`, `retained`, `frame`, `frame_aggregate`, and the norm a
+- **`Equals` compares what the reducer computes**: its type, function, arguments, rows and bind data. A NORM
+  is the norm its order and bound name, so it does not equal the SUM over its body. The facts the rewrites
+  record (`by`, `per`, `holds_reducer`, `retained`, `frame`, `frame_aggregate`, and the norm a
   definition was written as) are left
   out, as DuckDB leaves out an alias, and `FactsEqual` (`DecideFactsEqual` for any two nodes) compares them where they
   are structure. `written_name` is display only and is in neither.
@@ -87,7 +87,7 @@ innermost first, so a definition reads only helpers of definitions before it. Ev
 | `BOOLEAN_PRODUCT` | a product of two decisions, one of them Boolean | the decision that stands for the product | none | `bool_factor`, `other_factor` (the Boolean decision and the other) |
 | `L0_INDICATOR` | one counted row of `norm(e, 0)` | the indicator | none | `links` (its three rows, clause records), `m`, `auto_m` |
 | `DEFINITION` | a reducer's nonlinear body, kept where it is written | the decision the reducer reads in its place | the body | `relation` |
-| `REDUCER_VALUE` | a decision reducer the value rewrite or a range frame replaced by a helper | the decision that holds its value | the reducer node (`Reducer()`), held once | `agg_name`, `path_key`, `class_key`, `push` |
+| `REDUCER_VALUE` | a decision reducer the value rewrite or a range frame replaced by a helper | the decision that holds its value | the reducer node (`Reducer()`), held once | `reducer` (the kind), `path_key`, `class_key`, `push` |
 
 - **A kept call names its definition by a typed reference.** `BoundFunctionExpression::definition`
   (`DecideHelperRef`: the entry's kind and its index) is a symbol reference, as Clang's `DeclRefExpr` is to its

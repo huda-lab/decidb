@@ -250,7 +250,7 @@ KeyedMapping DecideFrameWindowMapping(const DecideFrameMap &map);
 //! decisions `payload_vars` at those rows and the `else`'s `fallback` of `fallback_vars` at the anchor. A SUM or AVG
 //! counts each value -- a row once per visit, the `else` once per missing position -- and an AVG divides by their
 //! number; a MIN or MAX reads each once.
-void DecideListFrameMembers(const DecideFrameMap &map, const string &aggregate, const DecideClauseRef &clause,
+void DecideListFrameMembers(const DecideFrameMap &map, DecideReducerKind aggregate, const DecideClauseRef &clause,
                             const string &frame_text, const vector<CoefficientColumn> &payload,
                             const vector<idx_t> &payload_vars, const vector<CoefficientColumn> &fallback,
                             const vector<idx_t> &fallback_vars, ReducerValueMembers &out);

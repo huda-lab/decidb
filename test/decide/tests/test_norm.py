@@ -110,6 +110,13 @@ def test_norm_l0_negative_bound_rejected(decidb_cli):
     decidb_cli.assert_error_at(_BASE.format(obj="norm(new_qty - l_quantity, 0, -5)"), kind="Binder Error", at="-5")
 
 
+@pytest.mark.parametrize("body", ["l_comment", "l_quantity > 1", "NULL"])
+def test_norm_body_that_is_no_number_rejected(decidb_cli, body):
+    """A norm's body is bound as a scalar and typed by the norm's definition, which reads numbers: text, a truth
+    value and NULL are refused at the body (the IsNumeric branch of the binder's norm binding)."""
+    decidb_cli.assert_error_at(_BASE.format(obj=f"norm({body}, 1)"), kind="Binder Error", at=body, word="not a number")
+
+
 def test_norm_unsupported_order(decidb_cli):
     decidb_cli.assert_error_at(
         _BASE.format(obj="norm(new_qty - l_quantity, 3)"), kind="Not implemented Error", at="3", word="'3'"

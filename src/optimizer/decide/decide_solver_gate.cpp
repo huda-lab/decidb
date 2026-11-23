@@ -44,7 +44,7 @@ bool MayHaveIntegralColumn(const LogicalDecide &op) {
 		}
 	}
 	for (auto &definition : op.helper_definitions) {
-		if (definition->agg_name == "min" || definition->agg_name == "max" || definition->exact) {
+		if (IsDecideExtremum(definition->reducer) || definition->exact) {
 			return true;
 		}
 	}

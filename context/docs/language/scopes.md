@@ -45,7 +45,7 @@ the clause the user wrote.
   the node's `per` to the key scope of an inner `per`. It registers the `by` key in
   `LogicalDecide::keys` (one entry per key; keys compare as sets, a key holding a subquery by its text,
   `FindOrCreateDecideKey`) and sets the node's `by` to its index. Each fact is a field of its own, so the binder's
-  `per` and the AVG→SUM rewrite's `count_scale` stand on one node without meeting.
+  `per` and its kind stand on one node without meeting.
 - **Objective.** `DecideObjectiveBinder::BindObjective` wraps a front `when` the same way; `per ()` adds
   nothing. `outer(per k: inner(e) by (k))` binds as any nested reducer (D81): `outer` with its `per` `k`, `inner`
   with its `by` key.

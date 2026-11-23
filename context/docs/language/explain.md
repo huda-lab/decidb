@@ -17,7 +17,6 @@ Constraints:
     ↳ max(ship) becomes a helper decision
   avg(ship) >= 10
     ↳ avg(ship) becomes a sum divided by its row count
-    ↳ sum(ship) >= 10
   abs(ship - 20) <= 5
     ↳ abs(ship - 20) becomes a helper decision
     ↳ abs(ship - 20) - ship >= -20

@@ -341,7 +341,7 @@ TEST_CASE("Direct-solve IR models every decision domain and scope", "[decidb]") 
 	}
 	// The query-wide decision is a row-level part beside the reducers.
 	REQUIRE(ir.objective.parts.size() == 5);
-	REQUIRE(ir.objective.parts[3].reducer == DirectReducer::NONE);
+	REQUIRE(!ir.objective.parts[3].reduced);
 }
 
 TEST_CASE("Direct-solve IR reads a keyed decision's key", "[decidb]") {
@@ -377,7 +377,7 @@ TEST_CASE("Direct-solve IR models comparisons, membership, and right-hand sides"
 	// One constraint per row, holding both decisions.
 	REQUIRE(!constraints[0].aggregate);
 	REQUIRE(constraints[0].lhs.size() == 1);
-	REQUIRE(constraints[0].lhs[0].reducer == DirectReducer::NONE);
+	REQUIRE(!constraints[0].lhs[0].reduced);
 	REQUIRE(constraints[0].lhs[0].terms.size() == 2);
 	REQUIRE(constraints[1].comparison == ExpressionType::COMPARE_NOTEQUAL);
 	REQUIRE(constraints[2].comparison == ExpressionType::COMPARE_IN);
@@ -402,15 +402,15 @@ TEST_CASE("Direct-solve IR models reducers, filters, qualifiers, scales and norm
 		REQUIRE(constraints[i].status == (i == 6 ? DirectAnalysisStatus::NOT_PROVED : DirectAnalysisStatus::PROVED));
 		REQUIRE(constraints[i].lhs.size() == 1);
 	}
-	REQUIRE(constraints[0].lhs[0].reducer == DirectReducer::AVG);
-	REQUIRE(constraints[1].lhs[0].reducer == DirectReducer::MIN);
-	REQUIRE(constraints[2].lhs[0].reducer == DirectReducer::MAX);
+	REQUIRE(constraints[0].lhs[0].reducer == DecideReducerKind::AVG);
+	REQUIRE(constraints[1].lhs[0].reducer == DecideReducerKind::MIN);
+	REQUIRE(constraints[2].lhs[0].reducer == DecideReducerKind::MAX);
 	REQUIRE(constraints[3].lhs[0].filter != nullptr);
 	REQUIRE(constraints[4].lhs[0].qualifier == 0);
 	REQUIRE(constraints[5].lhs[0].scale != nullptr);
 	REQUIRE(constraints[6].lhs[0].status == DirectAnalysisStatus::NOT_PROVED);
 	// L1 reads as its definition: SUM of an absolute value.
-	REQUIRE(constraints[7].lhs[0].reducer == DirectReducer::SUM);
+	REQUIRE(constraints[7].lhs[0].reducer == DecideReducerKind::SUM);
 	REQUIRE(constraints[7].lhs[0].terms.size() == 1);
 	REQUIRE(constraints[7].lhs[0].terms[0].IsAbs());
 }

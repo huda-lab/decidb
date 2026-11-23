@@ -597,7 +597,7 @@ private:
 	//! `begin`.
 	template <class TERM>
 	static void ApplyAggregateMetadata(vector<TERM> &items, idx_t begin, const BoundDecideReducerExpression &agg) {
-		bool is_avg = agg.count_scale;
+		bool is_avg = agg.kind == DecideReducerKind::AVG;
 		idx_t qualifier_scope = agg.per;
 		for (idx_t i = begin; i < items.size(); i++) {
 			items[i].avg_scale = is_avg;
@@ -610,7 +610,7 @@ private:
 	//! each row by its group's count, not the objective's (DecideTerm::avg_group_key).
 	template <class TERM>
 	static void ApplyAvgGroupKey(vector<TERM> &items, idx_t begin, const BoundDecideReducerExpression &agg) {
-		const idx_t avg_group_key = agg.count_scale ? agg.by : DConstants::INVALID_INDEX;
+		const idx_t avg_group_key = agg.kind == DecideReducerKind::AVG ? agg.by : DConstants::INVALID_INDEX;
 		for (idx_t i = begin; i < items.size(); i++) {
 			items[i].avg_group_key = avg_group_key;
 		}
@@ -785,10 +785,8 @@ private:
 
 	void ExtractReducerConstraintTerms(const BoundDecideReducerExpression &agg, DecideConstraint &constraint,
 	                                   int sign) {
-		auto agg_name = StringUtil::Lower(agg.function->name);
-		if (agg_name != "sum") {
-			throw InternalException("DECIDE optimizer did not rewrite aggregate '%s' to SUM before execution",
-			                        agg.function->name);
+		if (agg.kind != DecideReducerKind::SUM && agg.kind != DecideReducerKind::AVG) {
+			throw InternalException("DECIDE: the reducer '%s' reached the linear form", agg.ToString());
 		}
 		idx_t linear_before = constraint.lhs_terms.size();
 		idx_t group_before = constraint.product_groups.size();
@@ -928,10 +926,8 @@ private:
 	}
 
 	void ExtractReducerObjectiveTerms(const BoundDecideReducerExpression &agg, DecideObjective &obj, int sign) {
-		auto agg_name = StringUtil::Lower(agg.function->name);
-		if (agg_name != "sum") {
-			throw InternalException("DECIDE optimizer should rewrite objective aggregate '%s' to SUM before execution",
-			                        agg.function->name);
+		if (agg.kind != DecideReducerKind::SUM && agg.kind != DecideReducerKind::AVG) {
+			throw InternalException("DECIDE: the reducer '%s' reached the linear form", agg.ToString());
 		}
 		idx_t before = obj.terms.size();
 		idx_t group_before = obj.product_groups.size();

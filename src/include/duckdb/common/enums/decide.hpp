@@ -137,6 +137,13 @@ enum class DecideVariableType : uint8_t { REAL = 0, INT = 1, BOOL = 2 };
 //! the first or last peer, or k peers before or after the anchor's.
 enum class DecideFrameAnchor : uint8_t { FIRST = 0, LAST = 1, PREVIOUS = 2, NEXT = 3 };
 
+//! What a reducer does with the rows it reads. NORM is a norm no definition has replaced.
+enum class DecideReducerKind : uint8_t { SUM = 0, AVG = 1, MIN = 2, MAX = 3, COUNT = 4, NORM = 5 };
+
+inline bool IsDecideExtremum(DecideReducerKind kind) {
+	return kind == DecideReducerKind::MIN || kind == DecideReducerKind::MAX;
+}
+
 //! Origin/relaxability role of an emitted DECIDE matrix row.
 //!   USER_PARAMETER — carries a user-editable parameter/RHS; elastic may slacken.
 //!   USER_MECHANISM — helper row attached to a user clause; rigid.

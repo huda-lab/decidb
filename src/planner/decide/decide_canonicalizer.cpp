@@ -501,7 +501,7 @@ bool DecideCanonicalizer::BoundIsQueryWide(const Expression &body) const {
 //! order it was written with, and an L0 norm is still the binder's marker.
 static const Expression *WrittenNormBody(const BoundDecideReducerExpression &aggregate, string &order) {
 	order = aggregate.norm.order == DecideNorm::Order::INF ? "inf" : aggregate.norm.Written();
-	return aggregate.function ? DecideWrittenNormBody(aggregate) : aggregate.children[0].get();
+	return aggregate.kind == DecideReducerKind::NORM ? aggregate.children[0].get() : DecideWrittenNormBody(aggregate);
 }
 
 //! Name an expression the way the user wrote it, for an error message. Everything the
@@ -793,11 +793,7 @@ bool DecideCanonicalizer::DecomposeExtremumAddends(int sign, const Expression &t
 		return false;
 	}
 	auto &aggregate = reducer.Cast<BoundDecideReducerExpression>();
-	if (!aggregate.function) {
-		return false;
-	}
-	const auto &name = aggregate.function->name;
-	if (name != "min" && name != "max") {
+	if (!IsDecideExtremum(aggregate.kind)) {
 		return false;
 	}
 	auto split = SplitExtremumBody(*aggregate.children[0], decide_index);
@@ -808,7 +804,7 @@ bool DecideCanonicalizer::DecomposeExtremumAddends(int sign, const Expression &t
 	for (auto &part : split.kept) {
 		kept.push_back(Atom {part.first, part.second, Classify(*part.second)});
 	}
-	auto owned = RebindReducer(aggregate, name, BuildAdditive(kept));
+	auto owned = RebindReducer(aggregate, BuildAdditive(kept));
 	auto *rebuilt = owned.get();
 	auto *factor = scale.get();
 	out.push_back(Atom {sign, rebuilt, Classify(whole), std::move(scale), divides, std::move(owned)});
@@ -819,7 +815,9 @@ bool DecideCanonicalizer::DecomposeExtremumAddends(int sign, const Expression &t
 	return true;
 }
 
-static unique_ptr<Expression> BindReducer(ClientContext &context, const string &name, unique_ptr<Expression> child) {
+static unique_ptr<Expression> BindReducer(ClientContext &context, DecideReducerKind kind,
+                                          unique_ptr<Expression> child) {
+	auto name = StringUtil::Lower(EnumUtil::ToString(kind));
 	auto &entry = Catalog::GetSystemCatalog(context)
 	                  .GetEntry(context, CatalogType::SCALAR_FUNCTION_ENTRY, DEFAULT_SCHEMA, name)
 	                  .Cast<AggregateFunctionCatalogEntry>();
@@ -832,8 +830,9 @@ static unique_ptr<Expression> BindReducer(ClientContext &context, const string &
 	}
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(child));
-	return make_uniq<BoundDecideReducerExpression>(function_binder.BindAggregateFunction(
-	    entry.functions.GetFunctionByOffset(best.GetIndex()), std::move(children)));
+	return make_uniq<BoundDecideReducerExpression>(
+	    kind, function_binder.BindAggregateFunction(entry.functions.GetFunctionByOffset(best.GetIndex()),
+	                                                std::move(children)));
 }
 
 unique_ptr<Expression> DecideNormDefinition(ClientContext &context, unique_ptr<Expression> body,
@@ -848,15 +847,17 @@ unique_ptr<Expression> DecideNormDefinition(ClientContext &context, unique_ptr<E
 		vector<unique_ptr<Expression>> square;
 		square.push_back(std::move(body));
 		square.push_back(make_uniq<BoundConstantExpression>(Value::INTEGER(2)));
-		return BindReducer(context, "sum", DecideRebindOperator(context, "**", std::move(square), "power"));
+		return BindReducer(context, DecideReducerKind::SUM,
+		                   DecideRebindOperator(context, "**", std::move(square), "power"));
 	}
 	if (!norm.IsCount()) {
-		return BindReducer(context, norm.order == DecideNorm::Order::L1 ? "sum" : "max",
+		return BindReducer(context,
+		                   norm.order == DecideNorm::Order::L1 ? DecideReducerKind::SUM : DecideReducerKind::MAX,
 		                   unary("@", std::move(body), "abs"));
 	}
 	// An L0 norm of data counts the rows whose value is not 0; its `M` bounds a decision and means nothing here.
 	// SIGN reads a NaN as 0, so a value check reads the body (DecideWrittenNormBody), not this definition.
-	return BindReducer(context, "sum", unary("@", unary("sign", std::move(body), string()), "abs"));
+	return BindReducer(context, DecideReducerKind::SUM, unary("@", unary("sign", std::move(body), string()), "abs"));
 }
 
 //! Whether `expr` is a norm marker whose order has an expression for a definition: 1, 2, 'inf', and an L0 norm of
@@ -913,13 +914,13 @@ void DecideCanonicalizer::DesugarNormsInPlace(unique_ptr<Expression> &expr) cons
 	expr = std::move(definition);
 }
 
-unique_ptr<Expression> DecideCanonicalizer::BindAggregate(const string &name, unique_ptr<Expression> child) const {
-	return BindReducer(context, name, std::move(child));
+unique_ptr<Expression> DecideCanonicalizer::BindAggregate(DecideReducerKind kind, unique_ptr<Expression> child) const {
+	return BindReducer(context, kind, std::move(child));
 }
 
-unique_ptr<Expression> DecideCanonicalizer::RebindReducer(const BoundDecideReducerExpression &from, const string &name,
+unique_ptr<Expression> DecideCanonicalizer::RebindReducer(const BoundDecideReducerExpression &from,
                                                           unique_ptr<Expression> child) const {
-	auto result = BindAggregate(name, std::move(child));
+	auto result = BindAggregate(from.kind, std::move(child));
 	auto &reducer = result->Cast<BoundDecideReducerExpression>();
 	reducer.SetAlias(from.GetAlias());
 	reducer.CopyFacts(from);
@@ -1361,7 +1362,7 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 		if (!reducer.children.empty() && ContainsReducer(*reducer.children[0])) {
 			value = true; // a reducer inside it: a helper at every level (language/guide.md §5.5)
 		}
-		bool is_avg = (reducer.function && StringUtil::CIEquals(reducer.function->name, "avg")) || reducer.count_scale;
+		bool is_avg = reducer.kind == DecideReducerKind::AVG;
 		has_avg = has_avg || is_avg;
 		only_plain_avgs = only_plain_avgs && is_avg && !reducer.filter && reducer.per == DConstants::INVALID_INDEX;
 		if (atom.scale && !IsQueryWideConstant(*atom.scale)) {

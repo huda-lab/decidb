@@ -159,7 +159,8 @@ struct DecideNode {
 	//! `aux >= -operand` (MakeAbsRow), which carry the operand per row to stage 06; an L0 indicator's link rows; the
 	//! one row that defines a definition's helper. Such a root's `parent` is the F node.
 	vector<idx_t> rows;
-	string aggregate;
+	//! A G's reducer, and a range O's; no reader asks it of another node.
+	DecideReducerKind aggregate = DecideReducerKind::SUM;
 	//! The helper definition (DecideTree::definitions) the node holds the value of: an F node's, or the one whose
 	//! helper a linked G or O defines. INVALID_INDEX for every other node.
 	idx_t definition = DConstants::INVALID_INDEX;
@@ -348,8 +349,5 @@ idx_t DecideTreeOperand(const DecideTree &tree, idx_t reducer);
 //! lowers a reducer of decisions, the binder refuses a cast over one, and a reducer of a helper's value is a helper
 //! itself, whose terms stage 05 lowers with no G.
 idx_t DecideTreeMembersOf(const DecideTree &tree, idx_t reducer);
-
-//! The semantic name a carrier represents, shared by tree consumers.
-string DecideTreeReducerName(const BoundDecideReducerExpression &aggregate);
 
 } // namespace duckdb

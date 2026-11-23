@@ -707,7 +707,8 @@ def test_avg_rewrite_is_shown_not_substituted(decidb_cli):
     out = _explain(decidb_cli, sql)
     packed = _packed(out)
     assert "AVG(x)>=10" in packed, _plan_text(out)
-    assert _REWRITTEN_MARK + "sum(x)>=10" in packed, _plan_text(out)
+    assert _REWRITTEN_MARK + "avg(x)becomesasumdividedbyitsrowcount" in packed, _plan_text(out)
+    assert "sum(x)>=10" not in packed, _plan_text(out)
 
 
 @pytest.mark.explain
@@ -781,7 +782,8 @@ def test_layers_survive_a_prepared_statement(decidb_cli):
     ).stdout
     packed = _packed(out)
     assert "AVG(x)>=10" in packed, _plan_text(out)
-    assert _REWRITTEN_MARK + "sum(x)>=10" in packed, _plan_text(out)
+    assert _REWRITTEN_MARK + "avg(x)becomesasumdividedbyitsrowcount" in packed, _plan_text(out)
+    assert "sum(x)>=10" not in packed, _plan_text(out)
 
 
 @pytest.mark.explain

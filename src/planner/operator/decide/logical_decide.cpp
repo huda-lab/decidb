@@ -422,7 +422,7 @@ static int ComparisonPush(const Expression &leaf) {
 //! A MIN or MAX's closing side is the hard direction, encoded with a Big-M over its members, which reads them from
 //! both directions: no sign is pinned, which is 0, as under no push.
 static int ValueLinkPush(const DecideHelperDefinition &link) {
-	if ((link.agg_name == "min" || link.agg_name == "max") && link.NeedsClosing()) {
+	if (IsDecideExtremum(link.reducer) && link.NeedsClosing()) {
 		return 0;
 	}
 	return link.push == ExtremumPush::DOWN ? 1 : link.push == ExtremumPush::UP ? -1 : 0;
