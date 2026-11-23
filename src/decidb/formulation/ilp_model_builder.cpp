@@ -220,10 +220,10 @@ idx_t VarIndexer::OwnerOf(idx_t col) const {
 	return scalar_slot_var[col - scalar_block_start];
 }
 
-VarIndexer VarIndexer::Build(const SolverInput &input) {
+VarIndexer VarIndexer::Build(SolverInput &input) {
 	VarIndexer idx;
-	// Own a copy so this VarIndexer can outlive the SolverInput
-	idx.keyed_mappings = input.keyed_mappings;
+	// The layout is their one reader from here, and outlives the input for the readback.
+	idx.keyed_mappings = std::move(input.keyed_mappings);
 	idx.frame_reads = input.frame_reads;
 	idx.first_frame_read = input.first_frame_read;
 	BuildVarIndexer(idx, input);

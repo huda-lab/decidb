@@ -67,7 +67,7 @@ struct VarIndexer {
 	vector<idx_t> scalar_slot_var; //!< position within the scalar block → var_idx
 	vector<idx_t> keyed_block_var; //!< keyed var_idx, ascending by base
 
-	//! Owned keyed mappings. The indexer can therefore outlive its SolverInput.
+	//! The keyed mappings, taken from the SolverInput (Build): the indexer can therefore outlive it.
 	vector<KeyedMapping> keyed_mappings;
 
 	//! Owned frame reads (SolverInput::frame_reads), variables `first_frame_read` on.
@@ -239,9 +239,9 @@ struct VarIndexer {
 	//! NAME; without this it could only say "some variable is unbounded".
 	idx_t OwnerOf(idx_t col) const;
 
-	//! Build a VarIndexer that owns a copy of keyed_mappings.
-	//! Safe to use after the SolverInput is destroyed (e.g., stored on gstate for readback).
-	static VarIndexer Build(const SolverInput &input);
+	//! The layout of `input`'s decisions. It takes the input's keyed mappings, which no pass of stage 06 reads but
+	//! through it, so it is safe to use after the SolverInput is destroyed (it is kept for the readback).
+	static VarIndexer Build(SolverInput &input);
 };
 
 //! The box a reader that tells the instances of a decision apart takes, by the instance a term names. A reader that

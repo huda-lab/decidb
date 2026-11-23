@@ -777,7 +777,8 @@ struct SolverInput {
 	// --- Key scopes ---
 
 	//! Keyed mappings: one per KeyedScopeInfo (a `per K:` decision's key, a reducer's
-	//! `per K:` or colon-form qualifier, a helper decision's `by` key)
+	//! `per K:` or colon-form qualifier, a helper decision's `by` key). The column layout takes them
+	//! (VarIndexer::Build).
 	vector<KeyedMapping> keyed_mappings;
 	//! Per decision, the rows whose instance of it has no value beyond its keyed scope's absent class: an auxiliary
 	//! whose definition reads an instance with none, or a NULL (D88); empty where none. An instance every row of
