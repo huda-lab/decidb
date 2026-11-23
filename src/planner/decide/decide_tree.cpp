@@ -284,7 +284,6 @@ public:
 				}
 				auto &node = FunctionNode(i, DecideFunctionKind::L0_INDICATOR);
 				node.l0_auto_m = definition.auto_m;
-				node.l0_m = definition.m;
 				node.text = definition.label;
 				node.origin = definition.links[0].origin;
 				break;
@@ -292,16 +291,6 @@ public:
 			case DecideHelperKind::DEFINITION: {
 				// The row stands beneath the F node, at the placeholder's clause position.
 				auto &node = FunctionNode(i, DecideFunctionKind::DEFINITION);
-				node.definition_relation = definition.relation == ExpressionType::COMPARE_EQUAL
-				                               ? DecideDefinitionRelation::EQUAL
-				                           : definition.relation == ExpressionType::COMPARE_GREATERTHANOREQUALTO
-				                               ? DecideDefinitionRelation::AT_LEAST
-				                           : definition.relation == ExpressionType::COMPARE_LESSTHANOREQUALTO
-				                               ? DecideDefinitionRelation::AT_MOST
-				                               : DecideDefinitionRelation::INVALID;
-				if (node.definition_relation == DecideDefinitionRelation::INVALID) {
-					throw InternalException("DECIDE tree: nonlinear body definition has an unsupported comparison");
-				}
 				Gates(definition_nodes[i], definition.when.get());
 				node.definition_row = MakeDefinitionRow(definition);
 				break;
@@ -685,7 +674,6 @@ private:
 		}
 		const auto *row = &canonical->body->Cast<BoundComparisonExpression>();
 		node.facts = ReadDecideClauseFacts(context, op, *canonical);
-		node.comparison_type = row->type;
 		node.folded = clause.folded_bound;
 		node.origin = clause.origin;
 		node.text = RootText(node.origin.source_clause_id);
@@ -735,7 +723,6 @@ private:
 		}
 		node.body = Lower(index, *row->left);
 		node.rhs = Lower(index, *row->right, canonical->query_wide_bound);
-		node.facts->rhs_expr = node.rhs->Copy();
 		idx_t abs_function = DConstants::INVALID_INDEX;
 		if (is_abs_envelope) {
 			auto function =
@@ -838,7 +825,6 @@ private:
 		Edge(owner, child);
 		auto &node = *tree->nodes[owner];
 		const idx_t column = tree->input_column_count + child;
-		node.child_reads.push_back({child, column, tree->nodes[child]->decision_value});
 		node.decision_value = node.decision_value || tree->nodes[child]->decision_value;
 		DecideSignatureField field;
 		if (tree->nodes[child]->kind == DecideNodeKind::FUNCTION) {
@@ -1391,17 +1377,15 @@ void DecideTree::Validate() const {
 			    node.function_kind == DecideFunctionKind::BOOLEAN_PRODUCT &&
 			    (node.product_bool_var >= value_nodes.size() || node.product_other_var >= value_nodes.size() ||
 			     node.abs_exact || !node.abs_envelope_roots.empty());
-			const bool l0_invalid =
-			    node.function_kind == DecideFunctionKind::L0_INDICATOR &&
-			    (node.product_bool_var != DConstants::INVALID_INDEX ||
-			     node.product_other_var != DConstants::INVALID_INDEX || node.abs_exact ||
-			     !node.abs_envelope_roots.empty() || node.l0_link_roots.size() != 3 || !(node.l0_m > 0.0));
+			const bool l0_invalid = node.function_kind == DecideFunctionKind::L0_INDICATOR &&
+			                        (node.product_bool_var != DConstants::INVALID_INDEX ||
+			                         node.product_other_var != DConstants::INVALID_INDEX || node.abs_exact ||
+			                         !node.abs_envelope_roots.empty() || node.l0_link_roots.size() != 3);
 			const bool definition_invalid =
 			    node.function_kind == DecideFunctionKind::DEFINITION &&
 			    (node.product_bool_var != DConstants::INVALID_INDEX ||
 			     node.product_other_var != DConstants::INVALID_INDEX || node.abs_exact ||
-			     !node.abs_envelope_roots.empty() || !node.l0_link_roots.empty() || node.definition_roots.size() != 1 ||
-			     node.definition_relation == DecideDefinitionRelation::INVALID);
+			     !node.abs_envelope_roots.empty() || !node.l0_link_roots.empty() || node.definition_roots.size() != 1);
 			if (common_invalid || abs_invalid || product_invalid || l0_invalid || definition_invalid) {
 				throw InternalException("DECIDE tree has an invalid function node %llu", i);
 			}
@@ -1513,11 +1497,6 @@ void DecideTree::Validate() const {
 				throw InternalException("DECIDE tree node %llu's signature reads a non-source value", i);
 			}
 		}
-		for (auto &read : node.child_reads) {
-			if (read.node >= nodes.size() || read.column != input_column_count + read.node) {
-				throw InternalException("DECIDE tree body has an invalid child result");
-			}
-		}
 		// A program reads its node's layout, then the results of its arguments, and no column of a plan. A hole reads a
 		// G over data, or a frame's column of its O.
 		for (auto &hole : node.holes) {
@@ -1588,14 +1567,9 @@ string DecideTree::ToString() const {
 				       << ")";
 			} else if (node.function_kind == DecideFunctionKind::L0_INDICATOR) {
 				result << " function=l0_indicator value=x" << node.value_var << " body=(" << node.body->ToString()
-				       << ")" << (node.l0_auto_m ? " M=auto" : " M=" + std::to_string(node.l0_m));
+				       << ")" << (node.l0_auto_m ? " M=auto" : "");
 			} else if (node.function_kind == DecideFunctionKind::DEFINITION) {
-				const auto relation = node.definition_relation == DecideDefinitionRelation::AT_LEAST  ? "at-least"
-				                      : node.definition_relation == DecideDefinitionRelation::AT_MOST ? "at-most"
-				                      : node.definition_relation == DecideDefinitionRelation::EQUAL   ? "equal"
-				                                                                                      : "invalid";
-				result << " function=definition value=x" << node.value_var << " relation=" << relation << " body=("
-				       << node.body->ToString() << ")";
+				result << " function=definition value=x" << node.value_var << " body=(" << node.body->ToString() << ")";
 			}
 		}
 		result << " per=" << (node.per == DecideTreePer::ROW ? "row" : node.per == DecideTreePer::KEY ? "key" : "one");

@@ -311,9 +311,8 @@ struct DecideHelperDefinition {
 	idx_t first_factor = DConstants::INVALID_INDEX;
 	idx_t second_factor = DConstants::INVALID_INDEX;
 
-	//! L0_INDICATOR: the bound `m` of `|e| <= m * z`, and whether stage 06 fills it from the box.
+	//! L0_INDICATOR: whether stage 06 fills the bound `m` of `|e| <= m * z` from the box; a written one is in `links`.
 	bool auto_m = false;
-	double m = 1.0;
 	vector<BoundDecideClause> links;
 
 	//! DEFINITION: how the helper compares with its body (`=`, `>=` or `<=`).

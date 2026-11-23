@@ -101,7 +101,6 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		    auto indicator = make_uniq<DecideHelperDefinition>(DecideHelperKind::L0_INDICATOR);
 		    indicator->helper = z_idx;
 		    indicator->auto_m = auto_m;
-		    indicator->m = m;
 		    indicator->label = RenderForPlan(aggregate, decide);
 		    auto z = MakeDecisionRef(decide, z_idx);
 		    AddRewriteAccount(decide, origin.source_clause_id, LogicalDecide::RewriteAccount::Kind::HELPER_PER_ROW,

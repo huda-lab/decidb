@@ -20,17 +20,7 @@ class BoundComparisonExpression;
 
 enum class DecideNodeKind : uint8_t { SCOPE, REDUCER, FRAME, FUNCTION };
 enum class DecideFunctionKind : uint8_t { INVALID, ABS, BOOLEAN_PRODUCT, L0_INDICATOR, DEFINITION };
-enum class DecideDefinitionRelation : uint8_t { INVALID, AT_LEAST, AT_MOST, EQUAL };
 enum class DecideTreePer : uint8_t { ROW, KEY, ONE };
-
-//! A scalar body's reference to a child's result. The physical column is outside
-//! the input's columns: input_column_count + node. Decision-valued results are
-//! symbolic forms; a scalar evaluator must not interpret them as SQL values.
-struct DecideTreeRead {
-	idx_t node;
-	idx_t column;
-	bool decision_value;
-};
 
 //! Where one term of a body is computed (language/guide.md §6.1): the E or O whose entries it ranges over, its
 //! coefficient's program there, and the programs of the values it is computed from, which only a message reads.
@@ -144,7 +134,6 @@ struct DecideNode {
 	vector<idx_t> children;
 	//! Children and non-routing dependencies (shared helpers and definitions).
 	vector<idx_t> dependencies;
-	vector<DecideTreeRead> child_reads;
 	string text;
 	vector<unique_ptr<Expression>> when;
 	//! Generated NULL membership tests are computed after descent, never gates.
@@ -159,7 +148,8 @@ struct DecideNode {
 	vector<idx_t> decisions;
 	//! Bare source references carried by entries, including reads outside sigma.
 	vector<unique_ptr<Expression>> columns;
-	//! Scalar algebra with child results replaced by child_reads' physical columns.
+	//! Scalar algebra with each child's result replaced by its physical column, input_column_count + child. A
+	//! decision-valued result is a symbolic form; a scalar evaluator must not interpret it as an SQL value.
 	unique_ptr<Expression> body;
 	unique_ptr<Expression> rhs;
 	unique_ptr<Expression> fallback;
@@ -176,12 +166,10 @@ struct DecideNode {
 	//! L0_INDICATOR: rows which define the indicator from its operand and the reverse ABS link.
 	vector<idx_t> l0_link_roots;
 	bool l0_auto_m = false;
-	double l0_m = 1.0;
 	//! Set on a child clause root owned by an L0 indicator F node.
 	idx_t l0_function_owner = DConstants::INVALID_INDEX;
 	//! Definition F nodes own the structural row defining their helper value.
 	vector<idx_t> definition_roots;
-	DecideDefinitionRelation definition_relation = DecideDefinitionRelation::INVALID;
 	//! Set on the structural clause root owned by a definition F node.
 	idx_t definition_function_owner = DConstants::INVALID_INDEX;
 	//! An ABS F node's record from RewriteAbs (DecideHelperKind::ABS): whether its exact encoding is needed. Stage
@@ -208,7 +196,6 @@ struct DecideNode {
 	idx_t qualifier_scope = DConstants::INVALID_INDEX;
 	DecideRowOrigin origin;
 	idx_t defined_var = DConstants::INVALID_INDEX;
-	ExpressionType comparison_type = ExpressionType::INVALID;
 	bool root = false;
 	//! A clause root whose instances are its distinct sigmas over every class: classes whose rows agree on all they
 	//! read are one instance (language/guide.md §7.1). See DecideCanonicalizer::MergesClasses.
