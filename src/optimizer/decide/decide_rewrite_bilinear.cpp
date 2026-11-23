@@ -189,8 +189,8 @@ idx_t AddBooleanProduct(LogicalDecide &decide, const DecideRowOrigin &origin, id
 	// `w <= b2`, `w >= b1 + b2 - 1`).
 	auto product = make_uniq<DecideHelperDefinition>(DecideHelperKind::BOOLEAN_PRODUCT);
 	product->helper = aux_idx;
-	product->first_factor = first;
-	product->second_factor = second;
+	product->bool_factor = bool_var_idx;
+	product->other_factor = other_var_idx;
 	product->origin = origin;
 	decide.helper_definitions.push_back(std::move(product));
 	return aux_idx;

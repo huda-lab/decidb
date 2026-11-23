@@ -307,9 +307,9 @@ struct DecideHelperDefinition {
 	//! ABS: the helper's scope (ScopeOf its operand); the rows are stated once per instance of it.
 	DecideVarScopeInfo scope;
 
-	//! BOOLEAN_PRODUCT: the two decisions, in the order written.
-	idx_t first_factor = DConstants::INVALID_INDEX;
-	idx_t second_factor = DConstants::INVALID_INDEX;
+	//! BOOLEAN_PRODUCT: the two decisions, a Boolean one and the other.
+	idx_t bool_factor = DConstants::INVALID_INDEX;
+	idx_t other_factor = DConstants::INVALID_INDEX;
 
 	//! L0_INDICATOR: whether stage 06 fills the bound `m` of `|e| <= m * z` from the box; a written one is in `links`.
 	bool auto_m = false;

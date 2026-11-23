@@ -369,16 +369,15 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 	gstate.absent_reads.assign(tree.decide_variables.size(), vector<bool>());
 	columns.Absence().ReadClasses(mappings, gstate.absent_reads);
 	gstate.evaluated_bilinear_links.clear();
-	for (auto function : tree.function_nodes) {
-		const auto &node = *tree.nodes[function];
-		if (node.function_kind != DecideFunctionKind::BOOLEAN_PRODUCT) {
+	for (auto &product : tree.definitions) {
+		if (product->kind != DecideHelperKind::BOOLEAN_PRODUCT) {
 			continue;
 		}
 		BilinearLinkSpec link;
-		link.aux_idx = node.value_var;
-		link.bool_var_idx = node.product_bool_var;
-		link.other_var_idx = node.product_other_var;
-		link.origin = node.origin;
+		link.aux_idx = product->helper;
+		link.bool_var_idx = product->bool_factor;
+		link.other_var_idx = product->other_factor;
+		link.origin = product->origin;
 		gstate.evaluated_bilinear_links.push_back(link);
 	}
 	// The rows defining each auxiliary (DecideConstraint::defined_var) and each helper's G, in the tree's order, which
@@ -393,7 +392,7 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 	definitions.insert(definitions.end(), tree.function_nodes.begin(), tree.function_nodes.end());
 	link_members.assign(tree.nodes.size(), LinkMembers());
 	for (auto node : tree.eval_order) {
-		if (tree.nodes[node]->link != DConstants::INVALID_INDEX) {
+		if (tree.nodes[node]->Linked()) {
 			definitions.push_back(node);
 		}
 	}
@@ -403,25 +402,22 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 		auto &node = *tree.nodes[root];
 		if (node.kind == DecideNodeKind::FUNCTION) {
 			FunctionAbsence(root);
-			const auto variable = node.value_var;
-			if (node.function_kind == DecideFunctionKind::ABS) {
-				for (auto envelope : node.abs_envelope_roots) {
-					DefinitionAbsence(envelope, variable);
-				}
-			} else if (node.function_kind == DecideFunctionKind::L0_INDICATOR) {
-				for (auto link : node.l0_link_roots) {
-					DefinitionAbsence(link, variable);
-				}
-			} else if (node.function_kind == DecideFunctionKind::DEFINITION) {
-				for (auto definition : node.definition_roots) {
-					DefinitionAbsence(definition, variable);
-				}
+			// The rows a function owns are of its own kind: the other two lists are empty.
+			const auto variable = tree.ValueVar(node);
+			for (auto envelope : node.abs_envelope_roots) {
+				DefinitionAbsence(envelope, variable);
+			}
+			for (auto link : node.l0_link_roots) {
+				DefinitionAbsence(link, variable);
+			}
+			for (auto definition : node.definition_roots) {
+				DefinitionAbsence(definition, variable);
 			}
 		} else if (node.l0_function_owner != DConstants::INVALID_INDEX ||
 		           node.definition_function_owner != DConstants::INVALID_INDEX) {
 			// The owning F node resolves absence from its linked rows.
-		} else if (node.link != DConstants::INVALID_INDEX) {
-			mappings[tree.variable_scopes[node.value_var].keyed_scope_idx] = HelperMapping(root);
+		} else if (node.Linked()) {
+			mappings[tree.variable_scopes[tree.ValueVar(node)].keyed_scope_idx] = HelperMapping(root);
 		} else if (node.compiled.clause && node.compiled.clause->defined_var != DConstants::INVALID_INDEX &&
 		           !IsDecideAbsEnvelope(node.compiled.clause->helper_row)) {
 			DefinitionAbsence(root, node.compiled.clause->defined_var);
@@ -444,7 +440,7 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 
 void DecideModelEmitter::FunctionAbsence(idx_t function) {
 	const auto &node = *tree.nodes[function];
-	const auto variable = node.value_var;
+	const auto variable = tree.ValueVar(node);
 	if (variable >= gstate.absent_reads.size()) {
 		throw InternalException("DECIDE model emitter: invalid function absence source");
 	}
@@ -556,9 +552,6 @@ void DecideModelEmitter::Constraints() {
 	vector<idx_t> abs_function_of_clause(roots.size(), DConstants::INVALID_INDEX);
 	for (auto function : tree.function_nodes) {
 		const auto &node = *tree.nodes[function];
-		if (node.function_kind != DecideFunctionKind::ABS) {
-			continue;
-		}
 		for (auto root : node.abs_envelope_roots) {
 			if (root >= tree.nodes.size()) {
 				throw InternalException("DECIDE model emitter: ABS F node has an invalid envelope root");
@@ -617,27 +610,24 @@ void DecideModelEmitter::Route(EmittedClause &&clause, bool folded) {
 }
 
 void DecideModelEmitter::AbsEnvelope(idx_t function, idx_t root, bool counted) {
-	if (function >= tree.nodes.size() || tree.nodes[function]->kind != DecideNodeKind::FUNCTION ||
-	    tree.nodes[function]->function_kind != DecideFunctionKind::ABS) {
-		throw InternalException("DECIDE model emitter: invalid ABS F envelope ownership");
-	}
 	auto &node = *tree.nodes[function];
+	auto &definition = *tree.Definition(node);
 	const auto &envelopes = node.abs_envelope_roots;
 	if (root >= tree.nodes.size() || std::find(envelopes.begin(), envelopes.end(), root) == envelopes.end()) {
 		throw InternalException("DECIDE model emitter: invalid ABS F envelope ownership");
 	}
 	auto &clause = *tree.nodes[root]->compiled.clause;
-	if (!IsDecideAbsEnvelope(clause.helper_row) || clause.defined_var != node.value_var) {
+	if (!IsDecideAbsEnvelope(clause.helper_row) || clause.defined_var != definition.helper) {
 		throw InternalException("DECIDE model emitter: ABS F envelope belongs to a different auxiliary");
 	}
 	auto link = std::find_if(gstate.evaluated_abs_links.begin(), gstate.evaluated_abs_links.end(),
-	                         [&](const AbsLinkSpec &candidate) { return candidate.aux_idx == node.value_var; });
+	                         [&](const AbsLinkSpec &candidate) { return candidate.aux_idx == definition.helper; });
 	if (link == gstate.evaluated_abs_links.end()) {
 		gstate.evaluated_abs_links.emplace_back();
 		link = gstate.evaluated_abs_links.end() - 1;
-		link->aux_idx = node.value_var;
-		link->exact = node.abs_exact;
-		link->written = node.abs_written;
+		link->aux_idx = definition.helper;
+		link->exact = definition.exact;
+		link->written = definition.label;
 		link->label = node.text;
 	}
 	// An envelope row holds no aggregate (stage 05 gives every reducer a function reads a helper decision) and is
@@ -1561,10 +1551,10 @@ void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {
 	vector<idx_t> payload_vars, fallback_vars;
 	const auto payload = read(body.members, body.linear, map.ReadRows(), payload_vars);
 	const auto fallback = read(body.fallback, body.fallback_sites, map.FallbackAnchors(), fallback_vars);
-	DecideListFrameMembers(
-	    map, tree_node.aggregate,
-	    DecideClauseRefOf(op.display.constraint_sources, op.display.source_text, tree_node.value_link_clause),
-	    tree_node.text, payload, payload_vars, fallback, fallback_vars, out);
+	DecideListFrameMembers(map, tree_node.aggregate,
+	                       DecideClauseRefOf(op.display.constraint_sources, op.display.source_text,
+	                                         tree.Definition(tree_node)->origin.source_clause_id),
+	                       tree_node.text, payload, payload_vars, fallback, fallback_vars, out);
 }
 
 void DecideModelEmitter::ValueLinks() {
@@ -1572,23 +1562,18 @@ void DecideModelEmitter::ValueLinks() {
 	// metadata supplies the helper's formulation sides, qualifier and label.
 	for (auto node : tree.eval_order) {
 		auto &tree_node = *tree.nodes[node];
-		if (tree_node.link == DConstants::INVALID_INDEX) {
+		if (!tree_node.Linked()) {
 			continue;
 		}
-		const auto &aggregate = tree_node.aggregate;
-		if (tree_node.value_var >= tree.value_nodes.size() || tree.value_nodes[tree_node.value_var] != node ||
-		    !tree_node.decision_value || tree_node.value_link_label.empty()) {
-			throw InternalException("DECIDE model emitter: G/O node %llu has incomplete node-owned value-link metadata",
-			                        node);
-		}
+		auto &definition = *tree.Definition(tree_node);
 		auto &body = tree_node.compiled;
 		auto spec = ReducerValueLinkSpec();
-		spec.value_var = tree_node.value_var;
-		spec.agg_name = aggregate;
-		spec.need_envelope = tree_node.value_link_needs_envelope;
-		spec.need_closing = tree_node.value_link_needs_closing;
-		spec.label = tree_node.value_link_label;
-		spec.source_clause_id = tree_node.value_link_clause;
+		spec.value_var = definition.helper;
+		spec.agg_name = tree_node.aggregate;
+		spec.need_envelope = definition.NeedsEnvelope();
+		spec.need_closing = definition.NeedsClosing();
+		spec.label = definition.label;
+		spec.source_clause_id = definition.origin.source_clause_id;
 		spec.frame = tree_node.frame != DConstants::INVALID_INDEX;
 		if (tree_node.frame != DConstants::INVALID_INDEX) {
 			FrameMembers(node, spec.members);
@@ -1628,7 +1613,7 @@ void DecideModelEmitter::ValueLinks() {
 				continue;
 			}
 			spec.members.AddGroup(group_rows.front());
-			const auto avg_scale = aggregate == "avg" ? 1.0 / static_cast<double>(group_rows.size()) : 1.0;
+			const auto avg_scale = tree_node.aggregate == "avg" ? 1.0 / static_cast<double>(group_rows.size()) : 1.0;
 			for (auto row : group_rows) {
 				const auto entry = member_entry[row];
 				double constant = 0.0;
@@ -1639,7 +1624,7 @@ void DecideModelEmitter::ValueLinks() {
 				}
 				if (!std::isfinite(constant)) {
 					throw DecideTooLargeError(DecideClauseRefOf(op.display.constraint_sources, op.display.source_text,
-					                                            tree_node.value_link_clause));
+					                                            spec.source_clause_id));
 				}
 				spec.members.AddMember(constant);
 				for (idx_t term = 0; term < variables.size(); term++) {

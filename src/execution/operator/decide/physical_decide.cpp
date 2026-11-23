@@ -410,34 +410,31 @@ void PhysicalDecide::ReportAnEmptyObjective(const SolverInput &input) const {
 void PhysicalDecide::ReportInlinedHelpers(const SolverInput &input) const {
 	vector<idx_t> linked_nodes;
 	for (idx_t node = 0; node < tree->nodes.size(); node++) {
-		if (tree->nodes[node]->link != DConstants::INVALID_INDEX) {
+		if (tree->nodes[node]->Linked()) {
 			linked_nodes.push_back(node);
 		}
 	}
 	std::sort(linked_nodes.begin(), linked_nodes.end(),
-	          [&](idx_t left, idx_t right) { return tree->nodes[left]->link < tree->nodes[right]->link; });
+	          [&](idx_t left, idx_t right) { return tree->nodes[left]->definition < tree->nodes[right]->definition; });
 	for (auto node_index : linked_nodes) {
-		const auto &node = *tree->nodes[node_index];
-		if (!node.decision_value || node.value_var >= input.variable_scopes.size() || node.value_link_label.empty()) {
-			throw InternalException("DECIDE: linked node %llu has incomplete runtime reporting metadata", node_index);
-		}
+		auto &definition = *tree->Definition(*tree->nodes[node_index]);
+		const auto helper = definition.helper;
 		string line;
 		auto kind = LogicalDecide::RewriteAccount::Kind::RUN_TIME;
-		if (input.variable_scopes[node.value_var].scope == DecideVarScope::INLINED) {
-			line = node.value_link_label;
+		if (input.variable_scopes[helper].scope == DecideVarScope::INLINED) {
+			line = definition.label;
 			kind = LogicalDecide::RewriteAccount::Kind::VALUE_HELPER_INLINED;
-		} else if (node.value_var < input.written_in.size() &&
-		           std::find(input.written_in[node.value_var].begin(), input.written_in[node.value_var].end(), true) !=
-		               input.written_in[node.value_var].end()) {
-			line = node.value_link_label +
-			       ": each group of one member is written where it is read, with no helper decision";
+		} else if (helper < input.written_in.size() &&
+		           std::find(input.written_in[helper].begin(), input.written_in[helper].end(), true) !=
+		               input.written_in[helper].end()) {
+			line = definition.label + ": each group of one member is written where it is read, with no helper decision";
 		}
 		if (line.empty()) {
 			continue;
 		}
 		// Each clause whose plan names the helper: an account of it is one of the helper (AddValueHelper).
 		for (auto &account : display.rewrite_accounts) {
-			if (account.subject == node.value_link_label) {
+			if (account.subject == definition.label) {
 				RecordRunTimeAccount(account.source_clause_id, line, kind);
 			}
 		}
@@ -593,10 +590,9 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// here, before any pass reads the rows: implied-bound propagation reads `aux >= inner` of `ABS(x) <= 3` as a bound
 	// on x.
 	solver_input.abs_links = std::move(gstate.evaluated_abs_links);
-	for (auto function : tree->function_nodes) {
-		auto &node = *tree->nodes[function];
-		if (node.function_kind == DecideFunctionKind::L0_INDICATOR && node.l0_auto_m) {
-			solver_input.l0_auto_indicators.push_back(node.value_var);
+	for (auto &definition : tree->definitions) {
+		if (definition->kind == DecideHelperKind::L0_INDICATOR && definition->auto_m) {
+			solver_input.l0_auto_indicators.push_back(definition->helper);
 		}
 	}
 	EmitAbsEnvelopes(solver_input);

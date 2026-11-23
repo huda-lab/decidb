@@ -29,8 +29,8 @@ void PhysicalDecide::CheckDecisionDomains(const vector<LogicalDecide::UserBoundS
 	// contradicts a type (its floor is free, DecideOptimizer::FoldSingletonRows).
 	vector<bool> is_helper(num_decide_vars, false);
 	for (auto &node : tree->nodes) {
-		if (node->link != DConstants::INVALID_INDEX && node->value_var < num_decide_vars) {
-			is_helper[node->value_var] = true;
+		if (node->Linked() && tree->ValueVar(*node) < num_decide_vars) {
+			is_helper[tree->ValueVar(*node)] = true;
 		}
 	}
 	// An auxiliary whose definition may read no value -- a data value (NULL), a frame, a keyed decision (a row in
@@ -119,13 +119,12 @@ void PhysicalDecide::CheckDecisionDomains(const vector<LogicalDecide::UserBoundS
 		DecideWrittenBox written = written_box(var);
 		// A product takes its factor's sign (`b * x` with x >= -5 reaches -5, AddBooleanProduct): its floor is
 		// the factor's where that is negative, and none where the factor holds a value of either sign.
-		for (auto function : tree->function_nodes) {
-			const auto &node = *tree->nodes[function];
-			if (node.function_kind != DecideFunctionKind::BOOLEAN_PRODUCT || node.value_var != var ||
-			    node.product_other_var >= num_decide_vars) {
+		for (auto &product : tree->definitions) {
+			if (product->kind != DecideHelperKind::BOOLEAN_PRODUCT || product->helper != var ||
+			    product->other_factor >= num_decide_vars) {
 				continue;
 			}
-			const auto other = node.product_other_var;
+			const auto other = product->other_factor;
 			written.AddLowered('>',
 			                   is_signed[other] ? -DECIDE_SOLVER_INFINITY : written_box(other).Box().EffectiveLower());
 		}

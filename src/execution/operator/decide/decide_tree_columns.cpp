@@ -661,7 +661,7 @@ std::unordered_map<const Expression *, pair<idx_t, idx_t>> DecideTreeColumns::Fr
 	for (idx_t frame = 0; frame < tree.frame_nodes.size(); frame++) {
 		const auto node_index = tree.frame_nodes[frame];
 		const auto &node = *tree.nodes[node_index];
-		if (node.link == DConstants::INVALID_INDEX) {
+		if (!node.Linked()) {
 			continue;
 		}
 		if (node.kind != DecideNodeKind::FRAME || node.frame != frame || !node.decision_value) {

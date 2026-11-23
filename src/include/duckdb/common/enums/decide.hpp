@@ -220,7 +220,7 @@ enum class DecideHelperKind : uint8_t {
 	//! terms, each product of two decisions with a Boolean factor read as that BOOLEAN_PRODUCT's helper and every other
 	//! one left as a term of degree 2. It has no helper of its own: the expansion is a sum over any number of them.
 	PRODUCT,
-	//! `first_factor * second_factor` of two decisions, one of them Boolean: the helper a PRODUCT's expansion reads,
+	//! `bool_factor * other_factor` of two decisions, one of them Boolean: the helper a PRODUCT's expansion reads,
 	//! linked to its factors by stage 06 (LinearizeBilinear). It has no body: the two decisions are the product.
 	BOOLEAN_PRODUCT,
 	//! The indicator of one counted row of `norm(e, 0)` (RewriteNorm): `links` are its three formulation rows, kept

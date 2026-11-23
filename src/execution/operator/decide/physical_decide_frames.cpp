@@ -700,7 +700,7 @@ void SkipDecideFrameNullReads(const DecideTree &tree, vector<DecideFrameMap> &ma
 	for (idx_t frame = 0; frame < tree.frame_nodes.size(); frame++) {
 		const auto node_index = tree.frame_nodes[frame];
 		const auto &node = *tree.nodes[node_index];
-		if (node.link == DConstants::INVALID_INDEX) {
+		if (!node.Linked()) {
 			continue;
 		}
 		if (node.kind != DecideNodeKind::FRAME || node.frame != frame || !node.decision_value) {

@@ -19,7 +19,6 @@ class ClientContext;
 class BoundComparisonExpression;
 
 enum class DecideNodeKind : uint8_t { SCOPE, REDUCER, FRAME, FUNCTION };
-enum class DecideFunctionKind : uint8_t { INVALID, ABS, BOOLEAN_PRODUCT, L0_INDICATOR, DEFINITION };
 enum class DecideTreePer : uint8_t { ROW, KEY, ONE };
 
 //! Where one term of a body is computed (language/guide.md §6.1): the E or O whose entries it ranges over, its
@@ -156,37 +155,27 @@ struct DecideNode {
 	//! Every argument is retained: collated extrema have a value and comparison key.
 	vector<unique_ptr<Expression>> arguments;
 	unique_ptr<BoundAggregateExpression> function;
-	DecideFunctionKind function_kind = DecideFunctionKind::INVALID;
-	//! BOOLEAN_PRODUCT: factors whose product this F node defines; the emitter turns them into a BilinearLinkSpec.
-	idx_t product_bool_var = DConstants::INVALID_INDEX;
-	idx_t product_other_var = DConstants::INVALID_INDEX;
 	//! L0_INDICATOR: rows which define the indicator from its operand and the reverse ABS link.
 	vector<idx_t> l0_link_roots;
-	bool l0_auto_m = false;
 	//! Set on a child clause root owned by an L0 indicator F node.
 	idx_t l0_function_owner = DConstants::INVALID_INDEX;
 	//! Definition F nodes own the structural row defining their helper value.
 	vector<idx_t> definition_roots;
 	//! Set on the structural clause root owned by a definition F node.
 	idx_t definition_function_owner = DConstants::INVALID_INDEX;
-	//! An ABS F node's record from RewriteAbs (DecideHelperKind::ABS): whether its exact encoding is needed. Stage
-	//! 06 chooses the encoding, so the node holds no indicator.
-	bool abs_exact = false;
-	//! An ABS F node's call as the user wrote it, which a message about its value points at.
-	string abs_written;
 	//! The roots of the two lower-envelope rows this F node owns, `aux >= operand` then `aux >= -operand` (MakeAbsRow).
 	//! They carry the operand per row to stage 06, which states every row of the ABS from them.
 	vector<idx_t> abs_envelope_roots;
 	string aggregate;
-	idx_t link = DConstants::INVALID_INDEX;
+	//! The helper definition (DecideTree::definitions) the node holds the value of: an F node's, or the one whose
+	//! helper a linked G or O defines. INVALID_INDEX for every other node.
+	idx_t definition = DConstants::INVALID_INDEX;
+	//! Whether the node is a G or an O that defines a helper's value (a REDUCER_VALUE definition's).
+	bool Linked() const {
+		return kind != DecideNodeKind::FUNCTION && definition != DConstants::INVALID_INDEX;
+	}
 	//! A FRAME node's selector: an index into DecideTree::frames, INVALID for any other node.
 	idx_t frame = DConstants::INVALID_INDEX;
-	idx_t value_var = DConstants::INVALID_INDEX;
-	//! A linked G/O's output contract, copied onto the owning node for formulation.
-	string value_link_label;
-	idx_t value_link_clause = DConstants::INVALID_INDEX;
-	bool value_link_needs_envelope = false;
-	bool value_link_needs_closing = false;
 	//! A G node's relation-qualified scope, whose classes it reads at most once; INVALID_INDEX when unqualified.
 	idx_t qualifier_scope = DConstants::INVALID_INDEX;
 	DecideRowOrigin origin;
@@ -282,6 +271,22 @@ struct DecideTree {
 	idx_t objective_signature = DConstants::INVALID_INDEX;
 	//! The frame selectors (LogicalDecide::frames), one home for every reader: a frame node names its own by `frame`.
 	vector<DecideFrameSpec> frames;
+	//! The helper definitions (LogicalDecide::helper_definitions), one home for every reader: a node names its own by
+	//! `definition`.
+	vector<unique_ptr<DecideHelperDefinition>> definitions;
+	//! The definition a node holds the value of, null for a node that holds none.
+	const DecideHelperDefinition *Definition(const DecideNode &node) const {
+		return node.definition == DConstants::INVALID_INDEX ? nullptr : definitions[node.definition].get();
+	}
+	//! Whether `node` is the F node of a definition of `kind`.
+	bool IsFunction(const DecideNode &node, DecideHelperKind kind) const {
+		return node.kind == DecideNodeKind::FUNCTION && definitions[node.definition]->kind == kind;
+	}
+	//! The helper decision a node holds the value of, INVALID_INDEX for a node that holds none.
+	idx_t ValueVar(const DecideNode &node) const {
+		return node.definition == DConstants::INVALID_INDEX ? DConstants::INVALID_INDEX
+		                                                    : definitions[node.definition]->helper;
+	}
 	//! The `DIAGNOSE` prefix the user wrote. It is the only thing that arms the diagnosis engines: when true a failed
 	//! solve stashes its findings for the DIAGNOSE operator above to return as rows instead of raising, and none of the
 	//! diagnostic prep (unbounded-ray extraction, model retention, the elastic re-solves) is done or paid for
