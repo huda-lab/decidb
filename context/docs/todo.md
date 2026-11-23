@@ -12,8 +12,32 @@ the owner rules first.
 
 # Phase 6 — The model is written at the nodes
 
-## 6.1 One reading of a reducer body (one lane)
-- [ ] MODEL-6 Terms are split from the finished nodes — pipeline/todo.md § MODEL-6
+## 6.0 Owner decisions
+- [ ] MODEL-6 One reading of a reducer body (decision) — pipeline/todo.md § MODEL-6
+- [ ] MODEL-8 The helper of a link whose data may split its classes (decision) — pipeline/todo.md § MODEL-8
 
-## 6.2 Gate (one lane; needs: 6.1)
+## 6.1 A wrong answer (one lane)
+- [ ] MODEL-9 An L0 indicator's rows are handed over as its link — pipeline/todo.md § MODEL-9
+
+## 6.2 Code with no reader (one lane)
+- [ ] MODEL-10 Code no reader reaches is deleted — pipeline/todo.md § MODEL-10
+- [ ] MODEL-11 The tree is verified in debug builds, once — pipeline/todo.md § MODEL-11
+- [ ] MODEL-12 One struct per model constraint, one comparison mapping — pipeline/todo.md § MODEL-12
+
+## 6.3 Instances, not input rows (one lane)
+- [ ] MODEL-13 A term names the instance it reads — pipeline/todo.md § MODEL-13
+- [ ] MODEL-14 A helper has no array as long as the input — pipeline/todo.md § MODEL-14 (needs: MODEL-13)
+- [ ] MODEL-15 The objective is a coefficient per instance — pipeline/todo.md § MODEL-15 (needs: MODEL-13)
+- [ ] MODEL-16 Bound passes walk instances; absence looked up once — pipeline/todo.md § MODEL-16 (needs: MODEL-13)
+
+## 6.4 The emitter's structure (one lane; needs: 6.3)
+- [ ] MODEL-17 The emitter reads a term in one place — pipeline/todo.md § MODEL-17
+- [ ] MODEL-18 Working columns apart from the result; emitter fills the solver input — pipeline/todo.md § MODEL-18 (needs: MODEL-17)
+
+## 6.5 Layering (one lane)
+- [ ] MODEL-19 Stage 06 has one driver; the AVG under `<>` is the optimizer's — pipeline/todo.md § MODEL-19
+- [ ] MODEL-20 The helper-form rule names the readers that take members — pipeline/todo.md § MODEL-20
+- [ ] MODEL-21 One term extraction for a clause and the objective — pipeline/todo.md § MODEL-21
+
+## 6.6 Gate (one lane; needs: 6.1 to 6.5)
 - [ ] MODEL-7 Phase 6 gate and docs — pipeline/todo.md § MODEL-7
