@@ -196,7 +196,7 @@ def _pipeline_tags():
     spelling before its payload."""
     header = Path(__file__).resolve().parents[3] / "src/include/duckdb/common/enums/decide.hpp"
     tags = re.findall(r'const char \*\w*TAG\w* = "(__\w+)"', header.read_text())
-    assert len(tags) > 10, tags
+    assert tags
     return tags
 
 

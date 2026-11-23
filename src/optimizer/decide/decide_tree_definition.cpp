@@ -314,9 +314,9 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 		// EXPLAIN and source ordering until that tree attaches the row below the F node.
 		BoundDecideClause placeholder;
 		placeholder.body = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
-		AddDecideTag(placeholder.body->alias, BODY_DEFINITION_TAG);
 		placeholder.structural = true;
 		placeholder.defines = helper;
+		placeholder.helper_row = DecideHelperRow::DEFINITION;
 		rows.push_back(std::move(placeholder));
 
 		for (auto member : members) {
@@ -328,7 +328,6 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 			// The tag goes under the casts: every reader looks through a cast (UnwrapDecideCasts) before it reads tags.
 			AddDecideTag(UnwrapDecideCasts(*reducer.children[0], decide_index)->alias,
 			             MakeDefinitionFunctionTag(helper));
-			AddDecideTag(reducer.alias, BODY_DEFINITION_TAG);
 		}
 	}
 

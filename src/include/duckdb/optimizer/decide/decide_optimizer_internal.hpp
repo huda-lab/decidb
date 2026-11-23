@@ -49,9 +49,10 @@ unique_ptr<Expression> BindSumOver(Optimizer &optimizer, unique_ptr<Expression> 
 
 //! A row this layer emits (rather than one the user wrote) with the body `body`: structural, and of the clause
 //! `origin`, so diagnostics still name the clause the user typed; a row defining auxiliary `defined` says so
-//! (BoundDecideClause::defines). It has no scope.
+//! (BoundDecideClause::defines) and what it is to it (`helper_row`). It has no scope.
 BoundDecideClause MakeFormulationRow(unique_ptr<Expression> body, const DecideRowOrigin &origin,
-                                     idx_t defined = DConstants::INVALID_INDEX);
+                                     idx_t defined = DConstants::INVALID_INDEX,
+                                     DecideHelperRow helper_row = DecideHelperRow::NONE);
 
 //! Puts `row`, which a rewrite adds for `clause`, in the clause's scope: a copy of its `when`, so the row reads only
 //! the rows the clause keeps, and its own `per K:`, so the row stands for the same classes (D28): a row whose key is

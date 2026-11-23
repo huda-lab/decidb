@@ -378,9 +378,8 @@ BoundDecideClause decide_rewrite::MakeAbsRow(ClientContext &context, const Logic
 	auto comparison = make_uniq<BoundComparisonExpression>(
 	    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 	    make_uniq<BoundColumnRefExpression>(aux.alias, aux.return_type, aux.binding), std::move(bound));
-	AddDecideTag(comparison->alias,
-	             negated ? MakeAbsFunctionNegTag(function.aux_idx) : MakeAbsFunctionTag(function.aux_idx));
-	auto row = MakeFormulationRow(std::move(comparison), function.origin, function.aux_idx);
+	auto row = MakeFormulationRow(std::move(comparison), function.origin, function.aux_idx,
+	                              negated ? DecideHelperRow::ABS_NEGATED_ENVELOPE : DecideHelperRow::ABS_ENVELOPE);
 	row.scope.when = function.when ? function.when->Copy() : nullptr;
 	ScopeRowPerInstance(decide, row, function.scope);
 	return row;

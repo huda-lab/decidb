@@ -231,25 +231,6 @@ inline bool TryParseDecideIndexTag(const string &alias, const string &prefix, id
 	return true;
 }
 
-//! Tag marking a reducer with a nonlinear body held by a tree-owned definition F node. The source body remains at its
-//! written site as a DEFINITION_FUNCTION_TAG_PREFIX read, while this aggregate marker tells MIN/MAX planning that its
-//! members are helper columns. A helper has no box, so stage 08 states a MIN/MAX over it natively.
-//! Set on the BoundDecideReducerExpression.alias and on the BoundComparisonExpression.alias of the row defining the
-//! helper, which EXPLAIN leaves out: it restates the body, and the clause's account line says how it is held.
-static constexpr const char *BODY_DEFINITION_TAG = "__body_definition__";
-
-//! Tag on the placeholder coefficient of an automatic L0 link (`norm(e, 0)` with no
-//! bound written): stage 06 replaces it with a bound derived from the column box, so a
-//! plan prints it as `M` rather than as the 1.0 it holds until then.
-static constexpr const char *L0_AUTO_BOUND_TAG = "__l0_auto_bound__";
-
-//! Tags on the other two constants an L0 link holds, which the query did not write as a coefficient: the bound M the
-//! query wrote in `norm(e, 0, M)`, and the tolerance of the link `abs(e) >= tolerance * indicator`
-//! (`decide_l0_tolerance`). A plan prints M as the number written and the tolerance by the name it is set with, and a
-//! coefficient of 1 here is still printed.
-static constexpr const char *L0_WRITTEN_BOUND_TAG = "__l0_written_bound__";
-static constexpr const char *L0_TOLERANCE_TAG = "__l0_tolerance__";
-
 //! On the COALESCE or CASE that reads a NULL coefficient as 0 (DecideOptimizer's DropNullObjectiveTerms, the direct
 //! IR's GuardCoefficients): the query never wrote it, so a render prints the value it guards.
 static constexpr const char *NULL_GUARD_TAG = "__null_guard__";
@@ -258,26 +239,17 @@ static constexpr const char *NULL_GUARD_TAG = "__null_guard__";
 //! message prints as it stands, not as an identifier.
 static constexpr const char *FRAME_COLUMN_TAG = "__frame_column__";
 
-//! Tag on an ABS function in a clause, and on the positive lower-envelope row the tree builds for its F node (`aux >=
-//! inner`): both name the auxiliary the ABS became.
+//! Tag on an ABS function in a clause: it names the auxiliary the ABS became.
 static constexpr const char *ABS_FUNCTION_TAG_PREFIX = "__abs_function_";
-//! Matching marker on the negative lower-envelope row (`aux >= -inner`).
-static constexpr const char *ABS_FUNCTION_NEG_TAG_PREFIX = "__abs_function_neg_";
 
 //! Tag on a written Boolean product that the optimizer has described as an F-node group. The expression remains
 //! intact in the plan; term extraction and tree lowering read the group's expansion from LogicalDecide metadata.
 static constexpr const char *BILINEAR_FUNCTION_GROUP_TAG_PREFIX = "__bilinear_function_group_";
-//! Tag on an optimizer-generated L0 indicator link, identifying the L0 F node that owns the row.
-static constexpr const char *L0_INDICATOR_FUNCTION_TAG_PREFIX = "__l0_indicator_function_";
 //! Tag on a nonlinear reducer body left intact in the clause tree. The F node owns its value and definition row.
 static constexpr const char *DEFINITION_FUNCTION_TAG_PREFIX = "__definition_function_";
 
 inline string MakeBilinearFunctionGroupTag(idx_t group_idx) {
 	return string(BILINEAR_FUNCTION_GROUP_TAG_PREFIX) + to_string(group_idx) + "__";
-}
-
-inline string MakeL0IndicatorFunctionTag(idx_t var_idx) {
-	return string(L0_INDICATOR_FUNCTION_TAG_PREFIX) + to_string(var_idx) + "__";
 }
 
 inline string MakeDefinitionFunctionTag(idx_t var_idx) {
@@ -286,17 +258,6 @@ inline string MakeDefinitionFunctionTag(idx_t var_idx) {
 
 inline string MakeAbsFunctionTag(idx_t var_idx) {
 	return string(ABS_FUNCTION_TAG_PREFIX) + to_string(var_idx) + "__";
-}
-
-inline string MakeAbsFunctionNegTag(idx_t var_idx) {
-	return string(ABS_FUNCTION_NEG_TAG_PREFIX) + to_string(var_idx) + "__";
-}
-
-//! The ABS lower-envelope rows are built by the tree from the optimizer's record, not written by the user; each is
-//! marked with one of these tags, and this returns the helper they define.
-inline bool TryParseAbsFunctionEnvelopeTag(const string &alias, idx_t &var_idx) {
-	return TryParseDecideIndexTag(alias, ABS_FUNCTION_TAG_PREFIX, var_idx) ||
-	       TryParseDecideIndexTag(alias, ABS_FUNCTION_NEG_TAG_PREFIX, var_idx);
 }
 
 //! The name prefixes a rewrite gives a helper decision it adds (AddAuxiliaryDecision). Each is the opening of a name
@@ -318,16 +279,10 @@ static constexpr const char *BODY_NAME_PREFIX = "__body_";
 static constexpr const char *VALUE_LINK_NAME_PREFIX = "__value_";
 
 //! Every DECIDE tag above, the one list DecideNameContainsTag reads. A constant added above is added here.
-static constexpr const char *DECIDE_TAGS[] = {BODY_DEFINITION_TAG,
-                                              L0_AUTO_BOUND_TAG,
-                                              L0_WRITTEN_BOUND_TAG,
-                                              L0_TOLERANCE_TAG,
-                                              NULL_GUARD_TAG,
+static constexpr const char *DECIDE_TAGS[] = {NULL_GUARD_TAG,
                                               FRAME_COLUMN_TAG,
                                               ABS_FUNCTION_TAG_PREFIX,
-                                              ABS_FUNCTION_NEG_TAG_PREFIX,
                                               BILINEAR_FUNCTION_GROUP_TAG_PREFIX,
-                                              L0_INDICATOR_FUNCTION_TAG_PREFIX,
                                               DEFINITION_FUNCTION_TAG_PREFIX,
                                               L0_AUTO_INDICATOR_NAME_PREFIX,
                                               L0_INDICATOR_NAME_PREFIX,

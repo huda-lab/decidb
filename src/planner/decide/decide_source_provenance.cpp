@@ -386,12 +386,6 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 		return binding != 0 && binding < parent_precedence ? "(" + quoted + ")" : quoted;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
-		if (HasDecideTag(expr.GetAlias(), L0_AUTO_BOUND_TAG)) {
-			return "M"; // stage 06 derives it from the column box
-		}
-		if (HasDecideTag(expr.GetAlias(), L0_TOLERANCE_TAG)) {
-			return "decide_l0_tolerance";
-		}
 		auto &value = expr.Cast<BoundConstantExpression>().value;
 		if (ctx.rewrite_row && !value.IsNull() && value.type().id() == LogicalTypeId::DOUBLE) {
 			return RewriteNumberText(value);
@@ -753,7 +747,7 @@ static string RenderWrittenSense(const Expression &expr, const RenderContext &ct
 //! position needs that position. `written_sense` renders an objective in the direction it was written.
 static string RenderClause(const BoundDecideClause &clause, const DecideSourceNames &names, bool written_sense) {
 	auto &body = *clause.body;
-	if (IsTruePlaceholder(body) || HasDecideTag(body.GetAlias(), BODY_DEFINITION_TAG)) {
+	if (IsTruePlaceholder(body) || clause.helper_row == DecideHelperRow::DEFINITION) {
 		return string();
 	}
 	auto ctx = ClauseContext(ContextOf(names), clause);
@@ -769,13 +763,9 @@ string RenderDecideObjective(const BoundDecideClause &objective, const DecideSou
 	return RenderClause(objective, names, written_sense);
 }
 
-//! A term's coefficient is left out when it is the literal 1, as a user writes no factor of 1; an L0 link's bound and
-//! tolerance are printed whatever they hold (RenderSource).
+//! A term's coefficient is left out when it is the literal 1, as a user writes no factor of 1.
 static bool IsUnitCoefficient(const Expression &coefficient) {
-	if (coefficient.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT ||
-	    HasDecideTag(coefficient.GetAlias(), L0_AUTO_BOUND_TAG) ||
-	    HasDecideTag(coefficient.GetAlias(), L0_WRITTEN_BOUND_TAG) ||
-	    HasDecideTag(coefficient.GetAlias(), L0_TOLERANCE_TAG)) {
+	if (coefficient.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
 		return false;
 	}
 	auto &value = coefficient.Cast<BoundConstantExpression>().value;
@@ -784,9 +774,11 @@ static bool IsUnitCoefficient(const Expression &coefficient) {
 
 //! One row an F node owns, as `c1 * x1 + c2 * x2 >= bound` over the terms and bound stage 05 lowered, without the zero
 //! terms the rewrite added. It has no qualifier: the rows an F node owns print under the clause they came from, behind
-//! the scope that clause was written with (CollectDecideClauseLayers).
+//! the scope that clause was written with (CollectDecideClauseLayers). An L0 link's coefficient on its indicator is
+//! none the query wrote as a coefficient and is printed whatever it holds: the tolerance by the name it is set with,
+//! the bound as `M` when stage 06 derives it from the column box (`auto_bound`) and as the number written otherwise.
 static string RenderFunctionRow(const DecideConstraint &row, const vector<unique_ptr<Expression>> &decide_variables,
-                                const RenderContext &plan_ctx) {
+                                const RenderContext &plan_ctx, bool auto_bound) {
 	auto ctx = plan_ctx;
 	ctx.rewrite_row = true;
 	string result;
@@ -800,7 +792,12 @@ static string RenderFunctionRow(const DecideConstraint &row, const vector<unique
 			continue;
 		} else {
 			text = RenderSource(*decide_variables[term.variable_index], ctx, 20);
-			if (!IsUnitCoefficient(*term.coefficient)) {
+			const auto role = term.variable_index == row.defined_var ? row.helper_row : DecideHelperRow::NONE;
+			if (role == DecideHelperRow::L0_TOLERANCE) {
+				text = "decide_l0_tolerance * " + text;
+			} else if (role == DecideHelperRow::L0_BOUND && auto_bound) {
+				text = "M * " + text;
+			} else if (role == DecideHelperRow::L0_BOUND || !IsUnitCoefficient(*term.coefficient)) {
 				text = RenderSource(*term.coefficient, ctx, 20) + " * " + text;
 			}
 		}
@@ -823,8 +820,8 @@ vector<DecideFunctionRow> CollectDecideFunctionRows(const DecideTree &tree, cons
 		for (auto *roots : {&node.abs_envelope_roots, &node.l0_link_roots}) {
 			for (auto root : *roots) {
 				auto &clause = tree.nodes[root]->compiled.clause;
-				rows.push_back(
-				    {tree.nodes[root]->origin.source_clause_id, RenderFunctionRow(*clause, decide_variables, ctx)});
+				rows.push_back({tree.nodes[root]->origin.source_clause_id,
+				                RenderFunctionRow(*clause, decide_variables, ctx, node.l0_auto_m)});
 			}
 		}
 	}

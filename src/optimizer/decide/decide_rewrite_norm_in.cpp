@@ -107,29 +107,27 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		    AddRewriteAccount(decide, origin.source_clause_id, LogicalDecide::RewriteAccount::Kind::HELPER_PER_ROW,
 		                      RenderForPlan(aggregate, decide));
 		    auto make_mz = [&]() {
-			    auto bound = make_uniq<BoundConstantExpression>(Value::DOUBLE(m));
-			    // An automatic bound is a placeholder stage 06 fills from the box; a written one prints as written.
-			    bound->alias = auto_m ? L0_AUTO_BOUND_TAG : L0_WRITTEN_BOUND_TAG;
-			    return optimizer.BindScalarFunction("*", std::move(bound), z->Copy());
+			    // An automatic bound is a placeholder stage 06 fills from the box.
+			    return optimizer.BindScalarFunction("*", make_uniq<BoundConstantExpression>(Value::DOUBLE(m)),
+			                                        z->Copy());
 		    };
-		    auto add_link = [&](unique_ptr<Expression> lhs, unique_ptr<Expression> rhs) {
+		    auto add_link = [&](DecideHelperRow role, unique_ptr<Expression> lhs, unique_ptr<Expression> rhs) {
 			    auto comparison = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 			                                                           std::move(lhs), std::move(rhs));
-			    AddDecideTag(comparison->alias, MakeL0IndicatorFunctionTag(z_idx));
-			    auto link = MakeFormulationRow(std::move(comparison), origin, z_idx);
+			    auto link = MakeFormulationRow(std::move(comparison), origin, z_idx, role);
 			    link.scope.when = when ? when->Copy() : nullptr;
 			    ScopeRowPerInstance(decide, link, z_scope);
 			    indicator.links.push_back(std::move(link));
 		    };
-		    add_link(make_mz(), aggregate.children[0]->Copy());
-		    add_link(make_mz(),
+		    add_link(DecideHelperRow::L0_BOUND, make_mz(), aggregate.children[0]->Copy());
+		    add_link(DecideHelperRow::L0_BOUND, make_mz(),
 		             optimizer.BindScalarFunction("-", make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0)),
 		                                          aggregate.children[0]->Copy()));
 		    vector<unique_ptr<Expression>> absolute_children;
 		    absolute_children.push_back(aggregate.children[0]->Copy());
 		    auto tolerance = make_uniq<BoundConstantExpression>(Value::DOUBLE(GetDecideL0Tolerance(optimizer.context)));
-		    tolerance->alias = L0_TOLERANCE_TAG;
-		    add_link(DecideRebindOperator(optimizer.context, "@", std::move(absolute_children), "abs"),
+		    add_link(DecideHelperRow::L0_TOLERANCE,
+		             DecideRebindOperator(optimizer.context, "@", std::move(absolute_children), "abs"),
 		             optimizer.BindScalarFunction("*", std::move(tolerance), z->Copy()));
 		    auto count = BindSumOver(optimizer, std::move(z), aggregate.filter.get());
 		    count->alias = aggregate.GetAlias();

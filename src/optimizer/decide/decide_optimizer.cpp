@@ -179,12 +179,13 @@ void decide_rewrite::AddValueCheck(LogicalDecide &decide, unique_ptr<Expression>
 }
 
 BoundDecideClause decide_rewrite::MakeFormulationRow(unique_ptr<Expression> body, const DecideRowOrigin &origin,
-                                                     idx_t defined) {
+                                                     idx_t defined, DecideHelperRow helper_row) {
 	BoundDecideClause row;
 	row.body = std::move(body);
 	row.origin = origin;
 	row.structural = true;
 	row.defines = defined;
+	row.helper_row = helper_row;
 	return row;
 }
 

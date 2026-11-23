@@ -47,12 +47,7 @@ unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const
 		facts->kind = ConstraintKind::STRUCTURAL;
 	}
 	facts->defined_var = clause.defines;
-	if (TryParseDecideIndexTag(comparison.alias, ABS_FUNCTION_NEG_TAG_PREFIX, facts->abs_aux_idx)) {
-		facts->kind = ConstraintKind::STRUCTURAL;
-	} else if (TryParseDecideIndexTag(comparison.alias, ABS_FUNCTION_TAG_PREFIX, facts->abs_aux_idx)) {
-		facts->abs_is_pos_bound = true;
-		facts->kind = ConstraintKind::STRUCTURAL;
-	}
+	facts->helper_row = clause.helper_row;
 	facts->was_minmax_easy = clause.minmax_easy;
 	facts->scope = clause.scope.Copy();
 	facts->group_key = clause.group_key;
@@ -195,8 +190,7 @@ public:
 		for (auto &clause : op.bound.clauses) {
 			if (clause.body->GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 				Root(clause);
-			} else if (clause.body->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
-			           HasDecideTag(clause.body->GetAlias(), BODY_DEFINITION_TAG)) {
+			} else if (clause.helper_row == DecideHelperRow::DEFINITION) {
 				const idx_t value_var = clause.defines;
 				if (value_var == DConstants::INVALID_INDEX) {
 					throw InternalException("DECIDE tree: body-definition placeholder has no helper");
@@ -485,9 +479,9 @@ public:
 		                                               body.return_type);
 		BoundDecideClause row;
 		row.body = make_uniq<BoundComparisonExpression>(definition.relation, std::move(left), body.Copy());
-		AddDecideTag(row.body->alias, BODY_DEFINITION_TAG);
 		row.structural = true;
 		row.defines = definition.value_var;
+		row.helper_row = DecideHelperRow::DEFINITION;
 		row.origin = DecideRowOrigin::OfClause(definition.source_clause_id);
 		if (definition.value_var < op.bound.variable_scopes.size()) {
 			auto &scope = op.bound.variable_scopes[definition.value_var];
@@ -794,12 +788,11 @@ private:
 		// Bring these internal rows through the same canonical boundary as ordinary clauses before term extraction.
 		// PrepareAbsFunctions has already read the uncanonicalized operand from the record, so this rewrite only
 		// changes the row's linear form, not the F node's definition.
-		idx_t abs_aux = DConstants::INVALID_INDEX;
-		const bool is_abs_envelope = TryParseAbsFunctionEnvelopeTag(comparison.GetAlias(), abs_aux);
-		idx_t l0_value = DConstants::INVALID_INDEX;
+		const bool is_abs_envelope = IsDecideAbsEnvelope(clause.helper_row);
 		const bool is_l0_link =
-		    TryParseDecideIndexTag(comparison.GetAlias(), L0_INDICATOR_FUNCTION_TAG_PREFIX, l0_value);
-		const bool is_definition = HasDecideTag(comparison.GetAlias(), BODY_DEFINITION_TAG);
+		    clause.helper_row == DecideHelperRow::L0_BOUND || clause.helper_row == DecideHelperRow::L0_TOLERANCE;
+		const idx_t l0_value = clause.defines;
+		const bool is_definition = clause.helper_row == DecideHelperRow::DEFINITION;
 		const idx_t definition_value = is_definition ? clause.defines : DConstants::INVALID_INDEX;
 		if (is_definition && definition_value >= op.bound.variables.size()) {
 			throw InternalException("DECIDE tree: nonlinear body definition has no valid helper variable");
@@ -832,12 +825,6 @@ private:
 			}
 			l0_function = *function;
 			node.l0_function_owner = l0_function;
-			if (node.defined_var != DConstants::INVALID_INDEX && node.defined_var != l0_value) {
-				throw InternalException("DECIDE tree: L0 link defines a different indicator than its F node");
-			}
-			node.defined_var = l0_value;
-			node.facts->defined_var = l0_value;
-			node.facts->kind = ConstraintKind::STRUCTURAL;
 		}
 		if (is_definition) {
 			auto function =
@@ -875,7 +862,7 @@ private:
 		node.facts->rhs_expr = node.rhs->Copy();
 		idx_t abs_function = DConstants::INVALID_INDEX;
 		if (is_abs_envelope) {
-			abs_function = AbsFunctionNode(node.facts->abs_aux_idx, node.origin.source_clause_id);
+			abs_function = AbsFunctionNode(node.facts->defined_var, node.origin.source_clause_id);
 			tree->nodes[abs_function]->abs_envelope_roots.push_back(index);
 			tree->nodes[abs_function]->signature.clear();
 		} else if (is_l0_link) {
@@ -1395,7 +1382,7 @@ private:
 		for (idx_t i = 0; i < tree->nodes.size(); i++) {
 			auto &node = *tree->nodes[i];
 			auto variable = node.defined_var;
-			const bool abs_envelope = node.facts && node.facts->abs_aux_idx != DConstants::INVALID_INDEX;
+			const bool abs_envelope = node.facts && IsDecideAbsEnvelope(node.facts->helper_row);
 			const bool function_link = node.l0_function_owner != DConstants::INVALID_INDEX ||
 			                           node.definition_function_owner != DConstants::INVALID_INDEX;
 			if (variable < definitions.size() && !abs_envelope && !function_link) {
@@ -1563,11 +1550,12 @@ void DecideTree::Validate() const {
 			bool negative = false;
 			for (auto root : node.abs_envelope_roots) {
 				if (root >= nodes.size() || !nodes[root]->compiled.clause ||
-				    nodes[root]->compiled.clause->abs_aux_idx != node.value_var || nodes[root]->parent != i ||
+				    !IsDecideAbsEnvelope(nodes[root]->compiled.clause->helper_row) ||
+				    nodes[root]->compiled.clause->defined_var != node.value_var || nodes[root]->parent != i ||
 				    std::find(node.children.begin(), node.children.end(), root) == node.children.end()) {
 					throw InternalException("DECIDE tree ABS function node %llu has an invalid envelope row", i);
 				}
-				if (nodes[root]->compiled.clause->abs_is_pos_bound) {
+				if (nodes[root]->compiled.clause->helper_row == DecideHelperRow::ABS_ENVELOPE) {
 					positive = true;
 				} else {
 					negative = true;

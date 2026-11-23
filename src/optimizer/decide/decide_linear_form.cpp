@@ -886,11 +886,7 @@ private:
 			auto &written_comp = expr.Cast<BoundComparisonExpression>();
 			BoundDecideClause canonical_envelope;
 			const BoundDecideClause *canonical = &clause;
-			idx_t abs_aux = DConstants::INVALID_INDEX;
-			idx_t l0_value = DConstants::INVALID_INDEX;
-			if (TryParseAbsFunctionEnvelopeTag(written_comp.GetAlias(), abs_aux) ||
-			    TryParseDecideIndexTag(written_comp.GetAlias(), L0_INDICATOR_FUNCTION_TAG_PREFIX, l0_value) ||
-			    HasDecideTag(written_comp.GetAlias(), BODY_DEFINITION_TAG)) {
+			if (clause.helper_row != DecideHelperRow::NONE) {
 				// Function-owned links are generated in their natural form and can put decision terms on both sides.
 				// Canonicalize their linear form like an ordinary constraint, but keep `expr` as the clause identity so
 				// it still joins the root built from the optimizer metadata.

@@ -154,6 +154,18 @@ inline unique_ptr<Expression> DecideRowsKeptByBoth(const Expression *first, cons
 	return make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, first->Copy(), second->Copy());
 }
 
+//! What a row a rewrite made for an auxiliary decision is to it (BoundDecideClause::defines). An ABS has the two rows
+//! of its lower envelope, `aux >= operand` (ABS_ENVELOPE) and `aux >= -operand` (ABS_NEGATED_ENVELOPE). An L0 indicator
+//! `z` has the rows `M * z >= e` and `M * z >= -e` (L0_BOUND) and `abs(e) >= tolerance * z` (L0_TOLERANCE); the
+//! indicator's coefficient in them is no coefficient the query wrote, and a plan prints it by this role. A nonlinear
+//! reducer body has the row that defines its helper from the body (DEFINITION), which EXPLAIN leaves out: it restates
+//! the body, and the clause's account line says how it is held.
+enum class DecideHelperRow : uint8_t { NONE, ABS_ENVELOPE, ABS_NEGATED_ENVELOPE, L0_BOUND, L0_TOLERANCE, DEFINITION };
+
+inline bool IsDecideAbsEnvelope(DecideHelperRow row) {
+	return row == DecideHelperRow::ABS_ENVELOPE || row == DecideHelperRow::ABS_NEGATED_ENVELOPE;
+}
+
 //! The row shape of a canonical comparison. VALUE: its decision side mixes a decision reducer with something the
 //! aggregate shape cannot hold -- a per-row or keyed decision, a factor that varies by row, a second `by` key, a
 //! reducer inside another expression -- so the value rewrite (stage 05) replaces each decision reducer by a helper
@@ -188,6 +200,8 @@ struct BoundDecideClause {
 	//! links): the auxiliary has no value where what its definition reads has none (D88). INVALID_INDEX for every
 	//! other row.
 	idx_t defines = DConstants::INVALID_INDEX;
+	//! What the row is to the auxiliary it defines; NONE for every other row.
+	DecideHelperRow helper_row = DecideHelperRow::NONE;
 	//! A MIN or MAX pushed its easy way (`max(e) <= K`, `min(e) >= K`) keeps its reducer: the linear form expands it
 	//! to one row per member (RewriteMinMax).
 	bool minmax_easy = false;
@@ -228,6 +242,7 @@ struct BoundDecideClause {
 		result.between = between;
 		result.structural = structural;
 		result.defines = defines;
+		result.helper_row = helper_row;
 		result.minmax_easy = minmax_easy;
 		result.folded_bound = folded_bound;
 		result.folded_clause_rows = folded_clause_rows;
@@ -270,11 +285,11 @@ struct DecideConstraint {
 	bool lhs_is_aggregate = false;  // True if original LHS was an aggregate (e.g., SUM(...))
 	bool was_minmax_easy = false;   // An easy-direction MIN/MAX kept its reducer (BoundDecideClause::minmax_easy):
 	                                // one row per member, the bound reduced over each `by` group.
-	idx_t abs_aux_idx = DConstants::INVALID_INDEX; // ABS auxiliary this envelope row bounds
-	bool abs_is_pos_bound = false;                 // true=C1 (aux >= inner), false=C2 (aux >= -inner)
 	//! The auxiliary this row defines (BoundDecideClause::defines): it has no value on a row where the decisions the
 	//! row reads beside it have none (D88). INVALID_INDEX for every other row.
 	idx_t defined_var = DConstants::INVALID_INDEX;
+	//! What the row is to that auxiliary (BoundDecideClause::helper_row).
+	DecideHelperRow helper_row = DecideHelperRow::NONE;
 	//! The clause's `when` and `per`.
 	DecideClauseScope scope;
 	//! Aggregate shape: the `by` key its decision reducers share, which groups its rows (index into
