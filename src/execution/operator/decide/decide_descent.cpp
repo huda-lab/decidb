@@ -303,8 +303,7 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
       seen(tree.nodes.size()), landed(tree.nodes.size()), decision_groups(tree.keyed_scopes.size()),
       decision_sort_keys(tree.keyed_scopes.size()), decision_rows(tree.keyed_scopes.size()),
       decision_recorded(tree.keyed_scopes.size()), decision_layouts(tree.keyed_scopes.size()),
-      decision_class_layouts(tree.keyed_scopes.size()), enclosing(tree.nodes.size(), DConstants::INVALID_INDEX),
-      spellings(tree.keys.size()) {
+      enclosing(tree.nodes.size(), DConstants::INVALID_INDEX), spellings(tree.keys.size()) {
 	// The paths that reach each node, roots first: a node reached by one reads each of a window's rows once.
 	vector<idx_t> paths(tree.nodes.size(), 0);
 	std::function<void(idx_t)> reach = [&](idx_t node) {
@@ -638,7 +637,7 @@ void DecideDescent::KeyReads::Slice(const Reach &rows, idx_t window, DataChunk &
 	result.SetCardinality(rows.size());
 }
 
-void DecideDescent::ReadKey(idx_t key, DataChunk &chunk, const Reach &rows, const Reach &missing, DataChunk &values,
+void DecideDescent::ReadKey(idx_t key, DataChunk &chunk, const Reach &missing, DataChunk &values,
                             KeySpellings &spelled) {
 	auto &elements = DecideKeyElements(tree.keys, key);
 	values.Initialize(Allocator::Get(context), DescentKeyTypes(tree, key), MaxValue<idx_t>(missing.size(), 1));
@@ -691,7 +690,7 @@ void DecideDescent::Key(idx_t key, DataChunk &chunk, const Reach &rows, DataChun
 	auto &missing = held.Missing(rows, own);
 	DataChunk evaluated;
 	KeySpellings spelled;
-	ReadKey(key, chunk, rows, missing, evaluated, spelled);
+	ReadKey(key, chunk, missing, evaluated, spelled);
 	held.Hold(evaluated, spelled, missing, chunk.size());
 	held.Slice(rows, chunk.size(), values);
 	for (idx_t c = 0; c < elements.size(); c++) {
@@ -985,7 +984,6 @@ void DecideDescent::FindDecisionGroups(idx_t scope, DataChunk &keys, const unsaf
 		groups.parent_slots.push_back(DConstants::INVALID_INDEX);
 		groups.first_rows.push_back(rows[i]);
 		groups.in_a_class.push_back(true);
-		decision_class_layouts[scope].push_back(NumericCast<idx_t>(layout - layouts.begin()));
 	};
 	classes.assign(rows.size(), DConstants::INVALID_INDEX);
 	vector<idx_t> selected;

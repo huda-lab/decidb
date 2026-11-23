@@ -343,8 +343,6 @@ private:
 	vector<vector<idx_t>> decision_rows;
 	vector<vector<bool>> decision_recorded;
 	vector<vector<DecisionLayout>> decision_layouts;
-	//! Per keyed scope, each class's layout (decision_layouts).
-	vector<vector<idx_t>> decision_class_layouts;
 	//! Per node, the G or O whose slots its rows arrive in (DecideNodeContainer::parent_slots), INVALID for none and
 	//! MIXED_ENCLOSING for several.
 	vector<idx_t> enclosing;
@@ -374,8 +372,7 @@ private:
 	         KeySpellings *read = nullptr);
 	//! The values of `key` on `missing`, the rows of `rows` it holds no read of, into `values`, a collated column's
 	//! spellings into `spelled`.
-	void ReadKey(idx_t key, DataChunk &chunk, const Reach &rows, const Reach &missing, DataChunk &values,
-	             KeySpellings &spelled);
+	void ReadKey(idx_t key, DataChunk &chunk, const Reach &missing, DataChunk &values, KeySpellings &spelled);
 	void Spell(idx_t key, const vector<vector<Value>> &groups, const vector<vector<Value>> &spelled,
 	           const vector<vector<string>> &sort_keys);
 	//! `node`'s signature on `rows`, its values' columns (signature_types) into `values`.

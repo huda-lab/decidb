@@ -320,8 +320,8 @@ private:
 	const vector<bool> &ReadEntriesOf(idx_t site, bool qualified, vector<bool> &first);
 	//! A term beside a grouped clause's reducers, on each of `rows` (the kept rows and their root's entries), a NULL
 	//! coefficient marking its row (`null_rows`).
-	void ReadBesideReducers(idx_t root, const DecideTerm &term, const DecideTermSite &site, idx_t program,
-	                        const vector<pair<idx_t, idx_t>> &rows, CoefficientColumn &column, vector<bool> &null_rows);
+	void ReadBesideReducers(idx_t root, const DecideTerm &term, idx_t program, const vector<pair<idx_t, idx_t>> &rows,
+	                        CoefficientColumn &column, vector<bool> &null_rows);
 	//! A term in a reducer, on each member of the G it ranges over: an entry of its operand, which the reducer's `when`
 	//! routed and its member tests keep, a kept row in no group among them, since the term is computed on every kept
 	//! row; a NULL coefficient marks its row (`null_rows`). Returns the rows its filter keeps.

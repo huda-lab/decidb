@@ -76,10 +76,6 @@ unique_ptr<Expression> DecideFoldConstants(unique_ptr<Expression> expr, ClientCo
 	return std::move(holder.expressions[0]);
 }
 
-unique_ptr<Expression> TransformToChunkExpression(const Expression &expr, ClientContext &context) {
-	return DecideFoldConstants(ToChunkReferences(expr, context), context);
-}
-
 bool DecideErrorStopsTheQuery(const ErrorData &error) {
 	auto type = error.Type();
 	return type == ExceptionType::INTERRUPT || type == ExceptionType::OUT_OF_MEMORY || type == ExceptionType::FATAL;
@@ -458,13 +454,12 @@ bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, bool diag
 
 vector<idx_t> DecideKeptGroups(const DecideKeyGroups &groups, idx_t num_rows,
                                const std::function<bool(idx_t)> &row_filter, vector<idx_t> &out_row_group_ids,
-                               idx_t &out_num_groups, const std::function<bool(idx_t)> *loose_row_filter,
-                               vector<idx_t> *out_loose_row_group_ids) {
+                               idx_t &out_num_groups, vector<idx_t> *out_every_row_group_ids) {
 	// The call's kept groups, renumbered densely in key-value order.
 	out_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
 	vector<idx_t> kept_groups;
-	if (out_loose_row_group_ids) {
-		out_loose_row_group_ids->assign(num_rows, DConstants::INVALID_INDEX);
+	if (out_every_row_group_ids) {
+		out_every_row_group_ids->assign(num_rows, DConstants::INVALID_INDEX);
 	}
 	if (groups.num_groups == 0 || num_rows == 0) {
 		out_num_groups = 0;
@@ -475,7 +470,7 @@ vector<idx_t> DecideKeptGroups(const DecideKeyGroups &groups, idx_t num_rows,
 	};
 	vector<idx_t> remap(groups.num_groups, DConstants::INVALID_INDEX);
 	for (idx_t r = 0; r < num_rows; r++) {
-		if (reads(r) && (!row_filter || row_filter(r))) {
+		if (reads(r) && row_filter(r)) {
 			remap[groups.row_group_ids[r]] = 0;
 		}
 	}
@@ -488,23 +483,16 @@ vector<idx_t> DecideKeptGroups(const DecideKeyGroups &groups, idx_t num_rows,
 		kept_groups.push_back(unf_gid);
 	}
 	for (idx_t r = 0; r < num_rows; r++) {
-		if (reads(r) && (!row_filter || row_filter(r))) {
+		if (reads(r) && row_filter(r)) {
 			out_row_group_ids[r] = remap[groups.row_group_ids[r]];
 		}
 	}
 	out_num_groups = next_remap;
 
-	if (out_loose_row_group_ids) {
-		// Same `remap`, so a row lands in the group the model builder will emit for.
-		for (idx_t r = 0; r < num_rows; r++) {
-			if (!reads(r) || (loose_row_filter && *loose_row_filter && !(*loose_row_filter)(r))) {
-				continue;
-			}
-			idx_t mapped = remap[groups.row_group_ids[r]];
-			if (mapped == DConstants::INVALID_INDEX) {
-				continue; // group emits no constraint
-			}
-			(*out_loose_row_group_ids)[r] = mapped;
+	// Same `remap`, so a row lands in the group the model builder will emit for.
+	for (idx_t r = 0; out_every_row_group_ids && r < num_rows; r++) {
+		if (reads(r)) {
+			(*out_every_row_group_ids)[r] = remap[groups.row_group_ids[r]];
 		}
 	}
 	return kept_groups;
@@ -520,13 +508,10 @@ vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_row
 	std::function<bool(idx_t)> emitted = [&](idx_t row) {
 		return every_kept_row || !has_local_filters || local_row_active[row];
 	};
-	std::function<bool(idx_t)> kept = [](idx_t) {
-		return true;
-	};
 	vector<idx_t> kept_groups;
 	if (groups) {
 		kept_groups = DecideKeptGroups(*groups, num_rows, emitted, evaluated.row_group_ids, evaluated.num_groups,
-		                               kept_row_group_ids ? &kept : nullptr, kept_row_group_ids);
+		                               kept_row_group_ids);
 		vector<bool> held(groups->num_groups, false);
 		grouped_instances = 0;
 		for (idx_t row = 0; row < num_rows; row++) {

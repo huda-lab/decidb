@@ -97,7 +97,6 @@ static unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context
 		facts->admitted_upper = std::move(bound.upper);
 		facts->admitted_a = std::move(bound.a);
 		facts->admitted_r = std::move(bound.r);
-		facts->admitted_member = std::move(bound.member);
 		if (bound.LiftsDefaultFloor()) {
 			facts->lifted_floor = bound.var_idx;
 			facts->lifted_floor_k = bound.written_k;
@@ -527,16 +526,6 @@ private:
 			}
 			Signature(node, std::move(copy));
 		}
-	}
-
-	void Scope(idx_t owner, const DecideClauseScope &scope) {
-		auto &node = *tree->nodes[owner];
-		Gates(owner, scope.when.get());
-		if (scope.per != DecideClauseScope::PerRole::NONE) {
-			node.key = scope.class_key;
-			node.per = node.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
-		}
-		UseSignature(node, scope.signature);
 	}
 
 	//! `owner` is the helper definition whose F node a row a function owns stands beneath.

@@ -197,7 +197,7 @@ void DecideTreeColumns::ComputeNode(idx_t index, NodeColumns &columns, bool fram
 		if (column.values || (!frames && ReadsFrame(index, p))) {
 			continue;
 		}
-		// Folded where it is executed, as every expression stage 08 evaluates is (TransformToChunkExpression). One that
+		// Folded where it is executed, as every expression stage 08 evaluates is (DecideFoldConstants). One that
 		// folds to a constant is that constant on every entry, read in place.
 		column.folded = DecideFoldConstants(node.programs[p].expression->Copy(), context);
 		if (column.folded->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {

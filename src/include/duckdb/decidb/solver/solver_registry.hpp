@@ -23,10 +23,6 @@ class SolverSession;
 struct SolverBackendInfo {
 	//! Stable lowercase identifier, and the DECIDB_FORCE_SOLVER spelling.
 	const char *name;
-	//! How the backend is spelled in text a user reads ("Gurobi"). Kept in the table
-	//! so a refusal can name the solver that would run the query without any code
-	//! outside this file hard-coding a backend.
-	const char *display_name;
 	//! Runtime probe: is the library loadable and the license valid on THIS host?
 	//! A backend that is always present answers true unconditionally.
 	bool (*is_available)();
@@ -64,8 +60,6 @@ public:
 	//! The registered identifier ("gurobi", "highs"). Test overrides and internal
 	//! messages use it; nothing branches on it.
 	const char *Name() const;
-	//! The user-facing spelling ("Gurobi", "HiGHS").
-	const char *DisplayName() const;
 	//! Is this backend usable on this host right now?
 	bool IsAvailable() const;
 	//! The model classes this backend can load: a gate, read without loading anything.

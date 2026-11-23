@@ -45,24 +45,6 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   `build/release/test/unittest "[decidb]"`; the corpus query of `test/decide/golden/corpus.sql` line 717's
   neighbour (`per grp: sum(x) by (grp) <= budget / 10 * open`) has 6 columns and 3 rows.
 
-## MODEL-10 — Code no reader reaches is deleted
-
-- **Problem.** Nine items have no caller or reader (each confirmed by a search of `src` and `test/common`):
-  `AuxRange::Span` and `MarkUnbounded` with the doc block around them (`ilp_linearization.hpp:339-364`);
-  `CoefficientColumn::MakeDense`, `Empty`, `IsUniform`, `UniformValue`, `Negated` (`solver_input.hpp:66-101`);
-  `SolverBackend::DisplayName` and `display_name` (`solver_registry.hpp`, `.cpp`); `TransformToChunkExpression`;
-  `DecideTreeBuilder::Scope(idx_t, const DecideClauseScope &)` (`decide_tree.cpp:532`);
-  `DecideConstraint::admitted_member` (written, never read); `DecideDescent::decision_class_layouts` (pushed to,
-  never read); `FormulationBox::global_lower` and `global_upper`; `MinMaxLinkRow::AddConstant`. Seven parameters are
-  passed and unused: `BuildSolverInput`'s `evaluated`; `var_names` through `LinearizeNotEqual` and
-  `ExpandAggregateNotEqual`; `ReadBesideReducers`' `site`; `DecideProgramCompiler::Translate`'s `body` with the
-  `owner_body` computed for it; `DecideDescent::ReadKey`'s `rows`; `RewriteForSolver`'s `root`; `DecideKeptGroups`'
-  `loose_row_filter`, whose one caller passes a filter that keeps every row.
-- **Change.** Delete each with the comments that name it. `SolverInput::global_bounds_unbounded` is read only by an
-  assertion: keep it or delete the assertion with it, whichever the assertion's value decides.
-- **Done when.** The release build; `build/release/test/unittest "[decidb]"`;
-  `./test/decide/run_tests.sh -k "scope or frame or not_equal or abs"`; model goldens identical.
-
 ## MODEL-11 — The tree is verified in debug builds, once
 
 - **Problem.** `DecideTree::Validate` (`decide_tree.cpp:1176-1318`, complexity 75, 18 internal errors) checks in

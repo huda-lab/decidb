@@ -155,10 +155,9 @@ public:
 	//! A program on `site` computing `expression`, of `owner`'s body; returns its index on the site. A message about a
 	//! value that is not finite names `written`, and points at it when it has a location of its own.
 	idx_t Add(idx_t site, DecideProgramRole role, const Expression &expression, idx_t owner, int sign = 1) {
-		auto &owner_body = tree.nodes[owner]->compiled;
 		DecideProgram program;
 		program.role = role;
-		program.expression = Translate(site, expression, owner_body);
+		program.expression = Translate(site, expression);
 		program.written = expression.Copy();
 		program.sign = sign;
 		program.owner = owner;
@@ -296,7 +295,7 @@ private:
 	//! Stage 05's `expression` over `site`'s layout. Stage 05 reads the source as the operator's input columns, a data
 	//! reducer as its record's placeholder, a frame as a column after the input's, and an admitted end its inputs a and
 	//! r as DecideAdmittedInput.
-	unique_ptr<Expression> Translate(idx_t site, const Expression &expression, DecideBody &body) {
+	unique_ptr<Expression> Translate(idx_t site, const Expression &expression) {
 		DecideChunkLeaf leaf = [&](const Expression &leaf_expression) -> unique_ptr<Expression> {
 			const auto kind = leaf_expression.GetExpressionClass();
 			if (kind != ExpressionClass::BOUND_REF && kind != ExpressionClass::BOUND_COLUMN_REF) {
@@ -397,7 +396,7 @@ public:
 			auto add = [&](const Expression &expression) {
 				DecideProgram program;
 				program.role = DecideProgramRole::VALUE;
-				program.expression = Translate(programs.node, expression, tree.nodes[programs.node]->compiled);
+				program.expression = Translate(programs.node, expression);
 				program.written = expression.Copy();
 				auto &node = *tree.nodes[programs.node];
 				node.programs.push_back(std::move(program));
@@ -466,7 +465,7 @@ static void CompileClause(DecideProgramCompiler &compiler, idx_t root, DecideBod
 	body.rhs = compiler.Add(root, role, *clause.rhs_expr, root);
 	if (clause.admitted_lower) {
 		// A bound on one decision, admitted on each row its term is read on: an easy extremum's on its members, the
-		// entries of its reducer's operand, whose filter (DecideConstraint::admitted_member) the descent routes. As
+		// entries of its reducer's operand, whose filter the descent routes.
 		// They are computed in this order: the members, then a and r on them, then each end over the row and those two.
 		const auto site = body.linear[0].node;
 		const auto a = compiler.Add(site, DecideProgramRole::VALUE, *clause.admitted_a, root);

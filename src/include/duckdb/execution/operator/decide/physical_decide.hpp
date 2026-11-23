@@ -203,8 +203,7 @@ private:
 	//! `gstate`, and the box it settles is the one the formulation pass below is then
 	//! handed.
 	SolverInput BuildSolverInput(DecideGlobalSinkState &gstate, idx_t num_rows, vector<KeyedMapping> keyed_mappings,
-	                             vector<SolverInput::KeyValues> key_values, EvaluatedClauses &evaluated,
-	                             VarIndexer &out_var_indexer) const;
+	                             vector<SolverInput::KeyValues> key_values, VarIndexer &out_var_indexer) const;
 
 	//! FinalizeSolveResult, solve and readback: the solve (SolveDecide), the RouteSolveResult switch and its four
 	//! terminal cases, and the shared success epilogue. `elastic` is retained under `DIAGNOSE` only.

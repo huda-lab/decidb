@@ -46,7 +46,6 @@ namespace duckdb {
 //! Invariants:
 //!   - `logical_size` always equals num_rows for the constraint that owns the column.
 //!   - When `kind == Dense`, `dense_values.size() == logical_size`.
-//!   - `Empty()` (logical_size == 0) is reserved for not-yet-initialized columns.
 struct CoefficientColumn {
 	enum class Kind : uint8_t { Scalar, Dense };
 	Kind kind = Kind::Dense;
@@ -63,14 +62,6 @@ struct CoefficientColumn {
 		c.logical_size = n;
 		return c;
 	}
-	static CoefficientColumn MakeDense(idx_t n, double init = 0.0) {
-		CoefficientColumn c;
-		c.kind = Kind::Dense;
-		c.dense_values.assign(n, init);
-		c.logical_size = n;
-		return c;
-	}
-
 	inline double Get(idx_t row) const {
 		return kind == Kind::Scalar ? scalar_value : dense_values[row];
 	}
@@ -80,26 +71,6 @@ struct CoefficientColumn {
 	idx_t Size() const {
 		return logical_size;
 	}
-	bool Empty() const {
-		return logical_size == 0;
-	}
-	bool IsUniform() const {
-		return kind == Kind::Scalar;
-	}
-	double UniformValue() const {
-		return scalar_value;
-	}
-
-	//! This column with every value negated.
-	CoefficientColumn Negated() const {
-		CoefficientColumn out = *this;
-		out.scalar_value = -out.scalar_value;
-		for (auto &value : out.dense_values) {
-			value = -value;
-		}
-		return out;
-	}
-
 	//! Force Dense storage (allocates if currently Scalar).
 	//! After this, dense_values.size() == logical_size.
 	void EnsureDense() {
@@ -870,8 +841,6 @@ DecideClauseRef DecideWrittenClause(const SolverInput &input, idx_t source_claus
 struct FormulationBox {
 	const vector<double> &lower; //!< per decide variable, indexed as `SolverInput::lower_bounds`
 	const vector<double> &upper;
-	const vector<double> &global_lower; //!< per global variable
-	const vector<double> &global_upper;
 	//! A helper decision's reach per instance (`SolverInput::instance_reach_lower` / `instance_reach_upper`). Derived
 	//! from the members' boxes of this formulation, so it belongs to the box and not to the rigid view.
 	const vector<vector<double>> &instance_reach_lower;
@@ -889,8 +858,7 @@ struct FormulationBox {
 	}
 
 	static FormulationBox OfSolvedModel(const SolverInput &input) {
-		return {input.lower_bounds,        input.upper_bounds,         input.global_lower_bounds,
-		        input.global_upper_bounds, input.instance_reach_lower, input.instance_reach_upper};
+		return {input.lower_bounds, input.upper_bounds, input.instance_reach_lower, input.instance_reach_upper};
 	}
 };
 

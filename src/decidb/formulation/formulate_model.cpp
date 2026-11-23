@@ -130,7 +130,7 @@ void FormulateModel(SolverInput &input, const FormulationBox &box, VarIndexer &v
 	// LowerDecideConstructs at the end of this function.
 	phase.Next("formulation.not_equal");
 	if (!input.not_equals.empty()) {
-		LinearizeNotEqual(input, var_indexer, decide_var_names);
+		LinearizeNotEqual(input, var_indexer);
 	}
 
 	// Emit the McCormick envelope for every bilinear w = b * x auxiliary.

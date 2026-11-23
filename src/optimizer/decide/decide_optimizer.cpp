@@ -115,11 +115,11 @@ void DecideOptimizer::OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr
 	bool replaced = false;
 	RunPass("optimizer.choose_answer", nullptr, [&] { replaced = ChooseDecideAnswer(op, root, optimizer); });
 	if (!replaced) {
-		RewriteForSolver(decide, *root);
+		RewriteForSolver(decide);
 	}
 }
 
-void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &root) {
+void DecideOptimizer::RewriteForSolver(LogicalDecide &decide) {
 	RunPass("optimizer.tag_groups", &decide, [&] { TagAtomicRemovalGroups(decide); });
 	// A range over decisions becomes a helper before any rewrite copies it.
 	RunPass("optimizer.frame_ranges", &decide, [&] { RewriteFrameRanges(decide); });

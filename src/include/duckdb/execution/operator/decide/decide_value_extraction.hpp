@@ -37,12 +37,6 @@ unique_ptr<Expression> ToChunkReferences(const Expression &expr, ClientContext &
 //! `expr` constant-folded once by DuckDB's own rule, as the expression rewriter folds a query's own expressions.
 unique_ptr<Expression> DecideFoldConstants(unique_ptr<Expression> expr, ClientContext &context);
 
-//! `expr` as stage 08 evaluates it: over the chunk's columns, and constant-folded once by DuckDB's own rule, as the
-//! expression rewriter folds a query's own expressions. Every tree stage 08 evaluates passes through here, the ones
-//! the DECIDE optimizer builds among them, so no constant subtree (`CAST(CAST(45 AS DECIMAL(18,2)) AS DOUBLE)`,
-//! `45 >= 1e20`) is evaluated on every row. A message names the prepared tree, not this one, so it reads as written.
-unique_ptr<Expression> TransformToChunkExpression(const Expression &expr, ClientContext &context);
-
 //! Whether an error stops the query wherever it is raised, rather than belonging to the row it is raised on.
 bool DecideErrorStopsTheQuery(const ErrorData &error);
 
@@ -203,12 +197,11 @@ struct DecideKeyGroups {
 
 //! The rows `row_filter` keeps, numbered by their group of `groups`, the
 //! groups renumbered densely in key-value order; INVALID_INDEX on every other row. Returns the kept groups, as
-//! `groups` numbers them. The optional second map is over the same numbering but the looser `loose_row_filter`: a
-//! group no strict row reached emits no constraint, so its rows stay out.
+//! `groups` numbers them. `out_every_row_group_ids`, when given, takes every row of a kept group under the same
+//! numbering: a group no row of `row_filter` reached emits no constraint, so its rows stay out.
 vector<idx_t> DecideKeptGroups(const DecideKeyGroups &groups, idx_t num_rows,
                                const std::function<bool(idx_t)> &row_filter, vector<idx_t> &out_row_group_ids,
-                               idx_t &out_num_groups, const std::function<bool(idx_t)> *loose_row_filter = nullptr,
-                               vector<idx_t> *out_loose_row_group_ids = nullptr);
+                               idx_t &out_num_groups, vector<idx_t> *out_every_row_group_ids);
 
 //! The rows of a clause in the grouped shape (the aggregate shape, an easy MIN/MAX; language/guide.md §6.4): its kept
 //! rows grouped by its `by` key's `groups` (null with no key), a group emitting the rows a reducer reads

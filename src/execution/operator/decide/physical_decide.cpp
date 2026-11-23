@@ -260,7 +260,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 	DecideProfileScope phase("execution.assemble_input");
 	VarIndexer var_indexer;
 	SolverInput solver_input =
-	    BuildSolverInput(gstate, num_rows, std::move(keyed_mappings), std::move(key_values), evaluated, var_indexer);
+	    BuildSolverInput(gstate, num_rows, std::move(keyed_mappings), std::move(key_values), var_indexer);
 
 	// Under DIAGNOSE, keep the model input and column space as assembly left them —
 	// before a single constant was derived. An infeasibility repair searches a WIDER box
@@ -496,7 +496,7 @@ void PhysicalDecide::ScaleObjectiveAvg(DecideGlobalSinkState &gstate, idx_t num_
 
 SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_t num_rows,
                                              vector<KeyedMapping> keyed_mappings,
-                                             vector<SolverInput::KeyValues> key_values, EvaluatedClauses &evaluated,
+                                             vector<SolverInput::KeyValues> key_values,
                                              VarIndexer &out_var_indexer) const {
 	DecideProfileScope phase("assembly.var_indexer");
 	idx_t num_decide_vars = tree->decide_variables.size();

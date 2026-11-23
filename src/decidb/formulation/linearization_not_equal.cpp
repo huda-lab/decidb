@@ -187,10 +187,9 @@ static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer, cons
 }
 
 static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_indexer,
-                                    const vector<const NotEqualClause *> &deferred_aggregate,
-                                    const vector<string> &var_names);
+                                    const vector<const NotEqualClause *> &deferred_aggregate);
 
-void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names) {
+void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer) {
 
 	// The aggregate spelling is collected on this walk and finished below: it needs one
 	// global binary per GROUP, which the per-row loop has no notion of.
@@ -220,7 +219,7 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer, const vect
 		EmitNotEqualRows(input, indexer, ec, collapse, NotEqualClauseLabel(input, ec));
 	}
 
-	ExpandAggregateNotEqual(input, indexer, deferred_aggregate, var_names);
+	ExpandAggregateNotEqual(input, indexer, deferred_aggregate);
 	// Every `<>` is expanded: what is left of them is the rows and binaries above.
 	input.not_equals.clear();
 }
@@ -231,8 +230,7 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer, const vect
 //! per-row bound would silently cap. The indicator is named by the clause as the user
 //! wrote it (NotEqualClauseLabel), so a dropped aggregate `<>` can be named in a repair.
 static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_indexer,
-                                    const vector<const NotEqualClause *> &deferred_aggregate,
-                                    const vector<string> &var_names) {
+                                    const vector<const NotEqualClause *> &deferred_aggregate) {
 	if (deferred_aggregate.empty()) {
 		return;
 	}

@@ -21,10 +21,10 @@ namespace {
 //! backend is in play — capability questions go through the capability types, and
 //! session behavior through SolverSession's virtuals.
 const SolverBackendInfo REGISTERED_BACKENDS[] = {
-    {"gurobi", "Gurobi", GurobiSolver::IsAvailable, GurobiSolver::ModelClasses, GurobiSolver::Constructs,
+    {"gurobi", GurobiSolver::IsAvailable, GurobiSolver::ModelClasses, GurobiSolver::Constructs,
      GurobiSolver::CreateSession},
-    {"highs", "HiGHS", DeterministicNaive::IsAvailable, DeterministicNaive::ModelClasses,
-     DeterministicNaive::Constructs, DeterministicNaive::CreateSession},
+    {"highs", DeterministicNaive::IsAvailable, DeterministicNaive::ModelClasses, DeterministicNaive::Constructs,
+     DeterministicNaive::CreateSession},
 };
 
 //! Test-only A/B switch, mirroring DECIDB_FORCE_SOLVER. It is three-valued because the
@@ -80,11 +80,6 @@ bool NativeConstructsForced() {
 const char *SolverBackend::Name() const {
 	D_ASSERT(info);
 	return info->name;
-}
-
-const char *SolverBackend::DisplayName() const {
-	D_ASSERT(info);
-	return info->display_name;
 }
 
 bool SolverBackend::IsAvailable() const {

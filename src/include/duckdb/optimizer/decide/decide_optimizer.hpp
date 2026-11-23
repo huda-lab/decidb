@@ -75,7 +75,7 @@ private:
 	//! stage is one profile span, whichever way the query is answered.
 	void OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOperator> &root);
 	//! The passes that formulate the query for the solver chosen, in order.
-	void RewriteForSolver(LogicalDecide &decide, LogicalOperator &root);
+	void RewriteForSolver(LogicalDecide &decide);
 	//! Before any one-to-many rewrite, assign written-order identities to source clauses
 	//! whose formulations may only be removed as an atomic diagnostic repair.
 	void TagAtomicRemovalGroups(LogicalDecide &decide);

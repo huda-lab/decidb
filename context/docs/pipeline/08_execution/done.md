@@ -281,7 +281,7 @@ columns in a scan of their own.
   drives (`DecideConstraint::was_minmax_easy`), is a clause in the grouped shape: a model row per member of its G,
   grouped by its `by` key, whose terms are read as written on the member's own row, not counted once in its group. Its
   bound on one decision is admitted on each member (`DecideModelEmitter::Admit`), an entry of its term's site, the
-  reducer's operand, whose filter (`admitted_member`) the descent routes, so no program tests it; a row no member stands
+  reducer's operand, whose filter the descent routes, so no program tests it; a row no member stands
   on emits no model row and admits every value. An admitted end is never NULL, since a
   NULL coefficient or bound admits every value (`DecideReadSingletonRow`): no row's end is marked NULL, since no query
   reaches one, and a NULL end is an internal error. A MIN or MAX over a relation's classes reads every row an entry of
@@ -471,10 +471,10 @@ is not `folded_bound`: it flattens to a per-row spec that carries the classifier
 (`DecideConstraint::admitted_lower` / `admitted_upper`, stage 05). The ends read the clause
 as `a * x <comparison> r` through two inputs, `admitted_a` and `admitted_r`, which both ends
 read many times: the tree computes the inputs once, as programs on the clause's entries the
-reducer filter `admitted_member` keeps, then both ends over them (`DecideModelEmitter::Admit`);
+reducer's filter keeps, then both ends over them (`DecideModelEmitter::Admit`);
 a row that is no member admits every value. An input that is a constant is in the
 ends already, and stage 08 constant-folds each tree it evaluates once (`ConstantFoldingRule`,
-in `TransformToChunkExpression`, after messages have rendered from the prepared trees). It
+in `DecideFoldConstants`, after messages have rendered from the prepared trees). It
 evaluates the ends on the kept rows in the same pass that reads a data right-hand side,
 after it, admitting ±infinity as an open end, into
 `EvaluatedConstraint::admitted_lower` / `admitted_upper`, and the model builder folds each
@@ -853,8 +853,9 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
 
 ### Expression transformation
 
-`TransformToChunkExpression` copies an expression and constant-folds it once with DuckDB's own
-`ConstantFoldingRule`, so no constant subtree is evaluated per row. It rewrites no node: `ColumnBindingResolver` has
+The tree's compiler copies an expression over its site's layout (`ToChunkReferences`), and `DecideFoldConstants`
+constant-folds a program once with DuckDB's own `ConstantFoldingRule` where it is executed, so no constant subtree
+is evaluated per row. Folding rewrites no node: `ColumnBindingResolver` has
 already turned every column reference into a chunk position, and the bound-side rewrite has made every reducer on a
 bound a column.
 

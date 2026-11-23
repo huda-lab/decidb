@@ -58,7 +58,7 @@ struct DecideFrameColumnPrograms {
 
 //! An expression a node's entries compute (language/guide.md §6.1), over the node's layout: its carried columns, then
 //! its program columns, then its holes, then the results of `arguments`. Built by ToChunkReferences and folded where
-//! it is executed (TransformToChunkExpression), as every expression stage 08 evaluates is.
+//! it is executed (DecideFoldConstants), as every expression stage 08 evaluates is.
 struct DecideProgram {
 	DecideProgramRole role;
 	unique_ptr<Expression> expression;

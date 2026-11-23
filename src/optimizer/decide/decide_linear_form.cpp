@@ -397,8 +397,8 @@ private:
 		LowerFrames(constraint.scope.when);
 		LowerFrames(constraint.lhs_terms);
 		LowerFrames(constraint.rhs_expr);
-		for (auto *end : {&constraint.admitted_lower, &constraint.admitted_upper, &constraint.admitted_a,
-		                  &constraint.admitted_r, &constraint.admitted_member}) {
+		for (auto *end :
+		     {&constraint.admitted_lower, &constraint.admitted_upper, &constraint.admitted_a, &constraint.admitted_r}) {
 			LowerFrames(*end);
 		}
 		LowerFrames(constraint.product_groups);

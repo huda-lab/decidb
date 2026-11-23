@@ -1107,9 +1107,9 @@ void DecideModelEmitter::KeyClasses(idx_t root, const vector<pair<idx_t, idx_t>>
 	}
 }
 
-void DecideModelEmitter::ReadBesideReducers(idx_t root, const DecideTerm &term, const DecideTermSite &site,
-                                            idx_t program, const vector<pair<idx_t, idx_t>> &rows,
-                                            CoefficientColumn &column, vector<bool> &null_rows) {
+void DecideModelEmitter::ReadBesideReducers(idx_t root, const DecideTerm &term, idx_t program,
+                                            const vector<pair<idx_t, idx_t>> &rows, CoefficientColumn &column,
+                                            vector<bool> &null_rows) {
 	vector<bool> nulls(descent.Containers()[root].Count(), false);
 	auto numbers = columns.Numbers(root, program, columns.Tested(root), &nulls);
 	DecideAbsentReads absent_reads(columns.Absence());
@@ -1206,7 +1206,7 @@ bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const vector<pair<idx_t, i
 		auto &site = body.linear[t];
 		if (site.node == root) {
 			// A term beside the reducers is read on each kept row, and counted once in its group.
-			ReadBesideReducers(root, terms[t], site, site.program, rows, evaluated.row_coefficients[t], null_rows);
+			ReadBesideReducers(root, terms[t], site.program, rows, evaluated.row_coefficients[t], null_rows);
 			unfiltered = true;
 			continue;
 		}

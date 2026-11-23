@@ -17,7 +17,6 @@ the owner rules first.
 - [ ] MODEL-8 The helper of a link whose data may split its classes (decision) — pipeline/todo.md § MODEL-8
 
 ## 6.2 Code with no reader (one lane)
-- [ ] MODEL-10 Code no reader reaches is deleted — pipeline/todo.md § MODEL-10
 - [ ] MODEL-11 The tree is verified in debug builds, once — pipeline/todo.md § MODEL-11
 - [ ] MODEL-12 One struct per model constraint, one comparison mapping — pipeline/todo.md § MODEL-12
 
@@ -36,5 +35,5 @@ the owner rules first.
 - [ ] MODEL-20 The helper-form rule names the readers that take members — pipeline/todo.md § MODEL-20
 - [ ] MODEL-21 One term extraction for a clause and the objective — pipeline/todo.md § MODEL-21
 
-## 6.6 Gate (one lane; needs: 6.1 to 6.5)
+## 6.6 Gate (one lane; needs: 6.2 to 6.5)
 - [ ] MODEL-7 Phase 6 gate and docs — pipeline/todo.md § MODEL-7

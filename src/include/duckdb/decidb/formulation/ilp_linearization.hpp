@@ -162,7 +162,7 @@ struct NativeConstructPolicy {
 //! Refuses a left-hand side that is not integer-valued — the ±1 band is only exact
 //! on the integer lattice — and silently drops a comparison whose bound no integer
 //! can equal, since every assignment already satisfies it.
-void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names);
+void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer);
 
 //! The one place a construct is lowered, and the last pass of stage 06.
 //!
@@ -288,23 +288,9 @@ void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer);
 void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names,
                                 NativeConstructPolicy policy);
 
-//! The reachable range of a family of row expressions: the box every auxiliary over
-//! that family is declared with, and — as `Span()` — the only Big-M an extremum link
-//! over it may use. One object, because both come from the same walk over the data.
-//!
-//! Every continuous auxiliary stage 05 introduces stands for an extremum over such a
-//! family, so its bounds are always derivable at the moment it is created. Returning
-//! the range rather than a bare Big-M constant is what stops those endpoints from
-//! being computed and then discarded, which used to leave every continuous auxiliary
-//! declared `[-1e30, 1e30]` and the root LP with no box to work in.
-//!
-//! `lo`/`hi` INCLUDE constant terms, and there is deliberately no constant-free
-//! counterpart. One existed until 2026-08-23 and was what extremum links scaled off,
-//! on the reasoning that a constant cancels in the `(aux - expr)` difference a link row
-//! slackens. It cancels within one row, not between two, so it was invalid wherever
-//! rows carried different constants — see `Span()`. Both readings cannot coexist in one
-//! object without the wrong one eventually being picked, so only the sound one is
-//! representable.
+//! The reachable range of a family of row expressions: the box every auxiliary over that family is declared with.
+//! `lo`/`hi` include constant terms: a row's constant is measured against another row's, and cancels only within one
+//! row.
 //!
 //! Each end is seeded by the first row that reaches it, so the range is the cover of the
 //! family and nothing else; a family holding only positive values does not reach down to 0.
@@ -334,33 +320,6 @@ struct AuxRange {
 	//! half-open box is still a valid box.
 	bool Unbounded() const {
 		return lo_unbounded || hi_unbounded;
-	}
-
-	//! The full reach of this family, constants INCLUDED — and the only Big-M any
-	//! extremum link may use. Defined ONLY when `!Unbounded()`: no constant dominates a
-	//! range open at either end, so a caller must check `Unbounded()` and refuse before
-	//! asking. There is no fallback value to return — that is the point. A half-open
-	//! range is enough to box a column but not to scale a row, which is why boxing reads
-	//! the per-side flags and this does not.
-	//!
-	//! Why constants are included: a link row deactivated on row r must stay slack up
-	//! to `hi - exprmin_r`, and `hi` is whichever row in the family reaches highest — so
-	//! row r's constant is measured against a DIFFERENT row's and does not cancel. It
-	//! cancels only within one row's own `(aux - expr)`. Scaling off a constant-free
-	//! reach instead, which is what this did until 2026-08-23, hands back a Big-M too
-	//! small to be valid wherever rows carry different constants (`MAX(x + c)` with `c`
-	//! a data column) — and a too-small Big-M cuts off legal answers rather than merely
-	//! loosening the relaxation.
-	double Span() const {
-		D_ASSERT(!Unbounded());
-		return hi - lo;
-	}
-
-	//! Record an unbounded contributor. Keeps the FIRST one seen, so the message a
-	//! query produces does not depend on row order.
-	void MarkUnbounded(idx_t var) {
-		MarkLoUnbounded(var);
-		MarkHiUnbounded(var);
 	}
 
 	//! Record that one end alone is underivable, keeping whatever the other end holds.
@@ -452,10 +411,6 @@ struct MinMaxLinkRow {
 	vector<int> indices;
 	vector<double> coefficients;
 	double constant = 0.0;
-
-	void AddConstant(double value, const DecideClauseRef &written) {
-		AddCoefficient(constant, value, written);
-	}
 
 	//! The left-hand side `1 * column + (this row)` of a solver row, sized for `extra` more columns so that nothing
 	//! reallocates as the caller adds them.
