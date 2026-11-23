@@ -38,7 +38,7 @@ changes. A record holds
 | `folded_bound`, `folded_clause_rows` | a bound folded into the column's box, and whether a repair loosens it through the clause's rows | `FoldSingletonRows` |
 | `bound_read_shape`, `bound_read_type` | what bound reduction relied on (`../05_optimizer/done.md`) | `RewriteRhsAggregates` |
 
-A fact of a row is a field of its record, so no alias tag carries one and a copy of a comparison's alias copies none.
+A fact of a row is a field of its record.
 The rows a function owns (an L0 indicator's links, an ABS's envelope rows, a body helper's definition) are records
 too, held by their function. The binder fills `BoundSelectNode::decide`, `Binder::PlanDecide` canonicalizes it in place and
 moves it whole into `LogicalDecide::bound`. The operator keeps what is its own beside it: `decide_index`,
@@ -100,7 +100,7 @@ agree.
 - **A kept call names its definition by a typed reference.** `BoundFunctionExpression::definition`
   (`DecideHelperRef`: the entry's kind and its index) is a symbol reference, as Clang's `DeclRefExpr` is to its
   `Decl`. `LogicalDecide::NameDefinition` is its one writer and `DecideDefinitionOf` its reader. `Copy` carries it;
-  `Equals` compares it; `DecideStripTags` unsets it on
+  `Equals` compares it; `DecideForgetDefinitions` unsets it on
   the copy `ExpressionBuilder::Of` takes. A call that is first a `PRODUCT` and then a reducer's body names the `DEFINITION`.
   A `REDUCER_VALUE` has no kept call: the reader holds the helper's column.
 - **A definition states its rows, and a row's role is read from its owner.** `DecideHelperDefinition::Rows` is

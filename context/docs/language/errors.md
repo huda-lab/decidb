@@ -84,7 +84,6 @@ keeps ([guide.md §5.5](guide.md#55-reducers-inside-reducers--the-path-rule)).
 | A cast over a decision | Binder | `'x::DOUBLE' casts a decision` | the cast |
 | A NULL beside a decision | Binder | `'x + NULL' is NULL whatever the decisions are` | the expression |
 | A decision whose name is a column's or another decision's | Binder | `decision 'x' has the name of a column` · `decision 'x' is declared twice` | the declaration |
-| A name DECIDE reserves | Binder | `'q' is not allowed as a name in DECIDE` | the name |
 
 ### Scopes, keys and relations
 

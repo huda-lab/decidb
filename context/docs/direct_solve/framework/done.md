@@ -135,10 +135,10 @@ assertion, ASan or UBSan report. It is the baseline for every direct-solve task 
 - **Simplification after lowering** (MLIR's canonicalize, LLVM's InstCombine). A rule builds its expressions in
   general form, with a constant where a case does not arise (a flag that is always true, a CASE on it), and DuckDB's
   expression rewriter has run before the DECIDE optimizer, so nothing has simplified them. The rule driver runs DuckDB's
-  rewriter (`Optimizer::rewriter`) over the adapter's child after `StripTagsAbove`, as DuckDB runs it over a plan; over
-  the DECIDE input, which DuckDB has already rewritten, it changes nothing. Statistics propagation runs after the DECIDE
-  optimizer: it reads a constant the rule's stages carry as a column (a seed, a flag, a bound written as a number) as
-  its value inside the computations above, and folds what that makes constant
+  rewriter (`Optimizer::rewriter`) over the adapter's child after `PlainExpressionsAbove`, as DuckDB runs it over a
+  plan; over the DECIDE input, which DuckDB has already rewritten, it changes nothing. Statistics propagation runs
+  after the DECIDE optimizer: it reads a constant the rule's stages carry as a column (a seed, a flag, a bound written
+  as a number) as its value inside the computations above, and folds what that makes constant
   ([architecture.md](../../pipeline/architecture.md) § 1).
 
   The plan computes in DOUBLE, as the solver path does. A sum of an exact type stays a DOUBLE sum
@@ -406,10 +406,9 @@ assertion, ASan or UBSan report. It is the baseline for every direct-solve task 
   inside an ABS has no coefficient of its own, and the clause reader declines it. A NULL
   limit or per-row bound is open: S1's `SourceLimit` reads it as no limit, R1's limits pass over it through
   `MIN`/`MAX`/`LEAST`/`GREATEST`, and `DirectRowBoundMessage` and the singleton-row box (`AdmittedInterval`) give the
-  instance no bound. The driver unwraps every NULL guard and strips every tag from the operators above the source
-  (`StripTagsAbove`), and an
-  aggregate built from a reducer (`DirectAggregateOf`, for a side table, on either path) drops the reducer's alias,
-  which carries its tags, so EXPLAIN never prints one.
+  instance no bound. The driver unwraps every NULL guard and unsets every kept call's `definition` in the operators
+  above the source (`PlainExpressionsAbove`), and an
+  aggregate built from a reducer (`DirectAggregateOf`, for a side table, on either path) takes no alias from it.
 - **Number messages.** Both paths raise one text, `DecideInvalidValueMessage` (`decide_value_messages.hpp`), from the
   value's `DecideValueRole` and its text as written: the cut query text, or `DirectRender` where none was cut (a
   render prints the coefficient a NULL guard holds, not the guard), with the caret on the value

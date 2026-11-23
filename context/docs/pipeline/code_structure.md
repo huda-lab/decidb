@@ -11,7 +11,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 
 | Path | Stage | Contents |
 |---|---|---|
-| `common/enums/decide.hpp` | all | `DecideSense`, `DecideExpression`, `DecideVarScope` (`ROW` / `ENTITY` / `SCALAR`) and `DecideVarScopeInfo`, `ConstraintKind`, the DECIDE tag constants (a frame column's and a function's) and the tag helpers |
+| `common/enums/decide.hpp` | all | `DecideSense`, `DecideVarScope` (`ROW` / `KEYED` / `GLOBAL` / `FRAME_READ` / `INLINED`) and `DecideVarScopeInfo`, `ConstraintKind`, `DecideHelperKind`, `DecideHelperRef` and the helper decisions' display-name prefixes |
 | `common/decide_source_info.hpp` | 03 | `DecideSourceText` — the DECIDE tail's text and spans; `ConstraintSourceInfo` — the source display registry entry |
 | `common/decide_solver_capabilities.hpp` | 07 answers, 03/05/06/08 read | `SolverConstructSupport`, `SolverModelClass`, `DecideModelShape` and `ClassifyDecideModel` (the one classifier of a model's shape), `IsNonconvexProductGroup` — the backend differences upstream stages branch on. In `common/` because stage 07 answers it but four stages above read it |
 | `parser/decide/parsed_decide.hpp` | 01, 02 read | The parsed DECIDE part of a `SelectNode`: `DecideScope`, `DecideDeclaration`, `DecideClause`, `ParsedDecide` |

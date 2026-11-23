@@ -28,16 +28,6 @@ every one of them:
 - **Tests** (R32): focused tests in each task's **Done when**; `make decide-test` once at the end of each queue
   group; every other suite in TREE-28.
 
-## TREE-27 — The design and the stage docs state the system
-
-- **Problem.** design.md § 3 records forms the code does not have or no longer has (the reducer's kind, the frame
-  class, the value node, the NULL tests' home, the second shape writer, `constraint_sources` as deleted, the node
-  as one struct). The stage docs describe carriers by tag.
-- **Change.** design.md § 3 and § 3.5 match the code cell by cell; § 3.9's acceptance list is checked line by
-  line. The stage docs (01 to 05, 08's planning part, `code_structure.md`, the glossary) describe the tree in the
-  present tense.
-- **Done when.** Every name design.md § 3 gives is found by `grep` in `src/`; § 3.9 holds line by line.
-
 ## TREE-28 — The test pass for the phase
 
 - **Problem.** Since the phase's first commit the full suite has run on some commits only, and several behaviours
@@ -51,7 +41,6 @@ every one of them:
   `build/debug/test/unittest "[decidb]"` and `make decide-test-debug` on a quiet machine,
   `test/decide/run_direct_matrix.sh`, `make format-check`, and `context/opa_rewrite/tools/ab_bench.py` against the
   build of the commit before the phase.
-- **Needs.** TREE-27.
 - **Done when.** Every gate passes with goldens and model dumps identical on both solvers; no workload of the
   benchmark is beyond about 10%; the `lizard` figures of the three construction files before and after are in the
   report.

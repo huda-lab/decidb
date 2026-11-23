@@ -108,6 +108,21 @@ def test_a_reducer_reads_rows_outside_its_class(decidb_cli, scope_solver):
 
 
 @pytest.mark.correctness
+def test_reducers_that_differ_only_in_by_are_two_terms(decidb_cli, scope_solver):
+    """`sum(ship)` reads every kept row and `sum(ship) by (D.region)` the class's region: the two are not like terms,
+    so a depot's row is the total plus its region's sum, not twice either."""
+    sql = _ship_query("per D.depotID: sum(ship) + sum(ship) by (D.region) <= 2 * D.capacity")
+    model = ScopedModel(joined(), SHIP)
+    bound = (lambda r: {CONSTANT: 2 * r["capacity"]},)
+    clauses = [SHIP_BOUND, Scoped((_ship_sum(), _ship_sum(("region",))), "<=", bound, per=("depotID",))]
+    _judged(decidb_cli, scope_solver, sql, model, clauses, MAXIMIZE_SHIP)
+    merged = [SHIP_BOUND, Scoped((_ship_sum(("region",)), _ship_sum(("region",))), "<=", bound, per=("depotID",))]
+    assert model.solve_scoped(scope_solver, merged, MAXIMIZE_SHIP) != pytest.approx(
+        model.solve_scoped(scope_solver, clauses, MAXIMIZE_SHIP)
+    )
+
+
+@pytest.mark.correctness
 def test_a_data_only_reducer_with_by_on_the_bound_side(decidb_cli, scope_solver):
     """Each shipment is bounded by a fifth of its region's demand (East 75, West 25)."""
     sql = _ship_query("ship <= 0.2 * sum(S.demand) by (D.region)")

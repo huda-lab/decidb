@@ -13,8 +13,7 @@ the owner rules first.
 # Phase 5 — The parser builds the tree
 
 ## 5.6 Proof (one lane)
-- [ ] TREE-27 The design and the stage docs state the system — pipeline/todo.md § TREE-27
-- [ ] TREE-28 The test pass for the phase — pipeline/todo.md § TREE-28 (needs: TREE-27)
+- [ ] TREE-28 The test pass for the phase — pipeline/todo.md § TREE-28
 
 # Phase 6 — The model is written at the nodes
 

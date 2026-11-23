@@ -86,8 +86,8 @@ clause takes, so allocating here would give the native form a binary per data ro
 nothing references. Each construct allocates its binaries in the pass that emits the
 rows reading them, in the global block. A MIN/MAX is a helper decision here and stage 06 emits its extremum link
 (`EmitExtremumLink`); an ABS is a record here and stage 06 emits its rows (`EmitAbsEnvelopes`, `EmitAbsConstraints`);
-`FindNotEqualConstraints` records only the **marking** — which clause this is and the text to
-call it in a diagnosis — and the clause index rides the tag.
+`RewriteNotEqual` records only the **account** (`AddRewriteAccount`): the clause's `source_clause_id` and the text
+to call it in a diagnosis.
 
 The choice is made **once** and rides the plan: `LogicalDecide` → `PhysicalDecide` →
 the solve → every diagnostic re-solve. Nothing downstream selects again — stage 08
@@ -217,9 +217,9 @@ relation unless that was `=`, whose bound is the tightest of both directions. No
 An `=` bound's checks are scope checks made before any rule runs: its NaN check, then its `=` check (two values in
 one group, `AddDisagreementCheck`): one check per `by` group, whose message names the group and points at the bound
 (R15), made before any rule can; the NaN check stands with it, so every path raises the same error of the two. Every
-other data bound's NaN check is a scope check too. A check copies the value it reads whole (`NanMessage`,
-`AddAbsValueCheck`): the tree reads a frame by its tag, a reducer by its node and a query-wide value by its entry of
-`computed_values` or its record. The `=` check speaks only
+other data bound's NaN check is a scope check too. A check copies the value it reads whole (`NanCheck`,
+`AddAbsValueCheck`): the tree reads a frame by its `frame` index, a reducer by its node and a query-wide value by its
+entry of `computed_values` or its record. The `=` check speaks only
 where each of the clause's reducers with a `when` of its own keeps a row of the group: a group with none holds no
 instance and constrains nothing, so
 its bound is not read (guide §7.4), as a frame's is not. A reducer over data whose argument reads a frame stays a reducer over the rows it
@@ -246,7 +246,7 @@ term splitter use them:
 | 3 | `RewriteNorm` | Lowers the NORM marker, including L0 indicator metadata, and clears the written order (`norm`) of desugared L1/L2/infinity norms. |
 | 4 | `RewriteInDomain` | Lowers bound DECIDE-variable IN markers to indicator metadata. |
 | 5 | `RewriteBilinear` | The one bilinear pass: retains Boolean products and records their expansions and product F-node specs. A product a later pass exposes is kept where it appears (8, 11), through the same entry. |
-| 6 | `RewriteMinMax` | Tags the easy identity of a MIN or MAX (`max(e) <= K`) and splits an equality on one, before any pass reads the clause's direction. |
+| 6 | `RewriteMinMax` | Marks the easy identity of a MIN or MAX (`max(e) <= K`) and splits an equality on one, before any pass reads the clause's direction. |
 | 7 | `DecideTreeConstruction::PrepareDefinitionFunctions` | Registers definition F-node specs and reserves scoped helper columns before the value rewrite consumes their reads. |
 | 8 | `RewriteScopedReducers` | The value rewrite: a VALUE-shape comparison's reducers, and every other MIN or MAX the easy identity left, become helper decisions. |
 | 9 | `RewriteNotEqual` | Creates `<>` indicators. |
@@ -510,7 +510,7 @@ clause and a frame bound alike (R15).
 The data of an ABS argument is checked where the ABS is read, before the envelope turns
 it into a bound on the auxiliary (`AddAbsValueCheck`): the sum of the argument's terms
 that hold no decision (`-v` in `ABS(x - v)`) must be finite on every row the ABS is read
-on. Each term is copied with its tags, so a frame among them is read at the row it selects, as a
+on. Each term is copied whole, so a frame among them is read at the row it selects, as a
 coefficient's is. A row where the sum is not finite raises the message every number the model reads raises
 (`DirectNumberMessage`, shared with the direct-solve plans): the first of its values that
 is NaN or infinite, as the user wrote it, or, when each is finite and their sum passes a
@@ -569,8 +569,8 @@ the bound its weight-1 twin needs.
 
 **Helpers a hard extremum boxes.** A MIN or MAX link that states its closing side is encoded with a Big-M over its
 members, which needs every member boxed. An auxiliary held by pressure alone has no box. So the members of such a link,
-and every helper those members read, transitively through value links, column references and definition-tagged
-bodies (`FindBoxedHelpers`), count as boxed, and an ABS in any of those bodies takes the exact encoding whatever pushes
+and every helper those members read, transitively through value links, column references and the bodies kept calls
+name (`FindBoxedHelpers`), count as boxed, and an ABS in any of those bodies takes the exact encoding whatever pushes
 the helper itself; the exact encoding is what boxes it. A MIN or MAX pushed its cheap way (`MINIMIZE max(abs(e))`)
 states the envelope side alone, which bounds every member, so the plain envelope stands.
 
@@ -738,7 +738,7 @@ defined over linear members (`sum(power(x, 2)) + gcap * s <= 30`). A SUM or AVG 
 native MIN/MAX: its rows are quadratic, which the model-class gate refuses on HiGHS. In the objective, a reducer
 nested under a MIN or MAX (`max(per g: sum(power(x - t, 2)) by (g))`), which the value rewrite then holds in a
 helper over the defined members; a SUM beside a MIN or MAX stays on the
-objective's own quadratic path. A clause `RewriteMinMax` tagged
+objective's own quadratic path. A clause `RewriteMinMax` marked
 easy (`max(power(x, 2)) <= 16`, `BoundDecideClause::minmax_easy`) is left alone: it bounds each member, which is one
 quadratic row per member with no helper.
 
@@ -849,8 +849,8 @@ in no G group. A square of a linear form takes the weight's root inside, so the 
 convex QP on both solvers); every other term takes the weight as a factor. Linear nests keep their helpers, which
 stage 06 writes in (D89).
 
-One helper per **reducer over one set of rows**: a second site holding the same reducer (`DecideExpressionsEqual`,
-which leaves out a reducer's `by` and `per`, as `Equals` does) with the same path key, the same key scope of its own
+One helper per **reducer over one set of rows**: a second site holding the same reducer (`Expression::Equals`)
+with the same path key, the same key scope of its own
 `per`, over the same rows and under the same `per` key of its clause reuses the first helper (`Helpers::Find`),
 whichever clause it is in and however it spells the reducer. The rows `RewriteAbs` derived from one clause
 each hold a copy of the reducer (`aux >= sum(e) by (g) - 40`, `aux >= 40 - sum(e) by (g)`),
@@ -860,7 +860,7 @@ thing twice. The definition belongs to no clause: it is the
 definition of an auxiliary, not a constraint any clause wrote, so it carries no
 source clause or removal group. A DROP of a clause that reads the helper leaves
 it, which is harmless, since an equality on a helper nothing else reads always holds, and
-DIAGNOSE reads it as part of the fixed model like every untagged structural row. Each
+DIAGNOSE reads it as part of the fixed model like every structural row. Each
 clause that reads the helper still accounts for it in its own plan, once.
 
 A helper records the way its readers push it (`DecideHelperDefinition::push`), which says which side pins it
@@ -960,8 +960,8 @@ one decision with no `when` and no reducer filter is then a column bound, which 
 and `max(e) >= K` is not. An equality splits as BETWEEN does: `max(e) = K` is the easy half per member, a copy of the
 comparison under the clause's `when` and `per K:` (`ScopeRowPerClause`), and the `>=` half, which stays in the clause
 for the helper. A factor whose sign is known only when the query runs gives the term no direction, so the clause takes
-the helper on both sides. The value rewrite skips a tagged clause; definition F-node preparation does too, since the
-easy half bounds each member in its own row.
+the helper on both sides. The value rewrite skips a `minmax_easy` clause; definition F-node preparation does too, since
+the easy half bounds each member in its own row.
 
 ### Auxiliary boxes — `AuxRange`
 
@@ -1146,7 +1146,7 @@ predicate.
 makes a decision signed, so every form of a bound reaches it. But a clause is one knob
 per kept row or class in an expanded diagnosis (D28), which one column bound cannot say.
 So the comparison of every recorded bound (not a BOOLEAN restatement, below) is also
-tagged `folded_clause_rows`, and the linear form lowers it into
+marked `folded_clause_rows`, and the linear form lowers it into
 its root, a folded one (`DecideNode::folded`), instead of skipping it, throwing an
 `InternalException` if their count differs from `user_singleton_row_bounds` (the repair model
 would open the column with nothing enforcing it). Stage 08 evaluates those under DIAGNOSE

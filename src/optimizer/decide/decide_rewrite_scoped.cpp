@@ -141,9 +141,8 @@ struct Helpers {
 
 	//! The link holding `agg` as a clause of class key `class_key` reads it over `rows`, grouped by `path_key` -- its
 	//! path's (language/guide.md §5.5) --, or INVALID_INDEX. A helper is a reducer's value over the rows its path
-	//! keeps, one per group of its path key, so what it stands for is the reducer (Expression::Equals, which
-	//! leaves out its `per`), the key scope of
-	//! its own `per`, that path key, the rows and the clause's `per` key. Clauses that agree on all five share one
+	//! keeps, one per group of its path key, so what it stands for is the reducer (Expression::Equals), the key scope
+	//! of its own `per`, that path key, the rows and the clause's `per` key. Clauses that agree on all five share one
 	//! helper, however they spell the reducer.
 	idx_t Find(const BoundDecideReducerExpression &agg, const Expression *rows, idx_t path_key, idx_t class_key) const {
 		for (idx_t i = 0; i < decide.helper_definitions.size(); i++) {

@@ -153,10 +153,6 @@ Four layers refuse a DECIDE query, each for what only it can see:
 **What this stage refuses.** Each of these needs the parsed tree, the declared types or the binding context:
 
 - a name that collides, a decision used where only data may stand, `D.x` (§1, §4a);
-- a decision's name, or a column a clause reads (a `per` or `within` key too), that contains a DECIDE tag or the
-  name prefix of a helper decision (`DecideNameContainsTag`, over the one list `DECIDE_TAGS` in `enums/decide.hpp`):
-  later stages find a tag by searching an expression's name, so such a name would be read as the tag. The refusal
-  names the identifier (*"'...' is not allowed as a name in DECIDE"*), in any letter case, as DuckDB's identifiers are;
 - a volatile function, below;
 - a user-written cast over a decision (`ValidateDecideNoExplicitDecisionCasts`): authorship is observable only on
   the parsed tree (`../04_canonicalizer/done.md` §3.6);
@@ -422,8 +418,7 @@ Binder Error for a query wrong in the language, Not implemented Error for a shap
 caret stands on it. A constraint that is no comparison is `'q' is not a comparison` for a bare decision or frame and
 `'q' is not supported` for any other shape. Every binder message that quotes a clause takes its text from
 `DecideWrittenSql`, which cuts the expression's span from `DecideSourceText` by its query location. A parsed node with
-no span (a statement built without the parser's text) is printed from a copy stripped of the binders' tags, since a call
-prints its arguments' aliases.
+no span (a statement built without the parser's text) is printed by its own `ToString()`.
 
 A comparison, `BETWEEN` or conjunction a constraint cannot use as a number is `'q' is a comparison used as a number`; a
 constraint that is none of the comparisons is `'q' is not supported` (Not implemented Error), at its node.
@@ -601,4 +596,4 @@ the select list is bound before any exists, so an auxiliary never appears in
 | Refusing a DECIDE that reads an outer query (`ThrowIfOuterColumn`; the `WHERE` backstop in `BindSelectNode`) | `src/planner/expression_binder/decide/decide_binder.cpp`, `src/planner/binder/query_node/bind_select_node.cpp` |
 | Which parts of a query a walk visits (`decide_clauses`) | `src/parser/parsed_expression_iterator.cpp` |
 | Key scope struct | `src/include/duckdb/planner/operator/decide/logical_decide.hpp` |
-| Scope enum and DECIDE tags | `src/include/duckdb/common/enums/decide.hpp` |
+| Scope enum and helper name prefixes | `src/include/duckdb/common/enums/decide.hpp` |

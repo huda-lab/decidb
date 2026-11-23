@@ -467,7 +467,7 @@ writes it after every other lowered clause (its repair group numbered after them
 repair model loosens it one kept row or class at a time (D28) while the solved model
 keeps the box alone. Those clauses are the repair model's only rows for a folded bound.
 A bound against a data column (`x <= cap`, `cap * x <= 10`, an easy `max(cap * x) <= 10`)
-is not tagged: it flattens to a per-row spec that carries the classifier's admitted range
+is not `folded_bound`: it flattens to a per-row spec that carries the classifier's admitted range
 (`DecideConstraint::admitted_lower` / `admitted_upper`, stage 05). The ends read the clause
 as `a * x <comparison> r` through two inputs, `admitted_a` and `admitted_r`, which both ends
 read many times: the tree computes the inputs once, as programs on the clause's entries the

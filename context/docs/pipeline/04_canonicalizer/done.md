@@ -162,7 +162,7 @@ a rendering job rather than a re-plumbing job.
 | **C4** | Both additive spines contain only `+`, binary `-`, unary `-`, and binder-generated casts over decision algebra. Data casts are atoms. A factor known before the query runs distributes over an additive child (`2 * (min(x) - 1)` is `2 * min(x) - 2 * 1`), as a negation does; a row-varying factor or a subquery over a sum stays one atom. Like decision terms under such factors merge into one, over products as over atoms (`x + x` is `2 * x`, `2 * min(x) + min(x)` is `3 * min(x)`, `x*x + x*x` is `2 * POWER(x, 2)`); a group whose factors cancel is left as written. A `MIN` or `MAX` term hands its constant addends to the side (§3.3); otherwise the pass never opens an atom or distributes a cast. |
 | **C5** | Every comparison takes one shape of §3.10: per-row (no decision reducer), aggregate (decision reducers sharing one `by` key, beside query-wide terms only) or value (any other side with a decision reducer, which the value rewrite turns per-row). A shape §3.10 refuses is rejected here. |
 | **C6** | A factor attached to a decision-bearing reducer has one canonical representation, outside the reducer. In the objective it is one value for the whole query; in a constraint it may vary by row, which makes the comparison VALUE. A decision is never a factor. |
-| **C7** | A node's facts and tags and source provenance survive rebuilding. The result is a fixed point: `Canon(Canon(c)) == Canon(c)`. |
+| **C7** | A node's facts and source provenance survive rebuilding. The result is a fixed point: `Canon(Canon(c)) == Canon(c)`. |
 | **C8** | Every product of decisions, in every reducer body and per-row side, is written in the one spelling of §3.3b: a coefficient on the left times decision-bearing factors raised to whole powers. |
 
 This is a **structural** canonical form, not algebraic simplification. It never multiplies out a power or a product
@@ -241,7 +241,7 @@ additive pass below reads one spelling. The rule:
 - writes a whole exponent as its number, so a folded exponent (`CAST(2 AS INTEGER)`) and a written `2` are one
   spelling;
 - gives a rebuilt node its own name (a decision's column name), or the replaced node's name when it has none, and
-  every tag the replaced node carried, so the canonical layer of `EXPLAIN` prints `x` for `POWER(x, 1)`.
+  a rebuilt call the replaced call's `definition`, so the canonical layer of `EXPLAIN` prints `x` for `POWER(x, 1)`.
 
 Like terms merge along a clause's additive spine (§3.7). Inside one reducer body they do not: `SUM(x + x)` stays two
 terms, which stage 05's term reader adds into one coefficient, so the model is the same.
@@ -463,7 +463,7 @@ per-site pattern §3.6 exists to remove. The known limit is magnitude: composing
 factors near the double range can overflow to `inf` or underflow to `0` where
 sequential application would not. DeciDB does not special-case this.
 
-### 3.8 Source provenance and tags
+### 3.8 Source provenance
 
 Canonical and source form are different concerns. The canonical tree serves
 execution; diagnostics must still know what the user wrote. Preserved:
@@ -471,7 +471,7 @@ execution; diagnostics must still know what the user wrote. Preserved:
 - the original clause identity and spelling;
 - whether a value came from an uncorrelated or correlated scalar subquery;
 - whether a rebuilt RHS is wholly query-wide or contains row-varying data;
-- a frame's and a function's tags (a frame's index, an ABS's helper);
+- a frame's index (`frame`) and the helper definition a kept call names (`definition`);
 - `when`, `per` and `by` ownership, and a reducer's own key.
 
 Provenance is **side-agnostic**: `x <= (SELECT 5)` and `(SELECT 5) >= x` are the
@@ -479,13 +479,11 @@ same shared cap after canonicalization and must produce the same actionable
 diagnosis. Internal names such as `SUBQUERY` never appear in suggested SQL.
 
 A reducer's facts are fields of its node and a clause's are fields of its record, so a rebuild copies them with the
-node (`CopyFacts`) or the record. The tags that remain (a function's) live in the same `alias` field a plain
-user alias would occupy. `GetName()` strips them (`StripDecideTags`, `base_expression.cpp`), and a call's or a
-reducer's `ToString()` prints the name it was written under (`written_name`, §3.3c). `StripDecideTags` removes every
-trailing `__…__` run, so a user alias that ends in one loses it there; a result column takes its
-name from the alias itself, so only a DECIDE message naming such an expression could show
-it. `UserFacingName` (this file) names an expression the way the user wrote it for an error message when no source
-text is at hand: it strips the tags before falling back to `ToString()`, and prints a norm's definition as
+node (`CopyFacts`) or the record; a frame's index and a call's definition are fields copied with their node. The
+`alias` holds only a name. `GetName()` is DuckDB's (the alias, else `ToString()`), and a call's or a
+reducer's `ToString()` prints the name it was written under (`written_name`, §3.3c). `UserFacingName` (this file)
+names an expression the way the user wrote it for an error message when no source
+text is at hand: it falls back to `GetName()`, and prints a norm's definition as
 `NORM(e, p)`. This matters on a re-entry path: a constraint the optimizer rewrote returns through `AddClause` and is
 re-canonicalized, so a shape-violation error raised on that second pass quotes what the user typed.
 
@@ -512,7 +510,7 @@ reason objectives get a boundary instead of their own normalizer.
 | **O2** | A decision-free additive term whose value is known before the query runs is folded into `objective_constant_offset`. It shifts the objective without moving `argmax`/`argmin`. Any other (a column, a data reducer, a subquery) stays a term: it is one value over the kept rows, which the model adds once, and one that differs between kept rows is a second objective (D72), which execution refuses. | — |
 | **O3** | The spine contains only `+`, binary `-`, unary `-`, and binder casts over decision algebra. Data casts are atoms. | C4, verbatim |
 | **O4** | A factor on a decision-bearing reducer is one query-wide value, sits outside the reducer, and has one spelling (in a constraint it may vary by row, which makes the comparison VALUE, §3.10). | C6, same `PeelScale` |
-| **O5** | A node's facts and tags survive rebuilding. The result is a fixed point. | C7 |
+| **O5** | A node's facts survive rebuilding. The result is a fixed point. | C7 |
 | **O6** | The result is a minimization. A `MAXIMIZE` objective is canonicalized as written, then, as the last step, every term's sign and the constant offset are negated (CVXPY's `FlipObjective`): `MAXIMIZE f` is `MINIMIZE -f`, the sign carried by each term, never by a factor. | — |
 
 **One sense.** Every stage after this one reads a minimization and the terms' signs.
@@ -783,11 +781,9 @@ anchor is the data's to say: stage 08 reads it per instance (D84, D88). `SkipNul
 tests a frame inside a reducer over decisions whole (`marker IS NOT NULL`), as it tests a
 column: the frame reads another row, or nothing, so no column of the row itself says whether
 it has a value (D84), and the member goes where it reads nothing (D87); stage 05 makes the
-test a column. A marker names its frame by its `frame` field alone, which `Expression::Equals`
-ignores, so every DECIDE comparison of trees that may hold a frame -- the NULL tests
-`SkipNullData` collects, a filter like terms share, a helper's reducer and rows -- reads
-`DecideExpressionsEqual` (`decide_reducer_path.hpp`), which holds two markers the same only
-when they name one frame: `at(previous: x)` and `at(next: x)` are two values. It tests a
+test a column. A marker names its frame by its `frame` field, which
+`BoundDecideFrameExpression::Equals` compares, so `Expression::Equals` holds two markers the same only
+when they name one frame: `at(previous: x)` and `at(next: x)` are two values. `SkipNullData` tests a
 reducer over data alone inside one over decisions whole as well (`avg(t.v) by (t.h) IS NOT
 NULL`): it has no value where its path group has none, and the member goes; stage 05 makes it,
 and the test, a column (`RewriteRhsAggregates`). A nested reducer over decisions is not
@@ -869,7 +865,7 @@ or debug-only:
 - **The binder.** A comparison with no decision on either side never reaches the orientation pass (the constraints
   binder refuses it first); without that, the pass would swap it forever. The shape check admits only functions
   whose NULL handling is the default, so the special-NULL guard is a precondition.
-- **Typed reads.** Tag parsing, `ReadProduct`'s coefficient of a one-factor product, and `SourceClauseOf` throw an
+- **Typed reads.** `ReadProduct`'s coefficient of a one-factor product and `SourceClauseOf` throw an
   `InternalException` naming the stage that broke its promise.
 - **Source text.** A `BETWEEN` whose location a macro expansion replaced has no span, so `LinkBetweenHalves` reads its
   sides off its two halves (the macro `BETWEEN` test reaches it).

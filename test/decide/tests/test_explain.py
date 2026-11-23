@@ -695,6 +695,22 @@ def test_a_parenthesized_and_is_one_constraint_per_comparison(decidb_cli):
 
 
 @pytest.mark.explain
+def test_a_physical_plan_prints_a_frame_column_and_a_child_result_as_written(decidb_cli):
+    """A physical plan's clause reads a frame over data and a reducer over data as columns the tree computes
+    (RenderSource's BOUND_REF past the source's columns): each prints as written, with no quotes around it, where a
+    source column that needs quoting keeps its quotes."""
+    out = _explain(
+        decidb_cli,
+        'SELECT t, x FROM (VALUES (1, 5.0), (2, 3.0), (3, 4.0)) s(t, "my v") DECIDE x(REAL) '
+        'SUCH THAT x <= 10 AND x >= 0 AND x - at(previous else 0: x) over (t) <= at(previous else 1: "my v") over (t) '
+        'AND sum(x) <= sum("my v") MAXIMIZE sum(x * "my v")',
+    )
+    packed = _packed(out)
+    assert 'x-at(previouselse0:x)over(t)<=at(previouselse1:"myv")over(t)sum(x)<=sum("myv")' in packed, _plan_text(out)
+    assert "PhysicalPlan" in packed and '"at(' not in packed and '"sum(' not in packed, _plan_text(out)
+
+
+@pytest.mark.explain
 def test_helper_rows_print_in_the_order_their_helpers_are_made(decidb_cli):
     """One loop reads the helper table (R30): under one clause, the indicator's three rows come before the rows of
     the ABS its tolerance row reads, which is made later; a product's helper states no row of its own."""
