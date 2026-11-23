@@ -788,7 +788,7 @@ static string RenderFunctionRow(const DecideConstraint &row, const vector<unique
 	auto ctx = plan_ctx;
 	ctx.rewrite_row = true;
 	string result;
-	for (auto &term : row.lhs_terms) {
+	for (auto &term : row.terms) {
 		// A frame prints as its selector, `else` included: its READ term, whose coefficient is an indicator column,
 		// prints as the selector, and the term that carries its `else` (no decision, a frame column) prints nothing.
 		string text;

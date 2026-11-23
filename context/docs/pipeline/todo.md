@@ -61,17 +61,6 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   read; 1 moves the same state behind more plumbing and 2 pays time for no reader's gain.
 - **Done when.** Model goldens identical; `./test/decide/run_tests.sh -k "bound or not_equal or diagnose"`.
 
-## MODEL-21 — A clause's and the objective's terms are extracted by one function
-
-- **Problem.** `decide_linear_form.cpp` reads a clause and the objective through parallel functions that each fill a
-  list of terms and a list of product groups: `ExtractAggregateConstraintTerms` and
-  `ExtractAggregateObjectiveTerms` (`:749-781`, `:884-924`), `ExtractReducerConstraintTerms` and
-  `ExtractReducerObjectiveTerms`, `ExtractConstraintTerms` and `ExtractObjectiveBodyTerms`, with the same internal
-  error twice (`:785`, `:932`) and `ThrowOpaqueTerm` at four split sites.
-- **Change.** One extraction over a pair of terms and product groups, which a clause and the objective both hold.
-- **Done when.** `./test/decide/run_tests.sh -k "objective or scope or quadratic or avg"`;
-  `build/release/test/unittest "[decidb]"`; model goldens identical.
-
 ## MODEL-7 — Phase 6 gate and docs
 
 - **Change.** design.md § 4 and stages 05, 06 and 08 state the system as it is. `language/guide.md` states that an

@@ -408,11 +408,11 @@ EvaluatedClauseColumns InitializeEvaluatedConstraint(const DecideConstraint &con
 	evaluated.provenance.kind = constraint.kind;
 
 	// Initialize result storage
-	evaluated.row_coefficients.resize(constraint.lhs_terms.size());
+	evaluated.row_coefficients.resize(constraint.terms.size());
 
 	// Each term's decision, and the decisions the rows name, each once. Two terms on one decision, or a term a frame
 	// reads at another row, can name one column twice in a row.
-	for (auto &term : constraint.lhs_terms) {
+	for (auto &term : constraint.terms) {
 		const auto variable = term.variable_index;
 		evaluated.term_variables.push_back(variable);
 		if (variable == DConstants::INVALID_INDEX) {
@@ -620,7 +620,7 @@ void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<bool> &f
 
 void ScaleAvgTerms(const DecideConstraint &constraint, const vector<TermFilterState> &filters, idx_t num_rows,
                    EvaluatedClauseColumns &evaluated) {
-	for (idx_t term_idx = 0; term_idx < constraint.lhs_terms.size(); term_idx++) {
+	for (idx_t term_idx = 0; term_idx < constraint.terms.size(); term_idx++) {
 		if (filters[term_idx].avg_scale) {
 			ScaleAvgRows(evaluated.row_coefficients[term_idx], filters[term_idx].has_filter, filters[term_idx].mask,
 			             num_rows, evaluated.row_group_ids, evaluated.num_groups);

@@ -384,7 +384,12 @@ the kept rows is refused when the objective is read (`DecideObjectiveTwice`). An
 is refused (*"'x * y' multiplies decisions outside a reducer, which is not supported"*), since it has no once-only
 reading in the model. So is a term that is not itself a reducer but holds one (`sum(x) * max(x)`,
 `(sum(x) + 1) * max(x)`): no rewrite held its reducers in helper decisions, so they cannot be read as terms
-(`ExtractAggregateObjectiveTerms`). `RewriteBilinear` has already linearized a product with a `BOOL` decision by then.
+(`ExtractObjectiveTupleTerm`). `RewriteBilinear` has already linearized a product with a `BOOL` decision by then.
+
+A clause and the objective hold the same pair, their linear terms and their product groups (`DecideTermLists`), and
+one extraction fills it for both: `ExtractAtomTerms` over the canonical atoms, `ExtractReducerTerms` for a reducer,
+`ExtractBodyTerms` for a body. The objective's own rules are branches of it: a nest it reads in place, an AVG's `by`
+key, and the refusal of a product outside a reducer.
 
 ### Terms of degree 2 — product groups
 
@@ -452,7 +457,7 @@ FALLBACK column (`DecideBody::fallback`). What a signature reads of a reached `e
 ### Like-term collection
 
 After flattening, every list that becomes a **linear** solver row is grouped:
-constraint `lhs_terms`, the objective's `terms`, and each value link's terms and `else` terms. `2*ship + 3*ship`
+constraint `terms`, the objective's `terms`, and each value link's terms and `else` terms. `2*ship + 3*ship`
 becomes one term with coefficient `2 + 3`. A term contributes `sign * coefficient`, so a group merges as
 `sign_first * (coef_first ± coef_next ± ...)`, taking `-` exactly when a term's
 sign differs from the group's.

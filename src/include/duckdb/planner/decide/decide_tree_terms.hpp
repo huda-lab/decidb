@@ -252,8 +252,15 @@ struct BoundDecideClause {
 };
 
 //! One canonical comparison, flattened into terms.
-struct DecideConstraint {
-	vector<DecideTerm> lhs_terms;    // All additive terms from LHS
+//! The decision terms a clause's left side or the objective holds: the linear ones, and one group per product of
+//! degree 2. One extraction fills both (DecideTermLowering).
+struct DecideTermLists {
+	vector<DecideTerm> terms;
+	vector<DecideProductGroup> product_groups;
+};
+
+//! A clause: its left side's terms, a quadratic row when it holds a product group.
+struct DecideConstraint : DecideTermLists {
 	unique_ptr<Expression> rhs_expr; // RHS expression (may contain aggregates)
 	//! The bound is one value for the whole query (BoundDecideClause::query_wide_bound).
 	bool query_wide_bound = false;
@@ -300,23 +307,14 @@ struct DecideConstraint {
 	//! (DecideTermLowering::Clause).
 	bool avg_scales_bound = false;
 
-	//! The terms of degree 2, one group per product the left side holds: a constraint with any is a quadratic row.
-	vector<DecideProductGroup> product_groups;
-
 	DecideConstraint() = default;
 };
 
 //! The objective, flattened into terms: linear terms and product groups.
-struct DecideObjective {
-	vector<DecideTerm> terms;              // Linear objective terms
+//! The objective: its terms, the product groups summed into one Q. It reads only the rows its `when` keeps, and a
+//! term beside its reducers counts once, read on the first kept row.
+struct DecideObjective : DecideTermLists {
 	unique_ptr<Expression> when_condition; // the objective's `when` (nullptr = every row)
-	//! The objective reads only the rows its `when` keeps, and a term beside its reducers
-	//! counts once, read on the first kept row.
-
-	//! The objective's terms of degree 2 (DecideProductGroup), summed into one Q.
-	vector<DecideProductGroup> product_groups;
-
-	DecideObjective() = default;
 };
 
 //! A value a frame selector reads, which stage 08 computes as a column beside the input's:

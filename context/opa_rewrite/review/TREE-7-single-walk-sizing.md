@@ -63,7 +63,7 @@ cannot supply sigma (they hold coefficients, not reads, and cover the left side 
 
 | Product | Read by |
 |---|---|
-| `DecideConstraint` (`lhs_terms`, `product_groups`, bound, admitted ends) on `compiled.clause` | `compile.cpp:96-102,476-505`; emitter (13 sites, grep); `decide_solver_gate.cpp:76`; `decide_domain_check.cpp`; `decide_source_provenance.cpp:827` |
+| `DecideConstraint` (`terms`, `product_groups`, bound, admitted ends) on `compiled.clause` | `compile.cpp:96-102,476-505`; emitter (13 sites, grep); `decide_solver_gate.cpp:76`; `decide_domain_check.cpp`; `decide_source_provenance.cpp:827` |
 | `DecideObjective` on `compiled.objective` | `compile.cpp:104,508`; emitter `:1358` |
 | `DecideBody::members`, `fallback` | `compile.cpp:113-117,519-526`; emitter `:1547` |
 | `DecideTerm::child`, `qualifier_reducer` (`Stamp`) | `compile.cpp:73-81` (`Site`); emitter `:1443,1501` |

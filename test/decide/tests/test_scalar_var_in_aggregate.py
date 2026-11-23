@@ -8,7 +8,7 @@ objective path had accepted the same term for as long as it existed.
 
 Two things had to change, and they fail differently:
 
-  - ``ExtractAggregateConstraintTerms`` threw. That is a visible rejection.
+  - the clause's term extraction (``ExtractAtomTerms``) threw. That is a visible rejection.
   - the model builder's aggregate accumulator fans every term out over the group's
     rows, which for a one-column variable multiplies its coefficient by the row
     count. That is a **silent wrong answer**, so these tests pin the coefficient by

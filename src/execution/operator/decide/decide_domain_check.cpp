@@ -59,7 +59,7 @@ void PhysicalDecide::CheckDecisionDomains(const vector<LogicalDecide::UserBoundS
 			if (constraint->rhs_expr && !constraint->rhs_expr->IsFoldable()) {
 				return true;
 			}
-			for (auto &term : constraint->lhs_terms) {
+			for (auto &term : constraint->terms) {
 				if (reads_none(term)) {
 					return true;
 				}

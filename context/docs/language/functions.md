@@ -112,7 +112,7 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
 - **Linear objectives** become the `c` vector; a `when` in front zeroes other rows' coefficients, a reducer's own
   `when` zeroes only its term's. Additive constants accumulate on `LogicalDecide::objective_constant_offset`.
 - Code: `decide_objective_binder.cpp` (`BindObjective`); `AnalyzeObjective` and
-  `ExtractAggregateObjectiveTerms` (`decide_linear_form.cpp`).
+  `ExtractAtomTerms` (`decide_linear_form.cpp`).
 
 ## Reducers
 

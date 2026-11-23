@@ -24,7 +24,7 @@ namespace duckdb {
 
 //! A clause's parts a reducer may filter, whose filters are read in this order: its terms, its product groups.
 static idx_t Parts(const DecideConstraint &clause) {
-	return clause.lhs_terms.size() + clause.product_groups.size();
+	return clause.terms.size() + clause.product_groups.size();
 }
 
 DecideModelEmitter::DecideModelEmitter(const PhysicalDecide &op, ClientContext &context, const DecideTree &tree,
@@ -567,7 +567,7 @@ void DecideModelEmitter::DefinitionAbsence(idx_t root, idx_t variable) {
 	// definition's data expressions there: a cast or arithmetic error in a row the helper drops must stay dropped.
 	// Compute the full decision mask first, before reading its bound or coefficients.
 	vector<const DecideTerm *> dependencies;
-	for (auto &term : clause.lhs_terms) {
+	for (auto &term : clause.terms) {
 		dependencies.push_back(&term);
 	}
 	for (auto &group : clause.product_groups) {
@@ -615,7 +615,7 @@ void DecideModelEmitter::DefinitionAbsence(idx_t root, idx_t variable) {
 		});
 	};
 	null_rows(root, body.rhs);
-	for (idx_t t = 0; t < clause.lhs_terms.size(); t++) {
+	for (idx_t t = 0; t < clause.terms.size(); t++) {
 		null_rows(body.linear[t].node, body.linear[t].program);
 	}
 	for (auto &sites : body.groups) {
@@ -671,7 +671,7 @@ void DecideModelEmitter::Constraints() {
 	// bound stays in the box. A clause whose decisions have an instance at every row reads nothing here.
 	for (idx_t c = num_evaluated; c < roots.size() && !tree.diagnose; c++) {
 		auto &clause = *tree.nodes[roots[c]]->compiled.clause;
-		const DecideAbsentReads absent_reads(columns.Absence(), clause.lhs_terms);
+		const DecideAbsentReads absent_reads(columns.Absence(), clause.terms);
 		if (clause.lhs_is_aggregate || !absent_reads.Any()) {
 			continue;
 		}
@@ -790,7 +790,7 @@ EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
 	// Each term's coefficient and the bound, at the root's entries.
 	vector<bool> nulls(entries, false);
 	vector<vector<double>> coefficients;
-	for (idx_t t = 0; t < clause.lhs_terms.size(); t++) {
+	for (idx_t t = 0; t < clause.terms.size(); t++) {
 		auto &site = body.linear[t];
 		D_ASSERT(site.node == root);
 		coefficients.push_back(columns.Numbers(root, site.program, tested, &nulls));
@@ -815,7 +815,7 @@ EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
 	}
 	// A term reading a decision with no instance at the row has no value there (D84), nor has an auxiliary where what
 	// defines it has none (D88).
-	const DecideAbsentReads absent_reads(columns.Absence(), clause.lhs_terms);
+	const DecideAbsentReads absent_reads(columns.Absence(), clause.terms);
 	vector<bool> null_rows = std::move(definition_absent);
 	std::vector<bool> &nulled = null_rows;
 	const std::vector<bool> &null_entries = nulls;
@@ -855,7 +855,7 @@ EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
 	}
 	const auto terms = term_values.data();
 	const auto decisions = variables.data();
-	const auto instances_of_rows = InstancesOfRows(clause.lhs_terms);
+	const auto instances_of_rows = InstancesOfRows(clause.terms);
 	const auto term_instances = instances_of_rows.data();
 	const idx_t term_count = variables.size();
 	for (idx_t place = 0; place < kept; place++) {
@@ -903,7 +903,7 @@ void DecideModelEmitter::CheckDomain(idx_t root, const EvaluatedClauseColumns &e
 	    !clause.admitted_upper->IsFoldable()) {
 		return;
 	}
-	const auto var = clause.lhs_terms[0].variable_index;
+	const auto var = clause.terms[0].variable_index;
 	if (var >= tree.domains.size() || !tree.domains[var].checked ||
 	    clause.origin.source_clause_id >= op.display.constraint_sources.size()) {
 		return;
@@ -1243,7 +1243,7 @@ bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const vector<pair<idx_t, i
 	auto &node = *tree.nodes[root];
 	auto &body = node.compiled;
 	auto &clause = *body.clause;
-	auto &terms = clause.lhs_terms;
+	auto &terms = clause.terms;
 	bool has_local_filters = false;
 	bool unfiltered = false;
 	// A filter that keeps every kept row filters nothing.
@@ -1373,7 +1373,7 @@ EmittedClause DecideModelEmitter::Groups(idx_t root, bool counted) {
 	// A decision beside the reducers counts once in each group's row; an easy MIN's or MAX's rows are its members',
 	// whose terms stage 05 reads as written on each.
 	if (clause.lhs_is_aggregate) {
-		CountTupleTermsOncePerGroup(clause.lhs_terms, evaluated);
+		CountTupleTermsOncePerGroup(clause.terms, evaluated);
 	}
 	const auto bound_null = GroupBound(root, rows, null_rows, result);
 	if (clause.admitted_lower) {
@@ -1399,7 +1399,7 @@ EmittedClause DecideModelEmitter::Groups(idx_t root, bool counted) {
 	}
 	// The clause's rows, from its columns: one per group that holds a row.
 	result.sets = DecideClauseRowSets(evaluated, kept);
-	DecideWriteClauseRecords(evaluated, result.sets, result.rows, InstancesOfRows(clause.lhs_terms), Written(clause));
+	DecideWriteClauseRecords(evaluated, result.sets, result.rows, InstancesOfRows(clause.terms), Written(clause));
 	WriteMembersIn(evaluated);
 	Unplace(result.rows);
 	return result;
@@ -1527,7 +1527,7 @@ void DecideModelEmitter::Polynomial(idx_t root, const vector<pair<idx_t, idx_t>>
 		};
 		read_form(group.left, sites.left, out.left_variables, out.left_coefficients, out.left_instances);
 		read_form(group.right, sites.right, out.right_variables, out.right_coefficients, out.right_instances);
-		auto &filter = filters[clause.lhs_terms.size() + g];
+		auto &filter = filters[clause.terms.size() + g];
 		if (group.avg_scale) {
 			ScaleAvgRows(out.weight, filter.has_filter, filter.mask, placed, evaluated.row_group_ids,
 			             evaluated.num_groups);

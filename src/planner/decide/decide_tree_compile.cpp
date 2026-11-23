@@ -78,7 +78,7 @@ static void SiteGroups(const DecideTree &tree, idx_t holder, const vector<Decide
 
 static void SiteClause(const DecideTree &tree, idx_t holder, DecideBody &body) {
 	auto &clause = *body.clause;
-	for (auto &term : clause.lhs_terms) {
+	for (auto &term : clause.terms) {
 		body.linear.push_back(Site(tree, holder, term.child, term.qualifier_scope_idx, term.qualifier_reducer));
 	}
 	SiteGroups(tree, holder, clause.product_groups, body);
@@ -457,8 +457,8 @@ private:
 //! A clause root's programs: its terms, its bound and admitted ends, its products and squares.
 static void CompileClause(DecideProgramCompiler &compiler, idx_t root, DecideBody &body) {
 	auto &clause = *body.clause;
-	for (idx_t t = 0; t < clause.lhs_terms.size(); t++) {
-		compiler.AddTerm(clause.lhs_terms[t], body.linear[t], root);
+	for (idx_t t = 0; t < clause.terms.size(); t++) {
+		compiler.AddTerm(clause.terms[t], body.linear[t], root);
 	}
 	// A constant bound is a program too: it folds where it is executed.
 	const auto role = clause.tightest_frame_bound ? DecideProgramRole::TIGHTEST_BOUND : DecideProgramRole::BOUND;
@@ -641,7 +641,7 @@ static string Head(const DecideNode &node) {
 }
 
 static void ClauseLines(std::ostringstream &out, const DecideConstraint &clause, const DecideBody &body) {
-	Terms(out, clause.lhs_terms, body.linear, "  ", "term");
+	Terms(out, clause.terms, body.linear, "  ", "term");
 	Groups(out, clause.product_groups, body.groups);
 	out << "  bound rhs=" << Signed(body.rhs) << " lower=" << Signed(body.lower) << " upper=" << Signed(body.upper)
 	    << "\n";

@@ -104,7 +104,7 @@ supported; a signed variable needs a finite lower bound.
 | The one spelling of a square or product, and its degree | `NormalizeProducts`, `DecideDegreeOf` (`decide_product_form.cpp`) |
 | Degree guard and the other refusals of algebra | `DecideShapeCheck` (`decide_shape_check.cpp`) |
 | Term reading | `DecideTermSplitter::Split` (`decide_term_split.cpp`) |
-| Prepared product groups | `ExtractObjectiveBodyTerms`, `ExtractConstraintTerms`, `ReadProductGroup` (`decide_linear_form.cpp`) |
+| Prepared product groups | `ExtractBodyTerms`, `ReadProductGroup` (`decide_linear_form.cpp`) |
 | Product rewrite | `RewriteBilinear` (`decide_rewrite_bilinear.cpp`), once, before `RewriteMinMax`; a product a later pass exposes through `FindAndReplaceBilinear`; `BilinearLinkSpec`, `is_boolean_var` |
 | McCormick corners | `physical_decide.cpp` |
 | Q and quadratic constraints | `ilp_model_builder.cpp` (`AddProductGroupRow`, `BuildQuadraticConstraint`, `nonconvex_quadratic`) |

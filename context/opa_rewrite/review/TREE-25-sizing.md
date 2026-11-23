@@ -58,7 +58,7 @@ inspected one by one.
 
 1. Phase 6's rule is "a SUM or AVG passes its members up, a MIN or MAX allocates per group" (design.md § 4). That is a
    term produced at a node. ARCH-2 has two open choices on the contract with the model builder. A node-side
-   splitter built now would be shaped by today's records (`DecideConstraint::lhs_terms`), which Phase 6 replaces.
+   splitter built now would be shaped by today's records (`DecideConstraint::terms`), which Phase 6 replaces.
 2. What Phase 5 set out to remove is gone: the second lowering and every join by address. What is left is one
    analysis the rewrites share (the splitter) run on the clause, beside the walk that builds nodes. Two analyses of
    one structure is the compiler norm (a type checker and a code generator both walk the tree).

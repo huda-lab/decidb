@@ -17,8 +17,5 @@ the owner rules first.
 - [ ] MODEL-8 The helper of a link whose data may split its classes (decision) — pipeline/todo.md § MODEL-8
 - [ ] MODEL-24 The owner of a clause's emitted rows (decision) — pipeline/todo.md § MODEL-24
 
-## 6.5 Layering (one lane)
-- [ ] MODEL-21 One term extraction for a clause and the objective — pipeline/todo.md § MODEL-21
-
-## 6.6 Gate (one lane; needs: 6.5)
+## 6.6 Gate (one lane)
 - [ ] MODEL-7 Phase 6 gate and docs — pipeline/todo.md § MODEL-7
