@@ -683,6 +683,18 @@ def test_an_l0_link_prints_its_bound_and_tolerance_by_name(decidb_cli, norm, bou
 
 
 @pytest.mark.explain
+def test_a_parenthesized_and_is_one_constraint_per_comparison(decidb_cli):
+    """The binder reads the rows of a parenthesized AND, with a scope in front or without one: each comparison is a
+    constraint, and a scope stands on each of its clause's."""
+    out = _explain(
+        decidb_cli,
+        f"SELECT id, x {_L0_SOURCE} DECIDE x(REAL) SUCH THAT (x <= 5 AND x >= 1) "
+        "AND when id > 1: (x <= 3 AND x >= 2) AND sum(x) <= 7 MAXIMIZE sum(x)",
+    )
+    assert "Constraints:x<=5x>=1whenid>1:x<=3whenid>1:x>=2sum(x)<=7" in _packed(out), _plan_text(out)
+
+
+@pytest.mark.explain
 def test_helper_rows_print_in_the_order_their_helpers_are_made(decidb_cli):
     """One loop reads the helper table (R30): under one clause, the indicator's three rows come before the rows of
     the ABS its tolerance row reads, which is made later; a product's helper states no row of its own."""

@@ -59,14 +59,16 @@ every one of them:
   points the owner rules on before any code.
 - **Options.**
   1. *The NULL guard's home.* A field beside the coefficient does not hold: like-term collection merges two guarded
-     coefficients into one, and five readers have only the expression. (a) A typed home that is not a marker class
-     (the form to be proposed). (b) A decorator class around the guarded value.
+     coefficients into one, and five readers have only the expression. (a) No marker: the guard is stated as a
+     member test in the term's `when` (`c IS NOT NULL`), as a reducer's NULL test is. Terms with different tests
+     then stop merging, so the model's terms and its dumps change; it is not a like-for-like move. (b) A decorator
+     class around the guarded value, `BoundDecideNullGuardExpression`, as the member NULL test is one (R34).
   2. *The decline tests* (`test_decidb_direct_decline.cpp`, 22 cases, about 76 edits of the IR). (a) Edits move to
      the operator; the 41 that set a derived part are settled one at a time, and an arm no tree can reach is
      deleted with its case. (b) A way to hand a rule edited parts, kept for tests.
   3. *Three whole-query facts* (a frame present, a keyed scope with a signature, a non-finite objective offset).
      (a) Each in the reader that meets it. (b) A two-line whole-query test in the driver.
-- **Recommendation.** 1a, 2a, 3a.
+- **Recommendation.** 1b, 2a, 3a. 1b follows R34: the same carriers hold only the expression.
 - **Change.** R17: each rule reads the clauses and nodes; `DirectIR` and `DirectFrontEnd` go; `NULL_GUARD_TAG` and
   its two writers go.
 - **Needs.** TREE-20.
