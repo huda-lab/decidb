@@ -915,7 +915,7 @@ read and is cleared after it (`Unplace`), so no clause allocates by input length
 - **A per-row clause** (`Rows`) writes its records straight from the root's entries: one record per kept row, its
   terms, bound and admitted ends read from the entry's values, with no column between.
 - **An aggregate clause** (`Groups`) reads each term into a column over the kept rows (`EvaluatedClauseColumns`:
-  `row_coefficients`, `rhs_values`, the admitted ends, `row_group_ids`), then `DecideClauseRowSets` lists the places
+  `term_variables`, `row_coefficients`, `rhs_values`, the admitted ends, `row_group_ids`), then `DecideClauseRowSets` lists the places
   of each group by a counting sort and `DecideWriteClauseRecords` writes one record per group, turning places back
   into data rows. The same sets give an aggregate `<>` its excluded values and a quadratic clause the data rows of
   its products.
@@ -1216,7 +1216,7 @@ quadratic clause's product groups. `Groups` (the aggregate shape) and `Rows` (th
 clause goes among the repair model's rows (`evaluated_singleton_row_constraints`, under `DIAGNOSE` only). A
 `COMPARE_NOTEQUAL` goes to `SolverInput::not_equals`, a clause with product groups to `quadratics`, and any
 other to `constraints` (`../06_model_formulation/done.md` § 4). An ABS's envelope rows go to the ABS's record instead
-(`AbsEnvelope`, `evaluated_abs_links`).
+(`AbsEnvelope`, `SolverInput::abs_links`).
 
 The row starts from its clause: `InitializeEvaluatedConstraint` sets its `provenance` from the tree's constraint (the
 `origin` with the repair group execution numbers, and the `kind`), `DescribeBound` sets the `shape` and the `rhs_label`

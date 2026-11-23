@@ -289,11 +289,12 @@ struct ClauseRecords {
 };
 
 struct EvaluatedConstraint {
-	//! The decision of each term of the clause, INVALID_INDEX for a term that reads none; for a clause stage 08 wrote
-	//! a helper's members into, each decision its rows name, once.
+	//! The decisions the clause's rows name, each once: its terms', or their members' where stage 08 wrote a helper's
+	//! members into the clause.
 	vector<idx_t> variable_indices;
-	//! Whether a row may name one column in several terms: a term read a helper the plan writes where it is read, so
-	//! the row holds that helper's members, or a frame, through which several rows read one instance.
+	//! Whether a row may name one column in several terms: two terms read one decision, a term read a helper the plan
+	//! writes where it is read, so the row holds that helper's members, or a frame, through which several rows read
+	//! one instance.
 	bool repeats_columns = false;
 	//! The rows the clause emits.
 	ClauseRecords records;

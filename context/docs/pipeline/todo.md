@@ -45,22 +45,6 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   `build/release/test/unittest "[decidb]"`; the corpus query of `test/decide/golden/corpus.sql` line 717's
   neighbour (`per grp: sum(x) by (grp) <= budget / 10 * open`) has 6 columns and 3 rows.
 
-## MODEL-18 — A clause's working columns are apart from its result, and the emitter fills the solver input
-
-- **Problem.** `EvaluatedClauseColumns` inherits the stage 06 `EvaluatedConstraint` and is sliced in `Route`, which
-  still reads the working bound column for a `<>` (`decide_model_emitter.cpp:638-668`). An aggregate clause's rows
-  are dropped by about eight steps that each overwrite `row_group_ids` in an order stated only in comments
-  (`:1279-1330`). Fifteen fields of `DecideGlobalSinkState` mirror `SolverInput` and are moved one by one in
-  `BuildSolverInput` (`physical_decide.cpp:509-511`, `597-614`, `658-663`).
-  `EvaluatedConstraint::variable_indices` means each term's decision before a helper's members are written in and
-  the distinct decisions after, with `repeats_columns` to tell them apart; `emitted_rows` is a cache stage 06
-  keeps inside the record it is handed.
-- **Change.** A builder owns a clause's working columns and returns a plain `EvaluatedConstraint` (GoF Builder). Each
-  rule that drops an instance contributes a named mask, combined once. The emitter writes into the `SolverInput` the
-  sink state owns. A record states the decisions its rows name, once; stage 06 holds its own cache of emitted rows.
-- **Done when.** Model goldens identical; `./test/decide/run_tests.sh -k "scope or when or per or not_equal or absent
-  or null or diagnose"`; `build/release/test/unittest "[decidb]"`.
-
 ## MODEL-19 — Stage 06 has one driver, and the AVG under `<>` is the optimizer's choice
 
 - **Problem.** `PhysicalDecide::BuildSolverInput` runs stage 06 passes in an order that matters
@@ -68,9 +52,11 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   `FloorBilinearAuxiliaries`, `DeriveReducerValueBounds`, `DecidePropagateImpliedBounds`), and `FormulateModel` runs
   `DeriveReducerValueBounds` again: a construct is wired into two files of two layers.
   `HoistAvgIntoNotEqualBound` (`decide_value_extraction.cpp`) chooses how an AVG under `<>` is encoded at run time
-  from plan facts alone (R42).
+  from plan facts alone (R42). `EvaluatedConstraint::emitted_rows` is a `mutable` cache stage 06 keeps inside the
+  record it is handed.
 - **Change.** One entry point in `src/decidb/formulation` for what needs no box, called before `FormulateModel`;
-  `PhysicalDecide` calls the pair. The optimizer stamps the AVG encoding on the clause.
+  `PhysicalDecide` calls the pair. The optimizer stamps the AVG encoding on the clause. Stage 06 holds its own cache
+  of emitted rows.
 - **Done when.** `./test/decide/run_tests.sh -k "bound or floor or abs or not_equal or avg or diagnose"`;
   `build/release/test/unittest "[decidb]"`; model goldens identical.
 

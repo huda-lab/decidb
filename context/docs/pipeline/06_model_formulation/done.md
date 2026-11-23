@@ -224,9 +224,9 @@ Both ask of a row only its bound and its terms. Whether a `<>` or a quadratic ro
 ### Emitted rows
 
 `ClauseEmittedRows` builds a clause's rows once and keeps them on the clause, for every
-path below. `TermsHaveTheirOwnColumns()` inspects `variable_indices` once and returns true
-only when (a) every term references a **row-scoped** decide variable and (b) no decide
-variable appears in more than one term. Then each `(term, row)` pair has a column of its
+path below. `TermsHaveTheirOwnColumns()` returns true
+only when (a) every decision the rows name (`variable_indices`, each once) is **row-scoped** and (b) no row names a
+column twice (`repeats_columns`). Then each `(term, row)` pair has a column of its
 own, so coefficients are copied straight.
 
 Anything else — keyed or query-wide variables, or a repeated decide variable — sums each
@@ -816,7 +816,9 @@ nothing:
 - **The links** (`reducer_value_links`) hold the groups that keep a column, and each gets its definition.
 - **A clause's records** name the members' decisions where a term read a written-in instance, the members' constants
   in the record's constant. `EvaluatedConstraint::repeats_columns` says a row may then name one column in several
-  terms, so the builder sums its terms per column, and `variable_indices` lists the decisions the rows name.
+  terms, so the builder sums its terms per column. `variable_indices` lists the decisions the rows name, each once,
+  for every clause; the decision of each term slot is the emitter's own working column
+  (`EvaluatedClauseColumns::term_variables`) and stays behind when the record is taken (`Take`).
 - **The objective's terms on such a helper** are summed into its members' instances by stage 08
   (`SolverInput::objective_coefficients`, §3); the constants they carry are in `objective_constant`.
 - **The column layout** gives a written-in instance no column (`SolverInput::written_in`, §1).

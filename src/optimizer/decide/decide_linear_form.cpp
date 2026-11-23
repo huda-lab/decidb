@@ -492,8 +492,7 @@ private:
 	//!   `qualifier_reducer` distinguishes occurrences that reuse that scope.
 	//!
 	//! Constants (`INVALID_INDEX`) are deliberately left alone: they are a fixed
-	//! offset folded into the RHS, not a repeated column, and they are not what any
-	//! consumer iterating `variable_indices` can trip over.
+	//! offset folded into the RHS, not a repeated column.
 	static bool TermsAreLike(const DecideTerm &a, const DecideTerm &b) {
 		if (a.variable_index == DConstants::INVALID_INDEX) {
 			return false;

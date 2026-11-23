@@ -121,12 +121,8 @@ SignedRowRange decide_linearize::DecideRowSignedRange(const EvaluatedConstraint 
 //! (`DecideRowSignedRange`) reports an infinity rather than a culprit.
 idx_t decide_linearize::FindUnboundedContributor(const EvaluatedConstraint &ec, const vector<double> &lower_bounds,
                                                  const vector<double> &upper_bounds, idx_t skipped) {
-	for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
-		idx_t v = ec.variable_indices[t];
-		if (v == DConstants::INVALID_INDEX || v == skipped) {
-			continue;
-		}
-		if (DecideIsOpenAbove(upper_bounds[v]) || DecideIsOpenBelow(lower_bounds[v])) {
+	for (auto v : ec.variable_indices) {
+		if (v != skipped && (DecideIsOpenAbove(upper_bounds[v]) || DecideIsOpenBelow(lower_bounds[v]))) {
 			return v;
 		}
 	}
@@ -181,19 +177,11 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer)
 		// constraint over one variable drops nothing, so its sign does not matter there:
 		// `x <= cap` bounds a signed `x` as well, by a bound that may itself be negative.
 		// An aggregate one (`SUM(x) = -3`) sums every row's instance, so it does not.
-		idx_t only_variable = DConstants::INVALID_INDEX;
-		bool single_variable = !ec.lhs_is_aggregate;
-		for (idx_t v : ec.variable_indices) {
-			if (v == DConstants::INVALID_INDEX) {
-				continue;
-			}
-			single_variable =
-			    single_variable && only_variable == DConstants::INVALID_INDEX; // equal terms of one decision are merged
-			only_variable = v;
-		}
+		// One whose row can name a column twice (EvaluatedConstraint::repeats_columns) holds several terms.
+		const bool single_variable = !ec.lhs_is_aggregate && !ec.repeats_columns && ec.variable_indices.size() <= 1;
 		bool nonneg = true;
 		for (idx_t v : ec.variable_indices) {
-			if (!single_variable && v != DConstants::INVALID_INDEX && lower_bounds[v] < 0.0) {
+			if (!single_variable && lower_bounds[v] < 0.0) {
 				nonneg = false;
 				break;
 			}
@@ -238,16 +226,6 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer)
 		// the bound stays at its start: harmless, there is no instance of x to bind.
 		for (idx_t t = 0; nonneg && t < ec.variable_indices.size(); t++) {
 			idx_t v = ec.variable_indices[t];
-			if (v == DConstants::INVALID_INDEX) {
-				continue;
-			}
-			bool already_handled = false;
-			for (idx_t prev = 0; prev < t; prev++) {
-				already_handled = already_handled || ec.variable_indices[prev] == v;
-			}
-			if (already_handled) {
-				continue;
-			}
 			double bound = single_variable ? -std::numeric_limits<double>::infinity() : 0.0;
 			bool every_instance_bounded = true;
 			const idx_t instances = indexer.NumInstances(v);

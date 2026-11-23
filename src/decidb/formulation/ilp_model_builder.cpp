@@ -231,24 +231,13 @@ VarIndexer VarIndexer::Build(SolverInput &input) {
 	return idx;
 }
 
-//! Whether each decision term of `ec` has solver columns of its own: every term names a different decision, each
-//! is row-scoped, and none repeats a column (EvaluatedConstraint::repeats_columns). Then no two (term, data row) pairs
-//! share a column, and a row's terms are read without summing them.
+//! Whether each decision term of `ec` has solver columns of its own: no row repeats a column
+//! (EvaluatedConstraint::repeats_columns) and each decision is row-scoped. Then no two (term, data row) pairs share a
+//! column, and a row's terms are read without summing them.
 static bool TermsHaveTheirOwnColumns(const EvaluatedConstraint &ec, const VarIndexer &indexer) {
-	if (ec.repeats_columns) {
-		return false;
-	}
-	std::unordered_set<idx_t> seen_vars;
-	for (idx_t v : ec.variable_indices) {
-		if (v == DConstants::INVALID_INDEX) {
-			continue;
-		}
-		// Keyed and query-wide decisions both put many rows on one column.
-		if (indexer.var_scope[v] != DecideVarScope::ROW || !seen_vars.insert(v).second) {
-			return false;
-		}
-	}
-	return true;
+	// Keyed and query-wide decisions both put many rows on one column.
+	return !ec.repeats_columns && std::all_of(ec.variable_indices.begin(), ec.variable_indices.end(),
+	                                          [&](idx_t v) { return indexer.var_scope[v] == DecideVarScope::ROW; });
 }
 
 const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const VarIndexer &indexer,

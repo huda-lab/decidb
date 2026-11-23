@@ -16,13 +16,10 @@ the owner rules first.
 - [ ] MODEL-6 One reading of a reducer body (decision) — pipeline/todo.md § MODEL-6
 - [ ] MODEL-8 The helper of a link whose data may split its classes (decision) — pipeline/todo.md § MODEL-8
 
-## 6.4 The emitter's structure (one lane)
-- [ ] MODEL-18 Working columns apart from the result; emitter fills the solver input — pipeline/todo.md § MODEL-18
-
 ## 6.5 Layering (one lane)
 - [ ] MODEL-19 Stage 06 has one driver; the AVG under `<>` is the optimizer's — pipeline/todo.md § MODEL-19
 - [ ] MODEL-20 The helper-form rule names the readers that take members — pipeline/todo.md § MODEL-20
 - [ ] MODEL-21 One term extraction for a clause and the objective — pipeline/todo.md § MODEL-21
 
-## 6.6 Gate (one lane; needs: 6.4, 6.5)
+## 6.6 Gate (one lane; needs: 6.5)
 - [ ] MODEL-7 Phase 6 gate and docs — pipeline/todo.md § MODEL-7

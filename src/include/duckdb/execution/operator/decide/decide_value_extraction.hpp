@@ -174,8 +174,14 @@ void CountTupleTermsOnce(const vector<DecideTerm> &terms, vector<CoefficientColu
 //! (DecideWriteClauseRecords): each term's coefficient and the bound on every kept row, and each one's group. A row is
 //! numbered by its place among the kept rows, in the input's order, so no column is as long as the input.
 struct EvaluatedClauseColumns : EvaluatedConstraint {
-	vector<CoefficientColumn> row_coefficients; // [term_idx] = coefficient column for that term
-	CoefficientColumn rhs_values;               // RHS column (logical size = the kept rows)
+	//! The record stage 06 reads, once its rows are written: the working columns stay behind.
+	EvaluatedConstraint Take() {
+		return std::move(static_cast<EvaluatedConstraint &>(*this));
+	}
+	//! Per term, its decision (INVALID_INDEX for a term that reads none) and its coefficient column.
+	vector<idx_t> term_variables;
+	vector<CoefficientColumn> row_coefficients;
+	CoefficientColumn rhs_values; // RHS column (logical size = the kept rows)
 	//! A per-row bound on one decision: the values it admits on each row (ClauseRecords::admitted_lower). Logical
 	//! size 0 for any other constraint.
 	CoefficientColumn admitted_lower;

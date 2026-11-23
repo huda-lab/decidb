@@ -365,9 +365,9 @@ void DecideWriteClauseRecords(EvaluatedClauseColumns &evaluated, const ClauseRow
 	for (idx_t e = 0; e < count; e++) {
 		const idx_t begin = sets.begin[e];
 		const idx_t end = sets.begin[e + 1];
-		for (idx_t t = 0; t < evaluated.variable_indices.size(); t++) {
+		for (idx_t t = 0; t < evaluated.term_variables.size(); t++) {
 			auto &column = evaluated.row_coefficients[t];
-			const idx_t variable = evaluated.variable_indices[t];
+			const idx_t variable = evaluated.term_variables[t];
 			for (idx_t k = begin; k < end; k++) {
 				const double coefficient = column.Get(sets.rows[k]);
 				if (variable == DConstants::INVALID_INDEX) {
@@ -410,9 +410,20 @@ EvaluatedClauseColumns InitializeEvaluatedConstraint(const DecideConstraint &con
 	// Initialize result storage
 	evaluated.row_coefficients.resize(constraint.lhs_terms.size());
 
-	// Store variable indices for all terms (before scanning data).
+	// Each term's decision, and the decisions the rows name, each once. Two terms on one decision, or a term a frame
+	// reads at another row, can name one column twice in a row.
 	for (auto &term : constraint.lhs_terms) {
-		evaluated.variable_indices.push_back(term.variable_index);
+		const auto variable = term.variable_index;
+		evaluated.term_variables.push_back(variable);
+		if (variable == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		auto &named = evaluated.variable_indices;
+		if (std::find(named.begin(), named.end(), variable) == named.end()) {
+			named.push_back(variable);
+		} else {
+			evaluated.repeats_columns = true;
+		}
 		evaluated.repeats_columns = evaluated.repeats_columns || term.frame_read != DConstants::INVALID_INDEX;
 	}
 	return evaluated;

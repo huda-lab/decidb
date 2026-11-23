@@ -703,7 +703,7 @@ DecideClauseRef DecideModelEmitter::Written(const DecideConstraint &clause) cons
 
 void DecideModelEmitter::Route(EmittedClause &&clause, bool folded) {
 	auto &sets = clause.sets;
-	EvaluatedConstraint &row = clause.row;
+	EvaluatedConstraint row = clause.row.Take();
 	if (folded) {
 		gstate.evaluated_singleton_row_constraints.push_back(std::move(row));
 	} else if (row.comparison_type == ExpressionType::COMPARE_NOTEQUAL) {
@@ -842,7 +842,7 @@ EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
 	// NULL tests drop reads nothing: a row standing on one holds no term and a bound of 0.
 	auto &records = evaluated.records;
 	const auto written = Written(clause);
-	const auto &variables = evaluated.variable_indices;
+	const auto &variables = evaluated.term_variables;
 	const bool admits = evaluated.admitted_lower.logical_size != 0;
 	// Read through raw pointers: the loop runs once per kept row, and each index is a place or an entry of the lists
 	// it walks.
@@ -1994,8 +1994,7 @@ void DecideModelEmitter::WriteMembersIn(EvaluatedConstraint &clause) const {
 	}
 	// Its decisions are those its rows name: a helper written in gives way to its members'.
 	clause.repeats_columns = true;
-	vector<bool> named(tree.variable_scopes.size(), false);
-	std::vector<bool> &seen = named;
+	vector<bool> seen(tree.variable_scopes.size(), false);
 	clause.variable_indices.clear();
 	for (auto variable : records.variables) {
 		if (!seen[variable]) {
