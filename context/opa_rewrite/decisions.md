@@ -53,6 +53,11 @@ recommendation; nobody settles one silently. Rulings about a single task live wi
 | R39 | The NULL guard is a decorator class around the guarded value, as the member NULL test is (R34); `NULL_GUARD_TAG` goes (2026-11-23) |
 | R40 | The direct rules' decline tests edit the operator. An arm no tree can reach is deleted with its case (2026-11-23) |
 | R41 | A whole-query fact a direct rule declines on (a frame, a keyed scope with a signature, a non-finite objective offset) is read by the reader that meets it; the driver holds no gate (2026-11-23) |
+| R42 | The optimizer chooses the logical form of every lowering and stamps it on the plan; execution repeats that form once per group and decides nothing; `FormulateModel` supplies what needs the box (2026-11-23) |
+| R43 | Whether a SUM or AVG helper is a variable or is written into its readers is a rule over the plan, set by the optimizer on the helper's definition: written in when every reader takes a linear expression and it is in a nest of sums or each instance has one reading row by construction. The nonzero count of language D89 goes (2026-11-23) |
+| R44 | A MIN or MAX group of one member is that member: a fixed part of the form, tested at the node from the group's member count, the one data fact execution tests (2026-11-23) |
+| R45 | Helpers stay declared at planning. A node allocates no variable, and helper names in `EXPLAIN` and `DIAGNOSE` do not change (2026-11-23) |
+| R46 | R37 settled: terms are split from the finished nodes in Phase 6, prototype first. If the prototype leaves the shared splitter worse, the evidence goes to the owner (2026-11-23) |
 
 ## Open decisions
 

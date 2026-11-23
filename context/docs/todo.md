@@ -12,8 +12,20 @@ the owner rules first.
 
 # Phase 6 — The model is written at the nodes
 
-## 6.1 Design (one lane)
-- [ ] ARCH-2 Design Phase 6 and file its tasks (decision) — pipeline/todo.md § ARCH-2
+## 6.1 The helper's form is the optimizer's (one lane)
+- [ ] MODEL-1 The optimizer sets each reducer helper's form — pipeline/todo.md § MODEL-1
+- [ ] MODEL-2 A G hands its members to its reader — pipeline/todo.md § MODEL-2 (needs: MODEL-1)
+
+## 6.2 A record per group (one lane; needs: 6.1)
+- [ ] MODEL-3 Stage 06 reads a clause through its emitted rows — pipeline/todo.md § MODEL-3
+- [ ] MODEL-4 An aggregate root writes a record per group — pipeline/todo.md § MODEL-4 (needs: MODEL-3)
+- [ ] MODEL-5 A per-row root writes a record per kept row — pipeline/todo.md § MODEL-5 (needs: MODEL-4)
+
+## 6.3 One reading of a reducer body (one lane; needs: 6.2)
+- [ ] MODEL-6 Terms are split from the finished nodes — pipeline/todo.md § MODEL-6
+
+## 6.4 Gate (one lane; needs: 6.3)
+- [ ] MODEL-7 Phase 6 gate and docs — pipeline/todo.md § MODEL-7
 
 # Measurements (outside the phases; confirm each start with the owner)
 

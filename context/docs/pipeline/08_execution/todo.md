@@ -8,10 +8,9 @@ these todo files.
 
 The top-down descent, per-node containers, bottom-up evaluation and frame pass are the deck's (pp. 81-110), and P9's F
 nodes own ABS envelopes, Boolean products, L0 indicators and nonlinear reducer definitions. The deck's step 5,
-formulation at the nodes (pp. 111-119), is not built: stage 06 writes the rows, because D89 needs every reader and
-the implied bounds (done.md, "Departure from the deck"). Phase 6 builds it (ARCH-2, [`../todo.md`](../todo.md)):
-that means re-ruling D89 so a G can decide at its node, and replacing `InlineReducerValueLinks` and `EmitExtremumLink`
-rather than composing records beside them.
+formulation at the nodes (pp. 111-119), is not built: the emitter hands stage 06 arrays as long as the input, and
+stage 06 decides where a helper is written in. Phase 6 builds it as MODEL-1 to MODEL-7 ([`../todo.md`](../todo.md);
+design: `context/opa_rewrite/design.md` § 4).
 
 Other documented edge differences remain in `done.md` §1a: the D88 variant-name edge and unreferenced hidden
 records. Direct-solve rules and DIAGNOSE's separate

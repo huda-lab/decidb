@@ -152,7 +152,7 @@ A rewrite changes a node or a record; it leaves no tag.
   would make one auxiliary per copy. So the definition owns the body, and a reader or a copy holds only its index.
 - The five definition tables become one table of helper definitions with a kind, read by one loop where
   `EnumerateExpressions` and the tree's construction have five today.
-- Helpers are still allocated at planning in this phase. Phase 6 moves that to the nodes.
+- Helpers are allocated at planning, in this phase and after it (R45).
 
 #### 3.2.4 The tree execution runs
 
@@ -369,30 +369,38 @@ Ruled by the owner (`decisions.md` R21 to R26):
 
 ## 4. Phase 6: the model is written at the nodes
 
-- **The node rule.** A SUM or AVG passes its members up. A MIN or MAX allocates one variable per group that has more
-  than one member, plus its rows. How a MIN or MAX is written depends on which way its clause or the objective
-  pushes it (`ExtremumPush`), not only on its member count, so the analysis of a node's readers stays.
-- **Rows per group, not per input row.** Today the emitter scatters node values into arrays as long as the input
-  and stage 06 regroups them. [reproduced], `repro/clauses_times_rows.sql`: over 2 million rows, going from 1 clause
-  to 40 takes evaluation from 44 ms to 638 ms and peak memory from 1.1 GB to 2.5 GB, while the solve goes from
-  198 ms to 250 ms. `EmittedRows` and `ReducerValueMembers` in `solver_input.hpp` already have the per-group shape.
-- **Delete:** the plan-time helper allocation, `InlineReducerValueLinks`, `PlaceHelpers`, the helper mappings, and
-  the emitter's scatter with the row loops of `decide_value_extraction.cpp`.
+The design, its measurements and the tasks: [review/ARCH-2-design.md](review/ARCH-2-design.md). Rulings R42 to R46.
+
+- **Three owners (R42).** The optimizer chooses the form of every lowering and stamps it on the plan. A node repeats
+  that form once per group and decides nothing. `FormulateModel` supplies what needs the box (Big-M constants, a
+  `<>` disjunction, a hard MIN or MAX) and stays a pure function of the records and a box, re-runnable for
+  `DIAGNOSE` without reading data. Pattern: instruction selection, emission, legalization.
+- **The node rule (R43, R44).** A SUM or AVG passes its members up when every reader takes a linear expression and
+  it is in a nest of sums or each instance has one reading row by construction; otherwise it is a variable with a
+  definition row per group. A MIN or MAX is a variable with a link per group, and a group of one member is that
+  member. The optimizer sets the form on the helper's definition; how a MIN or MAX is pinned depends on which way
+  its readers push it (`ExtremumPush`), as today.
+- **Helpers stay declared at planning (R45).** Their names in `EXPLAIN` and `DIAGNOSE` do not change.
+- **A record per group, not per input row.** Today the emitter scatters node values into arrays as long as the
+  input and stage 06 regroups them. [reproduced], `repro/clauses_times_rows.sql`: over 2 million rows, going from 1
+  clause to 40 takes evaluation from 44 ms to 638 ms and peak memory from 1.1 GB to 2.5 GB, while the solve goes
+  from 198 ms to 250 ms. A member of a G is one distinct instance of its child, where a MIN or MAX over group values
+  lists one per input row today.
+- **Terms are split from the finished nodes (R46)**, prototype first.
+- **Delete:** `InlineReducerValueLinks`, `PlaceHelpers`, the inlined variable scope and the second column layout,
+  the emitter's input-length vectors, `ClauseRows` and `ClauseEmittedRows`' regrouping, the row loops of
+  `decide_value_extraction.cpp`.
 - **Survives:** routing, containers, the key map, data programs and folds, frames, the no-value rule
-  (`DecideAbsence`).
+  (`DecideAbsence`), plan-time helper allocation, the linearizers of stage 06.
 
-**Constraints the design must meet**
+**Departures from the deck (R-D).** Formulation has three owners where the deck's node does all of it; a lone SUM
+is written into its readers by structure, not by a count; AVG, COUNT, ABS, products, L0, norms, `<>` and quadratic
+terms each have a node rule the deck does not give.
 
-- Helper inlining and implied-bound propagation need every reader of a helper, which one node does not see (ARCH-2).
-- `FormulateModel` stays a pure function of the evaluated clauses and a box, re-runnable for `DIAGNOSE` without
-  reading data. Writing at the nodes must not bake in Big-M constants.
-- Variables allocated at run time change names in `EXPLAIN` and `DIAGNOSE` (ARCH-2).
-- The deck has no rule for ABS, products, L0, `<>`, AVG, norms or quadratic terms. Each needs one, and each is a
-  departure to present (ARCH-2). The F nodes mirror the plan-time rewrites and write nothing yet.
-
-**How to change it safely.** Run the old and the new model building side by side and compare the solver models
-while both exist. An earlier attempt composed values at the nodes beside stage 06; it changed no model and removed
-no code, and was reverted. Step 5 has to replace the helper logic, not sit next to it.
+**How to change it safely.** The old and the new model building run side by side in a debug build and the models
+are compared row by row over the suite; the old path is deleted in the task that makes the comparison empty. An
+earlier attempt composed values at the nodes beside stage 06; it changed no model and removed no code, and was
+reverted.
 
 ## 5. Direct solve and the tree
 
