@@ -607,7 +607,7 @@ coefficient evaluation:
    its rows are reached: the key's dictionary is a `DecideKeyMap` (§5). A row with
    NULL in a written key column is in no class; a relation's columns compare NULL as a
    value. A key with no columns (a reducer's `per ()`) is one class, every row in it.
-2. A helper decision's scope (`KeyedScopeInfo::value_link`, the value rewrite) reads its
+2. A helper decision's scope (`DecideValueHelperOfScope`, the value rewrite) reads its
    link's path key on the rows its path keeps only (`DecideHelperDefinition::when`: the clause's
    `when` and every enclosing reducer's own), so the key is never
    evaluated where the clause never reads: one class per group that holds a member,

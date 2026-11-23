@@ -278,7 +278,7 @@ private:
 		if (reducer.per != DConstants::INVALID_INDEX) {
 			D_ASSERT(reducer.per < decide.bound.keyed_scopes.size());
 			// Only the optimizer's helper decisions have scopes over a link, and they are made after this pass.
-			D_ASSERT(decide.bound.keyed_scopes[reducer.per].value_link == DConstants::INVALID_INDEX);
+			D_ASSERT(!DecideValueHelperOfScope(decide.helper_definitions, decide.bound.variable_scopes, reducer.per));
 			record.counts_classes = true;
 			record.class_key = decide.bound.keyed_scopes[reducer.per].key;
 		}

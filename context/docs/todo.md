@@ -12,12 +12,7 @@ the owner rules first.
 
 # Phase 5 — The parser builds the tree
 
-## 5.2 The clause record (one lane)
-
-## 5.3 The helper definitions (needs: 5.2) (one lane)
-- [ ] TREE-22 A definition owns its rows and its facts — pipeline/todo.md § TREE-22
-
-## 5.4 The tree (needs: 5.3) (one lane)
+## 5.4 The tree (one lane)
 - [ ] TREE-7 Each atom of a clause is handed over with its node — pipeline/todo.md § TREE-7
 - [ ] TREE-23 `DecideNode` holds no copy; a G names its operand — pipeline/todo.md § TREE-23 (needs: TREE-7)
 - [ ] TREE-24 `DecideNode` is a class per kind — pipeline/todo.md § TREE-24 (needs: TREE-23)

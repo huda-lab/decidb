@@ -411,6 +411,19 @@ static DecideOwnedBody ClauseBody(DecideOwnedBody::Owner owner, idx_t index, Bou
 	return body;
 }
 
+optional_ptr<const DecideReducerValueDefinition>
+DecideValueHelperOfScope(const vector<unique_ptr<DecideHelperDefinition>> &definitions,
+                         const vector<DecideVarScopeInfo> &variable_scopes, idx_t scope) {
+	for (auto &definition : definitions) {
+		const DecideHelperDefinition &entry = *definition;
+		auto link = entry.TryCast<DecideReducerValueDefinition>();
+		if (link && variable_scopes[link->helper].IsKeyed() && variable_scopes[link->helper].keyed_scope_idx == scope) {
+			return link;
+		}
+	}
+	return nullptr;
+}
+
 void DecideHelperDefinition::EnumerateExpressions(const std::function<void(unique_ptr<Expression> &)> &callback) {
 	if (when) {
 		callback(when);
@@ -418,6 +431,17 @@ void DecideHelperDefinition::EnumerateExpressions(const std::function<void(uniqu
 }
 
 void DecideHelperDefinition::Bodies(idx_t, const std::function<void(DecideOwnedBody &)> &) {
+}
+
+void DecideHelperDefinition::Rows(ClientContext &, const LogicalDecide &,
+                                  const std::function<void(const BoundDecideClause &)> &) const {
+}
+
+void DecideL0IndicatorDefinition::Rows(ClientContext &, const LogicalDecide &,
+                                       const std::function<void(const BoundDecideClause &)> &callback) const {
+	for (auto &link : links) {
+		callback(link);
+	}
 }
 
 void DecideAbsDefinition::EnumerateExpressions(const std::function<void(unique_ptr<Expression> &)> &callback) {

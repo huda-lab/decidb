@@ -179,14 +179,11 @@ void decide_rewrite::AddValueCheck(LogicalDecide &decide, unique_ptr<Expression>
 	decide.value_checks.push_back(std::move(check));
 }
 
-BoundDecideClause decide_rewrite::MakeFormulationRow(unique_ptr<Expression> body, const DecideRowOrigin &origin,
-                                                     idx_t defined, DecideHelperRow helper_row) {
+BoundDecideClause decide_rewrite::MakeFormulationRow(unique_ptr<Expression> body, const DecideRowOrigin &origin) {
 	BoundDecideClause row;
 	row.body = std::move(body);
 	row.origin = origin;
 	row.structural = true;
-	row.defines = defined;
-	row.helper_row = helper_row;
 	return row;
 }
 
@@ -433,10 +430,9 @@ void decide_rewrite::ScopeRowPerInstance(const LogicalDecide &decide, BoundDecid
 	// (RewriteFrameRanges): a row of it stays one per row, each reading its window's instance, and the rows of one
 	// window say the same.
 	if (scope.IsKeyed()) {
-		auto link = decide.bound.keyed_scopes[scope.keyed_scope_idx].value_link;
-		if (link != DConstants::INVALID_INDEX &&
-		    decide.helper_definitions[link]->Cast<DecideReducerValueDefinition>().Frame() !=
-		        DConstants::INVALID_INDEX) {
+		auto link =
+		    DecideValueHelperOfScope(decide.helper_definitions, decide.bound.variable_scopes, scope.keyed_scope_idx);
+		if (link && link->Frame() != DConstants::INVALID_INDEX) {
 			return;
 		}
 	}

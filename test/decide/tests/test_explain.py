@@ -683,6 +683,26 @@ def test_an_l0_link_prints_its_bound_and_tolerance_by_name(decidb_cli, norm, bou
 
 
 @pytest.mark.explain
+def test_helper_rows_print_in_the_order_their_helpers_are_made(decidb_cli):
+    """One loop reads the helper table (R30): under one clause, the indicator's three rows come before the rows of
+    the ABS its tolerance row reads, which is made later; a product's helper states no row of its own."""
+    out = _explain(
+        decidb_cli,
+        f"SELECT id, x, b {_L0_SOURCE} DECIDE x(REAL), b(BOOL) SUCH THAT x <= 5 AND x >= -5 AND abs(x - 3) <= 4 "
+        "AND norm(x, 0) <= 1 AND sum(b * x) <= 3 MAXIMIZE sum(x)",
+    )
+    packed = _packed(out)
+    assert "abs(x-3)<=4↳abs(x-3)becomesahelperdecision↳abs(x-3)-x>=-3↳abs(x-3)+x>=3norm(x,0)<=1" in packed, _plan_text(
+        out
+    )
+    rows = (
+        "↳M*(x<>0)-x>=0↳M*(x<>0)+x>=0↳abs(x)-decide_l0_tolerance*(x<>0)>=0"
+        "↳abs(x)-x>=0↳abs(x)+x>=0sum(b*x)<=3↳(b*x)becomesahelperdecision"
+    )
+    assert rows in packed, _plan_text(out)
+
+
+@pytest.mark.explain
 def test_an_l0_tolerance_of_one_is_still_printed(decidb_cli):
     """A coefficient of 1 is left out, as a user writes no factor of 1, except the tolerance of an L0 link."""
     sql = f"SELECT id, x {_L0_SOURCE} DECIDE x(REAL) SUCH THAT x <= 5 AND x >= -5 AND norm(x, 0) <= 1 MAXIMIZE sum(x)"

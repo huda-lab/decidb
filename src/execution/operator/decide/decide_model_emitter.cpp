@@ -412,7 +412,7 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 		} else if (node.Linked()) {
 			mappings[tree.variable_scopes[tree.ValueVar(node)].keyed_scope_idx] = HelperMapping(root);
 		} else if (node.compiled.clause && node.compiled.clause->defined_var != DConstants::INVALID_INDEX &&
-		           !IsDecideAbsEnvelope(node.compiled.clause->helper_row)) {
+		           !tree.OwnedBy(node, DecideHelperKind::ABS)) {
 			DefinitionAbsence(root, node.compiled.clause->defined_var);
 		}
 	}
@@ -613,7 +613,7 @@ void DecideModelEmitter::AbsEnvelope(idx_t function, idx_t root, bool counted) {
 		throw InternalException("DECIDE model emitter: invalid ABS F envelope ownership");
 	}
 	auto &clause = *tree.nodes[root]->compiled.clause;
-	if (!IsDecideAbsEnvelope(clause.helper_row) || clause.defined_var != definition.helper) {
+	if (clause.defined_var != definition.helper) {
 		throw InternalException("DECIDE model emitter: ABS F envelope belongs to a different auxiliary");
 	}
 	auto link = std::find_if(gstate.evaluated_abs_links.begin(), gstate.evaluated_abs_links.end(),
@@ -630,7 +630,7 @@ void DecideModelEmitter::AbsEnvelope(idx_t function, idx_t root, bool counted) {
 	// built fresh, never the easy half of a MIN/MAX: it is one row per routed instance of the F edge's scope.
 	auto envelope = Rows(root, counted);
 	D_ASSERT(envelope.products.empty());
-	(clause.helper_row == DecideHelperRow::ABS_ENVELOPE ? link->operand : link->negated) = std::move(envelope.row);
+	(root == envelopes[DecideAbsDefinition::NEGATED_ROW] ? link->negated : link->operand) = std::move(envelope.row);
 }
 
 EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {

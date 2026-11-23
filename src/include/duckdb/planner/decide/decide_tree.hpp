@@ -236,7 +236,6 @@ struct DecideTree {
 	vector<idx_t> qualified_operands;
 	vector<DecideBoundBox> singleton_row_boxes;
 	vector<LogicalDecide::UserBoundSpec> user_singleton_row_bounds;
-	vector<idx_t> signed_helper_vars;
 	//! Per frame (LogicalDecide::frames), its O; per reducer over data reading a frame
 	//! (LogicalDecide::frame_aggregates), its G.
 	vector<idx_t> frame_nodes;

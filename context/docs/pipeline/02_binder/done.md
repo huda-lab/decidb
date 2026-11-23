@@ -73,8 +73,7 @@ a bound expression with the name a message prints and a NULL mode (`VALUE` for a
 a relation element stands for, `NO_GROUP` for one written on its own).
 `FindOrCreateDecideKey` finds the entry with the same elements as a set, or appends one.
 A keyed decision points at an `KeyedScopeInfo`: the key, the decisions it keys
-(`scoped_variable_indices`), and `value_link`, which only stage 05 sets, on a helper
-decision's scope. One scope exists per key, whichever spelling names it: a declaration's
+(`scoped_variable_indices`). One scope exists per key, whichever spelling names it: a declaration's
 `per K` and a reducer's own `per K` (§3) both go through `FindOrCreateKeyScope`.
 
 ### Keyed declarations

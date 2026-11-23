@@ -29,8 +29,10 @@ namespace duckdb {
 
 //! The shape, provenance and bound-admission facts of a clause, read once. `clause` is canonical: a clause of SUCH
 //! THAT, or a function-owned row as DecideCanonicalizer::CanonicalizeFunctionRow returns it.
+//! `owner` is the helper definition that states the row, null for a clause of SUCH THAT.
 static unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context, const LogicalDecide &op,
-                                                          const BoundDecideClause &clause) {
+                                                          const BoundDecideClause &clause,
+                                                          optional_ptr<const DecideHelperDefinition> owner) {
 	auto &comparison = clause.body->Cast<BoundComparisonExpression>();
 	auto facts = make_uniq<DecideConstraint>();
 	facts->comparison_type = comparison.type;
@@ -42,11 +44,12 @@ static unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context
 	if (comparison.type == ExpressionType::COMPARE_NOTEQUAL) {
 		facts->kind = ConstraintKind::USER_MECHANISM;
 	}
-	if (clause.structural) {
+	if (clause.structural || owner) {
 		facts->kind = ConstraintKind::STRUCTURAL;
 	}
-	facts->defined_var = clause.defines;
-	facts->helper_row = clause.helper_row;
+	if (owner) {
+		facts->defined_var = owner->helper;
+	}
 	facts->was_minmax_easy = clause.minmax_easy;
 	facts->scope = clause.scope.Copy();
 	facts->group_key = clause.group_key;
@@ -142,7 +145,6 @@ public:
 		tree->qualified_operands.assign(op.bound.keyed_scopes.size(), DConstants::INVALID_INDEX);
 		tree->singleton_row_boxes = op.singleton_row_boxes;
 		tree->user_singleton_row_bounds = op.user_singleton_row_bounds;
-		tree->signed_helper_vars = op.signed_helper_vars;
 		if (!op.children.empty()) {
 			bindings = op.children[0]->GetColumnBindings();
 		}
@@ -182,34 +184,12 @@ public:
 		for (auto &clause : op.bound.clauses) {
 			if (clause.body->GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 				Root(clause);
-			} else if (clause.helper_row == DecideHelperRow::DEFINITION) {
-				// The row stands beneath its F node, at the placeholder's clause position.
-				auto definition = std::find_if(op.helper_definitions.begin(), op.helper_definitions.end(),
-				                               [&](const unique_ptr<DecideHelperDefinition> &candidate) {
-					                               return candidate->kind == DecideHelperKind::DEFINITION &&
-					                                      candidate->helper == clause.defines;
-				                               });
-				if (definition == op.helper_definitions.end()) {
-					throw InternalException("DECIDE tree: body-definition placeholder has no F node");
-				}
-				Root(MakeDefinitionRow((*definition)->Cast<DecideBodyDefinition>()),
-				     NumericCast<idx_t>(definition - op.helper_definitions.begin()));
 			}
 		}
-		// The rows a helper definition owns follow every written constraint, in the order the definitions were made
-		// (an indicator's by RewriteNorm, before every ABS), as children of their F nodes: an L0 indicator's three
-		// links and an ABS's two envelope rows.
+		// The rows a helper definition states follow every written constraint, in the order the definitions were made
+		// (R30), as children of their F nodes.
 		for (idx_t i = 0; i < op.helper_definitions.size(); i++) {
-			auto &definition = *op.helper_definitions[i];
-			if (auto indicator = definition.TryCast<DecideL0IndicatorDefinition>()) {
-				for (auto &link : indicator->links) {
-					Root(link, i);
-				}
-			}
-			if (auto abs = definition.TryCast<DecideAbsDefinition>()) {
-				Root(decide_rewrite::MakeAbsRow(context, op, *abs, false), i);
-				Root(decide_rewrite::MakeAbsRow(context, op, *abs, true), i);
-			}
+			op.helper_definitions[i]->Rows(context, op, [&](const BoundDecideClause &row) { Root(row, i); });
 		}
 		if (op.bound.objective.body) {
 			const Expression *body = op.bound.objective.body.get();
@@ -328,29 +308,6 @@ public:
 				break;
 			}
 		}
-	}
-
-	//! The row that defines a definition's helper from its body, on the rows its condition keeps, one per instance of
-	//! the helper.
-	BoundDecideClause MakeDefinitionRow(const DecideBodyDefinition &definition) const {
-		const auto &body = *definition.body;
-		auto left = BoundCastExpression::AddCastToType(context, op.bound.variables[definition.helper]->Copy(),
-		                                               body.return_type);
-		BoundDecideClause row;
-		row.body = make_uniq<BoundComparisonExpression>(definition.relation, std::move(left), body.Copy());
-		row.structural = true;
-		row.defines = definition.helper;
-		row.helper_row = DecideHelperRow::DEFINITION;
-		row.origin = definition.origin;
-		if (definition.helper < op.bound.variable_scopes.size()) {
-			auto &scope = op.bound.variable_scopes[definition.helper];
-			if (scope.IsGlobal() || scope.IsKeyed()) {
-				row.scope = DecideClauseScope::Per(scope.IsKeyed() ? op.bound.keyed_scopes[scope.keyed_scope_idx].key
-				                                                   : DConstants::INVALID_INDEX);
-			}
-		}
-		row.scope.when = definition.when ? definition.when->Copy() : nullptr;
-		return row;
 	}
 
 	//! The F node of helper definition `definition_index`: a hidden root holding the helper's value, one per instance
@@ -612,12 +569,11 @@ private:
 		// Bring these internal rows through the same canonical boundary as ordinary clauses before term extraction.
 		// The F node reads the uncanonicalized operand from the record (DecideHelperDefinition::body), so this
 		// rewrite only changes the row's linear form, not the F node's definition.
-		const bool is_abs_envelope = IsDecideAbsEnvelope(clause.helper_row);
-		const bool is_l0_link =
-		    clause.helper_row == DecideHelperRow::L0_BOUND || clause.helper_row == DecideHelperRow::L0_TOLERANCE;
-		const bool is_definition = clause.helper_row == DecideHelperRow::DEFINITION;
-		const bool owned = is_abs_envelope || is_l0_link || is_definition;
-		D_ASSERT(!owned || owner != DConstants::INVALID_INDEX);
+		const bool owned = owner != DConstants::INVALID_INDEX;
+		optional_ptr<const DecideHelperDefinition> definition = owned ? op.helper_definitions[owner].get() : nullptr;
+		const bool is_abs_envelope = owned && definition->kind == DecideHelperKind::ABS;
+		const bool is_l0_link = owned && definition->kind == DecideHelperKind::L0_INDICATOR;
+		const bool is_definition = owned && definition->kind == DecideHelperKind::DEFINITION;
 		const idx_t function = owned ? definition_nodes[owner] : DConstants::INVALID_INDEX;
 		BoundDecideClause canonical_envelope;
 		const BoundDecideClause *canonical = &clause;
@@ -627,11 +583,11 @@ private:
 			canonical = &canonical_envelope;
 		}
 		const auto *row = &canonical->body->Cast<BoundComparisonExpression>();
-		auto facts = ReadDecideClauseFacts(context, op, *canonical);
+		auto facts = ReadDecideClauseFacts(context, op, *canonical, definition);
 		node.folded = clause.folded_bound;
 		node.origin = clause.origin;
 		node.text = RootText(node.origin.source_clause_id);
-		node.defined_var = clause.defines;
+		node.defined_var = facts->defined_var;
 		if (owned) {
 			// Before the row is lowered: a row a function owns reads its helper as a decision (Lower).
 			Edge(function, index);
@@ -646,7 +602,7 @@ private:
 			node.per = node.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
 			signature = scope.signature;
 		}
-		if (!is_abs_envelope && !is_l0_link && !is_definition) {
+		if (!owned) {
 			Gates(index, scope.when.get());
 		}
 		node.body = Lower(index, *row->left);
@@ -1102,8 +1058,7 @@ private:
 		for (idx_t i = 0; i < tree->nodes.size(); i++) {
 			auto &node = *tree->nodes[i];
 			auto variable = node.defined_var;
-			const bool abs_envelope = node.compiled.clause && IsDecideAbsEnvelope(node.compiled.clause->helper_row);
-			if (variable < definitions.size() && !abs_envelope &&
+			if (variable < definitions.size() && !OwnedByFunction(node, DecideHelperKind::ABS) &&
 			    !OwnedByFunction(node, DecideHelperKind::L0_INDICATOR) &&
 			    !OwnedByFunction(node, DecideHelperKind::DEFINITION)) {
 				definitions[variable].push_back(i);
@@ -1225,9 +1180,7 @@ void DecideTree::Validate() const {
 				const auto root = node.rows[r];
 				invalid = root >= nodes.size() || !nodes[root]->compiled.clause ||
 				          nodes[root]->compiled.clause->defined_var != value_var || nodes[root]->parent != i ||
-				          std::find(node.children.begin(), node.children.end(), root) == node.children.end() ||
-				          (abs && nodes[root]->compiled.clause->helper_row !=
-				                      (r == 0 ? DecideHelperRow::ABS_ENVELOPE : DecideHelperRow::ABS_NEGATED_ENVELOPE));
+				          std::find(node.children.begin(), node.children.end(), root) == node.children.end();
 			}
 			if (invalid) {
 				throw InternalException("DECIDE tree has an invalid function node %llu", i);

@@ -756,7 +756,7 @@ static string RenderWrittenSense(const Expression &expr, const RenderContext &ct
 //! position needs that position. `written_sense` renders an objective in the direction it was written.
 static string RenderClause(const BoundDecideClause &clause, const DecideSourceNames &names, bool written_sense) {
 	auto &body = *clause.body;
-	if (IsTruePlaceholder(body) || clause.helper_row == DecideHelperRow::DEFINITION) {
+	if (IsTruePlaceholder(body)) {
 		return string();
 	}
 	auto ctx = ClauseContext(ContextOf(names), clause);
@@ -786,8 +786,12 @@ static bool IsUnitCoefficient(const Expression &coefficient) {
 //! the scope that clause was written with (CollectDecideClauseLayers). An L0 link's coefficient on its indicator is
 //! none the query wrote as a coefficient and is printed whatever it holds: the tolerance by the name it is set with,
 //! the bound as `M` when stage 06 derives it from the column box (`auto_bound`) and as the number written otherwise.
+//! `indicator` is the L0 indicator that states the row, null for another kind's row, and `ordinal` the row's place
+//! among its rows.
 static string RenderFunctionRow(const DecideConstraint &row, const vector<unique_ptr<Expression>> &decide_variables,
-                                const RenderContext &plan_ctx, bool auto_bound) {
+                                const RenderContext &plan_ctx,
+                                optional_ptr<const DecideL0IndicatorDefinition> indicator, idx_t ordinal) {
+	const bool tolerance = indicator && ordinal == DecideL0IndicatorDefinition::TOLERANCE_ROW;
 	auto ctx = plan_ctx;
 	ctx.rewrite_row = true;
 	string result;
@@ -801,12 +805,12 @@ static string RenderFunctionRow(const DecideConstraint &row, const vector<unique
 			continue;
 		} else {
 			text = RenderSource(*decide_variables[term.variable_index], ctx, 20);
-			const auto role = term.variable_index == row.defined_var ? row.helper_row : DecideHelperRow::NONE;
-			if (role == DecideHelperRow::L0_TOLERANCE) {
+			const bool on_indicator = indicator && term.variable_index == row.defined_var;
+			if (on_indicator && tolerance) {
 				text = "decide_l0_tolerance * " + text;
-			} else if (role == DecideHelperRow::L0_BOUND && auto_bound) {
+			} else if (on_indicator && indicator->auto_m) {
 				text = "M * " + text;
-			} else if (role == DecideHelperRow::L0_BOUND || !IsUnitCoefficient(*term.coefficient)) {
+			} else if (on_indicator || !IsUnitCoefficient(*term.coefficient)) {
 				text = RenderSource(*term.coefficient, ctx, 20) + " * " + text;
 			}
 		}
@@ -828,10 +832,11 @@ vector<DecideFunctionRow> CollectDecideFunctionRows(const DecideTree &tree, cons
 		auto &node = *tree.nodes[function];
 		if (!tree.IsFunction(node, DecideHelperKind::DEFINITION)) {
 			auto indicator = tree.Definition(node)->TryCast<DecideL0IndicatorDefinition>();
-			for (auto root : node.rows) {
+			for (idx_t r = 0; r < node.rows.size(); r++) {
+				const auto root = node.rows[r];
 				auto &clause = tree.nodes[root]->compiled.clause;
 				rows.push_back({tree.nodes[root]->origin.source_clause_id,
-				                RenderFunctionRow(*clause, decide_variables, ctx, indicator && indicator->auto_m)});
+				                RenderFunctionRow(*clause, decide_variables, ctx, indicator, r)});
 			}
 		}
 	}

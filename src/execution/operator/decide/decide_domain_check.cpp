@@ -105,9 +105,9 @@ void PhysicalDecide::CheckDecisionDomains(const vector<LogicalDecide::UserBoundS
 		return written;
 	};
 	vector<bool> is_signed(num_decide_vars, false);
-	for (auto var : tree->signed_helper_vars) {
-		if (var < num_decide_vars) {
-			is_signed[var] = true;
+	for (auto &definition : tree->definitions) {
+		if (definition->Signed() && definition->helper < num_decide_vars) {
+			is_signed[definition->helper] = true;
 		}
 	}
 	tree->domains.resize(num_decide_vars);

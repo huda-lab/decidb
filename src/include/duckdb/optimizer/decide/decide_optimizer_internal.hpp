@@ -46,11 +46,8 @@ unique_ptr<BoundDecideReducerExpression> ReadNestInPlace(const LogicalDecide &de
 unique_ptr<Expression> BindSumOver(Optimizer &optimizer, unique_ptr<Expression> body, const Expression *filter);
 
 //! A row this layer emits (rather than one the user wrote) with the body `body`: structural, and of the clause
-//! `origin`, so diagnostics still name the clause the user typed; a row defining auxiliary `defined` says so
-//! (BoundDecideClause::defines) and what it is to it (`helper_row`). It has no scope.
-BoundDecideClause MakeFormulationRow(unique_ptr<Expression> body, const DecideRowOrigin &origin,
-                                     idx_t defined = DConstants::INVALID_INDEX,
-                                     DecideHelperRow helper_row = DecideHelperRow::NONE);
+//! `origin`, so diagnostics still name the clause the user typed. It has no scope.
+BoundDecideClause MakeFormulationRow(unique_ptr<Expression> body, const DecideRowOrigin &origin);
 
 //! Puts `row`, which a rewrite adds for `clause`, in the clause's scope: a copy of its `when`, so the row reads only
 //! the rows the clause keeps, and its own `per K:`, so the row stands for the same classes (D28): a row whose key is
@@ -64,13 +61,6 @@ void ScopeRowPerClause(ClientContext &context, LogicalDecide &decide, BoundDecid
 //! is for one per row or for a range frame's helper, whose windows no key's classes name. A row that reads only
 //! columns of `scope` is the same on every row of an instance. A row that has its clause's `per` keeps it.
 void ScopeRowPerInstance(const LogicalDecide &decide, BoundDecideClause &row, const DecideVarScopeInfo &scope);
-
-//! A lower-envelope row the tree states for a recorded ABS (DecideHelperKind::ABS), under its F node: `aux >=
-//! operand`, or `aux >= -operand` when `negated`, on the rows the ABS is read on, once per instance of the auxiliary's
-//! scope, attributed to the clause the ABS was written in. The emitter evaluates each per row, and stage 06 states
-//! every row of the ABS from them (EmitAbsEnvelopes, EmitAbsConstraints).
-BoundDecideClause MakeAbsRow(ClientContext &context, const LogicalDecide &decide, const DecideAbsDefinition &function,
-                             bool negated);
 
 //! What the way down to a node passed through, besides the sign it carries (WalkPolarity).
 struct PolarityPath {

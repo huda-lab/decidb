@@ -154,7 +154,7 @@ instance is sized and collapsed from 0.
 Global auxiliaries take their own bounds and types from
 `input.global_lower_bounds` / `global_upper_bounds` / `global_variable_types`. A helper
 decision of the value rewrite (`SolverInput::reducer_value_links`) holds a reducer's
-value, which may be negative: stage 05 lists it in `signed_helper_vars`, so its box has no
+value, which may be negative: its definition is `Signed()`, so its box has no
 default floor when the rigid box is captured, and `DeriveReducerValueBounds` (§9) boxes it by its members' reach. The rigid box
 therefore holds a helper open below, so a diagnosis never lifts a floor it never had.
 
@@ -965,8 +965,8 @@ McCormick envelope is:
 | `w <= x - L*(1-b)` | `w`'s floor `< 0`; collapses to `w <= x` otherwise |
 | `w >= L*b` | `w`'s floor `< 0` only |
 
-**A product has no default floor of 0.** It takes its factor's sign (`b * x` is `x` where `b = 1`), so stage 05
-lists it with the signed helpers (`AddBooleanProduct`, `signed_helper_vars`): no decision's default floor is applied
+**A product has no default floor of 0.** It takes its factor's sign (`b * x` is `x` where `b = 1`), so its definition is
+`Signed()` (`DecideBooleanProductDefinition`): no decision's default floor is applied
 to it, `ResolveLiftedFloors` leaves it alone, and the bound check before solving gives it its factor's floor. Its
 column's floor is the product's range, `min(0, L)` over the lowest `L` of the instances, raised by a floor written on
 it (`b * x >= -4`, or `>= 0`). `FloorBilinearAuxiliaries` sets it from the factors' boxes before implied-bound

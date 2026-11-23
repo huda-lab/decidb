@@ -94,13 +94,6 @@ struct KeyedScopeInfo {
 	idx_t key = DConstants::INVALID_INDEX;
 	//! Which decide_variables indices this scope keys
 	vector<idx_t> scoped_variable_indices;
-	//! A helper decision's scope (DecideOptimizer::RewriteScopedReducers): the link into
-	//! `LogicalDecide::helper_definitions` it holds. Its classes are the groups of
-	//! `key` -- the link's `by` key -- among the rows the link's clause keeps, so
-	//! execution builds the mapping from the link. INVALID_INDEX for every scope the
-	//! binder creates. Deliberately absent from the serialization: the optimizer creates
-	//! these scopes, and an optimized plan is never serialized.
-	idx_t value_link = DConstants::INVALID_INDEX;
 	//! A relation-qualified reducer's scope of its own (DecideCanonicalizer::BuildConstraintSignatures): the classes
 	//! of `key` among the rows the reducer reads, each split by the values of its body's signature (D70, D71), an
 	//! index into LogicalDecide::signatures, so the reducer reads one value per instance, not per class. Execution
@@ -309,6 +302,16 @@ struct DecideHelperDefinition {
 	//! The bodies a rewrite reads or replaces (LogicalDecide::EnumerateBodies), `index` being the definition's own.
 	//! None by default: a copy of what a clause's body holds is no body.
 	virtual void Bodies(idx_t index, const std::function<void(DecideOwnedBody &)> &callback);
+	//! The rows the definition states for its helper, in the order its F node holds them (DecideNode::rows): a row's
+	//! role is its owner's kind and its place in that order. Each is rigid, and the helper has no value where what
+	//! the row reads has none (D88). None by default.
+	virtual void Rows(ClientContext &context, const LogicalDecide &decide,
+	                  const std::function<void(const BoundDecideClause &)> &callback) const;
+	//! Whether the helper holds a value of either sign (`sum(x - 5)`, `power(x, 2) - 10 * x`, `b * x` with x >= -5),
+	//! so no decision's default floor of 0 is applied to it.
+	virtual bool Signed() const {
+		return false;
+	}
 
 	template <class TARGET>
 	TARGET &Cast() {
@@ -351,6 +354,10 @@ struct DecideAbsDefinition : public DecideHelperDefinition {
 	DecideVarScopeInfo scope;
 
 	void EnumerateExpressions(const std::function<void(unique_ptr<Expression> &)> &callback) override;
+	//! Its lower envelope, made from the operand: `helper >= body`, then `helper >= -body` (NEGATED_ROW).
+	static constexpr const idx_t NEGATED_ROW = 1;
+	void Rows(ClientContext &context, const LogicalDecide &decide,
+	          const std::function<void(const BoundDecideClause &)> &callback) const override;
 };
 
 //! A written product of two forms over decisions (DecideHelperKind::PRODUCT). It has no helper.
@@ -369,6 +376,9 @@ struct DecideProductDefinition : public DecideHelperDefinition {
 struct DecideBooleanProductDefinition : public DecideHelperDefinition {
 	static constexpr const DecideHelperKind KIND = DecideHelperKind::BOOLEAN_PRODUCT;
 	DecideBooleanProductDefinition() : DecideHelperDefinition(KIND) {
+	}
+	bool Signed() const override {
+		return true;
 	}
 
 	//! The two decisions, a Boolean one and the other.
@@ -389,12 +399,20 @@ struct DecideL0IndicatorDefinition : public DecideHelperDefinition {
 	void EnumerateExpressions(const std::function<void(unique_ptr<Expression> &)> &callback) override;
 	//! Its three rows stand beside the clauses, where the tree's indicator F node reads them.
 	void Bodies(idx_t index, const std::function<void(DecideOwnedBody &)> &callback) override;
+	//! `links`: `M * z >= e`, `M * z >= -e`, then `abs(e) >= tolerance * z` (TOLERANCE_ROW). They are held, not made
+	//! here: the last holds an ABS a later rewrite reads.
+	static constexpr const idx_t TOLERANCE_ROW = 2;
+	void Rows(ClientContext &context, const LogicalDecide &decide,
+	          const std::function<void(const BoundDecideClause &)> &callback) const override;
 };
 
 //! A body kept for the helper it defines (DecideHelperKind::DEFINITION).
 struct DecideBodyDefinition : public DecideHelperDefinition {
 	static constexpr const DecideHelperKind KIND = DecideHelperKind::DEFINITION;
 	DecideBodyDefinition() : DecideHelperDefinition(KIND) {
+	}
+	bool Signed() const override {
+		return true;
 	}
 
 	unique_ptr<Expression> body;
@@ -404,6 +422,9 @@ struct DecideBodyDefinition : public DecideHelperDefinition {
 	void EnumerateExpressions(const std::function<void(unique_ptr<Expression> &)> &callback) override;
 	//! It stands apart from the clause list; `t >= q` holds the body down, `t <= q` up, `t = q` neither.
 	void Bodies(idx_t index, const std::function<void(DecideOwnedBody &)> &callback) override;
+	//! The one row `helper relation body`, on the rows `when` keeps, one per instance of the helper.
+	void Rows(ClientContext &context, const LogicalDecide &decide,
+	          const std::function<void(const BoundDecideClause &)> &callback) const override;
 };
 
 //! A reducer over decisions, or a frame's range over them, read as the helper that holds its value
@@ -411,6 +432,9 @@ struct DecideBodyDefinition : public DecideHelperDefinition {
 struct DecideReducerValueDefinition : public DecideHelperDefinition {
 	static constexpr const DecideHelperKind KIND = DecideHelperKind::REDUCER_VALUE;
 	DecideReducerValueDefinition() : DecideHelperDefinition(KIND) {
+	}
+	bool Signed() const override {
+		return true;
 	}
 
 	//! The reducer (Reducer), or the frame's node (Frame).
@@ -457,6 +481,13 @@ struct DecideReducerValueDefinition : public DecideHelperDefinition {
 	//! Its member belongs to no clause: it is read on the rows its path and its own `when` keep.
 	void Bodies(idx_t index, const std::function<void(DecideOwnedBody &)> &callback) override;
 };
+
+//! The reducer value helper keyed scope `scope` is the own scope of (AddValueHelper), null for a scope the binder made.
+//! Such a scope's classes are the groups of its key among the rows the helper's clause keeps, so execution builds
+//! its mapping from the helper.
+optional_ptr<const DecideReducerValueDefinition>
+DecideValueHelperOfScope(const vector<unique_ptr<DecideHelperDefinition>> &definitions,
+                         const vector<DecideVarScopeInfo> &variable_scopes, idx_t scope);
 
 //! One expression the optimizer reads or rewrites, with what its owner says about it (LogicalDecide::EnumerateBodies).
 //! A clause is read one comparison at a time, since a relation pushes the comparison it stands in and not the clause
@@ -643,12 +674,6 @@ public:
 	void NameDefinition(Expression &call, idx_t index);
 	//! The number of definitions of `kind`, which names the next helper of that kind.
 	idx_t HelperCount(DecideHelperKind kind) const;
-
-	//! The helper decisions that hold a value of either sign: a value rewrite's reducer (RewriteScopedReducers), a
-	//! definition function's output, and a product with a non-Boolean factor (AddBooleanProduct). FoldSingletonRows
-	//! gives them no default floor of 0; a value helper is boxed later by its members' reach, a product by its
-	//! factor's box, and a body helper stays unboxed, so stage 08 states the extremum over it natively.
-	vector<idx_t> signed_helper_vars;
 
 	//! Maps an auxiliary variable's index in decide_variables to a human-readable
 	//! source expression (the user's original ABS(...) / MAX(...) / product / <>),

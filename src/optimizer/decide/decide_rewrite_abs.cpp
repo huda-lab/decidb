@@ -336,8 +336,12 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	decide.EnumerateBodies([&](DecideOwnedBody &body) { RecordAbsOperands(*body.expr, decide, splitter); });
 }
 
-BoundDecideClause decide_rewrite::MakeAbsRow(ClientContext &context, const LogicalDecide &decide,
-                                             const DecideAbsDefinition &function, bool negated) {
+//! A lower-envelope row of a recorded ABS: `aux >= operand`, or `aux >= -operand` when `negated`, on the rows the ABS
+//! is read on, once per instance of the auxiliary's scope, attributed to the clause the ABS was written in. The
+//! emitter evaluates each per row, and stage 06 states every row of the ABS from them (EmitAbsEnvelopes,
+//! EmitAbsConstraints).
+static BoundDecideClause MakeAbsRow(ClientContext &context, const LogicalDecide &decide,
+                                    const DecideAbsDefinition &function, bool negated) {
 	// `aux >= inner` or `aux >= -inner`, in its natural form, which can leave decisions on both sides. The tree brings
 	// each through the canonical boundary as it does any clause.
 	auto &aux = decide.bound.variables[function.helper]->Cast<BoundColumnRefExpression>();
@@ -357,11 +361,16 @@ BoundDecideClause decide_rewrite::MakeAbsRow(ClientContext &context, const Logic
 	auto comparison = make_uniq<BoundComparisonExpression>(
 	    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 	    make_uniq<BoundColumnRefExpression>(aux.alias, aux.return_type, aux.binding), std::move(bound));
-	auto row = MakeFormulationRow(std::move(comparison), function.origin, function.helper,
-	                              negated ? DecideHelperRow::ABS_NEGATED_ENVELOPE : DecideHelperRow::ABS_ENVELOPE);
+	auto row = MakeFormulationRow(std::move(comparison), function.origin);
 	row.scope.when = function.when ? function.when->Copy() : nullptr;
 	ScopeRowPerInstance(decide, row, function.scope);
 	return row;
+}
+
+void DecideAbsDefinition::Rows(ClientContext &context, const LogicalDecide &decide,
+                               const std::function<void(const BoundDecideClause &)> &callback) const {
+	callback(MakeAbsRow(context, decide, *this, false));
+	callback(MakeAbsRow(context, decide, *this, true));
 }
 
 void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, LogicalDecide &decide,

@@ -123,7 +123,7 @@ own: its body and its scope each have one.
 - **`constraint_sources` keeps what outlives a rewritten clause.** `between_partner`, `between_upper` and
   `qualifier` are read by diagnostics after a rewrite has replaced the clause, so the table holds them.
   `repair_group_id` is a field of the shared `DecideRowOrigin`, read on provenance rows. The clause facts only the
-  optimizer reads (`structural`, `defines`, `minmax_easy`, `folded_bound`, `folded_clause_rows`,
+  optimizer reads (`structural`, `minmax_easy`, `folded_bound`, `folded_clause_rows`,
   `tightest_frame_bound`, `removal_group_id`) are not serialized.
 - **A reducer node keeps what the aggregate binding gives.** [read] `FunctionBinder` picks the overload, the return
   type and the argument casts for a decision reducer too (`decide_binder.cpp:848`), a collated MIN or MAX has two
@@ -141,7 +141,7 @@ A rewrite changes a node or a record; it leaves no tag.
 |---|---|
 | ABS, Boolean product, L0, definition: a tag on the kept call carrying an index into `abs_functions`, `bilinear_function_groups`, `l0_indicator_functions`, `definition_functions` | The kept call, a `BoundFunctionExpression`, holds a typed reference (`definition`: kind and index) into the one table `LogicalDecide::helper_definitions`, whose entries are a class per kind over the base `DecideHelperDefinition` (`Cast<T>()`, virtual `EnumerateExpressions` and `Bodies`); there is no wrapper node, since the kept call is still matched by shape (`context/docs/pipeline/03_logical_plan/done.md`). A product is two kinds: the kept call's expansion (`PRODUCT`) and each Boolean product's helper (`BOOLEAN_PRODUCT`) |
 | A reducer replaced by a helper's column, its definition in `reducer_value_links` | Unchanged in shape: the reader holds the helper's column, the `REDUCER_VALUE` definition holds the reducer node once |
-| What a row is to the helper it defines (an ABS envelope, an L0 bound or tolerance row, a body definition): a tag on the row | The clause field `helper_row`, beside `defines` |
+| What a row is to the helper it defines (an ABS envelope, an L0 bound or tolerance row, a body definition): a tag on the row | Read from the row's owner: the kind of the definition that states the row and the row's place among its rows (`DecideHelperDefinition::Rows`). A clause holds no role |
 | Rows a rewrite adds: appended by wrapping the whole tree in a new AND; role in `__decide_structural_constraint__`, `__defines_<i>__`, `__objective_row__` | A `BoundDecideClause` appended to the vector, its origin saying what it is |
 | Shape, easy MIN/MAX, folded bound, tightest frame bound: tags on the comparison | Fields of the clause |
 

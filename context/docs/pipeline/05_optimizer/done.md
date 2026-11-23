@@ -750,7 +750,7 @@ skipped by the reducer as before; its helper row is skipped too and leaves `t` f
 row nothing reads.
 
 **A helper has no box.** It holds the body's value, which may be negative
-(`power(x, 2) - 10 * x`), so it is a signed helper (`signed_helper_vars`), which
+(`power(x, 2) - 10 * x`), so it is a signed helper (`DecideHelperDefinition::Signed`), which
 `FoldSingletonRows` gives no floor of 0, and nothing derives a ceiling. With no box there is no Big-M for an extremum over `t`, so
 only a backend that states MIN/MAX natively takes it: stage 08 takes the native arm for a
 family with no box (`../06_model_formulation/done.md`). When the backend chosen in §0
@@ -764,7 +764,7 @@ gate, as a reducer nested in one does. The refusal names the reducer and not a c
 
 EXPLAIN says how the helper holds the body: `power(x, 2) becomes a helper decision per row,
 at least its value` (`BODY_AT_LEAST`; `at most`, `equal to` for `BODY_AT_MOST`,
-`BODY_EQUAL`). The defining row itself is left out (`DecideHelperRow::DEFINITION` in the row's `helper_row`): it
+`BODY_EQUAL`). The defining row itself is left out (a row a `DEFINITION` owns): it
 restates the body the reducer already prints. The row carries the source clause of the
 first clause that reads the helper (`DecideHelperDefinition::origin`), so a refusal can quote it, and
 no removal group (§ The value rewrite).
@@ -798,7 +798,7 @@ side (`CollectReducerSites`; a data-only reducer is a number and stays) the pass
    INTEGER when the reducer's value is whole by declared types, every constant inside
    counted (`DecideValueIsWholeNumbered`, shared with stage 04's integer step), so a strict bound on the
    rewritten row still steps on the lattice; else DOUBLE. It is keyed by a scope of its
-   own (`KeyedScopeInfo::value_link`), whose classes are the groups of its path key among
+   own (`DecideValueHelperOfScope`), whose classes are the groups of its path key among
    the rows its path keeps, built by stage 08: a path key `by ()` throughout is one class,
    or none when no row holds a member, so a read of it skips its instance (D68). Its label
    is the reducer's SQL, `by` included
@@ -1034,7 +1034,7 @@ semantics.
 A range over decisions, `agg(from F1 to F2 ...: e) over (...)` (`../../language/guide.md` §5.6, D78), is a reducer
 whose groups are the frame's **windows** -- the range several anchors share: one per timeline when neither end depends
 on the anchor, one per position (peer) otherwise. `decide_rewrite_frames.cpp` replaces each by a helper decision with
-one instance per window (a keyed scope of its own, `KeyedScopeInfo::value_link`, its key the frame's timeline key for a
+one instance per window (a keyed scope of its own, its key the frame's timeline key for a
 plan to name it by; stage 08 numbers the windows from the frame map) and a `REDUCER_VALUE` definition whose reducer is the frame's marker, one per
 frame however many copies the clause holds. It goes through the value rewrite's door (`AddValueHelper`): the helper's push is read off the way its comparison pushes it, through `+`, `-`, data factors
 and enclosing SUM, AVG, MIN and MAX (`WalkPolarity`, `CollectRangeSigns`), both sides under a norm (D79). It runs first among the
@@ -1131,7 +1131,7 @@ negative bound is honored instead of clamped up. Whether a lower bound was writt
 separate flag (`lower_written`), not a reserved value: stage 08 gives the default 0
 floor only to a decision with no lower bound written, and a written `x >= -1e30` is no
 bound, like any bound of magnitude 1e20 or more. A helper that holds a value of either
-sign (`signed_helper_vars`: a value rewrite's reducer, a defined non-linear body) is
+sign (`Signed()`: a value rewrite's reducer, a defined non-linear body, a Boolean product) is
 marked written before folding, so it starts with no floor and a bound written on it still
 folds in.
 

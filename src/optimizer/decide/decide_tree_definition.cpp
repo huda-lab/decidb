@@ -259,8 +259,6 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 
 	using Kind = LogicalDecide::RewriteAccount::Kind;
 	DecideCanonicalizer canonicalizer(context, decide_index, decide.bound);
-	// The placeholders are appended after both walks, so neither walk sees the structural rows registered here.
-	vector<BoundDecideClause> rows;
 	for (idx_t family = 0; family < families.size(); family++) {
 		auto &members = families[family];
 		auto &first = sites[members[0]];
@@ -282,7 +280,6 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 		idx_t helper =
 		    AddAuxiliaryDecision(decide, string(BODY_NAME_PREFIX) + to_string(family) + "__",
 		                         whole ? LogicalType::INTEGER : LogicalType::DOUBLE, false, scope, body_text);
-		decide.signed_helper_vars.push_back(helper);
 		// Each clause that reads the helper says so in its own plan, once.
 		const auto kind = equal ? Kind::BODY_EQUAL : down ? Kind::BODY_AT_LEAST : Kind::BODY_AT_MOST;
 		vector<std::pair<idx_t, bool>> told;
@@ -309,14 +306,6 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 		definition->origin = DecideRowOrigin::OfClause(first.origin.source_clause_id);
 		decide.helper_definitions.push_back(std::move(definition));
 		const idx_t definition_index = decide.helper_definitions.size() - 1;
-		// Tree construction owns the function's row. This placeholder keeps its former clause-list position for
-		// EXPLAIN and source ordering until that tree attaches the row below the F node.
-		BoundDecideClause placeholder;
-		placeholder.body = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
-		placeholder.structural = true;
-		placeholder.defines = helper;
-		placeholder.helper_row = DecideHelperRow::DEFINITION;
-		rows.push_back(std::move(placeholder));
 
 		for (auto member : members) {
 			auto &reducer = *sites[member].reducer;
@@ -334,9 +323,22 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 	if (objective_defined) {
 		decide.SetObjective(context, std::move(decide.bound.objective));
 	}
-	for (auto &row : rows) {
-		decide.AddClause(context, std::move(row));
+}
+
+void DecideBodyDefinition::Rows(ClientContext &context, const LogicalDecide &decide,
+                                const std::function<void(const BoundDecideClause &)> &callback) const {
+	auto left = BoundCastExpression::AddCastToType(context, decide.bound.variables[helper]->Copy(), body->return_type);
+	auto row =
+	    MakeFormulationRow(make_uniq<BoundComparisonExpression>(relation, std::move(left), body->Copy()), origin);
+	if (helper < decide.bound.variable_scopes.size()) {
+		auto &scope = decide.bound.variable_scopes[helper];
+		if (scope.IsGlobal() || scope.IsKeyed()) {
+			row.scope = DecideClauseScope::Per(scope.IsKeyed() ? decide.bound.keyed_scopes[scope.keyed_scope_idx].key
+			                                                   : DConstants::INVALID_INDEX);
+		}
 	}
+	row.scope.when = when ? when->Copy() : nullptr;
+	callback(row);
 }
 
 } // namespace duckdb

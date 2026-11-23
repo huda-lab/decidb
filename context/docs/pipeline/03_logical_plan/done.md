@@ -33,7 +33,7 @@ changes. A record holds
 | `origin` (`DecideRowOrigin`) | the source clause (an index into `constraint_sources`), the removal group, and whether a rewrite made the row for the objective | `InitializeConstraintSourceInfo`, `TagAtomicRemovalGroups`, rewrites |
 | `between` | which comparison of a `BETWEEN` the row is | binder |
 | `shape`, `group_key` | the row shape (`CanonicalConstraintClass`) and, in the aggregate shape, the `by` key its decision reducers share | canonicalizer, once (`ClassifyClause`); `RewriteScopedReducers` for the clause it leaves |
-| `structural`, `defines` | a row a rewrite added to define an auxiliary, and the auxiliary | rewrites |
+| `structural` | a row a rewrite added to the clause list (an `IN`'s domain rows), which no repair loosens | rewrites |
 | `minmax_easy` | an easy-direction MIN or MAX that keeps its reducer | `RewriteMinMax` |
 | `folded_bound`, `folded_clause_rows` | a bound folded into the column's box, and whether a repair loosens it through the clause's rows | `FoldSingletonRows` |
 | `bound_read_shape`, `bound_read_type` | what bound reduction relied on (`../05_optimizer/done.md`) | `RewriteRhsAggregates` |
@@ -103,9 +103,19 @@ agree.
   `Equals` compares it; `DecideStripTags` unsets it on
   the copy `ExpressionBuilder::Of` takes. A call that is first a `PRODUCT` and then a reducer's body names the `DEFINITION`.
   A `REDUCER_VALUE` has no kept call: the reader holds the helper's column.
-- **What a row is to the helper it defines is a clause field.** `BoundDecideClause::helper_row` (`DecideHelperRow`:
-  `ABS_ENVELOPE`, `ABS_NEGATED_ENVELOPE`, `L0_BOUND`, `L0_TOLERANCE`, `DEFINITION`) beside `defines`, the helper;
-  the tree's facts and `DecideConstraint` copy the field.
+- **A definition states its rows, and a row's role is read from its owner.** `DecideHelperDefinition::Rows` is
+  virtual: an ABS makes its two envelope rows from its operand (`helper >= body`, then `helper >= -body`,
+  `NEGATED_ROW`), a `DEFINITION` its one row from its body and relation, and an L0 indicator hands out the three
+  rows it holds (`links`; the last, `TOLERANCE_ROW`, holds an ABS a later rewrite reads, which is why they are held
+  and not made). The tree reads them in one loop over the table, after the written clauses, in the order the
+  definitions were made (R30), and roots each beneath its F node. A clause holds no role and no helper: the role is
+  the owner's kind and the row's place in the F node's `rows`, the helper is the owner's, and the row is rigid
+  because it has an owner. `DecideConstraint::defined_var` is set from the owner.
+- **A helper's facts are the definition's.** Whether a helper holds a value of either sign is `Signed()`, true for a
+  Boolean product, a `DEFINITION` and a `REDUCER_VALUE`. The keyed scope a `REDUCER_VALUE` helper has of its own is
+  the scope of its helper decision; `DecideValueHelperOfScope` finds the helper of a scope. The label a plan names
+  an auxiliary decision by stays `aux_var_expressions`, a list by decision: an `IN`'s indicator has a label and no
+  entry of the table.
 - **One loop reads the table.** `LogicalDecide::EnumerateExpressions` (every expression execution evaluates),
   `EnumerateBodies` (every body a rewrite reads, with its owner's push and rows: `DecideOwnedBody`, whose `Owner` is
   `CLAUSE`, `OBJECTIVE` or `HELPER` with the entry's index) and the tree's registration each visit the entries in
@@ -123,9 +133,8 @@ agree.
    reader that matches it by shape (the term splitter, the product form, the canonicalizer's operator rebuild), and
    two readers hold a call and no table (`DecideDegreeOf`, the canonicalizer's `HoldsReducer`), which is why the
    reference carries the kind beside the index.
-2. *The six row marks are one clause field*, `helper_row`, an enumeration on the record (the design's rule that a
-   fact of a row is a field of its record), not facts of a function node: the rows are clause records the tree reads
-   one at a time, and a row is one thing to one helper.
+2. *A row's role is its owner's*, not a field of the row: the tree roots a row with the definition that states it,
+   so every clause would otherwise hold three fields that restate it.
 3. *A product is two kinds.* `PRODUCT` is the kept call's entry, whose body is the expansion and which has no helper;
    `BOOLEAN_PRODUCT` is one entry per Boolean product the expansion reads, each one helper. One group record would be
    an entry with any number of helpers, where every other entry has at most one.
@@ -280,9 +289,8 @@ a subquery is recognised by its text instead, since bound subqueries do not comp
 `keyed_scopes` holds the key scopes, one per key that keys decisions or a reducer's own
 `per` (`KeyedScopeInfo`: the key, the decisions it keys). `variable_scopes` points each
 keyed decision at one, with its key as written (`declared_key`). A scope the optimizer
-creates for a helper decision of the value rewrite has the link's `by` key and names the
-link (`KeyedScopeInfo::value_link`, deliberately absent from the serialization: an
-optimized plan is never serialized); its entities are the link's `by` groups among the
+creates for a helper decision of the value rewrite has the link's `by` key, and is the scope of
+the link's helper (`DecideValueHelperOfScope`); its entities are the link's `by` groups among the
 rows the link's clause keeps, so it shares no scope with a binder scope on the same key.
 
 **From the canonicalizer** — `objective_constant_offset`, and the variant signatures
@@ -513,9 +521,9 @@ solver's construction) is printed under its clause before the rows it left; the 
 (`origin.objective`, returned by `CollectDecideClauseLayers` in `objective_rows`), print
 under the objective. A MIN or MAX prints as written in a clause and in the objective, its account under it; an AVG
 objective prints its sum under its account; an
-L0 link's constants print by the names the user writes or sets them with: the bound of an `L0_BOUND` row
-(`BoundDecideClause::helper_row`) as `M` when automatic (`DecideHelperDefinition::auto_m`) and as the number in
-`norm(e, 0, M)` when written, and the tolerance of an `L0_TOLERANCE` row as `decide_l0_tolerance`. A rewrite's row prints its clause's scope as written
+L0 link's constants print by the names the user writes or sets them with: the bound of its two bound rows
+as `M` when automatic (`DecideL0IndicatorDefinition::auto_m`) and as the number in
+`norm(e, 0, M)` when written, and the tolerance of its third row (`TOLERANCE_ROW`) as `decide_l0_tolerance`. A rewrite's row prints its clause's scope as written
 (`per region:`, and no `when true:` the query did not write; `DecideObjectiveQualifier` for the objective's
 rows), drops a zero the rewrite wrote (`IsRewriteZero`: a numeric constant with no query location, so `0 + v`
 prints `v`), and prints a DOUBLE constant the rewrite wrote as a plain number (`RewriteNumberText`: `>= 0`).

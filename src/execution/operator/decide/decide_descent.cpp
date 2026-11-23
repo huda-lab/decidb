@@ -1513,7 +1513,8 @@ void DecideDescent::Append(DataChunk &chunk, idx_t row_base) {
 	// are instead populated when their defining/reading nodes are reached.
 	for (idx_t scope = 0; scope < tree.keyed_scopes.size(); scope++) {
 		auto &definition = tree.keyed_scopes[scope];
-		if (definition.value_link != DConstants::INVALID_INDEX || definition.signature != DConstants::INVALID_INDEX) {
+		if (DecideValueHelperOfScope(tree.definitions, tree.variable_scopes, scope) ||
+		    definition.signature != DConstants::INVALID_INDEX) {
 			continue;
 		}
 		DataChunk keys;

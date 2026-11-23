@@ -53,10 +53,8 @@ idx_t decide_rewrite::AddValueHelper(LogicalDecide &decide, unique_ptr<DecideRed
                                      LogicalDecide::RewriteAccount::Kind account) {
 	const idx_t link_idx = decide.helper_definitions.size();
 	link->origin = DecideRowOrigin::OfClause(source_clause_id);
-	// One instance per class of a scope of its own (KeyedScopeInfo::value_link), which execution builds from the link.
-	KeyedScopeInfo helper_scope = scope;
-	helper_scope.value_link = link_idx;
-	decide.bound.keyed_scopes.push_back(std::move(helper_scope));
+	// One instance per class of a scope of its own (DecideValueHelperOfScope), which execution builds from the link.
+	decide.bound.keyed_scopes.push_back(scope);
 	auto var_scope = DecideVarScopeInfo::Keyed(decide.bound.keyed_scopes.size() - 1);
 	// Whole-numbered when the value is, so a strict bound on a row reading it still steps on the integer lattice.
 	// F6: a diagnosis, and a plan, name the helper by what it holds.
@@ -65,8 +63,6 @@ idx_t decide_rewrite::AddValueHelper(LogicalDecide &decide, unique_ptr<DecideRed
 	    string(VALUE_LINK_NAME_PREFIX) + to_string(decide.HelperCount(DecideHelperKind::REDUCER_VALUE)) + "__";
 	link->helper = AddAuxiliaryDecision(decide, name, aux_type, false, var_scope, link->label);
 	AddRewriteAccount(decide, source_clause_id, account, link->label);
-	// A reducer's value may be negative: no default floor. The formulation pass boxes it by its members' reach.
-	decide.signed_helper_vars.push_back(link->helper);
 	decide.helper_definitions.push_back(std::move(link));
 	return link_idx;
 }

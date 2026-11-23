@@ -176,10 +176,9 @@ idx_t AddBooleanProduct(LogicalDecide &decide, const DecideRowOrigin &origin, id
 	// query-wide product is one column and a keyed one a column per key, not a copy per row.
 	auto scope = JoinScopes(decide.bound.variable_scopes[first], decide.bound.variable_scopes[second]);
 	idx_t aux_idx = AddAuxiliaryDecision(decide, aux_name, aux_type, both_bool, scope, label);
-	// A product takes its factor's sign (`b * x` is x where b = 1, -5 for x >= -5): no default floor of 0. Its
-	// column is floored at the product's range, min(0, the factor's floor) (LinearizeBilinear). An AND of two
-	// Booleans keeps its BOOL box.
-	decide.signed_helper_vars.push_back(aux_idx);
+	// A product takes its factor's sign (`b * x` is x where b = 1, -5 for x >= -5): no default floor of 0
+	// (DecideBooleanProductDefinition::Signed). Its column is floored at the product's range, min(0, the factor's
+	// floor) (LinearizeBilinear). An AND of two Booleans keeps its BOOL box.
 	AddRewriteAccount(decide, origin.source_clause_id, LogicalDecide::RewriteAccount::Kind::HELPER, label);
 
 	// Both kinds are linked per instance of the auxiliary by LinearizeBilinear, which reads the factors' boxes

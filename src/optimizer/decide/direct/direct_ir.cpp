@@ -200,8 +200,6 @@ private:
 	void ReadKeyedScopes(DirectIR &ir) const {
 		for (auto &scope : decide.bound.keyed_scopes) {
 			DirectIRKeyedScope ir_node;
-			// The IR is read before the value rewrite makes its helper scopes; a binder scope's key is columns.
-			D_ASSERT(scope.value_link == DConstants::INVALID_INDEX);
 			if (scope.signature != DConstants::INVALID_INDEX) {
 				// A reducer's own `per` over a body with variants (D71): its instances are the key's classes split
 				// by the body's values, which the operator numbers and no rule's plan reads.

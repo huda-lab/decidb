@@ -505,8 +505,10 @@ void DecideOptimizer::FoldSingletonRows(LogicalDecide &decide) {
 		}
 	}
 	// A helper that holds a value of either sign (`sum(x - 5)`, `power(x, 2) - 10 * x`): no default floor.
-	for (auto var : decide.signed_helper_vars) {
-		decide.singleton_row_boxes[var].lower_written = true;
+	for (auto &definition : decide.helper_definitions) {
+		if (definition->Signed()) {
+			decide.singleton_row_boxes[definition->helper].lower_written = true;
+		}
 	}
 
 	for (auto &clause : decide.bound.clauses) {

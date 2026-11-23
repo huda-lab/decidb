@@ -28,20 +28,6 @@ every one of them:
 - **Tests** (R32): focused tests in each task's **Done when**; `make decide-test` once at the end of each queue
   group; every other suite in TREE-28.
 
-## TREE-22 — A definition owns its rows and its facts
-
-- **Problem.** Every clause holds `helper_row`, `structural` and `defines`, while the tree's `Root(clause, owner)`
-  already has the owner (`decide_tree_terms.hpp:163,204`, `decide_tree.cpp:613-616`). An L0 indicator's rows live
-  on the definition (`links`); an ABS's and a definition's rows are made at lowering: two paths.
-  `signed_helper_vars`, `aux_var_expressions` and `KeyedScopeInfo::value_link` are per-helper facts outside the
-  table (`logical_decide.hpp:103,534,542`).
-- **Change.** Each definition owns its rows in named members, made in one place for every kind. A row's role is
-  "owned by definition i", read from the owner. The three side lists are fields of the definition.
-
-- **Done when.** `helper_row` is named nowhere or only on the definition;
-  `./test/decide/run_tests.sh -k "abs or norm or l0 or definition or explain or diagnos"` passes; a stored plan
-  of a query mixing an ABS, an L0 count and a product pins the order of helper rows (R30).
-
 ## TREE-7 — Each atom of a clause is handed over with its node
 
 - **Problem.** Two readers take each clause: `DecideTreeBuilder::Lower` collects what a node reads, and
@@ -66,7 +52,7 @@ every one of them:
 - **Change.** Each field with no reader outside the builder goes; each copy is read from the definition or the
   clause record. A G holds its operand's index. A field judged dead on grep evidence is confirmed by a probe
   before it is deleted.
-- **Needs.** TREE-7, TREE-22.
+- **Needs.** TREE-7.
 - **Done when.** `DecideTreeOperand` is named nowhere;
   `./test/decide/run_tests.sh -k "one_pass or frame or abs or minmax or helper or explain"` and
   `build/release/test/unittest "[decidb]"` pass; the probes are byte-identical.
