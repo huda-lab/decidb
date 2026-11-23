@@ -61,21 +61,6 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   read; 1 moves the same state behind more plumbing and 2 pays time for no reader's gain.
 - **Done when.** Model goldens identical; `./test/decide/run_tests.sh -k "bound or not_equal or diagnose"`.
 
-## MODEL-20 — The helper-form rule names the readers that take members
-
-- **Problem.** `ChooseHelperForms` writes a helper in unless a listed reader holds its column
-  (`decide_helper_form.cpp:43-46`, `154`, `161`, `199-220`; complexity 71 in one function): a reader the list misses
-  leaves a term naming an instance with no column, an internal error for a keyed helper and column -1 for a
-  query-wide one (`ilp_model.hpp:85`). A rewrite account is matched to its helper by label text (`:262-265`,
-  `physical_decide.cpp:448-451`), so two helpers that print alike share accounts.
-- **Change.** The rule lists the readers that take a linear expression (a linear row of a clause, the linear
-  objective, one helper's member); any other holds the column. The pass is split into the reading of readers and the
-  choice. An account names its helper's definition. A debug check in stage 06 that no term names an instance with no
-  column.
-- **Done when.** `build/release/test/unittest "[decidb]"` (`test_decidb_helper_form.cpp`);
-  `./test/decide/run_tests.sh -k "anr or nested or inlin or explain"`; lizard over `decide_helper_form.cpp` beside
-  71.
-
 ## MODEL-21 — A clause's and the objective's terms are extracted by one function
 
 - **Problem.** `decide_linear_form.cpp` reads a clause and the objective through parallel functions that each fill a

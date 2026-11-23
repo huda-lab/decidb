@@ -294,11 +294,12 @@ void decide_rewrite::RequireLinearOperand(const DecideTermSplitter &splitter, co
 }
 
 void decide_rewrite::AddRewriteAccount(LogicalDecide &decide, idx_t source_clause_id,
-                                       LogicalDecide::RewriteAccount::Kind kind, string subject) {
+                                       LogicalDecide::RewriteAccount::Kind kind, string subject, idx_t helper) {
 	LogicalDecide::RewriteAccount account;
 	account.source_clause_id = source_clause_id;
 	account.kind = kind;
 	account.subject = std::move(subject);
+	account.helper = helper;
 	decide.rewrite_accounts.push_back(std::move(account));
 }
 

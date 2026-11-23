@@ -718,6 +718,9 @@ public:
 		idx_t source_clause_id = DConstants::INVALID_INDEX;
 		Kind kind = Kind::HELPER;
 		string subject;
+		//! The reducer helper the account is of, by its decision: what the helper's form and a run's finding are
+		//! matched to, since two helpers may print alike. INVALID_INDEX for any other account.
+		idx_t helper = DConstants::INVALID_INDEX;
 	};
 	vector<RewriteAccount> rewrite_accounts;
 

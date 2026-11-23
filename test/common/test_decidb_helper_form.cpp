@@ -22,8 +22,8 @@ LogicalDecide *FindFormDecide(LogicalOperator &op) {
 	return nullptr;
 }
 
-//! The form the optimizer gives each reducer helper of a query over (id, g, h, p, w), by the helper's label.
-duckdb::vector<std::pair<string, DecideHelperForm>> HelperForms(Connection &con, const string &decide_clause) {
+//! The optimized plan of a query over (id, g, h, p, w).
+duckdb::unique_ptr<LogicalOperator> OptimizedPlan(Connection &con, const string &decide_clause) {
 	if (!con.HasActiveTransaction()) {
 		con.BeginTransaction();
 	}
@@ -34,7 +34,12 @@ duckdb::vector<std::pair<string, DecideHelperForm>> HelperForms(Connection &con,
 	Planner planner(*con.context);
 	planner.CreatePlan(std::move(parser.statements[0]));
 	Optimizer optimizer(*planner.binder, *con.context);
-	auto plan = optimizer.Optimize(std::move(planner.plan));
+	return optimizer.Optimize(std::move(planner.plan));
+}
+
+//! The form the optimizer gives each reducer helper of the query, by the helper's label.
+duckdb::vector<std::pair<string, DecideHelperForm>> HelperForms(Connection &con, const string &decide_clause) {
+	auto plan = OptimizedPlan(con, decide_clause);
 	auto *decide = FindFormDecide(*plan);
 	REQUIRE(decide != nullptr);
 	duckdb::vector<std::pair<string, DecideHelperForm>> forms;
@@ -169,4 +174,24 @@ TEST_CASE("A helper a reader states by its column keeps the column", "[decidb]")
 	auto one_sided = HelperForms(
 	    con, "x(REAL) SUCH THAT x <= 5 AND per t.g: abs(max(x) by (t.g, t.h) - 3) + t.w <= 9 MAXIMIZE sum(x)");
 	REQUIRE(FormOf(one_sided, "max(x) by (t.g, t.h)") == DecideHelperForm::ONE_MEMBER_WRITTEN_IN);
+}
+
+// An account is of one helper, whatever it prints as: two helpers of one label, under two clauses, each say what they
+// became (RewriteAccount::helper).
+TEST_CASE("A helper's account follows its own form", "[decidb][helper_form]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	auto plan = OptimizedPlan(con, "x(REAL), b(BOOL) SUCH THAT x <= 5 AND when t.p > 1: b * sum(x) by (t.g) <= 4 AND "
+	                               "sum(x) by (t.g) + sum(x) <= 9 MAXIMIZE sum(x)");
+	auto *decide = FindFormDecide(*plan);
+	REQUIRE(decide != nullptr);
+	using Kind = LogicalDecide::RewriteAccount::Kind;
+	duckdb::vector<Kind> kinds;
+	for (auto &account : decide->rewrite_accounts) {
+		if (account.subject == "sum(x) by (t.g)") {
+			kinds.push_back(account.kind);
+		}
+	}
+	// The product's factor keeps its column; the plain row's is written in.
+	REQUIRE(kinds == duckdb::vector<Kind> {Kind::HELPER_PER_GROUP, Kind::VALUE_HELPER_INLINED});
 }

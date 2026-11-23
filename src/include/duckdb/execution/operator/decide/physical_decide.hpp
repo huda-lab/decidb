@@ -165,9 +165,10 @@ private:
 	//! Records an EXPLAIN ANALYZE line (run_time_accounts) for a scoped expression that generated `variants`
 	//! instances -- `unit`: constraints, or a reducer's values -- from `classes` classes.
 	void RecordVariants(const DecideSignature &signature, const char *unit, idx_t variants, idx_t classes) const;
-	void RecordRunTimeAccount(
-	    idx_t source_clause_id, string subject,
-	    LogicalDecide::RewriteAccount::Kind kind = LogicalDecide::RewriteAccount::Kind::RUN_TIME) const;
+	//! `helper` is the reducer helper the line is of (RewriteAccount::helper).
+	void RecordRunTimeAccount(idx_t source_clause_id, string subject,
+	                          LogicalDecide::RewriteAccount::Kind kind = LogicalDecide::RewriteAccount::Kind::RUN_TIME,
+	                          idx_t helper = DConstants::INVALID_INDEX) const;
 	//! What the data left of each clause (deck pp. 50, 56): the instances it skipped for having no value, an EXPLAIN
 	//! ANALYZE line under it, and a clause left with none, which constrains nothing, a warning on stderr.
 	void ReportSkippedInstances(const DecideGlobalSinkState &gstate) const;

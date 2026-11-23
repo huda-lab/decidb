@@ -141,9 +141,9 @@ void RequireLinearOperand(const DecideTermSplitter &splitter, const Expression &
 
 //! Record what a rewrite made of `subject` (as RenderForPlan prints it), for EXPLAIN
 //! (LogicalDecide::rewrite_accounts): under the clause `source_clause_id`, or the
-//! objective (INVALID_INDEX).
+//! objective (INVALID_INDEX). `helper` is the reducer helper the account is of (RewriteAccount::helper).
 void AddRewriteAccount(LogicalDecide &decide, idx_t source_clause_id, LogicalDecide::RewriteAccount::Kind kind,
-                       string subject);
+                       string subject, idx_t helper = DConstants::INVALID_INDEX);
 
 //! The helper decision holding `link`'s value, appended to the plan's (LogicalDecide::helper_definitions), its floor
 //! free: whole-numbered when `whole`; one instance per class of `scope` -- a copy of which becomes the helper's own,

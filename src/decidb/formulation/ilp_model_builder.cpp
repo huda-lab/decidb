@@ -223,6 +223,12 @@ idx_t VarIndexer::OwnerOf(idx_t col) const {
 	return scalar_slot_var[col - scalar_block_start];
 }
 
+void VarIndexer::ThrowNoColumn(idx_t var_idx, idx_t inst) {
+	throw InternalException("DECIDE: a column was asked of instance %llu of decision %llu, which has none: it has no "
+	                        "value, or is written into its readers",
+	                        inst, var_idx);
+}
+
 VarIndexer VarIndexer::Build(SolverInput &input) {
 	VarIndexer idx;
 	// The layout is their one reader from here, and outlives the input for the readback.

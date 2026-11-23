@@ -62,7 +62,7 @@ idx_t decide_rewrite::AddValueHelper(LogicalDecide &decide, unique_ptr<DecideRed
 	const auto name =
 	    string(VALUE_LINK_NAME_PREFIX) + to_string(decide.HelperCount(DecideHelperKind::REDUCER_VALUE)) + "__";
 	link->helper = AddAuxiliaryDecision(decide, name, aux_type, false, var_scope, link->label);
-	AddRewriteAccount(decide, source_clause_id, account, link->label);
+	AddRewriteAccount(decide, source_clause_id, account, link->label, link->helper);
 	decide.helper_definitions.push_back(std::move(link));
 	return link_idx;
 }
@@ -241,11 +241,10 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 		// Each clause that reads the helper says so in its own plan, once.
 		bool told = false;
 		for (auto &account : decide.rewrite_accounts) {
-			told = told || (account.source_clause_id == source_clause_id && account.kind == account_kind &&
-			                account.subject == plan_label);
+			told = told || (account.source_clause_id == source_clause_id && account.helper == link.helper);
 		}
 		if (!told) {
-			AddRewriteAccount(decide, source_clause_id, account_kind, plan_label);
+			AddRewriteAccount(decide, source_clause_id, account_kind, plan_label, link.helper);
 		}
 		ReplaceWithDecision(helpers.context, decide, link.helper, *site.slot);
 		return;

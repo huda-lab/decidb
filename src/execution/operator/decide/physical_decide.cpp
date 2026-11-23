@@ -111,7 +111,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 		const bool replaced = std::any_of(
 		    run_time_accounts.begin(), run_time_accounts.end(), [&](const LogicalDecide::RewriteAccount &run) {
 			    return run.kind == LogicalDecide::RewriteAccount::Kind::VALUE_HELPER_INLINED &&
-			           run.source_clause_id == account.source_clause_id && run.subject == account.subject;
+			           run.source_clause_id == account.source_clause_id && run.helper == account.helper;
 		    });
 		if (!replaced) {
 			accounts.push_back(account);
@@ -438,8 +438,8 @@ void PhysicalDecide::ReportInlinedHelpers(const SolverInput &input) const {
 		                             : LogicalDecide::RewriteAccount::Kind::RUN_TIME;
 		// Each clause whose plan names the helper: an account of it is one of the helper (AddValueHelper).
 		for (auto &account : display.rewrite_accounts) {
-			if (account.subject == definition.label) {
-				RecordRunTimeAccount(account.source_clause_id, line, kind);
+			if (account.helper == helper) {
+				RecordRunTimeAccount(account.source_clause_id, line, kind, helper);
 			}
 		}
 	}
@@ -447,7 +447,7 @@ void PhysicalDecide::ReportInlinedHelpers(const SolverInput &input) const {
 
 //! One line EXPLAIN ANALYZE prints under clause `source_clause_id` (INVALID_INDEX: the objective), once.
 void PhysicalDecide::RecordRunTimeAccount(idx_t source_clause_id, string subject,
-                                          LogicalDecide::RewriteAccount::Kind kind) const {
+                                          LogicalDecide::RewriteAccount::Kind kind, idx_t helper) const {
 	for (auto &recorded : run_time_accounts) {
 		if (recorded.source_clause_id == source_clause_id && recorded.subject == subject) {
 			return; // a clause the rewrites made several rows of
@@ -457,6 +457,7 @@ void PhysicalDecide::RecordRunTimeAccount(idx_t source_clause_id, string subject
 	account.source_clause_id = source_clause_id;
 	account.kind = kind;
 	account.subject = std::move(subject);
+	account.helper = helper;
 	run_time_accounts.push_back(std::move(account));
 }
 

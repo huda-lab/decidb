@@ -329,6 +329,8 @@ join its constant (`obj_constant`), as a kept helper's definition carried them i
 reading an absent instance (stage 08), so one reaching the builder is an internal error; the objective reads one as
 no value, as it reads the spare column of an absent class (D84). A row over one decision that may fold into its box
 never reads an inlined helper: the plan keeps the column of a helper such a row reads (`ChooseHelperForms`, stage 05).
+A term that names an instance with no column is an internal error, whatever the decision's scope
+(`VarIndexer::InstanceColumn`).
 
 ### Quadratic and bilinear constraints
 

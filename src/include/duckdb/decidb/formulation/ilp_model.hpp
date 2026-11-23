@@ -109,20 +109,22 @@ struct VarIndexer {
 	}
 
 	//! Flat column of instance `inst` of a variable, which a term names (ClauseRecords::instances): a row for a
-	//! row-scoped variable, a class for a keyed one, 0 for a query-wide one.
+	//! row-scoped variable, a class for a keyed one, 0 for a query-wide one. A term never names an instance with no
+	//! column, whatever its scope.
 	inline idx_t InstanceColumn(idx_t var_idx, idx_t inst) const {
 		switch (var_scope[var_idx]) {
 		case DecideVarScope::ROW:
 			return inst * num_row_vars + row_var_offset[var_idx];
 		case DecideVarScope::GLOBAL:
+			if (scalar_var_index[var_idx] == DConstants::INVALID_INDEX) {
+				ThrowNoColumn(var_idx, inst);
+			}
 			return scalar_var_index[var_idx];
 		default: {
 			if (var_idx < instance_slot.size() && !instance_slot[var_idx].empty()) {
 				const idx_t slot = instance_slot[var_idx][inst];
 				if (slot == DConstants::INVALID_INDEX) {
-					throw InternalException("DECIDE: a column was asked of instance %llu of decision %llu, which has "
-					                        "none: it has no value, or is written into its readers",
-					                        inst, var_idx);
+					ThrowNoColumn(var_idx, inst);
 				}
 				return keyed_var_base[var_idx] + slot;
 			}
@@ -130,6 +132,7 @@ struct VarIndexer {
 		}
 		}
 	}
+	[[noreturn]] static void ThrowNoColumn(idx_t var_idx, idx_t inst);
 
 	//! The instance of `var_idx` that flat column `col` is, for a column in the decide-variable blocks: the inverse of
 	//! InstanceColumn().
