@@ -22,13 +22,18 @@ struct DecideReducerValueDefinition;
 struct DecideObjective;
 struct DecideTree;
 
-//! The G each reducer of the clause in hand became, by the reducer's address in that clause.
-using DecideReducerNodes = unordered_map<const Expression *, idx_t>;
+//! One atom of a clause's left side or of the objective, as the walk lowered it: the G its reducer became, which its
+//! terms range over. INVALID_INDEX for a tuple term, which has no reducer.
+struct DecideLoweredAtom {
+	CanonicalAtom atom;
+	idx_t reducer = DConstants::INVALID_INDEX;
+};
 
-//! The term half of the one lowering walk (DecideTreeConstruction, language/guide.md §6.4): the walk lowers a canonical
-//! clause into nodes and hands the same clause here, which splits it into the records its root holds
-//! (DecideConstraint, DecideObjective, a helper's DecideBody::members). Every term a reducer produces names the G it
-//! ranges over (DecideTerm::child), read from `reducers`, which the walk fills as it lowers that clause.
+//! The term half of the one lowering walk (DecideTreeConstruction, language/guide.md §6.4): the walk reads a canonical
+//! clause's atoms once, lowers each into nodes and hands the atoms with their nodes here, which splits them into the
+//! records the clause's root holds (DecideConstraint, DecideObjective, a helper's DecideBody::members). Every term a
+//! reducer produces names the G it ranges over (DecideTerm::child), the atom's. A reducer body has two readings by
+//! two readers: what its node reads (the walk) and its coefficient algebra (here).
 //!
 //! It runs at physical planning (PhysicalPlanGenerator::CreatePlan of a LogicalDecide), after the DECIDE optimizer has
 //! finished and the column bindings are final. It must stay after every rewrite and after singleton-row folding: the
@@ -42,13 +47,13 @@ using DecideReducerNodes = unordered_map<const Expression *, idx_t>;
 //! stage 08 to evaluate against the relational input.
 class DecideTermLowering {
 public:
-	DecideTermLowering(ClientContext &context, LogicalDecide &op, const DecideTree &tree,
-	                   const DecideReducerNodes &reducers);
+	DecideTermLowering(ClientContext &context, LogicalDecide &op, const DecideTree &tree);
 	~DecideTermLowering();
-	//! The terms of a canonical clause, or of a row a function owns, into `constraint`, which holds its facts.
-	void Clause(const BoundDecideClause &clause, DecideConstraint &constraint);
-	//! The objective's records, null for one that reads no decision.
-	unique_ptr<DecideObjective> Objective(const BoundDecideClause &objective);
+	//! The terms of a canonical clause, or of a row a function owns, into `constraint`, which holds its facts. `atoms`
+	//! are its left side's.
+	void Clause(const BoundDecideClause &clause, const vector<DecideLoweredAtom> &atoms, DecideConstraint &constraint);
+	//! The objective's records, null for one that reads no decision. `atoms` are its body's.
+	unique_ptr<DecideObjective> Objective(const BoundDecideClause &objective, const vector<DecideLoweredAtom> &atoms);
 	//! A helper's member terms and its frame's `else` terms, into the body of its G or O.
 	void Members(DecideReducerValueDefinition &link, DecideBody &body);
 	//! Once every term is split: the frames left in the records become the columns they read, and the frame columns

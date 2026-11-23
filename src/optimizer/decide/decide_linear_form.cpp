@@ -69,16 +69,14 @@ static bool IsReducer(const Expression &expr) {
 //! list, their scopes, and what earlier passes recorded on the clauses. It never reads a data row.
 class DecideLinearFormBuilder {
 public:
-	DecideLinearFormBuilder(ClientContext &context, LogicalDecide &op, const DecideTree &tree,
-	                        const DecideReducerNodes &reducers)
-	    : context(context), op(op), tree(tree), reducers(reducers), decide_index(op.decide_index),
-	      splitter(context, op) {
+	DecideLinearFormBuilder(ClientContext &context, LogicalDecide &op, const DecideTree &tree)
+	    : context(context), op(op), tree(tree), decide_index(op.decide_index), splitter(context, op) {
 		// A frame's values are columns after the input's (DecideFrameColumn).
 		frame_reads.column_base = op.children.empty() ? 0 : op.children[0]->types.size();
 	}
 
 	//! One clause, or one row a function owns, in canonical form: its terms into `constraint`, which holds its facts.
-	void Clause(const BoundDecideClause &clause, DecideConstraint &constraint) {
+	void Clause(const BoundDecideClause &clause, const vector<DecideLoweredAtom> &atoms, DecideConstraint &constraint) {
 		auto &comp = clause.body->Cast<BoundComparisonExpression>();
 		Expression *lhs = UnwrapDecideCasts(*comp.left, decide_index);
 		if (constraint.was_minmax_easy) {
@@ -87,12 +85,12 @@ public:
 			// reducer's `when` choosing the members, while the bound is reduced over
 			// each `by` group of every kept row. RewriteMinMax kept the reducer so its
 			// `when` and `by` reach this point; a factor on it distributes over the rows.
-			ExtractEasyExtremumTerms(*lhs, constraint);
+			ExtractEasyExtremumTerms(*lhs, atoms, constraint);
 		} else if (constraint.lhs_is_aggregate) {
 			// Aggregate constraint: additive aggregate expressions whose reducers carry their own `when`. The
 			// classification comes from the canonical boundary rather than aggregate presence alone, so a data-only
 			// RHS reducer cannot change row semantics.
-			ExtractAggregateConstraintTerms(*lhs, constraint);
+			ExtractAggregateConstraintTerms(atoms, constraint);
 		} else if (lhs->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 			// Simple single-variable constraint (e.g., x <= 5)
 			constraint.lhs_terms.push_back(DecideTerm {
@@ -109,8 +107,8 @@ public:
 	}
 
 	//! The objective's records, null for one that reads no decision.
-	unique_ptr<DecideObjective> Objective(const BoundDecideClause &clause) {
-		auto lowered = AnalyzeObjective(clause);
+	unique_ptr<DecideObjective> Objective(const BoundDecideClause &clause, const vector<DecideLoweredAtom> &atoms) {
+		auto lowered = AnalyzeObjective(clause, atoms);
 		if (lowered) {
 			DropNullObjectiveTerms(*lowered);
 			CollectLikeTerms(lowered->terms);
@@ -712,16 +710,13 @@ private:
 		return all;
 	}
 
-	//! Names, on every term and product group `agg`'s body produced since the marks, the tree node it ranges over
-	//! (DecideTerm::child) and the reducer whose `per` qualifies it; a group's forms too.
-	void Stamp(const BoundDecideReducerExpression &agg, const BoundDecideReducerExpression &read,
-	           vector<DecideTerm> &terms, vector<DecideProductGroup> &groups, idx_t linear, idx_t group_before) const {
-		// The walk lowered this reducer's node from the same expression.
-		const auto reducer = reducers.find(&agg);
-		D_ASSERT(reducer != reducers.end());
-		const auto node = DecideTreeMembersOf(tree, reducer->second);
-		const auto qualifier_reducer =
-		    read.per == DConstants::INVALID_INDEX ? DConstants::INVALID_INDEX : reducer->second;
+	//! Names, on every term and product group the body of the reducer `read` produced since the marks, the tree node
+	//! it ranges over (DecideTerm::child) and the reducer whose `per` qualifies it; a group's forms too. `reducer` is
+	//! the G the walk lowered the atom's reducer to.
+	void Stamp(idx_t reducer, const BoundDecideReducerExpression &read, vector<DecideTerm> &terms,
+	           vector<DecideProductGroup> &groups, idx_t linear, idx_t group_before) const {
+		const auto node = DecideTreeMembersOf(tree, reducer);
+		const auto qualifier_reducer = read.per == DConstants::INVALID_INDEX ? DConstants::INVALID_INDEX : reducer;
 		auto stamp = [&](DecideTerm &term) {
 			term.child = node;
 			if (qualifier_reducer != DConstants::INVALID_INDEX) {
@@ -751,8 +746,9 @@ private:
 
 	//! The left side of an aggregate constraint, one canonical atom at a time: a reducer, a reducer with the
 	//! factor canonicalization left on it, or a tuple term beside the reducers.
-	void ExtractAggregateConstraintTerms(const Expression &lhs, DecideConstraint &constraint) {
-		for (auto &atom : ReadCanonicalAtoms(lhs, decide_index)) {
+	void ExtractAggregateConstraintTerms(const vector<DecideLoweredAtom> &atoms, DecideConstraint &constraint) {
+		for (auto &lowered : atoms) {
+			auto &atom = lowered.atom;
 			auto &expr = *atom.term;
 			if (atom.scaled) {
 				auto scale = atom.scale.scale;
@@ -767,7 +763,7 @@ private:
 				}
 				idx_t linear_before = constraint.lhs_terms.size();
 				idx_t group_before = constraint.product_groups.size();
-				ExtractReducerConstraintTerms(*atom.scale.aggregate, constraint, atom.sign);
+				ExtractReducerConstraintTerms(*atom.scale.aggregate, lowered.reducer, constraint, atom.sign);
 				ApplyScaleToExtracted(*atom.scale.function, *scale, atom.scale.divides, constraint.lhs_terms,
 				                      constraint.product_groups, linear_before, group_before);
 				continue;
@@ -779,12 +775,13 @@ private:
 				ExtractConstraintTerms(expr, constraint, atom.sign);
 				continue;
 			}
-			ExtractReducerConstraintTerms(expr.Cast<BoundDecideReducerExpression>(), constraint, atom.sign);
+			ExtractReducerConstraintTerms(expr.Cast<BoundDecideReducerExpression>(), lowered.reducer, constraint,
+			                              atom.sign);
 		}
 	}
 
-	void ExtractReducerConstraintTerms(const BoundDecideReducerExpression &agg, DecideConstraint &constraint,
-	                                   int sign) {
+	void ExtractReducerConstraintTerms(const BoundDecideReducerExpression &agg, idx_t reducer,
+	                                   DecideConstraint &constraint, int sign) {
 		if (agg.kind != DecideReducerKind::SUM && agg.kind != DecideReducerKind::AVG) {
 			throw InternalException("DECIDE: the reducer '%s' reached the linear form", agg.ToString());
 		}
@@ -794,18 +791,18 @@ private:
 		AttachReducerFilter(constraint, linear_before, group_before, agg.filter.get());
 		ApplyAggregateMetadata(constraint.lhs_terms, linear_before, agg);
 		ApplyAggregateMetadata(constraint.product_groups, group_before, agg);
-		Stamp(agg, agg, constraint.lhs_terms, constraint.product_groups, linear_before, group_before);
+		Stamp(reducer, agg, constraint.lhs_terms, constraint.product_groups, linear_before, group_before);
 	}
 
 	//! The per-row terms of a scoped easy MIN/MAX, `[-] [s *] max(when c: e)`: the terms of `e`,
 	//! each filtered by `c`, scaled by `s` and signed.
-	void ExtractEasyExtremumTerms(const Expression &lhs, DecideConstraint &constraint) {
-		auto atoms = ReadCanonicalAtoms(lhs, decide_index);
+	void ExtractEasyExtremumTerms(const Expression &lhs, const vector<DecideLoweredAtom> &atoms,
+	                              DecideConstraint &constraint) {
 		const BoundDecideReducerExpression *agg = nullptr;
-		if (atoms.size() == 1 && atoms[0].scaled) {
-			agg = atoms[0].scale.aggregate;
+		if (atoms.size() == 1 && atoms[0].atom.scaled) {
+			agg = atoms[0].atom.scale.aggregate;
 		} else if (atoms.size() == 1) {
-			auto &term = *UnwrapDecideCasts(*atoms[0].term, decide_index);
+			auto &term = *UnwrapDecideCasts(*atoms[0].atom.term, decide_index);
 			agg = term.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER
 			          ? &term.Cast<BoundDecideReducerExpression>()
 			          : nullptr;
@@ -814,11 +811,11 @@ private:
 			throw InternalException("DECIDE scoped MIN/MAX reached term extraction without its reducer: %s",
 			                        lhs.ToString());
 		}
-		auto &atom = atoms[0];
+		auto &atom = atoms[0].atom;
 		D_ASSERT(constraint.lhs_terms.empty() && constraint.product_groups.empty());
 		ExtractConstraintTerms(*agg->children[0], constraint, atom.sign);
 		AttachReducerFilter(constraint, 0, 0, agg->filter.get());
-		Stamp(*agg, *agg, constraint.lhs_terms, constraint.product_groups, 0, 0);
+		Stamp(atoms[0].reducer, *agg, constraint.lhs_terms, constraint.product_groups, 0, 0);
 		if (atom.scaled) {
 			ApplyScaleToExtracted(*atom.scale.function, *atom.scale.scale, atom.scale.divides, constraint.lhs_terms,
 			                      constraint.product_groups, 0, 0);
@@ -884,8 +881,9 @@ private:
 	}
 
 	//! The objective, one canonical atom at a time, as for an aggregate constraint's left side.
-	void ExtractAggregateObjectiveTerms(const Expression &objective_expr, DecideObjective &obj) {
-		for (auto &atom : ReadCanonicalAtoms(objective_expr, decide_index)) {
+	void ExtractAggregateObjectiveTerms(const vector<DecideLoweredAtom> &atoms, DecideObjective &obj) {
+		for (auto &lowered : atoms) {
+			auto &atom = lowered.atom;
 			auto &expr = *atom.term;
 			// A factor left outside a reducer (`2 * SUM(x*p)`): extract the reducer, then
 			// multiply the factor into everything it produced.
@@ -893,7 +891,7 @@ private:
 				auto obj_scale = atom.scale.scale;
 				idx_t linear_before = obj.terms.size();
 				idx_t group_before = obj.product_groups.size();
-				ExtractReducerObjectiveTerms(*atom.scale.aggregate, obj, atom.sign);
+				ExtractReducerObjectiveTerms(*atom.scale.aggregate, lowered.reducer, obj, atom.sign);
 				ApplyScaleToExtracted(*atom.scale.function, *obj_scale, atom.scale.divides, obj.terms,
 				                      obj.product_groups, linear_before, group_before);
 				continue;
@@ -921,13 +919,14 @@ private:
 				}
 				continue;
 			}
-			ExtractReducerObjectiveTerms(expr.Cast<BoundDecideReducerExpression>(), obj, atom.sign);
+			ExtractReducerObjectiveTerms(expr.Cast<BoundDecideReducerExpression>(), lowered.reducer, obj, atom.sign);
 		}
 	}
 
 	//! The terms of the objective's reducer `agg`, which range over its node. A nest read in place
 	//! (decide_rewrite::ReadNestInPlace) gives the terms of its reading.
-	void ExtractReducerObjectiveTerms(const BoundDecideReducerExpression &agg, DecideObjective &obj, int sign) {
+	void ExtractReducerObjectiveTerms(const BoundDecideReducerExpression &agg, idx_t reducer, DecideObjective &obj,
+	                                  int sign) {
 		auto in_place = agg.holds_reducer ? decide_rewrite::ReadNestInPlace(op, agg) : nullptr;
 		auto &read = in_place ? *in_place : agg;
 		if (read.kind != DecideReducerKind::SUM && read.kind != DecideReducerKind::AVG) {
@@ -940,10 +939,11 @@ private:
 		ApplyAggregateMetadata(obj.product_groups, group_before, read);
 		ApplyAvgGroupKey(obj.terms, before, read);
 		ApplyAvgGroupKey(obj.product_groups, group_before, read);
-		Stamp(agg, read, obj.terms, obj.product_groups, before, group_before);
+		Stamp(reducer, read, obj.terms, obj.product_groups, before, group_before);
 	}
 
-	unique_ptr<DecideObjective> AnalyzeObjective(const BoundDecideClause &clause) {
+	unique_ptr<DecideObjective> AnalyzeObjective(const BoundDecideClause &clause,
+	                                             const vector<DecideLoweredAtom> &atoms) {
 		auto *expr = UnwrapDecideCasts(*clause.body, decide_index);
 		auto when_cond = clause.scope.when ? clause.scope.when->Copy() : nullptr;
 		unique_ptr<DecideObjective> lowered;
@@ -955,7 +955,8 @@ private:
 
 			// Walk the SUM argument: its linear terms and its product groups, a mixed body
 			// (SUM(POWER(x-t, 2) + penalty*x)) included.
-			ExtractReducerObjectiveTerms(agg, *lowered, 1);
+			// A bare reducer is the body's one atom.
+			ExtractReducerObjectiveTerms(agg, atoms[0].reducer, *lowered, 1);
 
 			lowered->when_condition = std::move(when_cond);
 		} else if (DecideCanonicalizer::ContainsReducer(*expr) ||
@@ -963,7 +964,7 @@ private:
 			// The second arm covers an objective with no aggregate at all: decisions
 			// outside every reducer (e.g. `minimize max_shortfall`), read once.
 			lowered = make_uniq<DecideObjective>();
-			ExtractAggregateObjectiveTerms(*expr, *lowered);
+			ExtractAggregateObjectiveTerms(atoms, *lowered);
 			lowered->when_condition = std::move(when_cond);
 		}
 		return lowered;
@@ -972,9 +973,8 @@ private:
 private:
 	ClientContext &context;
 	LogicalDecide &op;
-	//! The tree under construction, and the G each reducer of the clause in hand became (the walk's).
+	//! The tree under construction.
 	const DecideTree &tree;
-	const DecideReducerNodes &reducers;
 	//! The records filled, in the order filled, which the tree's nodes hold: the frame passes read them once every
 	//! term is split.
 	vector<DecideConstraint *> clauses;
@@ -994,20 +994,21 @@ struct DecideTermLowering::Builder : DecideLinearFormBuilder {
 	using DecideLinearFormBuilder::DecideLinearFormBuilder;
 };
 
-DecideTermLowering::DecideTermLowering(ClientContext &context, LogicalDecide &op, const DecideTree &tree,
-                                       const DecideReducerNodes &reducers)
-    : builder(make_uniq<Builder>(context, op, tree, reducers)) {
+DecideTermLowering::DecideTermLowering(ClientContext &context, LogicalDecide &op, const DecideTree &tree)
+    : builder(make_uniq<Builder>(context, op, tree)) {
 }
 
 DecideTermLowering::~DecideTermLowering() {
 }
 
-void DecideTermLowering::Clause(const BoundDecideClause &clause, DecideConstraint &constraint) {
-	builder->Clause(clause, constraint);
+void DecideTermLowering::Clause(const BoundDecideClause &clause, const vector<DecideLoweredAtom> &atoms,
+                                DecideConstraint &constraint) {
+	builder->Clause(clause, atoms, constraint);
 }
 
-unique_ptr<DecideObjective> DecideTermLowering::Objective(const BoundDecideClause &objective) {
-	return builder->Objective(objective);
+unique_ptr<DecideObjective> DecideTermLowering::Objective(const BoundDecideClause &objective,
+                                                          const vector<DecideLoweredAtom> &atoms) {
+	return builder->Objective(objective, atoms);
 }
 
 void DecideTermLowering::Members(DecideReducerValueDefinition &link, DecideBody &body) {

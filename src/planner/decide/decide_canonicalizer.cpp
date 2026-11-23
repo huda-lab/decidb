@@ -67,6 +67,7 @@ bool TryMatchScaledAggregate(const Expression &expr, idx_t decide_index, ScaledA
 	    &UnwrapDecideCasts(*func.children[aggregate_child], decide_index)->Cast<BoundDecideReducerExpression>();
 	result.scale = func.children[1 - aggregate_child].get();
 	result.function = &func;
+	result.aggregate_child = aggregate_child;
 	result.divides = is_div;
 	return true;
 }

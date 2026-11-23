@@ -136,7 +136,7 @@ static DecideSignatureField CopyField(const DecideSignatureField &field) {
 class DecideTreeBuilder {
 public:
 	DecideTreeBuilder(ClientContext &context, LogicalDecide &op)
-	    : context(context), op(op), tree(make_uniq<DecideTree>()), terms(context, op, *tree, reducer_nodes) {
+	    : context(context), op(op), tree(make_uniq<DecideTree>()), terms(context, op, *tree) {
 		tree->written_sense = op.bound.sense;
 		tree->variable_scopes = op.bound.variable_scopes;
 		tree->keyed_scopes = op.bound.keyed_scopes;
@@ -196,14 +196,13 @@ public:
 			const Expression *condition = op.bound.objective.scope.when.get();
 			auto index = NewNode(DecideNodeKind::SCOPE);
 			auto &node = *tree->nodes[index];
-			reducer_nodes.clear();
 			node.root = node.objective = true;
 			node.per = DecideTreePer::ONE;
 			node.text = op.bound.written_objective.empty() ? Text(*body) : op.bound.written_objective;
 			Gates(index, condition);
-			node.body = Lower(index, *body);
+			auto atoms = LowerAtoms(index, *body);
 			UseSignature(node, op.bound.objective.scope.signature);
-			node.compiled.objective = terms.Objective(op.bound.objective);
+			node.compiled.objective = terms.Objective(op.bound.objective, atoms);
 			tree->roots.push_back(index);
 		}
 		// A helper or data check can outlive the reading clause (D88). Preserve
@@ -381,7 +380,6 @@ private:
 	vector<idx_t> record_nodes;
 	//! The G each reducer of the clause in hand became, by its address in that clause: cleared at each root, read by
 	//! the term half as it splits the same clause.
-	DecideReducerNodes reducer_nodes;
 	//! The term half of the walk: stage 05's split of each canonical clause into its root's records.
 	DecideTermLowering terms;
 
@@ -563,7 +561,6 @@ private:
 		auto index = NewNode(DecideNodeKind::SCOPE);
 		auto &node = *tree->nodes[index];
 		node.root = true;
-		reducer_nodes.clear();
 		// ABS envelopes are built from the optimizer's record rather than written by the user. They are in their
 		// natural form (`aux >= inner` / `aux >= -inner`), which can leave decisions on both sides of the comparison.
 		// Bring these internal rows through the same canonical boundary as ordinary clauses before term extraction.
@@ -605,7 +602,7 @@ private:
 		if (!owned) {
 			Gates(index, scope.when.get());
 		}
-		node.body = Lower(index, *row->left);
+		auto atoms = LowerAtoms(index, *row->left);
 		node.rhs = Lower(index, *row->right, canonical->query_wide_bound);
 		if (owned) {
 			auto &owner_node = *tree->nodes[function];
@@ -641,7 +638,7 @@ private:
 		// A folded bound holds a clause only when its repair rows come from it, for the repair model alone: emitting
 		// one for a bound already in the column box would add a redundant model row per input row.
 		if (!clause.folded_bound || clause.folded_clause_rows) {
-			terms.Clause(*canonical, *facts);
+			terms.Clause(*canonical, atoms, *facts);
 			node.compiled.clause = std::move(facts);
 		}
 	}
@@ -696,6 +693,40 @@ private:
 		return make_uniq<BoundReferenceExpression>(alias, type, column);
 	}
 
+	//! The atoms of a root's left side or of the objective's body, each lowered beneath `owner` in the order written,
+	//! with the G its reducer became: a reducer lowers to a read of its G (Read), which a scaled atom holds at the
+	//! reducer's place in the product. The root stores no lowered body: the decisions the atoms read are its
+	//! `decisions` at once. Lowering atom by atom makes the nodes lowering the side whole would: the spine between
+	//! atoms is `+`, `-` and casts, which make none.
+	vector<DecideLoweredAtom> LowerAtoms(idx_t owner, const Expression &side) {
+		vector<DecideLoweredAtom> atoms;
+		for (auto &atom : ReadCanonicalAtoms(side, op.decide_index)) {
+			auto lowered = Lower(owner, *atom.term);
+			DecideLoweredAtom entry;
+			entry.atom = atom;
+			const Expression *read = StripCasts(*lowered);
+			if (atom.scaled) {
+				read = StripCasts(*read->Cast<BoundFunctionExpression>().children[atom.scale.aggregate_child]);
+			}
+			const bool reducer = atom.scaled || UnwrapDecideCasts(*atom.term, op.decide_index)->GetExpressionClass() ==
+			                                        ExpressionClass::BOUND_DECIDE_REDUCER;
+			if (reducer) {
+				entry.reducer = read->Cast<BoundReferenceExpression>().index - tree->input_column_count;
+			}
+			Decisions(*lowered, tree->nodes[owner]->decisions);
+			atoms.push_back(entry);
+		}
+		return atoms;
+	}
+
+	static const Expression *StripCasts(const Expression &expression) {
+		auto current = &expression;
+		while (current->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+			current = current->Cast<BoundCastExpression>().child.get();
+		}
+		return current;
+	}
+
 	idx_t FindRecord(const Expression &expression) const {
 		for (idx_t i = 0; i < op.bound.bound_aggregates.size(); i++) {
 			if (op.bound.bound_aggregates[i].IsReadBy(expression)) {
@@ -731,9 +762,8 @@ private:
 			return Read(owner, Frame(frame, &expression), expression.return_type, expression.GetAlias());
 		}
 		if (expression.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
-			auto reducer = Aggregate(expression.Cast<BoundDecideReducerExpression>());
-			reducer_nodes[&expression] = reducer;
-			return Read(owner, reducer, expression.return_type, expression.GetAlias());
+			return Read(owner, Aggregate(expression.Cast<BoundDecideReducerExpression>()), expression.return_type,
+			            expression.GetAlias());
 		}
 		if (expression.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 			auto &reference = expression.Cast<BoundColumnRefExpression>();
@@ -790,8 +820,7 @@ private:
 			}
 			return Read(owner, function, expression.return_type, expression.GetAlias());
 		}
-		// The children are lowered from the clause's own expressions, so a reducer's address is the one the term half
-		// splits (reducer_nodes); the copy only holds the results.
+		// The children are lowered from the clause's own expressions; the copy only holds the results.
 		auto result = expression.Copy();
 		vector<const Expression *> originals;
 		ExpressionIterator::EnumerateChildren(expression,

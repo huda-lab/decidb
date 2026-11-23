@@ -157,13 +157,20 @@ A rewrite changes a node or a record; it leaves no tag.
 `DecideTree` and `DecideNode` stay the executor's structure. Physical planning derives them from `BoundDecide` in
 three steps, where column bindings are final (`plan_decide.cpp:224`):
 
-1. **One lowering walk** over the clauses and the helper definitions. A clause makes its root E; a reducer node makes
-   a G and its operand E; a frame index makes its O once; a helper definition makes its F and the rows it owns. Terms
-   are split in the same walk, so a term names its G directly.
+1. **One walk over each clause's atoms.** A clause makes its root E, and the walk reads the atoms of its left side
+   once (`ReadCanonicalAtoms`), lowers each (`LowerAtoms`), and hands the atom with the G its reducer became to the
+   term half (`DecideLoweredAtom`, `DecideTermLowering`), so a term names its G because it was given it. A reducer
+   node makes a G and its operand E; a frame index makes its O once; a helper definition makes its F and the rows it
+   states. A reducer body has two readings by two readers (R31): what its node reads, which the walk collects, and
+   its coefficient algebra, which the term half does with the splitter the rewrites share. A per-row clause's left
+   side is split whole, since the splitter keeps a decision-free sum as one constant term. A root stores no lowered
+   body: the decisions its atoms read are its `decisions`. The helpers' members and the frame columns are split in
+   later loops of the same construction, which keeps the frame columns' stated layout.
 2. **The solver gate** (`RequireDecideSolverSupport`), as today.
 3. **`CompileDecideTree`**, today's program compiler, unchanged.
 
-- Gone: the second lowering, the address maps that join the two (`DecideTreeSources`, `retained_function_links`),
+- Gone: the second lowering, the address maps that join the two (`DecideTreeSources`, `retained_function_links`,
+  `DecideReducerNodes`),
   and the checks that they agree. [read] 81 internal errors in the three construction files.
 - Kept, because they serve more than the join: the term splitter (three rewrites and the direct rules use it),
   like-term collection, the frame-column registry, and the order of rows the model dumps record.

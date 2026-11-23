@@ -131,6 +131,8 @@ struct ScaledAggregateMatch {
 	const BoundDecideReducerExpression *aggregate = nullptr;
 	const Expression *scale = nullptr;
 	const BoundFunctionExpression *function = nullptr;
+	//! Which child of `function` the reducer is, beneath its casts.
+	idx_t aggregate_child = 0;
 	bool divides = false;
 };
 

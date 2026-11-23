@@ -28,22 +28,6 @@ every one of them:
 - **Tests** (R32): focused tests in each task's **Done when**; `make decide-test` once at the end of each queue
   group; every other suite in TREE-28.
 
-## TREE-7 — Each atom of a clause is handed over with its node
-
-- **Problem.** Two readers take each clause: `DecideTreeBuilder::Lower` collects what a node reads, and
-  `DecideTermLowering` does the coefficient algebra with a splitter ten tree-less callers share. They are joined by
-  `reducer_nodes`, a map from a reducer's address to its G (`decide_tree.cpp:426,607,778,794`,
-  `decide_linear_form.cpp:717-746`): the same object must be handed over, the map cleared per root, and a miss
-  dereferences `end()` in a release build.
-- **Change.** R31, `review/TREE-7-single-walk-sizing.md` form A: `Root` and the objective read the additive spine
-  once (`ReadCanonicalAtoms`), lower each atom, and hand the atom with its G to the term half; `Stamp` takes the G.
-  The map, its clears and writes, the retained special case (`decide_tree.cpp:775-779`) and a clause root's stored
-  `body` go. A kept call is an atom. The per-row arm splits the left side whole.
-- **Done when.** `DecideReducerNodes` is named nowhere;
-  `./test/decide/run_tests.sh -k "one_pass or like_term or frame or minmax or objective or bilinear"` passes; the
-  probes of `review/tree7-probes/` and `review/tree6-probes/` are byte-identical; design.md § 3.2.4 says "one walk
-  over each clause's atoms" and names the two readings of a reducer body.
-
 ## TREE-23 — `DecideNode` holds no copy; a G names its operand
 
 - **Problem.** A node still copies facts: a root's `body` and `rhs`, `defined_var`, an F's `origin` and `text`, a
@@ -52,7 +36,6 @@ every one of them:
 - **Change.** Each field with no reader outside the builder goes; each copy is read from the definition or the
   clause record. A G holds its operand's index. A field judged dead on grep evidence is confirmed by a probe
   before it is deleted.
-- **Needs.** TREE-7.
 - **Done when.** `DecideTreeOperand` is named nowhere;
   `./test/decide/run_tests.sh -k "one_pass or frame or abs or minmax or helper or explain"` and
   `build/release/test/unittest "[decidb]"` pass; the probes are byte-identical.
