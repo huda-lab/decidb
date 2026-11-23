@@ -37,7 +37,7 @@ static constexpr idx_t DECIDE_HOLE_BASE = idx_t(1) << 48;
 
 idx_t DecideTreeMembersOf(const DecideTree &tree, idx_t reducer) {
 	while (true) {
-		const Expression *body = tree.nodes[tree.nodes[reducer]->operand]->body.get();
+		const Expression *body = tree.nodes[tree.OperandOf(reducer)]->body.get();
 		if (!body || body->GetExpressionClass() != ExpressionClass::BOUND_REF ||
 		    body->Cast<BoundReferenceExpression>().index < tree.input_column_count) {
 			return reducer;
@@ -56,9 +56,9 @@ namespace decide_tree_compile {
 static DecideTermSite Site(const DecideTree &tree, idx_t holder, idx_t child, idx_t qualifier_scope,
                            idx_t qualifier_reducer) {
 	DecideTermSite site;
-	site.node = child == DConstants::INVALID_INDEX ? holder : tree.nodes[child]->operand;
+	site.node = child == DConstants::INVALID_INDEX ? holder : tree.OperandOf(child);
 	if (qualifier_scope != DConstants::INVALID_INDEX) {
-		site.qualifier_operand = tree.nodes[qualifier_reducer]->operand;
+		site.qualifier_operand = tree.OperandOf(qualifier_reducer);
 	}
 	return site;
 }
@@ -94,7 +94,7 @@ static void SiteObjective(const DecideTree &tree, idx_t holder, DecideBody &body
 
 //! A G's or an O's members: computed on the G's operand, or on the O, which holds a frame's positions.
 static void SiteMembers(const DecideTree &tree, idx_t holder, DecideBody &body) {
-	const auto site = tree.nodes[holder]->kind == DecideNodeKind::FRAME ? holder : tree.nodes[holder]->operand;
+	const auto site = tree.nodes[holder]->kind == DecideNodeKind::FRAME ? holder : tree.OperandOf(holder);
 	body.linear.assign(body.members.size(), DecideTermSite {site});
 	body.fallback_sites.assign(body.fallback.size(), DecideTermSite {site});
 }
@@ -104,7 +104,7 @@ static void SiteMembers(const DecideTree &tree, idx_t holder, DecideBody &body) 
 //! the repair group ids.
 static void NumberClauses(DecideTree &tree) {
 	for (auto &node : tree.nodes) {
-		tree.constraint_count += node->compiled.clause && !node->folded;
+		tree.constraint_count += node->compiled.clause && !DecideIsFolded(*node);
 	}
 	idx_t constraint = 0;
 	for (idx_t root = 0; root < tree.nodes.size(); root++) {
@@ -113,7 +113,7 @@ static void NumberClauses(DecideTree &tree) {
 		if (!body.clause) {
 			continue;
 		}
-		body.clause_index = node.folded ? tree.constraint_count + tree.singleton_row_count++ : constraint++;
+		body.clause_index = DecideIsFolded(node) ? tree.constraint_count + tree.singleton_row_count++ : constraint++;
 		body.kind = DecideBodyKind::CONSTRAINT;
 		body.order = body.clause_index;
 		SiteClause(tree, root, body);
@@ -246,14 +246,14 @@ public:
 	//! of squares, of absolute values), and a NaN in its body is its data check's to refuse (DecideWrittenNormBody).
 	void AddData(idx_t index) {
 		auto &node = *tree.nodes[index];
-		if (node.value_check) {
+		if (DecideIsValueCheck(node)) {
 			node.compiled.check = AddValue(index, *node.body, "a data check");
 		}
-		if (node.kind != DecideNodeKind::REDUCER || node.decision_value || !node.function) {
+		if (!DecideDataFold(node)) {
 			return;
 		}
-		const auto operand = tree.nodes[index]->operand;
-		auto &operand_node = *tree.nodes[operand];
+		const auto operand = tree.OperandOf(index);
+		auto &operand_node = tree.nodes[operand]->Cast<DecideScopeNode>();
 		for (auto &argument : operand_node.arguments) {
 			operand_node.compiled.arguments.push_back(AddValue(operand, *argument, "a data reducer's argument"));
 		}
@@ -365,7 +365,7 @@ private:
 	//! An O's value as an expression Lower read in the tree's terms reads it: over data, its frame's one value (a
 	//! point's VALUE or a range's REDUCED column), of the read's type; over decisions, a reducer's NULL test of it, its
 	//! DEFINED column, as stage 05 reads both (DecideFrameColumn).
-	unique_ptr<Expression> FrameRead(idx_t site, const DecideNode &frame, const LogicalType &type) {
+	unique_ptr<Expression> FrameRead(idx_t site, const DecideFrameNode &frame, const LogicalType &type) {
 		auto &columns = tree.frame_reads.columns;
 		for (idx_t j = 0; j < columns.size(); j++) {
 			auto kind = columns[j].kind;
@@ -435,11 +435,11 @@ private:
 			const auto column = leaf_expression.Cast<BoundReferenceExpression>().index;
 			if (column >= tree.input_column_count) {
 				auto &child = *tree.nodes[column - tree.input_column_count];
-				if (child.kind == DecideNodeKind::REDUCER && !child.decision_value && child.function) {
+				if (DecideDataFold(child)) {
 					return Hole(index, column - tree.input_column_count, type);
 				}
 				if (child.kind == DecideNodeKind::FRAME) {
-					return FrameRead(index, child, type);
+					return FrameRead(index, child.Cast<DecideFrameNode>(), type);
 				}
 				throw InternalException("DECIDE tree: %s of %s reads %s, which has no data value", what, node.text,
 				                        child.text);

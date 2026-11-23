@@ -669,7 +669,7 @@ of whose reducers reads no row (p. 56, before the group's bound is read) and an 
 Everything that reads absence asks it. `DecideAbsence::At` answers whether the
 instance a row reads of a decision has a value. A keyed decision has none on a row in no class of its scope (its
 mapping's absent class), and so has a helper's group with no member. An auxiliary -- an ABS's, a body helper, an L0
-indicator, a product -- has none where the rows defining it (`DecideConstraint::defined_var`, from `BoundDecideClause::defines`;
+indicator, a product -- has none where the rows defining it (`DecideConstraint::defined_var`, the helper of the definition that states the row;
 a product's factors) read an instance with none (`DecideGlobalSinkState::absent_reads`). The model
 emitter (`ReadAbsence`) resolves both in the order the definitions read each other -- a helper's members may read an
 auxiliary whose definition reads a helper made after it -- whatever order the rewrites numbered them in. Every reader

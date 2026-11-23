@@ -703,7 +703,7 @@ void SkipDecideFrameNullReads(const DecideTree &tree, vector<DecideFrameMap> &ma
 		if (!node.Linked()) {
 			continue;
 		}
-		if (node.kind != DecideNodeKind::FRAME || node.frame != frame || !node.decision_value) {
+		if (node.kind != DecideNodeKind::FRAME || node.Cast<DecideFrameNode>().frame != frame || !node.decision_value) {
 			throw InternalException("DECIDE tree: frame node %llu has an invalid helper value", node_index);
 		}
 		vector<const Expression *> payload, fallback;

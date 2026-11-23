@@ -123,11 +123,14 @@ struct DecideBody {
 //! Composite: E owns entries, G groups an operand E, and O holds ordered positions.
 //! Expressions are owned copies, with source columns resolved to chunk references. `compiled` holds the terms the
 //! walk split into the node (DecideTreeConstruction).
+//! A node of the tree. The base holds what every kind has; each kind is a class of its own with its own fields,
+//! reached by Cast, as a LogicalOperator's is: a field of one kind cannot be set on another.
 struct DecideNode {
 	explicit DecideNode(DecideNodeKind kind) : kind(kind) {
 	}
+	virtual ~DecideNode() = default;
 
-	DecideNodeKind kind;
+	const DecideNodeKind kind;
 	idx_t parent = DConstants::INVALID_INDEX;
 	vector<idx_t> children;
 	//! Children and non-routing dependencies (shared helpers and definitions).
@@ -149,22 +152,6 @@ struct DecideNode {
 	//! Scalar algebra with each child's result replaced by its physical column, input_column_count + child. A
 	//! decision-valued result is a symbolic form; a scalar evaluator must not interpret it as an SQL value.
 	unique_ptr<Expression> body;
-	unique_ptr<Expression> fallback;
-	unique_ptr<Expression> over;
-	//! A G's operand: every argument of its reducer is retained, since a collated extremum has a value and a
-	//! comparison key.
-	vector<unique_ptr<Expression>> arguments;
-	//! A G over data: the aggregate execution folds its operand's entries with.
-	unique_ptr<BoundAggregateExpression> function;
-	//! A G: its operand, the one SCOPE child that holds its members.
-	idx_t operand = DConstants::INVALID_INDEX;
-	//! An F node: the roots of the rows it owns, its children. An ABS's two lower-envelope rows, `aux >= operand` then
-	//! `aux >= -operand` (MakeAbsRow), which carry the operand per row to stage 06; an L0 indicator's link rows; the
-	//! one row that defines a definition's helper. Such a root's `parent` is the F node.
-	vector<idx_t> rows;
-	//! A G's reducer, where no definition holds it: a linked G's and a range O's are read from the definition and the
-	//! frame (DecideTree::ReducerOf).
-	DecideReducerKind aggregate = DecideReducerKind::SUM;
 	//! The helper definition (DecideTree::definitions) the node holds the value of: an F node's, or the one whose
 	//! helper a linked G or O defines. INVALID_INDEX for every other node.
 	idx_t definition = DConstants::INVALID_INDEX;
@@ -172,26 +159,16 @@ struct DecideNode {
 	bool Linked() const {
 		return kind != DecideNodeKind::FUNCTION && definition != DConstants::INVALID_INDEX;
 	}
-	//! A FRAME node's selector: an index into DecideTree::frames, INVALID for any other node.
-	idx_t frame = DConstants::INVALID_INDEX;
-	//! A G node's relation-qualified scope, whose classes it reads at most once; INVALID_INDEX when unqualified.
-	idx_t qualifier_scope = DConstants::INVALID_INDEX;
 	bool root = false;
-	//! A clause root whose instances are its distinct sigmas over every class: classes whose rows agree on all they
-	//! read are one instance (language/guide.md §7.1). See DecideCanonicalizer::MergesClasses.
-	bool merges_classes = false;
 	bool objective = false;
 	bool hidden = false;
 	bool decision_value = false;
-	bool folded = false;
 	//! A grouped root whose `per K:` names the classes its rows stand for (DecideClauseScope::NAMES_CLASSES): its
 	//! instances are its `by` key's groups (language/guide.md §6.4), so it holds a kept row in no class of K too, in a
 	//! slot of its own (DecideNodeGroups::in_a_class). So does a relation-qualified reducer's operand: its reducer
 	//! reads every row its `when` keeps, and its `per K'` keeps no value of a row in no class of K' (§5.3). So does an
 	//! O an anchor in no timeline (§5.6, D75).
 	bool holds_rows_in_no_class = false;
-	//! A hidden root's non-NULL string is the data check's error message.
-	bool value_check = false;
 	//! Stage 05's terms for what the node holds (CompileDecideTree).
 	DecideBody compiled;
 	//! What its entries compute, and its member tests among them (TEST programs).
@@ -203,7 +180,107 @@ struct DecideNode {
 	vector<unique_ptr<Expression>> program_columns;
 	//! The data reducers its programs read, after its program columns in its layout.
 	vector<DecideHole> holes;
+
+	template <class TARGET>
+	TARGET &Cast() {
+		if (kind != TARGET::KIND) {
+			throw InternalException("DECIDE tree: a node is read as another kind");
+		}
+		return reinterpret_cast<TARGET &>(*this);
+	}
+	template <class TARGET>
+	const TARGET &Cast() const {
+		if (kind != TARGET::KIND) {
+			throw InternalException("DECIDE tree: a node is read as another kind");
+		}
+		return reinterpret_cast<const TARGET &>(*this);
+	}
+	//! The node as a TARGET, or null when it is of another kind.
+	template <class TARGET>
+	optional_ptr<const TARGET> TryCast() const {
+		return kind == TARGET::KIND ? reinterpret_cast<const TARGET *>(this) : nullptr;
+	}
 };
+
+//! E: a clause's root, the objective's, a data check's, a reducer's operand.
+struct DecideScopeNode : public DecideNode {
+	static constexpr const DecideNodeKind KIND = DecideNodeKind::SCOPE;
+	DecideScopeNode() : DecideNode(KIND) {
+	}
+
+	//! A G's operand: every argument of its reducer is retained, since a collated extremum has a value and a
+	//! comparison key.
+	vector<unique_ptr<Expression>> arguments;
+	//! A clause root whose instances are its distinct sigmas over every class: classes whose rows agree on all they
+	//! read are one instance (language/guide.md §7.1). See DecideCanonicalizer::MergesClasses.
+	bool merges_classes = false;
+	bool folded = false;
+	//! A hidden root's non-NULL string is the data check's error message.
+	bool value_check = false;
+};
+
+//! G: a reducer.
+struct DecideReducerNode : public DecideNode {
+	static constexpr const DecideNodeKind KIND = DecideNodeKind::REDUCER;
+	DecideReducerNode() : DecideNode(KIND) {
+	}
+
+	//! A G over data: the aggregate execution folds its operand's entries with.
+	unique_ptr<BoundAggregateExpression> function;
+	//! A G: its operand, the one SCOPE child that holds its members.
+	idx_t operand = DConstants::INVALID_INDEX;
+	//! A G's reducer, where no definition holds it: a linked G's and a range O's are read from the definition and the
+	//! frame (DecideTree::ReducerOf).
+	DecideReducerKind aggregate = DecideReducerKind::SUM;
+	//! A G node's relation-qualified scope, whose classes it reads at most once; INVALID_INDEX when unqualified.
+	idx_t qualifier_scope = DConstants::INVALID_INDEX;
+};
+
+//! O: a frame.
+struct DecideFrameNode : public DecideNode {
+	static constexpr const DecideNodeKind KIND = DecideNodeKind::FRAME;
+	DecideFrameNode() : DecideNode(KIND) {
+	}
+
+	//! Its selector: an index into DecideTree::frames.
+	idx_t frame = DConstants::INVALID_INDEX;
+	unique_ptr<Expression> fallback;
+	unique_ptr<Expression> over;
+};
+
+//! F: a helper definition's value.
+struct DecideFunctionNode : public DecideNode {
+	static constexpr const DecideNodeKind KIND = DecideNodeKind::FUNCTION;
+	DecideFunctionNode() : DecideNode(KIND) {
+	}
+
+	//! An F node: the roots of the rows it owns, its children. An ABS's two lower-envelope rows, `aux >= operand` then
+	//! `aux >= -operand` (MakeAbsRow), which carry the operand per row to stage 06; an L0 indicator's link rows; the
+	//! one row that defines a definition's helper. Such a root's `parent` is the F node.
+	vector<idx_t> rows;
+};
+
+//! Whether `node` is a clause root whose classes agreeing on all they read are one instance
+//! (DecideScopeNode::merges_classes).
+inline bool DecideMergesClasses(const DecideNode &node) {
+	auto scope = node.TryCast<DecideScopeNode>();
+	return scope && scope->merges_classes;
+}
+//! Whether `node` is a clause root whose bound is folded into its decision's box (DecideScopeNode::folded).
+inline bool DecideIsFolded(const DecideNode &node) {
+	auto scope = node.TryCast<DecideScopeNode>();
+	return scope && scope->folded;
+}
+//! Whether `node` is a data check's root (DecideScopeNode::value_check).
+inline bool DecideIsValueCheck(const DecideNode &node) {
+	auto scope = node.TryCast<DecideScopeNode>();
+	return scope && scope->value_check;
+}
+//! The aggregate a G over data folds its operand's entries with, null for any other node.
+inline optional_ptr<const BoundAggregateExpression> DecideDataFold(const DecideNode &node) {
+	auto reducer = node.TryCast<DecideReducerNode>();
+	return reducer && !node.decision_value ? reducer->function.get() : nullptr;
+}
 
 struct DecideTree {
 	idx_t input_column_count = 0;
@@ -274,7 +351,12 @@ struct DecideTree {
 		if (node.Linked()) {
 			return definitions[node.definition]->Cast<DecideReducerValueDefinition>().reducer;
 		}
-		return node.kind == DecideNodeKind::FRAME ? frames[node.frame].reducer : node.aggregate;
+		return node.kind == DecideNodeKind::FRAME ? frames[node.Cast<DecideFrameNode>().frame].reducer
+		                                          : node.Cast<DecideReducerNode>().aggregate;
+	}
+	//! The operand of G `reducer`.
+	idx_t OperandOf(idx_t reducer) const {
+		return nodes[reducer]->Cast<DecideReducerNode>().operand;
 	}
 	//! The definition a node holds the value of, null for a node that holds none.
 	const DecideHelperDefinition *Definition(const DecideNode &node) const {

@@ -401,7 +401,7 @@ private:
 	//! a set E's wait for every root (pending).
 	void Store(idx_t node, DataChunk &chunk, const Reach &stored, const unsafe_vector<idx_t> &slots, idx_t row_base);
 	//! An O's order value on `stored`, its comparison bytes and its partition, into `values` at `layout`.
-	void FrameOrder(const DecideNode &node, const DecideEntryLayout &layout, DataChunk &chunk, const Reach &stored,
+	void FrameOrder(const DecideFrameNode &node, const DecideEntryLayout &layout, DataChunk &chunk, const Reach &stored,
 	                DataChunk &values);
 	//! An O's timelines (DecideNodeTimelines), once every row is appended and its slots are ranked.
 	void Timelines(idx_t node);

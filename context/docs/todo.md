@@ -13,8 +13,7 @@ the owner rules first.
 # Phase 5 — The parser builds the tree
 
 ## 5.4 The tree (one lane)
-- [ ] TREE-24 `DecideNode` is a class per kind — pipeline/todo.md § TREE-24
-- [ ] TREE-25 Terms split from the finished nodes (decision) — pipeline/todo.md § TREE-25 (needs: TREE-24)
+- [ ] TREE-25 Terms split from the finished nodes (decision) — pipeline/todo.md § TREE-25
 
 ## 5.5 Parser, direct rules, tags (needs: 5.4) (one lane)
 - [ ] TREE-26 The parser's reducer node holds its call; one AND splitter — pipeline/todo.md § TREE-26

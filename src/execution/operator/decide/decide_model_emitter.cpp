@@ -186,7 +186,7 @@ static vector<idx_t> SignatureStarts(const DecideTree &tree, const DecideNode &n
 		} else if (field.kind == DecideSignatureFieldKind::BY_KEY) {
 			start += DecideKeyElements(tree.keys, field.key).size();
 		} else {
-			auto &frame = *tree.nodes[tree.frame_nodes[field.frame]];
+			auto &frame = tree.nodes[tree.frame_nodes[field.frame]]->Cast<DecideFrameNode>();
 			start += DecideKeyElements(tree.keys, frame.key).size() + (tree.frames[frame.frame].Relative() ? 1 : 0);
 		}
 		starts.push_back(start);
@@ -303,7 +303,7 @@ KeyedMapping DecideModelEmitter::SignatureMapping(idx_t scope) {
 
 DecideModelEmitter::LinkMembers DecideModelEmitter::Members(idx_t node) {
 	auto &body = tree.nodes[node]->compiled;
-	const auto site = tree.nodes[node]->operand;
+	const auto site = tree.OperandOf(node);
 	auto &entries = descent.Containers()[site];
 	auto &slots = descent.Containers()[node].groups;
 	// The members are computed on the rows its reducer's `when` and NULL tests keep where every decision they read
@@ -319,7 +319,7 @@ DecideModelEmitter::LinkMembers DecideModelEmitter::Members(idx_t node) {
 			members.reads[e] = members.reads[e] && !columns.Absence().TermAt(term, entries.rows[e]);
 		}
 	}
-	const auto qualified = tree.nodes[node]->qualifier_scope != DConstants::INVALID_INDEX;
+	const auto qualified = tree.nodes[node]->Cast<DecideReducerNode>().qualifier_scope != DConstants::INVALID_INDEX;
 	vector<bool> held(slots.size(), false);
 	for (auto &read :
 	     ReadRows(site, qualified ? columns.FirstOfEachInstance(site, members.reads) : members.reads, qualified)) {
@@ -347,7 +347,7 @@ KeyedMapping DecideModelEmitter::HelperMapping(idx_t node_index) {
 	auto &node = *tree.nodes[node_index];
 	if (node.kind == DecideNodeKind::FRAME) {
 		// A range frame's helper: a class per window of its frame.
-		auto mapping = DecideFrameWindowMapping(gstate.frame_maps[node.frame]);
+		auto mapping = DecideFrameWindowMapping(gstate.frame_maps[node.Cast<DecideFrameNode>().frame]);
 		DecideMapRowsInNoClass(mapping);
 		return mapping;
 	}
@@ -403,7 +403,7 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 		auto &node = *tree.nodes[root];
 		if (node.kind == DecideNodeKind::FUNCTION) {
 			FunctionAbsence(root);
-			for (auto row : node.rows) {
+			for (auto row : node.Cast<DecideFunctionNode>().rows) {
 				DefinitionAbsence(row, tree.ValueVar(node));
 			}
 		} else if (tree.OwnedBy(node, DecideHelperKind::L0_INDICATOR) ||
@@ -548,7 +548,7 @@ void DecideModelEmitter::Constraints() {
 		if (!tree.IsFunction(node, DecideHelperKind::ABS)) {
 			continue;
 		}
-		for (auto root : node.rows) {
+		for (auto root : node.Cast<DecideFunctionNode>().rows) {
 			if (root >= tree.nodes.size()) {
 				throw InternalException("DECIDE model emitter: ABS F node has an invalid envelope root");
 			}
@@ -608,7 +608,7 @@ void DecideModelEmitter::Route(EmittedClause &&clause, bool folded) {
 void DecideModelEmitter::AbsEnvelope(idx_t function, idx_t root, bool counted) {
 	auto &node = *tree.nodes[function];
 	auto &definition = tree.Definition(node)->Cast<DecideAbsDefinition>();
-	const auto &envelopes = node.rows;
+	const auto &envelopes = node.Cast<DecideFunctionNode>().rows;
 	if (root >= tree.nodes.size() || std::find(envelopes.begin(), envelopes.end(), root) == envelopes.end()) {
 		throw InternalException("DECIDE model emitter: invalid ABS F envelope ownership");
 	}
@@ -799,7 +799,8 @@ vector<Value> DecideModelEmitter::Identity(idx_t node, idx_t entry) const {
 	auto &fields = tree.nodes[node]->signature;
 	const auto starts = SignatureStarts(tree, *tree.nodes[node]);
 	// A clause that merges classes tells its variants apart by what its rows read, not by their class.
-	auto identity = tree.nodes[node]->merges_classes ? vector<Value>() : container.groups.Key(container.Slot(entry));
+	auto identity =
+	    DecideMergesClasses(*tree.nodes[node]) ? vector<Value>() : container.groups.Key(container.Slot(entry));
 	const auto read = descent.Signature(node, entry);
 	const auto row = container.rows[entry];
 	for (idx_t i = 0; i < fields.size(); i++) {
@@ -1520,7 +1521,7 @@ void DecideModelEmitter::AvgGroups(bool avg_scale, idx_t avg_group_key, idx_t ch
 
 void DecideModelEmitter::FrameMembers(idx_t node, ReducerValueMembers &out) {
 	auto &tree_node = *tree.nodes[node];
-	auto &map = gstate.frame_maps[tree_node.frame];
+	auto &map = gstate.frame_maps[tree_node.Cast<DecideFrameNode>().frame];
 	auto &body = tree.nodes[node]->compiled;
 	auto &entries = descent.Containers()[node].rows;
 	// Each term's coefficient on the rows `rows` marks, its anchors there, each an entry of the O.
@@ -1569,13 +1570,13 @@ void DecideModelEmitter::ValueLinks() {
 		spec.need_closing = definition.NeedsClosing();
 		spec.label = definition.label;
 		spec.source_clause_id = definition.origin.source_clause_id;
-		spec.frame = tree_node.frame != DConstants::INVALID_INDEX;
-		if (tree_node.frame != DConstants::INVALID_INDEX) {
+		spec.frame = tree_node.kind == DecideNodeKind::FRAME;
+		if (spec.frame) {
 			FrameMembers(node, spec.members);
 			gstate.evaluated_value_links.push_back(std::move(spec));
 			continue;
 		}
-		const auto site = tree.nodes[node]->operand;
+		const auto site = tree.OperandOf(node);
 		auto &entries = descent.Containers()[site].parent_slots;
 		auto &members = link_members[node];
 		// Form each G's member expressions from its operand entries. Stage 06 still owns helper

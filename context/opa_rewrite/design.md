@@ -175,9 +175,14 @@ three steps, where column bindings are final (`plan_decide.cpp:224`):
 - Kept, because they serve more than the join: the term splitter (three rewrites and the direct rules use it),
   like-term collection, the frame-column registry, and the order of rows the model dumps record.
 - `DecideNode` holds no copy of a plan fact and no unread field: the tree holds the helper definitions and a node
-  names its own by index. [read] 38 fields, 13 of them of one kind (5 for E, 4 for G, 3 for O, 1 for F). It stays one
-  struct: `Validate` holds two cross-kind checks, and a class per kind would trade them for a cast at each read of
-  those 13 fields in the three execution files.
+  names its own by index. A root's bound, origin and defined helper are read from its clause record
+  (`DecideConstraint`), an F's from its definition, a linked G's or a range O's reducer from the definition or the
+  frame (`DecideTree::ReducerOf`). A G holds its operand's index (`operand`, `DecideTree::OperandOf`).
+- A node is a class per kind over the base `DecideNode`, DuckDB's tagged hierarchy: `DecideScopeNode` (E: `arguments`,
+  `merges_classes`, `folded`, `value_check`), `DecideReducerNode` (G: `function`, `aggregate`, `qualifier_scope`,
+  `operand`), `DecideFrameNode` (O: `frame`, `over`, `fallback`) and `DecideFunctionNode` (F: `rows`). A reader that
+  has tested the kind uses `Cast<T>()`, which raises on another kind; one that reads any node uses `TryCast<T>()`. A
+  field of one kind cannot be set on another, so `Validate` holds no cross-kind check.
 - Programs, layouts, containers and the three execution files do what they do today.
 
 #### 3.2.5 The tree is built once

@@ -437,7 +437,8 @@ unique_ptr<Vector> DecideTreeColumns::HoleValues(idx_t node, idx_t hole) {
 			slots[reducer.rows[e]] = reducer.Slot(e);
 		}
 	}
-	Vector folds(tree.nodes[read.node]->function->return_type, MaxValue<idx_t>(values.size(), 1));
+	Vector folds(tree.nodes[read.node]->Cast<DecideReducerNode>().function->return_type,
+	             MaxValue<idx_t>(values.size(), 1));
 	for (idx_t slot = 0; slot < values.size(); slot++) {
 		folds.SetValue(slot, values[slot]);
 	}
@@ -454,8 +455,8 @@ const vector<Value> &DecideTreeColumns::Folds(idx_t reducer) {
 	if (known != folds.end()) {
 		return known->second;
 	}
-	auto &node = *tree.nodes[reducer];
-	const auto operand = tree.nodes[reducer]->operand;
+	auto &node = tree.nodes[reducer]->Cast<DecideReducerNode>();
+	const auto operand = node.operand;
 	auto &arguments = tree.nodes[operand]->compiled.arguments;
 	auto &entries = descent.Containers()[operand];
 	// Its members are the operand's entries its member tests keep, each variant of a class once, at its first row,
@@ -494,7 +495,7 @@ const vector<Value> &DecideTreeColumns::Folds(idx_t reducer) {
 void DecideTreeColumns::CheckData() {
 	for (auto root : tree.roots) {
 		auto &node = *tree.nodes[root];
-		if (!node.value_check) {
+		if (!DecideIsValueCheck(node)) {
 			continue;
 		}
 		const auto check = node.compiled.check;
@@ -664,7 +665,7 @@ std::unordered_map<const Expression *, pair<idx_t, idx_t>> DecideTreeColumns::Fr
 		if (!node.Linked()) {
 			continue;
 		}
-		if (node.kind != DecideNodeKind::FRAME || node.frame != frame || !node.decision_value) {
+		if (node.kind != DecideNodeKind::FRAME || node.Cast<DecideFrameNode>().frame != frame || !node.decision_value) {
 			throw InternalException("DECIDE tree: frame node %llu has an invalid helper value", node_index);
 		}
 		auto &body = node.compiled;
@@ -740,7 +741,7 @@ DecideTreeInjection ReadDecideTreeInjection(const DecideTree &tree, const Decide
 	}
 	// Only a G over data computes a value its readers read, its fold.
 	auto &node = *tree.nodes[injection.node];
-	if (node.kind != DecideNodeKind::REDUCER || node.decision_value || !node.function) {
+	if (!DecideDataFold(node)) {
 		throw InvalidInputException("decide_debug: inject node %llu computes no data value", injection.node);
 	}
 	return injection;

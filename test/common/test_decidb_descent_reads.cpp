@@ -12,7 +12,7 @@ namespace {
 //! A tree of one E node whose `when` is `when`, over rows of `width` columns.
 duckdb::unique_ptr<DecideTree> TreeReading(duckdb::unique_ptr<Expression> when) {
 	auto tree = make_uniq<DecideTree>();
-	auto node = make_uniq<DecideNode>(DecideNodeKind::SCOPE);
+	auto node = make_uniq<DecideScopeNode>();
 	node->when.push_back(std::move(when));
 	tree->nodes.push_back(std::move(node));
 	tree->roots.push_back(0);

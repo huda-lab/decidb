@@ -75,7 +75,7 @@ idx_t CountGroupDecisions(const DecideProductGroup &group) {
 vector<const DecideConstraint *> HeldClauses(const DecideTree &tree) {
 	vector<const DecideConstraint *> clauses;
 	for (auto &node : tree.nodes) {
-		if (node->compiled.clause && !node->folded) {
+		if (node->compiled.clause && !DecideIsFolded(*node)) {
 			clauses.push_back(node->compiled.clause.get());
 		}
 	}

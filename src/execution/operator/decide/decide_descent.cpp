@@ -97,17 +97,18 @@ static vector<LogicalType> DescentKeyTypes(const DecideTree &tree, idx_t key) {
 }
 
 //! The O of frame `frame`, null if none holds it.
-static const DecideNode *DescentFrameNode(const DecideTree &tree, idx_t frame) {
+static optional_ptr<const DecideFrameNode> DescentFrameNode(const DecideTree &tree, idx_t frame) {
 	for (auto &candidate : tree.nodes) {
-		if (candidate->kind == DecideNodeKind::FRAME && candidate->frame == frame) {
-			return candidate.get();
+		auto node = candidate->TryCast<DecideFrameNode>();
+		if (node && node->frame == frame) {
+			return node;
 		}
 	}
 	return nullptr;
 }
 
 //! Whether a frame field of a signature reads its order key: relative to the anchor.
-static bool DescentFrameReadsOrder(const DecideTree &tree, const DecideNode &frame) {
+static bool DescentFrameReadsOrder(const DecideTree &tree, const DecideFrameNode &frame) {
 	return tree.frames[frame.frame].Relative();
 }
 
@@ -378,13 +379,14 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 		layout.program_columns = types.size();
 		auto program_columns = DescentTypes(node.program_columns);
 		types.insert(types.end(), program_columns.begin(), program_columns.end());
-		if (node.kind == DecideNodeKind::FRAME && node.over) {
+		auto frame_node = node.TryCast<DecideFrameNode>();
+		if (frame_node && frame_node->over) {
 			layout.order = types.size();
-			types.push_back(node.over->return_type);
+			types.push_back(frame_node->over->return_type);
 			layout.order_key = types.size();
 			types.push_back(LogicalType::BLOB);
 			layout.partition = types.size();
-			auto partition = DescentKeyTypes(tree, tree.frames[node.frame].partition_key);
+			auto partition = DescentKeyTypes(tree, tree.frames[frame_node->frame].partition_key);
 			types.insert(types.end(), partition.begin(), partition.end());
 			layout.partition_present = types.size();
 			types.push_back(LogicalType::BOOLEAN);
@@ -424,7 +426,7 @@ DecideDescent::DecideDescent(const DecideTree &tree_p, ClientContext &context_p)
 		}
 		vector<LogicalType> instance {LogicalType::UBIGINT};
 		instance.insert(instance.end(), signature_types[n].begin(), signature_types[n].end());
-		instance_maps[n] = make_uniq<DecideKeyMap>(context, instance, numbered && !node.merges_classes);
+		instance_maps[n] = make_uniq<DecideKeyMap>(context, instance, numbered && !DecideMergesClasses(node));
 		auto entry = instance;
 		entry.insert(entry.end(), columns.begin(), columns.end());
 		entry.insert(entry.end(), node.dependencies.size(), LogicalType::UBIGINT);
@@ -463,8 +465,9 @@ void DecideDescent::RequireRowReads(const DecideTree &tree, idx_t width) {
 				require(*field.value, what);
 			}
 		}
-		if (node.over) {
-			require(*node.over, what);
+		auto frame_node = node.TryCast<DecideFrameNode>();
+		if (frame_node && frame_node->over) {
+			require(*frame_node->over, what);
 		}
 	}
 	for (idx_t key = 0; key < tree.keys.size(); key++) {
@@ -789,7 +792,7 @@ void DecideDescent::Signature(idx_t node_index, DataChunk &chunk, const Reach &r
 			// node's values as a `by` key's read: the node raises what it raises, where it is read (a helper's G
 			// where the helper's classes are built, a frame's O where every frame is built before any clause,
 			// language/guide.md §5.6).
-			const DecideNode *frame = nullptr;
+			optional_ptr<const DecideFrameNode> frame;
 			if (field.kind == DecideSignatureFieldKind::FRAME) {
 				frame = DescentFrameNode(tree, field.frame);
 				if (!frame || !frame->over) {
@@ -1196,7 +1199,7 @@ void DecideDescent::InsertDistinct(Pending &batch, idx_t row_base) {
 		signatures.data[c].Slice(probe.data[c], selection, created.size());
 	}
 	signatures.SetCardinality(created.size());
-	if (node.merges_classes) {
+	if (DecideMergesClasses(node)) {
 		// The slot leaves the instance key and the entry keeps it: a merged instance is named by its first class.
 		signatures.data[0].Reference(Value::UBIGINT(0));
 	}
@@ -1216,7 +1219,7 @@ void DecideDescent::InsertDistinct(Pending &batch, idx_t row_base) {
 	container.values.Append(batch.values, selection, created.size());
 }
 
-void DecideDescent::FrameOrder(const DecideNode &node, const DecideEntryLayout &layout, DataChunk &chunk,
+void DecideDescent::FrameOrder(const DecideFrameNode &node, const DecideEntryLayout &layout, DataChunk &chunk,
                                const Reach &stored, DataChunk &values) {
 	auto &frame = tree.frames[node.frame];
 	DataChunk partition;
@@ -1290,7 +1293,7 @@ void DecideDescent::Store(idx_t node_index, DataChunk &chunk, const Reach &store
 		Evaluate(*node.program_columns[c], chunk, stored, values.data[layout.program_columns + c]);
 	}
 	if (layout.order != DConstants::INVALID_INDEX && !stored.empty()) {
-		FrameOrder(node, layout, chunk, stored, values);
+		FrameOrder(node.Cast<DecideFrameNode>(), layout, chunk, stored, values);
 	}
 	values.SetCardinality(stored.size());
 	// An entry per row.
@@ -1423,11 +1426,13 @@ const DecideDescent::Reach &DecideDescent::HoldKeyed(idx_t node_index, DataChunk
 	// A reader reads a G's or O's value at its group or timeline, and an `else` at the anchor's own row
 	// (language/guide.md §5.6; DecideNodeContainer::routed).
 	if (!scope) {
+		auto frame_node = node.TryCast<DecideFrameNode>();
+		const bool holds_fallback = frame_node && frame_node->fallback;
 		auto landing = landed[node_index].data();
 		for (idx_t k = 0; k < stored->size(); k++) {
 			const auto row = stored->rows[k];
 			if (landing[row] == DConstants::INVALID_INDEX) {
-				landing[row] = node.fallback ? row_base + row : (*stored_slots)[k];
+				landing[row] = holds_fallback ? row_base + row : (*stored_slots)[k];
 			}
 		}
 	}
@@ -1614,7 +1619,7 @@ void DecideDescent::Timelines(idx_t node_index) {
 				for (auto e = at; e != end; e++) {
 					spelled.push_back(container.Order(*e));
 				}
-				const auto sort_keys = SpellingKeys(spelled, node.over->return_type);
+				const auto sort_keys = SpellingKeys(spelled, node.Cast<DecideFrameNode>().over->return_type);
 				const auto signature = Signature(node_index, *at);
 				for (idx_t k = 1; k < sort_keys.size(); k++) {
 					conflict = conflict || !DescentEqual(signature, Signature(node_index, at[k]));

@@ -174,8 +174,8 @@ public:
 		RegisterHelperDefinitions();
 		LowerHelperDefinitions();
 		for (auto &check : op.value_checks) {
-			auto index = NewNode(DecideNodeKind::SCOPE);
-			auto &node = *tree->nodes[index];
+			auto index = NewNode<DecideScopeNode>();
+			auto &node = tree->nodes[index]->Cast<DecideScopeNode>();
 			node.root = node.hidden = node.value_check = true;
 			node.text = "data value check";
 			node.body = Lower(index, *check);
@@ -194,8 +194,8 @@ public:
 		if (op.bound.objective.body) {
 			const Expression *body = op.bound.objective.body.get();
 			const Expression *condition = op.bound.objective.scope.when.get();
-			auto index = NewNode(DecideNodeKind::SCOPE);
-			auto &node = *tree->nodes[index];
+			auto index = NewNode<DecideScopeNode>();
+			auto &node = tree->nodes[index]->Cast<DecideScopeNode>();
 			node.root = node.objective = true;
 			node.per = DecideTreePer::ONE;
 			node.text = op.bound.written_objective.empty() ? Text(*body) : op.bound.written_objective;
@@ -318,9 +318,9 @@ public:
 		if (helper >= tree->variable_scopes.size() || label == op.aux_var_expressions.end()) {
 			throw InternalException("DECIDE tree: helper %llu has no scope or no label", helper);
 		}
-		auto index = NewNode(DecideNodeKind::FUNCTION);
+		auto index = NewNode<DecideFunctionNode>();
 		definition_nodes[definition_index] = index;
-		auto &node = *tree->nodes[index];
+		auto &node = tree->nodes[index]->Cast<DecideFunctionNode>();
 		node.definition = definition_index;
 		node.root = node.hidden = node.decision_value = true;
 		node.text = label->second;
@@ -406,10 +406,11 @@ private:
 		return copy;
 	}
 
-	idx_t NewNode(DecideNodeKind kind) {
-		auto index = tree->nodes.size();
-		tree->nodes.push_back(make_uniq<DecideNode>(kind));
-		return index;
+	//! A node of kind NODE, at the end of the tree: its index is the tree's size before the call.
+	template <class NODE>
+	idx_t NewNode() {
+		tree->nodes.push_back(make_uniq<NODE>());
+		return tree->nodes.size() - 1;
 	}
 
 	void Edge(idx_t parent, idx_t child) {
@@ -547,8 +548,8 @@ private:
 	//! `owner` is the helper definition whose F node a row a function owns stands beneath.
 	void Root(const BoundDecideClause &clause, idx_t owner = DConstants::INVALID_INDEX) {
 		auto &scope = clause.scope;
-		auto index = NewNode(DecideNodeKind::SCOPE);
-		auto &node = *tree->nodes[index];
+		auto index = NewNode<DecideScopeNode>();
+		auto &node = tree->nodes[index]->Cast<DecideScopeNode>();
 		node.root = true;
 		// ABS envelopes are built from the optimizer's record rather than written by the user. They are in their
 		// natural form (`aux >= inner` / `aux >= -inner`), which can leave decisions on both sides of the comparison.
@@ -594,7 +595,7 @@ private:
 		// the nodes, columns and decisions it reads.
 		Decisions(*Lower(index, *row->right, canonical->query_wide_bound), node.decisions);
 		if (owned) {
-			auto &owner_node = *tree->nodes[function];
+			auto &owner_node = tree->nodes[function]->Cast<DecideFunctionNode>();
 			owner_node.rows.push_back(index);
 			if (is_abs_envelope || (is_l0_link && owner_node.rows.size() == 1)) {
 				owner_node.signature.clear();
@@ -672,7 +673,7 @@ private:
 			field.decision = op.helper_definitions[tree->nodes[child]->definition]->helper;
 		} else if (tree->nodes[child]->kind == DecideNodeKind::FRAME) {
 			field.kind = DecideSignatureFieldKind::FRAME;
-			field.frame = tree->nodes[child]->frame;
+			field.frame = tree->nodes[child]->Cast<DecideFrameNode>().frame;
 		} else {
 			field.kind = DecideSignatureFieldKind::BY_KEY;
 			field.key = tree->nodes[child]->key;
@@ -822,8 +823,8 @@ private:
 
 	//! The G of a reducer.
 	idx_t Aggregate(const BoundDecideReducerExpression &aggregate) {
-		auto index = NewNode(DecideNodeKind::REDUCER);
-		auto &node = *tree->nodes[index];
+		auto index = NewNode<DecideReducerNode>();
+		auto &node = tree->nodes[index]->Cast<DecideReducerNode>();
 		node.aggregate = aggregate.kind;
 		node.text = Text(aggregate);
 		node.decision_value = HasDecision(aggregate);
@@ -837,10 +838,10 @@ private:
 			tree->frame_aggregate_nodes[frame_aggregate] = index;
 		}
 		node.function = unique_ptr_cast<Expression, BoundAggregateExpression>(aggregate.ToAggregate());
-		auto operand = NewNode(DecideNodeKind::SCOPE);
+		auto operand = NewNode<DecideScopeNode>();
 		Edge(index, operand);
-		tree->nodes[index]->operand = operand;
-		auto &entry = *tree->nodes[operand];
+		node.operand = operand;
+		auto &entry = tree->nodes[operand]->Cast<DecideScopeNode>();
 		entry.text = node.text + " operand";
 		Gates(operand, aggregate.filter.get());
 		if (qualifier < op.bound.keyed_scopes.size()) {
@@ -894,9 +895,9 @@ private:
 			return index;
 		}
 		auto &reducer = link.Reducer();
-		auto index = NewNode(DecideNodeKind::REDUCER);
+		auto index = NewNode<DecideReducerNode>();
 		definition_nodes[link_index] = index;
-		auto &node = *tree->nodes[index];
+		auto &node = tree->nodes[index]->Cast<DecideReducerNode>();
 		node.definition = link_index;
 		node.qualifier_scope = reducer.per;
 		node.key = link.path_key;
@@ -906,10 +907,10 @@ private:
 		if (link.helper < tree->value_nodes.size()) {
 			tree->value_nodes[link.helper] = index;
 		}
-		auto operand = NewNode(DecideNodeKind::SCOPE);
+		auto operand = NewNode<DecideScopeNode>();
 		Edge(index, operand);
-		tree->nodes[index]->operand = operand;
-		auto &entry = *tree->nodes[operand];
+		node.operand = operand;
+		auto &entry = tree->nodes[operand]->Cast<DecideScopeNode>();
 		entry.text = node.text + " operand";
 		Gates(operand, reducer.filter.get());
 		if (reducer.per < op.bound.keyed_scopes.size()) {
@@ -928,9 +929,9 @@ private:
 			return record_nodes[record_index];
 		}
 		auto &record = op.bound.bound_aggregates[record_index];
-		auto index = NewNode(DecideNodeKind::REDUCER);
+		auto index = NewNode<DecideReducerNode>();
 		record_nodes[record_index] = index;
-		auto &node = *tree->nodes[index];
+		auto &node = tree->nodes[index]->Cast<DecideReducerNode>();
 		// The record's reducer over its arguments.
 		auto read = record.function->Copy();
 		auto &reducer = read->Cast<BoundDecideReducerExpression>();
@@ -941,10 +942,10 @@ private:
 		node.aggregate = reducer.kind;
 		node.key = record.key;
 		node.text = Text(reducer);
-		auto operand = NewNode(DecideNodeKind::SCOPE);
+		auto operand = NewNode<DecideScopeNode>();
 		Edge(index, operand);
-		tree->nodes[index]->operand = operand;
-		auto &entry = *tree->nodes[operand];
+		node.operand = operand;
+		auto &entry = tree->nodes[operand]->Cast<DecideScopeNode>();
 		entry.text = node.text + " operand";
 		Gates(operand, record.reads.get());
 		if (record.counts_classes) {
@@ -970,9 +971,9 @@ private:
 		if (frame_nodes[frame_index] != DConstants::INVALID_INDEX) {
 			return frame_nodes[frame_index];
 		}
-		auto index = NewNode(DecideNodeKind::FRAME);
+		auto index = NewNode<DecideFrameNode>();
 		frame_nodes[frame_index] = index;
-		auto &node = *tree->nodes[index];
+		auto &node = tree->nodes[index]->Cast<DecideFrameNode>();
 		auto &frame = op.bound.frames[frame_index];
 		node.frame = frame_index;
 		node.key = frame.timeline_key;
@@ -1012,7 +1013,7 @@ private:
 	}
 
 	void AddOrphan(idx_t child) {
-		auto root = NewNode(DecideNodeKind::SCOPE);
+		auto root = NewNode<DecideScopeNode>();
 		tree->nodes[root]->root = tree->nodes[root]->hidden = true;
 		tree->nodes[root]->text = "definition: " + tree->nodes[child]->text;
 		Edge(root, child);
@@ -1094,13 +1095,16 @@ private:
 		for (idx_t i = 0; i < tree->nodes.size(); i++) {
 			auto &node = *tree->nodes[i];
 			auto &variables = node.decisions;
-			for (auto *expression : {node.body.get(), node.fallback.get()}) {
-				if (expression) {
-					Decisions(*expression, variables);
-				}
+			if (node.body) {
+				Decisions(*node.body, variables);
 			}
-			for (auto &argument : node.arguments) {
-				Decisions(*argument, variables);
+			if (node.kind == DecideNodeKind::FRAME && node.Cast<DecideFrameNode>().fallback) {
+				Decisions(*node.Cast<DecideFrameNode>().fallback, variables);
+			}
+			if (node.kind == DecideNodeKind::SCOPE) {
+				for (auto &argument : node.Cast<DecideScopeNode>().arguments) {
+					Decisions(*argument, variables);
+				}
 			}
 			for (auto variable : variables) {
 				if (variable != DefinedVar(node)) {
@@ -1200,11 +1204,12 @@ void DecideTree::Validate() const {
 			                            : definition.kind == DecideHelperKind::L0_INDICATOR ? 3
 			                            : definition.kind == DecideHelperKind::DEFINITION   ? 1
 			                                                                                : 0;
+			auto &rows = node.Cast<DecideFunctionNode>().rows;
 			bool invalid = value_var >= value_nodes.size() ||
 			               (!variable_scopes.empty() && value_var >= variable_scopes.size()) || !node.body ||
-			               node.rows.size() != expected_rows;
-			for (idx_t r = 0; r < node.rows.size() && !invalid; r++) {
-				const auto root = node.rows[r];
+			               rows.size() != expected_rows;
+			for (idx_t r = 0; r < rows.size() && !invalid; r++) {
+				const auto root = rows[r];
 				invalid = root >= nodes.size() || !nodes[root]->compiled.clause ||
 				          nodes[root]->compiled.clause->defined_var != value_var || nodes[root]->parent != i ||
 				          std::find(node.children.begin(), node.children.end(), root) == node.children.end();
@@ -1232,15 +1237,14 @@ void DecideTree::Validate() const {
 			throw InternalException("DECIDE tree node %llu has an invalid key", i);
 		}
 		if (node.Linked() &&
-		    (value_var >= value_nodes.size() || value_nodes[value_var] != i ||
-		     (node.kind != DecideNodeKind::REDUCER && node.kind != DecideNodeKind::FRAME) ||
-		     (node.kind == DecideNodeKind::FRAME) != (node.frame != DConstants::INVALID_INDEX) ||
-		     (node.kind == DecideNodeKind::FRAME && node.qualifier_scope != DConstants::INVALID_INDEX))) {
+		    (value_var >= value_nodes.size() || value_nodes[value_var] != i || node.kind == DecideNodeKind::SCOPE)) {
 			throw InternalException("DECIDE tree node %llu has invalid value-link ownership", i);
 		}
-		if (node.qualifier_scope != DConstants::INVALID_INDEX &&
-		    (node.kind != DecideNodeKind::REDUCER || node.qualifier_scope >= keyed_scopes.size())) {
-			throw InternalException("DECIDE tree node %llu has an invalid reducer qualifier", i);
+		if (node.kind == DecideNodeKind::REDUCER) {
+			const auto qualifier = node.Cast<DecideReducerNode>().qualifier_scope;
+			if (qualifier != DConstants::INVALID_INDEX && qualifier >= keyed_scopes.size()) {
+				throw InternalException("DECIDE tree node %llu has an invalid reducer qualifier", i);
+			}
 		}
 		for (auto child : node.children) {
 			if (child >= nodes.size() ||
@@ -1333,7 +1337,8 @@ string DecideTree::ToString() const {
 			result << (node.objective ? " objective" : node.hidden ? " definition" : " root");
 		}
 		result << " key=" << DecideKeyText(keys, node.key);
-		if (node.kind == DecideNodeKind::REDUCER || (node.kind == DecideNodeKind::FRAME && frames[node.frame].range)) {
+		if (node.kind == DecideNodeKind::REDUCER ||
+		    (node.kind == DecideNodeKind::FRAME && frames[node.Cast<DecideFrameNode>().frame].range)) {
 			result << " agg=" << StringUtil::Lower(EnumUtil::ToString(ReducerOf(node)));
 		}
 		if (node.kind == DecideNodeKind::FUNCTION) {

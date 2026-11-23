@@ -28,17 +28,6 @@ every one of them:
 - **Tests** (R32): focused tests in each task's **Done when**; `make decide-test` once at the end of each queue
   group; every other suite in TREE-28.
 
-## TREE-24 — `DecideNode` is a class per kind
-
-- **Problem.** One struct serves four kinds; a field of one kind can be set on another, and
-  `DecideTree::Validate` checks that it is not.
-- **Change.** DuckDB's tagged hierarchy: a base with the common fields and `DecideScopeNode`, `DecideReducerNode`,
-  `DecideFrameNode`, `DecideFunctionNode`, reached by `Cast<T>()` at sites that already test the kind. `Validate`'s
-  cross-kind checks go. The execution files change field access only.
-- **Done when.** `Validate` holds no cross-kind check; the `lizard` figures of `decide_tree.cpp` are reported;
-  `./test/decide/run_tests.sh -k "one_pass or frame or abs or minmax or helper or explain or diagnos"` and
-  `build/release/test/unittest "[decidb]"` pass; design.md § 3.2.4 describes the classes.
-
 ## TREE-25 — Terms split from the finished nodes
 
 - **Decision needed.** After TREE-7 a reducer body is still read twice (reads, then algebra). One form reads a
@@ -49,7 +38,6 @@ every one of them:
 - **Options.** (1) Build it. (2) Keep two readings, stated in design.md § 3.2.4 as two analyses.
 - **Recommendation.** Size it first: the task opens with a note (what goes, what the shared splitter gains, each
   order that moves) and the owner rules on it.
-- **Needs.** TREE-24.
 - **Done when.** The owner rules on the note; under option 1 the note's own Done-when holds.
 
 ## TREE-26 — The parser's reducer node holds its call; one AND splitter
