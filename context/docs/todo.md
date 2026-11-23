@@ -13,11 +13,11 @@ the owner rules first.
 # Phase 5 — The parser builds the tree
 
 ## 5.1 The reducer node (one lane)
-- [ ] TREE-10 A reducer holds its kind; a norm is bound as itself — pipeline/todo.md § TREE-10
+- [ ] TREE-13 A frame is its own class — pipeline/todo.md § TREE-13
+- [ ] TREE-10 A reducer holds its kind; a norm is bound as itself — pipeline/todo.md § TREE-10 (needs: TREE-13)
 - [ ] TREE-11 Reducer equality and hash hold every fact — pipeline/todo.md § TREE-11 (needs: TREE-10)
 - [ ] TREE-12 Member tests are a reducer field — pipeline/todo.md § TREE-12 (needs: TREE-11)
-- [ ] TREE-13 A frame is its own class — pipeline/todo.md § TREE-13 (needs: TREE-12)
-- [ ] TREE-14 The side copy of an inlined reducer (decision) — pipeline/todo.md § TREE-14 (needs: TREE-13)
+- [ ] TREE-14 The side copy of an inlined reducer (decision) — pipeline/todo.md § TREE-14 (needs: TREE-12)
 - [ ] TREE-15 The written name's home (decision) — pipeline/todo.md § TREE-15
 
 ## 5.2 The clause record (needs: 5.1) (one lane)

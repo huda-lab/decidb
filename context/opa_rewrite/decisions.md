@@ -44,6 +44,7 @@ recommendation; nobody settles one silently. Rulings about a single task live wi
 | R30 | Helper rows print in the order the helpers are made, one table read by one loop; a stored plan of a query mixing helper kinds pins it (2026-11-23) |
 | R31 | A reducer body has two readings, what its node reads and its coefficient algebra, by two readers; a clause's atoms are handed from one to the other with their nodes, and nothing joins them by address. Whether terms are split from the finished nodes is ruled after it is sized (2026-11-23) |
 | R32 | `when c: (a and b)` binds one constraint per comparison, each under the `when`. Phase 5 runs focused tests per task, `make decide-test` at the end of each queue group, and every other suite once at the end (2026-11-23) |
+| R33 | An AVG has one encoding: the node is an AVG from the binder to lowering, the AVG pass only records its account, and the linear form scales its terms. `EXPLAIN` prints no rewritten `sum(...)` layer for an AVG clause. The frame class lands before the reducer's kind, so the kind has the six real members and no placeholder (2026-11-23) |
 
 ## Open decisions
 
