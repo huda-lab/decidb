@@ -328,6 +328,8 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	emitter.Objective(evaluated);
 	ScaleObjectiveAvg(gstate, num_rows, evaluated);
 	emitter.ObjectiveCoefficients();
+	emitter.AbsentInstances();
+	emitter.FrameReads();
 	// What the data left of each clause is reported once its clauses and its objective are read.
 	ReportSkippedInstances(gstate);
 	// The bottom-up values the evaluation computed, each node's programs on its entries.
@@ -508,7 +510,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	solver_input.num_rows = num_rows;
 	solver_input.num_decide_vars = num_decide_vars;
 	solver_input.keyed_mappings = std::move(keyed_mappings);
-	solver_input.absent_reads = gstate.absent_reads;
+	solver_input.absent_instances = std::move(gstate.absent_instances);
 	solver_input.written_in = std::move(gstate.written_in);
 	ReportInlinedHelpers(solver_input);
 	solver_input.variable_scopes = tree->variable_scopes;
@@ -519,20 +521,10 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	if (!gstate.frame_reads.empty()) {
 		solver_input.variable_scopes.resize(num_decide_vars, DecideVarScopeInfo::Row());
 		solver_input.num_decide_vars = num_decide_vars + gstate.frame_reads.size();
+		solver_input.variable_scopes.resize(solver_input.num_decide_vars,
+		                                    DecideVarScopeInfo(DecideVarScope::FRAME_READ, DConstants::INVALID_INDEX));
 	}
-	for (auto &read : gstate.frame_reads) {
-		SolverInput::FrameRead frame_read;
-		frame_read.base = read.first;
-		auto &map = gstate.frame_maps[read.second];
-		frame_read.rows.resize(num_rows);
-		for (idx_t row = 0; row < num_rows; row++) {
-			auto selected = map.SelectedRow(row);
-			frame_read.rows[row] = selected == DConstants::INVALID_INDEX ? row : selected;
-		}
-		solver_input.frame_reads.push_back(std::move(frame_read));
-		solver_input.variable_scopes.push_back(
-		    DecideVarScopeInfo(DecideVarScope::FRAME_READ, DConstants::INVALID_INDEX));
-	}
+	solver_input.frame_reads = std::move(gstate.evaluated_frame_reads);
 
 	// The flat column space, built ONCE and handed to every consumer below. It reads only the scopes and the class
 	// mappings, which are final here, and the floors a `when` lowers (ResolveLiftedFloors) need its row to instance

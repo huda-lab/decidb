@@ -86,6 +86,10 @@ public:
 	//! Per decision, the rows whose instance of it has no value beyond its keyed scope's absent class: an auxiliary
 	//! whose definition reads an instance with none there (D88); empty where none.
 	vector<vector<bool>> absent_reads;
+	//! Per decision, the instances every row reads with no value; moved into SolverInput::absent_instances.
+	vector<vector<bool>> absent_instances;
+	//! The frame reads, each with its base decision's instance per row; moved into SolverInput::frame_reads.
+	vector<SolverInput::FrameRead> evaluated_frame_reads;
 	//! Per clause (its source clause id), the instances its rows hold once grouped, and those left once each with no
 	//! value is skipped (deck pp. 50, 56): the most any of its rows holds, as a rewrite states the clause's instances
 	//! in each of its rows (PhysicalDecide::ReportSkippedInstances).

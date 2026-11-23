@@ -232,7 +232,7 @@ VarIndexer VarIndexer::Build(SolverInput &input) {
 		if (v >= idx.var_scope.size() || idx.var_scope[v] != DecideVarScope::FRAME_READ ||
 		    idx.frame_reads[i].base >= idx.first_frame_read ||
 		    idx.var_scope[idx.frame_reads[i].base] == DecideVarScope::FRAME_READ ||
-		    idx.frame_reads[i].rows.size() != idx.num_rows) {
+		    idx.frame_reads[i].instances.size() != idx.num_rows) {
 			throw InternalException("DECIDE: frame read %llu does not read a decision of the plan at every row", v);
 		}
 	}
@@ -521,23 +521,14 @@ static void BuildModelColumns(SolverModel &model, SolverInput &input, const VarI
 			model.is_integer[var_idx] = input.variable_types[var] != LogicalType::DOUBLE;
 			model.is_binary[var_idx] = per_var_binary[var];
 		}
-		// An auxiliary's instance every row of which reads it with no value (SolverInput::absent_reads) is fixed at 0:
-		// no row reads it, so no bound folded into its box binds it (D88). A keyed decision's absent class has no
+		// An auxiliary's instance every row of which reads it with no value (SolverInput::absent_instances) is fixed at
+		// 0: no row reads it, so no bound folded into its box binds it (D88). A keyed decision's absent class has no
 		// column (VarIndexer::instance_slot).
-		if (num_instances > 0 && var < input.absent_reads.size() && !input.absent_reads[var].empty()) {
-			vector<bool> present(num_instances, false);
-			auto &absent = input.absent_reads[var];
-			for (idx_t row = 0; row < absent.size(); row++) {
-				if (!absent[row]) {
-					present[indexer.InstanceOf(var, row)] = true;
-				}
-			}
-			for (idx_t inst = 0; inst < num_instances; inst++) {
-				if (!present[inst] && indexer.HasColumn(var, inst)) {
-					idx_t var_idx = indexer.InstanceColumn(var, inst);
-					model.col_lower[var_idx] = 0.0;
-					model.col_upper[var_idx] = 0.0;
-				}
+		for (idx_t inst = 0; var < input.absent_instances.size() && inst < input.absent_instances[var].size(); inst++) {
+			if (input.absent_instances[var][inst] && indexer.HasColumn(var, inst)) {
+				idx_t var_idx = indexer.InstanceColumn(var, inst);
+				model.col_lower[var_idx] = 0.0;
+				model.col_upper[var_idx] = 0.0;
 			}
 		}
 	}
@@ -941,33 +932,17 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer, const 
 	idx_t num_decide_vars = var_labels.size();
 	for (idx_t var = 0; var < num_decide_vars; var++) {
 		ColumnKind kind = var_is_aux[var] ? ColumnKind::AUX : ColumnKind::USER;
-		// Inverting Get(var, row) over all rows visits every column this variable
-		// owns. Keyed variables collapse multiple rows onto one column;
-		// the repeated writes are idempotent (same var/label, instance pinned to
-		// the class id via Get's mapping).
-		for (idx_t row = 0; row < indexer.num_rows; row++) {
-			// A row whose instance has no column (no class, or written into its readers) names none.
-			idx_t col = indexer.ColumnOrNone(var, row);
-			if (col == DConstants::INVALID_INDEX) {
+		// Each instance with a column: a row for a row-scoped variable, a class for a keyed one, the one instance of a
+		// query-wide one.
+		for (idx_t inst = 0; inst < indexer.NumInstances(var); inst++) {
+			if (!indexer.HasColumn(var, inst)) {
 				continue;
 			}
-			ColumnProvenance &slot = provenance[col];
+			ColumnProvenance &slot = provenance[indexer.InstanceColumn(var, inst)];
 			slot.kind = kind;
 			slot.label = var_labels[var];
 			slot.decide_var_idx = var;
-			// For keyed vars, the instance is the class id (col - base);
-			// for row-scoped vars it is the row; a scalar has exactly one instance.
-			switch (indexer.var_scope[var]) {
-			case DecideVarScope::KEYED:
-				slot.instance = indexer.InstanceOfColumn(var, col);
-				break;
-			case DecideVarScope::GLOBAL:
-				slot.instance = 0;
-				break;
-			default:
-				slot.instance = row;
-				break;
-			}
+			slot.instance = inst;
 		}
 	}
 	// Name any labeled global-block columns (today: aggregate `<>` indicators).

@@ -104,8 +104,10 @@ void LinearizeBilinear(SolverInput &input, const VarIndexer &indexer, const Form
 			if (instance == absent) {
 				continue; // the instance of a row that reads no key is fixed at 0
 			}
-			const idx_t bool_instance = indexer.InstanceUnder(link.bool_var_idx, link.aux_idx, instance);
-			const idx_t other_instance = indexer.InstanceUnder(link.other_var_idx, link.aux_idx, instance);
+			const idx_t bool_instance =
+			    ProductFactorInstance(indexer, link.bool_var_idx, link.bool_instances, instance);
+			const idx_t other_instance =
+			    ProductFactorInstance(indexer, link.other_var_idx, link.other_instances, instance);
 			// A factor with no value there leaves the product none (D88): no corner reads it.
 			if (!indexer.HasColumn(link.aux_idx, instance) || !indexer.HasColumn(link.bool_var_idx, bool_instance) ||
 			    !indexer.HasColumn(link.other_var_idx, other_instance)) {

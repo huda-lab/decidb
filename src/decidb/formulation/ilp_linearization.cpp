@@ -120,7 +120,7 @@ static void FlatColumnBox(const SolverInput &input, const FormulationBox &box, c
 	// of a 0/1 and x's box, exactly [min(0, L), max(0, U)], x's box being that of the instance this one reads.
 	// U is finite: DeriveBilinearAuxiliaryBounds refuses a factor open above before this runs.
 	if (auto link = BilinearLinkOf(input, v)) {
-		idx_t other_instance = indexer.InstanceUnder(link->other_var_idx, v, instance);
+		idx_t other_instance = ProductFactorInstance(indexer, link->other_var_idx, link->other_instances, instance);
 		double x_lo = box.InstanceLower(input, link->other_var_idx, other_instance);
 		double x_hi = box.InstanceUpper(link->other_var_idx, other_instance);
 		if (x_lo > -1e20) {

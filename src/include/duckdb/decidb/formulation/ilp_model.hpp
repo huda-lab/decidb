@@ -85,7 +85,7 @@ struct VarIndexer {
 			return scalar_var_index[var_idx];
 		case DecideVarScope::FRAME_READ: {
 			auto &read = frame_reads[var_idx - first_frame_read];
-			return Get(read.base, read.rows[row]);
+			return InstanceColumn(read.base, read.instances[row]);
 		}
 		default:
 			return InstanceColumn(var_idx, keyed_mappings[var_keyed_mapping_idx[var_idx]].row_to_class[row]);
@@ -95,8 +95,8 @@ struct VarIndexer {
 	//! Get(), or INVALID_INDEX where the instance `row` reads has no column -- a row in no class, an instance written
 	//! into its readers --, read through a frame at the row it selects.
 	inline idx_t ColumnOrNone(idx_t var_idx, idx_t row) const {
-		ResolveRead(var_idx, row);
-		return HasColumn(var_idx, InstanceOf(var_idx, row)) ? Get(var_idx, row) : DConstants::INVALID_INDEX;
+		return InstanceColumnOrNone(var_idx,
+		                            var_scope[var_idx] == DecideVarScope::FRAME_READ ? row : InstanceOf(var_idx, row));
 	}
 	//! The column of instance `inst` of `var_idx` as a term names it (InstanceColumn), or INVALID_INDEX where it has
 	//! none.
@@ -132,7 +132,7 @@ struct VarIndexer {
 			return scalar_var_index[var_idx];
 		case DecideVarScope::FRAME_READ: {
 			auto &read = frame_reads[var_idx - first_frame_read];
-			return Get(read.base, read.rows[inst]);
+			return InstanceColumn(read.base, read.instances[inst]);
 		}
 		default: {
 			if (var_idx < instance_slot.size() && !instance_slot[var_idx].empty()) {
@@ -149,23 +149,13 @@ struct VarIndexer {
 		}
 	}
 
-	//! A frame read at `row` is its base decision read at the row its frame selects (SolverInput::frame_reads); any
-	//! other variable is itself, read at `row`.
-	inline void ResolveRead(idx_t &var_idx, idx_t &row) const {
-		if (var_scope[var_idx] == DecideVarScope::FRAME_READ) {
-			auto &read = frame_reads[var_idx - first_frame_read];
-			var_idx = read.base;
-			row = read.rows[row];
-		}
-	}
-
 	//! A term on a frame read is a term on its base decision, at the instance the row its frame selects reads; any
 	//! other term is itself.
 	inline void ResolveInstance(idx_t &var_idx, idx_t &inst) const {
 		if (var_scope[var_idx] == DecideVarScope::FRAME_READ) {
 			auto &read = frame_reads[var_idx - first_frame_read];
 			var_idx = read.base;
-			inst = InstanceOf(var_idx, read.rows[inst]);
+			inst = read.instances[inst];
 		}
 	}
 
@@ -181,20 +171,6 @@ struct VarIndexer {
 			throw InternalException("DECIDE: a frame read has no instance of its own");
 		default:
 			return keyed_mappings[var_keyed_mapping_idx[var_idx]].row_to_class[row];
-		}
-	}
-
-	//! The instance of `var_idx` that instance `inst` of `finer` reads, for a variable whose scope is no finer than
-	//! `finer`'s: the instance of a query-wide variable is the only one, a row-scoped `finer` reads the instance its
-	//! row does, and a keyed one reads the instance of a variable keyed alike (or of a row-scoped one: its own).
-	inline idx_t InstanceUnder(idx_t var_idx, idx_t finer, idx_t inst) const {
-		switch (var_scope[finer]) {
-		case DecideVarScope::ROW:
-			return InstanceOf(var_idx, inst);
-		case DecideVarScope::GLOBAL:
-			return 0;
-		default:
-			return var_scope[var_idx] == DecideVarScope::GLOBAL ? 0 : inst;
 		}
 	}
 
@@ -243,6 +219,15 @@ struct VarIndexer {
 	//! through it, so it is safe to use after the SolverInput is destroyed (it is kept for the readback).
 	static VarIndexer Build(SolverInput &input);
 };
+
+//! The instance of a product's factor `factor` (BilinearLinkSpec::bool_var_idx or ::other_var_idx, with its
+//! `bool_instances` or `other_instances` as `of_auxiliary`) that instance `inst` of the product's auxiliary reads. A
+//! factor's scope is no finer than the auxiliary's: a query-wide one has the one instance, one scoped as the auxiliary
+//! is read at the auxiliary's own, and a keyed factor of an auxiliary per row at the class stage 08 listed.
+inline idx_t ProductFactorInstance(const VarIndexer &indexer, idx_t factor, const vector<idx_t> &of_auxiliary,
+                                   idx_t inst) {
+	return !of_auxiliary.empty() ? of_auxiliary[inst] : indexer.var_scope[factor] == DecideVarScope::GLOBAL ? 0 : inst;
+}
 
 //! The box a reader that tells the instances of a decision apart takes, by the instance a term names. A reader that
 //! takes the decision's box instead is sound, only looser.

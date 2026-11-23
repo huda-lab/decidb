@@ -126,6 +126,11 @@ public:
 	//! (DecideGlobalSinkState::objective_coefficients, ::objective_constant), once the objective's columns are final.
 	//! A term on a helper the plan writes where it is read is that helper's members.
 	void ObjectiveCoefficients();
+	//! What stage 06 reads of the rows once every term is written, by instance: each auxiliary's instances that every
+	//! row reads with no value (DecideGlobalSinkState::absent_instances), and each frame read's instance of its base
+	//! decision per row (::evaluated_frame_reads).
+	void AbsentInstances();
+	void FrameReads();
 
 private:
 	//! A helper's members (language/guide.md §7.2): the entries of its G's operand it reads, every decision they read
@@ -182,6 +187,8 @@ private:
 	//! `variables`; of no decision (INVALID_INDEX), nothing a reader asks for.
 	DecideInstanceOfRow InstanceOfRow(idx_t variable) const;
 	vector<DecideInstanceOfRow> InstancesOfRows(const vector<idx_t> &variables) const;
+	//! How many instances `variable` has: a row each for a decision per row or a frame read, its key's classes, or 1.
+	idx_t Instances(idx_t variable) const;
 	//! Writes each term of a list that reads a written-in instance as that instance's members, scaled by the term's
 	//! coefficient, their constants added to the constant of the term's row: `begin` delimits the rows, as a clause's
 	//! records and a helper's members do. A read of an instance with no member has no value: the objective drops it

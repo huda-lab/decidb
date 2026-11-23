@@ -324,6 +324,48 @@ DecideInstanceOfRow DecideModelEmitter::InstanceOfRow(idx_t variable) const {
 	return instance;
 }
 
+idx_t DecideModelEmitter::Instances(idx_t variable) const {
+	if (variable >= tree.variable_scopes.size()) {
+		return num_rows;
+	}
+	auto &scope = tree.variable_scopes[variable];
+	return scope.IsGlobal() ? 1 : scope.IsKeyed() ? (*keyed)[scope.keyed_scope_idx].num_classes : num_rows;
+}
+
+void DecideModelEmitter::AbsentInstances() {
+	gstate.absent_instances.assign(gstate.absent_reads.size(), vector<bool>());
+	for (idx_t variable = 0; variable < gstate.absent_reads.size(); variable++) {
+		auto &absent = gstate.absent_reads[variable];
+		if (absent.empty()) {
+			continue;
+		}
+		// An instance is read where some row that reads it has a value.
+		auto &none = gstate.absent_instances[variable];
+		none.assign(Instances(variable), true);
+		const auto instance = InstanceOfRow(variable);
+		for (idx_t row = 0; row < absent.size(); row++) {
+			if (!absent[row]) {
+				none[instance.At(row)] = false;
+			}
+		}
+	}
+}
+
+void DecideModelEmitter::FrameReads() {
+	for (auto &read : gstate.frame_reads) {
+		SolverInput::FrameRead frame_read;
+		frame_read.base = read.first;
+		auto &map = gstate.frame_maps[read.second];
+		const auto instance = InstanceOfRow(read.first);
+		frame_read.instances.resize(num_rows);
+		for (idx_t row = 0; row < num_rows; row++) {
+			const auto selected = map.SelectedRow(row);
+			frame_read.instances[row] = instance.At(selected == DConstants::INVALID_INDEX ? row : selected);
+		}
+		gstate.evaluated_frame_reads.push_back(std::move(frame_read));
+	}
+}
+
 vector<DecideInstanceOfRow> DecideModelEmitter::InstancesOfRows(const vector<idx_t> &variables) const {
 	vector<DecideInstanceOfRow> instances;
 	for (auto variable : variables) {
@@ -471,8 +513,18 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 			DefinitionAbsence(root, node.compiled.clause->defined_var);
 		}
 	}
-	// A product's auxiliary has none where a factor has none (DecideAbsence::At), which stage 06 reads too.
+	// A product's auxiliary has none where a factor has none (DecideAbsence::At), which stage 06 reads too. One per
+	// row reads a keyed factor at its row's class.
 	for (auto &product : gstate.evaluated_bilinear_links) {
+		auto &scope = tree.variable_scopes[product.aux_idx];
+		const bool per_row = !scope.IsKeyed() && !scope.IsGlobal();
+		for (auto factor : {std::make_pair(product.bool_var_idx, &product.bool_instances),
+		                    std::make_pair(product.other_var_idx, &product.other_instances)}) {
+			const auto instance = InstanceOfRow(factor.first);
+			for (idx_t row = 0; per_row && instance.class_of_row && row < num_rows; row++) {
+				factor.second->push_back(instance.At(row));
+			}
+		}
 		auto &absent = gstate.absent_reads[product.aux_idx];
 		if (!columns.Absence().MayBe(product.aux_idx)) {
 			continue;
@@ -1971,16 +2023,10 @@ void DecideModelEmitter::ObjectiveCoefficients() {
 	const auto written =
 	    DecideClauseRefOf(op.display.constraint_sources, op.display.source_text, DConstants::INVALID_INDEX);
 	sums.resize(tree.variable_scopes.size() + gstate.frame_reads.size());
-	// A decision's instances: a frame read is read per row.
 	auto add = [&](idx_t variable, idx_t instance, double coefficient) {
 		auto &of_variable = sums[variable];
 		if (of_variable.empty()) {
-			const bool plan = variable < tree.variable_scopes.size();
-			auto scope = plan ? tree.variable_scopes[variable] : DecideVarScopeInfo::Row();
-			of_variable.assign(scope.IsGlobal()  ? 1
-			                   : scope.IsKeyed() ? (*keyed)[scope.keyed_scope_idx].num_classes
-			                                     : num_rows,
-			                   0.0);
+			of_variable.assign(Instances(variable), 0.0);
 		}
 		AddCoefficient(of_variable[instance], coefficient, written);
 	};

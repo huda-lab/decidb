@@ -372,6 +372,11 @@ struct BilinearLinkSpec {
 	idx_t bool_var_idx;  //!< Boolean variable b
 	idx_t other_var_idx; //!< non-Boolean variable x
 	DecideRowOrigin origin;
+	//! Per instance of the auxiliary, the instance of a factor it reads, for a keyed factor of an auxiliary per row:
+	//! its row's class. Empty for any other factor, which is read at the auxiliary's own instance, or is query-wide
+	//! (ProductFactorInstance).
+	vector<idx_t> bool_instances;
+	vector<idx_t> other_instances;
 };
 
 //! One ABS, as stage 05 recorded it (DecideHelperKind::ABS) and the emitter evaluated it. Stage 05 picks the
@@ -780,10 +785,10 @@ struct SolverInput {
 	//! `per K:` or colon-form qualifier, a helper decision's `by` key). The column layout takes them
 	//! (VarIndexer::Build).
 	vector<KeyedMapping> keyed_mappings;
-	//! Per decision, the rows whose instance of it has no value beyond its keyed scope's absent class: an auxiliary
-	//! whose definition reads an instance with none, or a NULL (D88); empty where none. An instance every row of
-	//! which reads none is a column fixed at 0, which no row reads, as an absent class is.
-	vector<vector<bool>> absent_reads;
+	//! Per decision, the instances every row of which reads it with no value, beyond its keyed scope's absent class:
+	//! an auxiliary whose definition reads an instance with none, or a NULL (D88); empty where none. Such an instance
+	//! is a column fixed at 0, which no row reads, as an absent class is.
+	vector<vector<bool>> absent_instances;
 	//! Per helper, the instances stage 08 wrote where they are read (DecideHelperForm: a SUM or AVG the plan writes in,
 	//! a MIN or MAX group of one member, deck p. 112), which own no column (VarIndexer::instance_slot); empty for a
 	//! helper none of which is. No term stage 06 reads names one.
@@ -793,14 +798,13 @@ struct SolverInput {
 	//! For a keyed variable, keyed_scope_idx indexes keyed_mappings.
 	vector<DecideVarScopeInfo> variable_scopes;
 
-	//! A decision read at the row a frame selector selects (language/guide.md §5.6):
-	//! variable `first_frame_read + i` is decision `base` read, at each row, at `rows[row]`
-	//! -- the selected row, or the row itself where the frame selects none, where every term
-	//! reading it has coefficient 0. It owns no column (DecideVarScope::FRAME_READ); its
-	//! type and box are its base's, so a pass reading a term's box reads a sound one.
+	//! A decision read at the row a frame selector selects (language/guide.md §5.6): variable `first_frame_read + i` is
+	//! decision `base` read, at each row, at instance `instances[row]` -- the one the selected row reads, or the row's
+	//! own where the frame selects none, where every term reading it has coefficient 0. It owns no column
+	//! (DecideVarScope::FRAME_READ); its type and box are its base's, so a pass reading a term's box reads a sound one.
 	struct FrameRead {
 		idx_t base = DConstants::INVALID_INDEX;
-		vector<idx_t> rows;
+		vector<idx_t> instances;
 	};
 	vector<FrameRead> frame_reads;
 	//! The first frame read's variable index: the plan's decisions come first.
