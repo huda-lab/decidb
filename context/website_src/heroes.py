@@ -172,7 +172,52 @@ def about(b):
     )
 
 
+def demo(b):
+    """The live demo's opening: the engine as it loads in this page (demo/demo.js fills in each line)."""
+    import os
+
+    size = (
+        os.path.getsize(os.path.join(b.SITE, "demo", "decidb.wasm.gz"))
+        if os.path.exists(os.path.join(b.SITE, "demo", "decidb.wasm.gz"))
+        else 0
+    )
+    mb = f"{size / 1e6:.1f} MB"
+    rows = [
+        ("Status", "Waiting for the page", "status"),
+        ("Download", f"decidb.wasm.gz, {mb}", "loaded"),
+        ("Version", "–", "version"),
+        ("Solver", "HiGHS, one thread", "solver"),
+        ("Tables", "–", "tables"),
+    ]
+    lines = "".join(
+        f'<div class="engine__row"><span>{esc(k)}</span><b data-engine-{key}>{esc(v)}</b></div>' for k, v, key in rows
+    )
+    body = (
+        '<div class="hw__q">DeciDB in this page</div>'
+        f'<div class="engine" data-engine data-engine-size="{size}">'
+        f'<div class="engine__bar"><span data-engine-bar></span></div>{lines}</div>'
+        '<p class="engine__note">The queries and the data stay in your browser.</p>'
+    )
+    picture = window(
+        "WebAssembly",
+        body,
+        "DeciDB starting in this page: its download, version, solver and the tables it holds.",
+    )
+    return hero(
+        b,
+        "",
+        ["Live demo"],
+        "Live demo",
+        "DeciDB runs inside this page, compiled to WebAssembly. Book a festival lineup in seven steps, and edit any "
+        "query as you go.",
+        picture,
+        17,
+        btn("#acts", "Start the demo", True) + btn("getting-started.html#install", "Install DeciDB"),
+    )
+
+
 PAGES = {
+    "demo.html": demo,
     "getting-started.html": getting_started,
     "guide.html": documentation,
     "features.html": features,

@@ -26,6 +26,10 @@ Macros inside a fragment:
   env="NAME=value" on sql and model runs the binary with that variable set (DECIDB_FORCE_SOLVER=highs); a model
   block with `dump-only` shows the dump without the query
   <!--sql-->QUERY<!--/sql-->                                              shown only (grammar sketches)
+  <!--live id="ID" fixture="FIXTURE" dec="x"-->QUERY<!--/live-->           the live demo's editor: run here as a check
+                                                                         (expect=, direct= as for sql); the page
+                                                                         runs it again in the browser
+  <!--idea for="ID" fixture="FIXTURE" label="..."-->QUERY<!--/idea-->        a button that puts QUERY in editor ID
   <!--bash-->, <!--python-->, <!--text-->                                  other code blocks
 Fixtures (named databases) are in fixtures.py; every example's setup is one too.
 """
@@ -454,7 +458,9 @@ def expand_sql(attrs, code, page):
     return code_block(code, "sql", title, "ok", ctx)
 
 
-MACRO = re.compile(r'<!--(sql|bash|python|text|explain|plan|model)(\s(?:[^>"]|"[^"]*")*)?-->(.*?)<!--/\1-->', re.S)
+MACRO = re.compile(
+    r'<!--(sql|bash|python|text|explain|plan|model|live|idea)(\s(?:[^>"]|"[^"]*")*)?-->(.*?)<!--/\1-->', re.S
+)
 
 
 def plan_json(setup, query):
@@ -601,6 +607,116 @@ def expand_explain(attrs, code, page):
     )
 
 
+# ---------------------------------------------------------------- the live demo (demo.html)
+
+LIVE = {}  # each live editor's fixture and query, by id: the buttons and sliders beside it are checked against them
+DEMO_FIXTURE = "demo-festival"  # the database the browser loads (its `big` is the speed step's table)
+DEMO_BIG_N = 10000
+
+
+def live_check(sql, fx_name):
+    """Run SQL against a fixture, as a live editor would in the browser: (ok, rows, message)."""
+    ok, out, err = run_sql(FX.FIXTURES[fx_name]["setup"] + "\n" + sql.rstrip().rstrip(";") + ";\n")
+    return ok, (parse_json_rows(out) if ok else []), (err + out).strip()
+
+
+def expand_live(attrs, code, page):
+    """An editor the page runs in the browser. The build runs its query here first: it must succeed (or fail with
+    expect=), and name its rule when direct= is given. That run's result waits in a <template>, shown only when a
+    browser cannot start DeciDB."""
+    code = code.strip("\n")
+    lid, fx_name, title = attr(attrs, "id"), attr(attrs, "fixture"), attr(attrs, "title", "SQL")
+    if not lid or fx_name not in FX.FIXTURES:
+        FAILURES.append(f"{where(page, code)}\n    a live block needs id= and a known fixture=")
+        return code_block(code, "sql", title)
+    LIVE[lid] = (fx_name, code)
+    dec = tuple(x for x in (attr(attrs, "dec", "") or "").split(",") if x)
+    expect, want_rule = attr(attrs, "expect"), attr(attrs, "direct")
+    ok, rows, msg = live_check(code, fx_name)
+    if expect is not None:
+        if ok or expect not in msg:
+            FAILURES.append(f"{where(page, code)}\n    expected an error with {expect!r}, got ok={ok}: {msg[:300]}")
+        recorded = error_box(msg.splitlines()[0] if msg else "", "no answer")
+    elif not ok:
+        FAILURES.append(f"{where(page, code)}\n    {msg[:400]}")
+        recorded = ""
+    else:
+        got = direct_rule(FX.FIXTURES[fx_name]["setup"], code) if want_rule else None
+        if want_rule and got != want_rule:
+            FAILURES.append(f"{where(page, code)}\n    expected direct solve {want_rule}, got {got}")
+        recorded = result_table(rows, dec=dec, on=dec[0] if dec else None)
+    data = f' data-live="{esc(lid)}" data-dec="{esc(",".join(dec))}"'
+    if attr(attrs, "target"):
+        data += f' data-target="{esc(attr(attrs, "target"))}"'
+    return (
+        f'<div class="live"{data}><div class="qr"><div class="code live__code" data-lang="sql">'
+        f'<div class="code__head"><span class="code__title">{esc(title)}</span>'
+        f'<span class="live__status" aria-live="polite"></span>'
+        f'<button class="live__reset" type="button" hidden>Reset</button>'
+        f'<button class="live__run" type="button" disabled>Run</button></div>'
+        f'<div class="live__edit"><pre aria-hidden="true"><code>{hl_sql(code)}</code></pre>'
+        f'<textarea spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off" rows="{code.count(chr(10)) + 1}"'
+        f' aria-label="{esc(title)}: the query, editable">{esc(code)}</textarea></div></div>'
+        f'<div class="live__out"></div></div><template class="live__recorded">{recorded}</template></div>'
+    )
+
+
+def expand_idea(attrs, code, page):
+    """A button that puts a query in a live editor and runs it; the build runs the query first."""
+    code = code.strip("\n")
+    fx_name, target = attr(attrs, "fixture"), attr(attrs, "for", "")
+    if fx_name not in FX.FIXTURES:
+        FAILURES.append(f"{where(page, code)}\n    an idea needs a known fixture=")
+    else:
+        ok, _, msg = live_check(code, fx_name)
+        if not ok:
+            FAILURES.append(f"{where(page, code)}\n    {msg[:400]}")
+    label = attr(attrs, "label", "Try this")
+    return f'<button class="pill" type="button" data-idea="{esc(target)}" data-code="{esc(code)}">{esc(label)}</button>'
+
+
+def demo_finish(body, page):
+    """The demo page's checks that span blocks, then its data and script. A button's data-sql runs before the query
+    of the editor it serves; a slider's data-sub must find its number in that editor's query, at the slider's value."""
+    for block in re.finditer(r'<div class="live__(actions|controls)" data-for="([^"]+)">(.*?)</div>', body, re.S):
+        kind, lid, inner = block.groups()
+        if lid not in LIVE:
+            FAILURES.append(f"{page}: live__{kind} for {lid!r}, which is not a live editor")
+            continue
+        fx_name, query = LIVE[lid]
+        for sql in re.findall(r'data-sql="([^"]*)"', inner):
+            ok, _, msg = live_check(html.unescape(sql) + "\n" + query, fx_name)
+            if not ok:
+                FAILURES.append(f"{page}: the button {html.unescape(sql)[:60]!r} then {lid}: {msg[:300]}")
+        for tag in re.findall(r"<input\b[^>]*>", inner):
+            sub, value = attr(tag, "data-sub"), attr(tag, "value")
+            m = re.search(html.unescape(sub), query) if sub else None
+            if sub and (not m or m.group(2) != value):
+                FAILURES.append(f"{page}: the slider {html.unescape(sub)!r} does not find {value} in {lid}'s query")
+    engine = os.path.join(SITE, "demo", "decidb.wasm.gz")
+    if not os.path.exists(engine):
+        FAILURES.append(f"{page}: no {engine}: run context/website_src/wasm/build.sh")
+    fx = FX.FIXTURES[DEMO_FIXTURE]
+    ok, _, msg = live_check(fx["big"].replace("{N}", "1000"), DEMO_FIXTURE)
+    if not ok:
+        FAILURES.append(f"{page}: the Big table's SQL: {msg[:300]}")
+    data = {
+        "setup": fx["setup"],
+        "big": fx["big"],
+        "bigN": DEMO_BIG_N,
+        "words": {
+            "keywords": sorted(SQL_KEYWORDS),
+            "decide": sorted(SQL_DECIDE),
+            "scope": sorted(SQL_SCOPE),
+            "types": sorted(SQL_TYPES),
+            "funcs": sorted(SQL_FUNCS),
+        },
+    }
+    payload = json.dumps(data).replace("</", "<\\/")
+    body += f'\n<script type="application/json" id="demo-data">{payload}</script>'
+    return body, '<script type="module" src="demo/demo.js"></script>\n'
+
+
 def expand(fragment, page, root=""):
     def sub(m):
         kind, attrs, code = m.group(1), (m.group(2) or ""), m.group(3)
@@ -612,11 +728,15 @@ def expand(fragment, page, root=""):
             return expand_plan(attrs, code, page)
         if kind == "model":
             return expand_model(attrs, code, page)
+        if kind == "live":
+            return expand_live(attrs, code, page)
+        if kind == "idea":
+            return expand_idea(attrs, code, page)
         return code_block(code, kind, attr(attrs, "title"))
 
     text = MACRO.sub(sub, fragment)
     text = re.sub(r"<th(?=[ >])(?![^>]*scope=)", '<th scope="col"', text)
-    left = re.search(r"<!--/?(sql|bash|python|text|explain|plan|model|meta)\b", text)
+    left = re.search(r"<!--/?(sql|bash|python|text|explain|plan|model|live|idea|meta)\b", text)
     if left:
         FAILURES.append(f"{page}: unexpanded macro near {text[left.start():left.start() + 120]!r}")
     return text.replace("{{GITHUB}}", GITHUB)
@@ -658,12 +778,24 @@ ARROW = (
 )
 NAV_WORDS = [
     ("getting-started.html", "Get started"),
+    ("demo.html", "Live demo"),
     ("guide.html", "Guide"),
     ("examples.html", "Examples"),
     ("about.html", "About"),
     ("docs/index.html", "Documentation"),
     ("features.html", "Novel features"),
 ]
+# on a small laptop the bar shows these shorter words (the full word stays the link's name)
+NAV_SHORT = {"Documentation": "Docs", "Novel features": "Features"}
+
+
+def nav_word(word):
+    short = NAV_SHORT.get(word)
+    if not short:
+        return word
+    return f'<span class="nav__full">{word}</span><span class="nav__short" aria-hidden="true">{short}</span>'
+
+
 MENU_COLS = [
     (
         "First problems",
@@ -745,7 +877,9 @@ def header(root, active):
     for href, word in NAV_WORDS:
         cur = ' aria-current="page"' if href == active else ""
         if href != "examples.html":
-            words.append(f'<div class="nav__item"><a class="nav__link" href="{root}{href}"{cur}>{word}</a></div>')
+            words.append(
+                f'<div class="nav__item"><a class="nav__link" href="{root}{href}"{cur}>{nav_word(word)}</a></div>'
+            )
             continue
         cols = "".join(
             f'<div class="menu-col span-3"><p class="t-label">{esc(g)}</p>'
@@ -777,7 +911,7 @@ def header(root, active):
     <div class="nav__actions">
       <button class="btn btn--secondary theme-toggle" type="button" aria-pressed="false" data-theme-toggle hidden>{SUN}{MOON}<span class="theme-toggle__label">Dark theme</span></button>
       <a class="nav__link" href="{GITHUB}">GitHub</a>
-      <a class="btn btn--primary" href="{root}getting-started.html#install">Install DeciDB</a>
+      <a class="btn btn--primary" href="{root}getting-started.html#install"><span>Install<span class="nav__more"> DeciDB</span></span></a>
     </div>
     <button class="nav__toggle" type="button" aria-expanded="false" aria-label="Menu">
       <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M2 5h14M2 13h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
@@ -796,7 +930,7 @@ def footer_links(root):
           <a class="nav__logo" href="{root}index.html"><img src="{root}assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
           <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
-        {col("Learn", [(f"{root}getting-started.html", "Get started"), (f"{root}guide.html", "Guide"), (f"{root}docs/index.html", "Documentation"), (f"{root}features.html", "Novel features"), (f"{root}examples.html", "Examples")])}
+        {col("Learn", [(f"{root}getting-started.html", "Get started"), (f"{root}demo.html", "Live demo"), (f"{root}guide.html", "Guide"), (f"{root}docs/index.html", "Documentation"), (f"{root}features.html", "Novel features"), (f"{root}examples.html", "Examples")])}
         {col("Examples", [(f"{root}examples/knapsack.html", "Knapsack"), (f"{root}examples/facility-location.html", "Depots"), (f"{root}examples/fair-allocation.html", "Fair allocation"), (f"{root}examples/diagnose.html", "DIAGNOSE")])}
         {col("Project", [(f"{root}about.html", "About"), (f"{root}about.html#research", "Papers"), (GITHUB, "GitHub"), ("https://huda-lab.github.io/", "HUDA Lab")])}
         {col("Contact", [("mailto:support@decidb.com", "Email the team"), (f"{GITHUB}/issues", "Report an issue")])}
@@ -835,7 +969,7 @@ def closing(root):
 </footer>"""
 
 
-def page(title, description, body, active, root=""):
+def page(title, description, body, active, root="", extra=""):
     return f"""{head(title, description, root)}
 <body class="doc-body">
 {header(root, active)}
@@ -843,7 +977,7 @@ def page(title, description, body, active, root=""):
 {body}
 </main>
 {closing(root)}
-{scripts(root)}
+{scripts(root, extra)}
 </body>
 </html>
 """
@@ -980,6 +1114,12 @@ PAGES = [
         "Install DeciDB: your first DECIDE query",
         "Install DeciDB and write your first DECIDE query: decisions, constraints, objectives and the scope words per, when and by.",
         "getting-started.html",
+    ),
+    (
+        "demo.html",
+        "Live demo: DeciDB in your browser",
+        "Run DeciDB in your browser: book a festival lineup in seven steps, from a first DECIDE query to DIAGNOSE and query rewriting, with every query editable.",
+        "demo.html",
     ),
     (
         "guide.html",
@@ -1186,7 +1326,7 @@ def copy_assets():
 
     if os.path.realpath(OUT) == os.path.realpath(SITE):
         return
-    for dirpath, _, files in os.walk(os.path.join(SITE, "assets")):
+    for dirpath, _, files in [w for top in ("assets", "demo") for w in os.walk(os.path.join(SITE, top))]:
         rel = os.path.relpath(dirpath, SITE)
         os.makedirs(os.path.join(OUT, rel), exist_ok=True)
         for name in files:
@@ -1204,7 +1344,10 @@ def main():
             .read()
             .replace("<!--hero-->", heroes.PAGES[name](sys.modules[__name__]))
         )
-        write_page(os.path.join(OUT, name), page(title, desc, expand(frag, name), active))
+        body, extra = expand(frag, name), ""
+        if name == "demo.html":
+            body, extra = demo_finish(body, name)
+        write_page(os.path.join(OUT, name), page(title, desc, body, active, extra=extra))
     write_page(os.path.join(OUT, "documentation.html"), redirect("guide.html", "The DECIDE guide"))
     for i in range(len(DOC_PAGES)):
         text = docs_page(i)
