@@ -351,7 +351,22 @@ columns in a scan of their own.
   Objective terms check an auxiliary's value on each row an E entry stands
   for, so absence on the entry's first row does not mask a value on another row (`ReadEntries`). Their coefficient
   programs are read on the term site's rows before a relation-qualified reducer selects its classes; an invalid
-  coefficient on a row in no class raises nothing (`ObjectiveTerms`, `ReadInReducer`). A variant whose first row D88
+  coefficient on a row in no class raises nothing (`ObjectivePart`, `ReadInReducer`).
+
+  **A part is read by its place.** A term's coefficient, a product group's weight and each of its forms'
+  coefficients are parts (`DecideModelEmitter::Part`), and one reader serves all of them in each place a part can
+  stand, each place with its rule for a row where the part has no value (D84):
+
+  | Place | Read on | A row where the part has no value | Reader |
+  |---|---|---|---|
+  | beside a clause's reducers | each kept row | leaves the row's instance no value | `ReadBesideReducers` |
+  | in a clause's reducer | each member | is no member | `ReadInReducer` |
+  | in the objective | each row it keeps, or each member | drops the part there | `ObjectivePart` |
+
+  A product group is read where its weight and every form term are, so the objective's is dropped on a row where
+  one form's decision has no value. A per-row clause's terms (`Rows`), a helper's members (`ValueLinks`) and a
+  frame's (`FrameMembers`) stand on their node's own entries and read their programs there
+  (`DecideTreeColumns::Numbers`), with no row of another node to join. A variant whose first row D88
   moves to a later row of its entry is named by the entry's first row; no query is known to reach it.
 
 The tree folds the data reducers in the bottom-up pass and plans nothing for them. A data reducer's arguments are
@@ -681,8 +696,8 @@ emitter (`ReadAbsence`) resolves both in the order the definitions read each oth
 auxiliary whose definition reads a helper made after it -- whatever order the rewrites numbered them in. Every reader
 reads that one mark: a comparison skips the instance, a helper drops the member, the objective drops the term. A term's
 own read is one check, `DecideAbsentReads` (`decide_absence.hpp`), built over the terms a clause reads that may read
-none and asked per row: whether the term stands in a row (`Rows`), beside a reducer (`ReadBesideReducers`), in a
-product's part (`ReadPart`) or in a reducer (`ReadInReducer`). Every folded bound asks it too, so a folded bound
+none and asked per row: whether the term stands in a row (`Rows`), beside a reducer (`ReadBesideReducers`) or in a
+reducer (`ReadInReducer`), a product's part as a term. Every folded bound asks it too, so a folded bound
 counts its skipped instances and, with none kept, warns that it constrains nothing, as the clause unfolded does: a lone
 `max(when val > 100: x) >= 5` over no matching row, or `per k: c BETWEEN 0 AND 10` over rows in no class. `MayBe`
 answers exactly once the classes are read, so a folded bound over a keyed decision with a class at every row reads

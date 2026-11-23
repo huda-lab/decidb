@@ -290,20 +290,14 @@ private:
 	EmittedClause Groups(idx_t root, bool counted);
 	//! A clause's product groups (EmittedClause::products), once its rows are grouped: each group's weight
 	//! and its forms' coefficients on the rows its site's members stand for, its weight 0 on every other row and
-	//! divided by its AVG's count (`filters`: the terms', then the groups'); a NULL coefficient or a form's decision
-	//! with no instance leaves an instance no value (`null_rows`).
-	void Polynomial(idx_t root, const vector<TermFilterState> &filters, vector<bool> &null_rows, EmittedClause &result);
-	//! A group's weight or one of its form terms at its site `site`, its column on each row its site's members stand
-	//! for, a relation-qualified one's first of each class, which it is computed on once the repeats are left out
-	//! (language/guide.md §5.1): a NULL coefficient there, or the decision of `term` (none for a weight) with no
-	//! instance there, leaves the row's instance no value (`null_rows`, D84).
-	void ReadPart(const DecideTermSite &site, idx_t qualifier_scope, int sign, const DecideTerm *term,
-	              CoefficientColumn &column, vector<bool> &null_rows);
-	//! The objective's linear terms `terms` at their sites `sites`: each its decision as a
-	//! row reads it, its column and its filter, the rows it is read on (D84).
-	vector<TermFilterState> ObjectiveTerms(idx_t root, const vector<DecideTerm> &terms,
-	                                       const vector<DecideTermSite> &sites, vector<CoefficientColumn> &coefficients,
-	                                       vector<idx_t> &variables);
+	//! divided by its AVG's count (`filters`: the terms', then the groups'), each read as a term in its place is
+	//! (ReadBesideReducers on `rows`, ReadInReducer).
+	void Polynomial(idx_t root, const vector<pair<idx_t, idx_t>> &rows, const vector<TermFilterState> &filters,
+	                vector<bool> &null_rows, EmittedClause &result);
+	//! The objective's linear terms `terms` at their sites `sites`: each its decision, its column and its filter, the
+	//! rows it is read on (ObjectivePart).
+	vector<TermFilterState> ObjectiveTerms(const vector<DecideTerm> &terms, const vector<DecideTermSite> &sites,
+	                                       vector<CoefficientColumn> &coefficients, vector<idx_t> &variables);
 	//! An objective AVG of a `by` key (`avg_group_key`, D81), in the G `child`, its site `site`: each member's group
 	//! there, which its 1/n divides by (TermFilterState::avg_group_ids).
 	void AvgGroups(bool avg_scale, idx_t avg_group_key, idx_t child, idx_t site, TermFilterState &filter);
@@ -337,15 +331,47 @@ private:
 	            TermFilterState &filter, vector<bool> &members, F &&read);
 	//! Read entries when the qualified scope is the site's own node, as for a helper's members.
 	const vector<bool> &ReadEntriesOf(idx_t site, bool qualified, vector<bool> &first);
-	//! A term beside a grouped clause's reducers, on each of `rows` (the kept rows and their root's entries), a NULL
-	//! coefficient marking its row (`null_rows`).
-	void ReadBesideReducers(idx_t root, const DecideTerm &term, idx_t program, const vector<pair<idx_t, idx_t>> &rows,
-	                        CoefficientColumn &column, vector<bool> &null_rows);
-	//! A term in a reducer, on each member of the G it ranges over: an entry of its operand, which the reducer's `when`
-	//! routed and its member tests keep, a kept row in no group among them, since the term is computed on every kept
-	//! row; a NULL coefficient marks its row (`null_rows`). Returns the rows its filter keeps.
-	vector<bool> ReadInReducer(const DecideTerm &term, const DecideTermSite &site, idx_t program,
-	                           CoefficientColumn &column, TermFilterState &filter, vector<bool> &null_rows);
+	//! What is read into a column of the rows a reader holds: a term's coefficient, or a product group's weight or one
+	//! of its forms' coefficients. Its site, the relation-qualified reducer its reads go through, the term whose
+	//! decision it reads (none for a weight) and its value where stage 05 left its program out, a weight of 1.
+	struct Part {
+		const DecideTermSite &site;
+		idx_t qualifier_scope;
+		const DecideTerm *term;
+		double unit;
+
+		Part(const DecideTerm &term, const DecideTermSite &site)
+		    : site(site), qualifier_scope(term.qualifier_scope_idx), term(&term), unit(term.sign) {
+		}
+		Part(const DecideTerm &term, const DecideTermSite &site, idx_t qualifier_scope)
+		    : site(site), qualifier_scope(qualifier_scope), term(&term), unit(term.sign) {
+		}
+		Part(const DecideTermSite &site, idx_t qualifier_scope, double unit)
+		    : site(site), qualifier_scope(qualifier_scope), term(nullptr), unit(unit) {
+		}
+	};
+	//! A part's program on `entries` of its site (DecideTreeColumns::Numbers), or its unit on every entry.
+	vector<double> Numbers(const Part &part, const vector<bool> &entries, vector<bool> *nulls);
+	//! The three places a part is read in, each with its rule for a row where the part has no value (D84):
+	//!
+	//!   beside a clause's reducers   on each kept row; the row's instance has no value         ReadBesideReducers
+	//!   in a clause's reducer        on each member; the row is no member                      ReadInReducer
+	//!   in the objective             on each row it keeps or each member; the part is dropped  ObjectivePart
+	//!
+	//! and a NULL coefficient leaves a clause's instance no value (`null_rows`), while the objective has none (stage
+	//! 05 read one as 0). A relation-qualified reducer's part is computed on every member and read on the first of
+	//! each class (language/guide.md §5.1).
+	//!
+	//! A part beside a grouped clause's reducers, on each of `rows` (the kept rows and their root's entries).
+	void ReadBesideReducers(const Part &part, const vector<pair<idx_t, idx_t>> &rows, CoefficientColumn &column,
+	                        vector<bool> &null_rows);
+	//! A part in a reducer, on each member of the G it ranges over: an entry of its operand, which the reducer's `when`
+	//! routed and its member tests keep, a kept row in no group among them, since the part is computed on every kept
+	//! row. Returns the rows its filter keeps.
+	vector<bool> ReadInReducer(const Part &part, CoefficientColumn &column, TermFilterState &filter,
+	                           vector<bool> &null_rows);
+	//! A part of the objective by data row, and the rows it is read on.
+	void ObjectivePart(const Part &part, CoefficientColumn &column, vector<bool> &read_rows);
 	//! The grouped root's G of its `by` key.
 	idx_t ByReducer(idx_t root) const;
 	//! Each of `kept_groups`, groups of the G `by`, named by its key's values.

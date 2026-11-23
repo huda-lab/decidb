@@ -45,19 +45,15 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   `build/release/test/unittest "[decidb]"`; the corpus query of `test/decide/golden/corpus.sql` line 717's
   neighbour (`per grp: sum(x) by (grp) <= budget / 10 * open`) has 6 columns and 3 rows.
 
-## MODEL-17 — The emitter reads a term in one place
+## MODEL-23 — Tests pin a product group's part in a reducer
 
-- **Problem.** "Read a term's program at its site, project it onto the reader's rows, mark NULLs and absence" is
-  written seven times, each with its own index space and NULL rule: `Rows` (`decide_model_emitter.cpp:734`),
-  `ReadBesideReducers`, `ReadInReducer`, `ReadPart`, `ObjectiveTerms`, `FrameMembers`, `ValueLinks`. Product groups
-  are read once for a clause (`Polynomial`, `ReadPart`) and again for the objective (inline in `Objective`). Three
-  index spaces (a container's entries, places among kept rows, data rows) are joined ad hoc.
-- **Change.** One type for the rows a reader holds (place, data row, entry) and one reader that returns a term's
-  values and NULL mask in it; the seven sites call it. One reader of product groups serves a clause and the
-  objective.
-- **Done when.** Model goldens identical; `./test/decide/run_tests.sh -k "scope or anr or when or per or quadratic or
-  avg or null or absent"`; lizard over `decide_model_emitter.cpp`: `Rows`, `Groups` and `ValueLinks` beside 32, 22
-  and 30.
+- **Problem.** A product group's part in a reducer is read as a term is (`08_execution/done.md` § A part is read by
+  its place): a member whose form decision has no value is no member (D84), and a coefficient is computed on every
+  member before a relation-qualified reducer selects its classes. No test reaches either with a product group.
+- **Change.** Two oracle tests: a product group in a `sum` whose form reads an auxiliary with no value on one member
+  (D88), and one in a relation-qualified reducer whose coefficient is not finite on a row in no class.
+- **Done when.** `./test/decide/run_tests.sh -k "quadratic and (absent or class)"`; each test fails with
+  `ReadInReducer` reading `Tested` for a part's entries, or `Numbers` on `reads`.
 
 ## MODEL-18 — A clause's working columns are apart from its result, and the emitter fills the solver input
 
@@ -72,7 +68,6 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
 - **Change.** A builder owns a clause's working columns and returns a plain `EvaluatedConstraint` (GoF Builder). Each
   rule that drops an instance contributes a named mask, combined once. The emitter writes into the `SolverInput` the
   sink state owns. A record states the decisions its rows name, once; stage 06 holds its own cache of emitted rows.
-- **Needs.** MODEL-17.
 - **Done when.** Model goldens identical; `./test/decide/run_tests.sh -k "scope or when or per or not_equal or absent
   or null or diagnose"`; `build/release/test/unittest "[decidb]"`.
 

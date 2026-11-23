@@ -829,7 +829,7 @@ EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
 		Admit(body, evaluated);
 	}
 	// Its product groups, which no reducer filters.
-	Polynomial(root, vector<TermFilterState>(Parts(clause)), null_rows, result);
+	Polynomial(root, rows, vector<TermFilterState>(Parts(clause)), null_rows, result);
 	DecideAbsence::SkipNullInstances(null_rows, false, kept, evaluated.row_group_ids, evaluated.num_groups);
 	if (counted) {
 		gstate.CountInstances(evaluated.provenance.origin.source_clause_id, instances,
@@ -1154,17 +1154,28 @@ void DecideModelEmitter::KeyClasses(idx_t root, const vector<pair<idx_t, idx_t>>
 	}
 }
 
-void DecideModelEmitter::ReadBesideReducers(idx_t root, const DecideTerm &term, idx_t program,
-                                            const vector<pair<idx_t, idx_t>> &rows, CoefficientColumn &column,
-                                            vector<bool> &null_rows) {
-	vector<bool> nulls(descent.Containers()[root].Count(), false);
-	auto numbers = columns.Numbers(root, program, columns.Tested(root), &nulls);
+vector<double> DecideModelEmitter::Numbers(const Part &part, const vector<bool> &entries, vector<bool> *nulls) {
+	return part.site.program == DConstants::INVALID_INDEX
+	           ? vector<double>(entries.size(), part.unit)
+	           : columns.Numbers(part.site.node, part.site.program, entries, nulls);
+}
+
+void DecideModelEmitter::ReadBesideReducers(const Part &part, const vector<pair<idx_t, idx_t>> &rows,
+                                            CoefficientColumn &column, vector<bool> &null_rows) {
+	const auto root = part.site.node;
+	const auto &tested = columns.Tested(root);
+	vector<bool> nulls(tested.size(), false);
+	const auto numbers = Numbers(part, tested, &nulls);
 	DecideAbsentReads absent_reads(columns.Absence());
-	absent_reads.Add(term);
+	if (part.term) {
+		absent_reads.Add(*part.term);
+	}
 	column.AssignDense(rows.size());
 	for (idx_t place = 0; place < rows.size(); place++) {
 		const auto read = rows[place];
-		column.Set(place, numbers[read.second]);
+		if (tested[read.second]) {
+			column.Set(place, numbers[read.second]);
+		}
 		null_rows[place] = null_rows[place] || nulls[read.second] || absent_reads.At(read.first);
 	}
 }
@@ -1175,22 +1186,22 @@ vector<pair<idx_t, idx_t>> DecideModelEmitter::ReadRows(idx_t site, const vector
 	return rows;
 }
 
-vector<bool> DecideModelEmitter::ReadInReducer(const DecideTerm &term, const DecideTermSite &site, idx_t program,
-                                               CoefficientColumn &column, TermFilterState &filter,
+vector<bool> DecideModelEmitter::ReadInReducer(const Part &part, CoefficientColumn &column, TermFilterState &filter,
                                                vector<bool> &null_rows) {
+	auto &site = part.site;
 	// Its member tests are its filter's NULL tests of what its body reads and of its decisions' keys, so every
 	// member's decision has an instance (D84); a coefficient is NULL on a member only through a value the whole query
 	// shares, which no test reads, and leaves the member's group no value. It is computed on every member, and a
 	// relation-qualified one's repeats are left out afterwards.
 	vector<bool> nulls(descent.Containers()[site.node].Count(), false);
 	vector<bool> first, selected_rows, candidates;
-	const auto &present = columns.ReadEntries(site.node, term, candidates);
-	const auto &reads = ReadEntriesOf(site, term.qualifier_scope_idx, present, first, selected_rows);
+	const auto &present =
+	    part.term ? columns.ReadEntries(site.node, *part.term, candidates) : columns.Tested(site.node);
+	const auto &reads = ReadEntriesOf(site, part.qualifier_scope, present, first, selected_rows);
 	// Evaluate the coefficient before the relation qualifier removes rows outside its classes. The old lowering reads
 	// these values on the reducer's kept rows, then applies the qualifier to the members; a NaN on a row in no class
 	// still raises here.
-	auto numbers = columns.Numbers(site.node, program, present, &nulls);
-	filter.avg_scale = term.avg_scale;
+	const auto numbers = Numbers(part, present, &nulls);
 	vector<bool> members;
 	column.AssignDense(placed);
 	const auto coefficients = column.MutableDense().data();
@@ -1198,8 +1209,10 @@ vector<bool> DecideModelEmitter::ReadInReducer(const DecideTerm &term, const Dec
 	const std::vector<bool> &null_entries = nulls;
 	std::vector<bool> &nulled = null_rows;
 	DecideAbsentReads absent_reads(columns.Absence());
-	absent_reads.Add(term);
-	Filter(site.node, term.qualifier_scope_idx, reads, selected_rows, filter, members,
+	if (part.term) {
+		absent_reads.Add(*part.term);
+	}
+	Filter(site.node, part.qualifier_scope, reads, selected_rows, filter, members,
 	       [&](idx_t place, idx_t row, idx_t entry) {
 		       if (absent_reads.At(row)) {
 			       nulled[place] = true;
@@ -1253,11 +1266,12 @@ bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const vector<pair<idx_t, i
 		auto &site = body.linear[t];
 		if (site.node == root) {
 			// A term beside the reducers is read on each kept row, and counted once in its group.
-			ReadBesideReducers(root, terms[t], site.program, rows, evaluated.row_coefficients[t], null_rows);
+			ReadBesideReducers(Part(terms[t], site), rows, evaluated.row_coefficients[t], null_rows);
 			unfiltered = true;
 			continue;
 		}
-		read_filter(ReadInReducer(terms[t], site, site.program, evaluated.row_coefficients[t], filters[t], null_rows),
+		filters[t].avg_scale = terms[t].avg_scale;
+		read_filter(ReadInReducer(Part(terms[t], site), evaluated.row_coefficients[t], filters[t], null_rows),
 		            filters[t]);
 	}
 	// A product group's filter, on the members of its reducer, which is read with the terms'; its weight and its
@@ -1367,7 +1381,7 @@ EmittedClause DecideModelEmitter::Groups(idx_t root, bool counted) {
 	}
 	result.avg_rhs_scale = HoistAvgIntoNotEqualBound(clause, filters);
 	ScaleAvgTerms(clause, filters, kept, evaluated);
-	Polynomial(root, filters, null_rows, result);
+	Polynomial(root, rows, filters, null_rows, result);
 	if (!bound_null.empty()) {
 		// Taken once every rule that drops an instance has run but the next, which reads `null_rows`.
 		TakeTightestFrameBound(evaluated.comparison_type, RenderDecideSource(*clause.rhs_expr, names),
@@ -1477,31 +1491,8 @@ void DecideModelEmitter::Admit(const DecideBody &body, EvaluatedClauseColumns &e
 	}
 }
 
-void DecideModelEmitter::ReadPart(const DecideTermSite &site, idx_t qualifier_scope, int sign, const DecideTerm *term,
-                                  CoefficientColumn &column, vector<bool> &null_rows) {
-	vector<bool> first, selected_rows;
-	const auto &tested = columns.Tested(site.node);
-	const auto &reads = ReadEntriesOf(site, qualifier_scope, tested, first, selected_rows);
-	vector<bool> nulls(reads.size(), false);
-	// Stage 05 leaves a weight of 1 out.
-	auto numbers = site.program == DConstants::INVALID_INDEX ? vector<double>(reads.size(), double(sign))
-	                                                         : columns.Numbers(site.node, site.program, reads, &nulls);
-	DecideAbsentReads absent_reads(columns.Absence());
-	if (term) {
-		absent_reads.Add(*term);
-	}
-	column.AssignDense(placed);
-	const auto coefficients = column.MutableDense().data();
-	ForEachTermRead(site.node, reads, qualifier_scope, selected_rows, [&](idx_t row, idx_t entry) {
-		const auto place = place_of_row[row];
-		if (place != DConstants::INVALID_INDEX) {
-			coefficients[place] = numbers[entry];
-			null_rows[place] = null_rows[place] || nulls[entry] || absent_reads.At(row);
-		}
-	});
-}
-
-void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &filters, vector<bool> &null_rows,
+void DecideModelEmitter::Polynomial(idx_t root, const vector<pair<idx_t, idx_t>> &rows,
+                                    const vector<TermFilterState> &filters, vector<bool> &null_rows,
                                     EmittedClause &result) {
 	auto &body = tree.nodes[root]->compiled;
 	auto &clause = *body.clause;
@@ -1512,9 +1503,17 @@ void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &f
 		EvaluatedProductGroup out;
 		out.square = group.square;
 		out.weight_sign = group.weight_sign;
-		// Its weight, 0 on a row it does not read, then each form term's coefficient, whose decision has no value
-		// where it has no instance (D84).
-		ReadPart(sites.weight, group.qualifier_scope_idx, group.sign, nullptr, out.weight, null_rows);
+		// Its weight, 0 on a row it does not read, then each form term's coefficient, each read as a term in its
+		// place is: beside the reducers, or in one.
+		auto read = [&](const Part &part, CoefficientColumn &column) {
+			if (part.site.node == root) {
+				ReadBesideReducers(part, rows, column, null_rows);
+			} else {
+				TermFilterState members;
+				ReadInReducer(part, column, members, null_rows);
+			}
+		};
+		read(Part(sites.weight, group.qualifier_scope_idx, group.sign), out.weight);
 		auto read_form = [&](const vector<DecideTerm> &terms, const vector<DecideTermSite> &form,
 		                     vector<idx_t> &variables, vector<CoefficientColumn> &coefficients,
 		                     vector<TermInstances> &instances) {
@@ -1523,7 +1522,7 @@ void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &f
 				variables.push_back(term.variable_index);
 				instances.push_back(InstancesAt(term, &result.rows));
 				coefficients.emplace_back();
-				ReadPart(form[t], group.qualifier_scope_idx, term.sign, &term, coefficients.back(), null_rows);
+				read(Part(term, form[t], group.qualifier_scope_idx), coefficients.back());
 			}
 		};
 		read_form(group.left, sites.left, out.left_variables, out.left_coefficients, out.left_instances);
@@ -1582,8 +1581,8 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 	for (auto &read : container.routed) {
 		marked[read.first] = true;
 	}
-	evaluated.linear_filters = ObjectiveTerms(
-	    root, objective.terms, body.linear, gstate.evaluated_objective_coefficients, gstate.objective_variable_indices);
+	evaluated.linear_filters = ObjectiveTerms(objective.terms, body.linear, gstate.evaluated_objective_coefficients,
+	                                          gstate.objective_variable_indices);
 	// A term outside every reducer counts once, on the first row the objective keeps.
 	CountTupleTermsOnce(objective.terms, gstate.evaluated_objective_coefficients, &kept, num_rows);
 	// A product group is read as a term is, on the members of the G it ranges over or on each row the objective
@@ -1597,19 +1596,15 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 		auto &sites = body.groups[g];
 		auto &filter = evaluated.group_filters[g];
 		const auto site = sites.weight.node;
-		const auto &tested = columns.Tested(site);
-		vector<bool> first, selected_rows;
-		const auto &reads = ReadEntriesOf(sites.weight, group.qualifier_scope_idx, tested, first, selected_rows);
 		EvaluatedProductGroup out;
 		out.square = group.square;
 		out.weight_sign = group.weight_sign;
-		const auto weight = sites.weight.program == DConstants::INVALID_INDEX
-		                        ? vector<double>(reads.size(), double(group.sign))
-		                        : columns.Numbers(site, sites.weight.program, reads, nullptr);
-		out.weight.AssignDense(num_rows);
-		vector<const DecideTerm *> absent;
-		vector<vector<double>> numbers;
-		vector<CoefficientColumn *> coefficients;
+		filter.avg_scale = group.avg_scale;
+		filter.has_filter = true;
+		ObjectivePart(Part(sites.weight, group.qualifier_scope_idx, group.sign), out.weight, filter.mask);
+		// The group is read where its weight and every form term are.
+		std::vector<bool> &read_rows = filter.mask;
+		vector<bool> part_rows;
 		auto read_form = [&](const vector<DecideTerm> &terms, const vector<DecideTermSite> &form,
 		                     vector<idx_t> &variables, vector<CoefficientColumn> &columns_out,
 		                     vector<TermInstances> &instances) {
@@ -1618,91 +1613,68 @@ void DecideModelEmitter::Objective(PhysicalDecide::EvaluatedClauses &evaluated) 
 				auto &term = terms[t];
 				variables.push_back(term.variable_index);
 				instances.push_back(InstancesAt(term, nullptr));
-				if (columns.Absence().MayBe(term)) {
-					absent.push_back(&term);
+				ObjectivePart(Part(term, form[t], group.qualifier_scope_idx), columns_out[t], part_rows);
+				for (idx_t row = 0; row < num_rows; row++) {
+					read_rows[row] = read_rows[row] && part_rows[row];
 				}
-				numbers.push_back(columns.Numbers(site, form[t].program, reads, nullptr));
-				columns_out[t].AssignDense(num_rows);
-				coefficients.push_back(&columns_out[t]);
 			}
 		};
 		read_form(group.left, sites.left, out.left_variables, out.left_coefficients, out.left_instances);
 		read_form(group.right, sites.right, out.right_variables, out.right_coefficients, out.right_instances);
-		filter.avg_scale = group.avg_scale;
-		filter.has_filter = true;
-		filter.mask.assign(num_rows, false);
-		ForEachTermRead(site, reads, group.qualifier_scope_idx, selected_rows, [&](idx_t row, idx_t entry) {
-			for (auto term : absent) {
-				if (columns.Absence().TermAt(*term, row)) {
-					return;
-				}
+		for (idx_t row = 0; row < num_rows; row++) {
+			if (!read_rows[row]) {
+				out.weight.Set(row, 0.0);
 			}
-			filter.mask[row] = true;
-			out.weight.Set(row, weight[entry]);
-			for (idx_t c = 0; c < coefficients.size(); c++) {
-				coefficients[c]->Set(row, numbers[c][entry]);
-			}
-		});
+		}
 		AvgGroups(group.avg_scale, group.avg_group_key, group.child, site, filter);
 		gstate.evaluated_objective_groups.push_back(std::move(out));
 	}
 	CountProductsOnce(groups, gstate.evaluated_objective_groups, &kept, num_rows);
 }
 
-vector<TermFilterState> DecideModelEmitter::ObjectiveTerms(idx_t root, const vector<DecideTerm> &terms,
+void DecideModelEmitter::ObjectivePart(const Part &part, CoefficientColumn &column, vector<bool> &read_rows) {
+	auto &site = part.site;
+	read_rows.assign(num_rows, false);
+	column.AssignDense(num_rows);
+	// Stage 05 read a NULL coefficient as 0 (DropNullObjectiveTerms), so none is read here. An entry that reads no
+	// instance of the part's decision gives it no value, so the part is dropped there and its coefficient never read
+	// (D84). The coefficient is still evaluated on the rows the part's own scope keeps before the relation qualifier
+	// selects members; this preserves errors from a coefficient on a row in no qualified class.
+	vector<bool> candidates, first, selected_rows;
+	const auto &present =
+	    part.term ? columns.ReadEntries(site.node, *part.term, candidates) : columns.Tested(site.node);
+	const auto &reads = ReadEntriesOf(site, part.qualifier_scope, present, first, selected_rows);
+	const auto numbers = Numbers(part, present, nullptr);
+	std::vector<bool> &mask = read_rows;
+	const auto values = column.MutableDense().data();
+	const auto computed = numbers.data();
+	// A part outside every reducer is read on each row the objective keeps, at its variant's entry; one in a reducer
+	// on each member of the G it ranges over, an entry of its operand, which the reducer's `when` routed and its
+	// member tests keep. A keyed E entry may stand for rows where an auxiliary alternates between a value and none:
+	// its coefficient is the entry's, and the part is read only on the rows with a value.
+	ForEachTermRead(site.node, reads, part.qualifier_scope, selected_rows, [&](idx_t row, idx_t entry) {
+		if (!part.term || !columns.Absence().TermAt(*part.term, row)) {
+			mask[row] = true;
+			values[row] = computed[entry];
+		}
+	});
+}
+
+vector<TermFilterState> DecideModelEmitter::ObjectiveTerms(const vector<DecideTerm> &terms,
                                                            const vector<DecideTermSite> &sites,
                                                            vector<CoefficientColumn> &coefficients,
                                                            vector<idx_t> &variables) {
-	auto &container = descent.Containers()[root];
 	vector<TermFilterState> filters(terms.size());
 	coefficients.resize(terms.size());
 	for (idx_t t = 0; t < terms.size(); t++) {
 		auto &term = terms[t];
-		auto &site = sites[t];
-		const auto program = site.program;
 		auto &filter = filters[t];
 		variables.push_back(term.variable_index);
 		objective_instances.push_back(InstanceOfRow(term));
 		filter.avg_scale = term.avg_scale;
 		filter.has_filter = true;
-		filter.mask.assign(num_rows, false);
-		coefficients[t].AssignDense(num_rows);
-		// Stage 05 read a NULL coefficient as 0 (DropNullObjectiveTerms), so none is read here. An entry that reads no
-		// instance of the term's decision gives it no value, so the term is dropped there and its coefficient never
-		// read (D84). The coefficient is still evaluated on the rows the term's own scope keeps before the relation
-		// qualifier selects members; this preserves errors from a coefficient on a row in no qualified class.
-		vector<bool> absent, first;
-		const auto &present = columns.ReadEntries(site.node, term, absent);
-		vector<bool> selected_rows;
-		const auto &reads = ReadEntriesOf(site, term.qualifier_scope_idx, present, first, selected_rows);
-		auto numbers = columns.Numbers(site.node, program, present, nullptr);
-		const std::vector<bool> &marked = reads;
-		std::vector<bool> &mask = filter.mask;
-		const auto values = coefficients[t].MutableDense().data();
-		const auto computed = numbers.data();
-		auto read = [&](idx_t row, idx_t entry) {
-			// A keyed E entry may represent rows where this auxiliary alternates between present and absent. Its
-			// coefficient is shared by the entry, but the objective term is present only on rows with a value.
-			if (marked[entry] && !columns.Absence().TermAt(term, row)) {
-				mask[row] = true;
-				values[row] = computed[entry];
-			}
-		};
-		if (site.node == root) {
-			// A term outside every reducer is read on each row the objective keeps, at its variant's entry, and
-			// counted once there (Objective).
-			for (auto &routed : container.routed) {
-				if (term.qualifier_scope_idx == DConstants::INVALID_INDEX || selected_rows[routed.first]) {
-					read(routed.first, routed.second);
-				}
-			}
-		} else {
-			// A term in a reducer is read on each member of the G it ranges over: an entry of its operand, which
-			// the reducer's `when` routed and its member tests keep. A reducer that keeps none reads nothing, so its
-			// terms are dropped (D84).
-			ForEachTermRead(site.node, reads, term.qualifier_scope_idx, selected_rows, read);
-		}
-		AvgGroups(term.avg_scale, term.avg_group_key, term.child, site.node, filter);
+		ObjectivePart(Part(term, sites[t]), coefficients[t], filter.mask);
+		AvgGroups(term.avg_scale, term.avg_group_key, term.child, sites[t].node, filter);
 	}
 	return filters;
 }

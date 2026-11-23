@@ -17,8 +17,8 @@ the owner rules first.
 - [ ] MODEL-8 The helper of a link whose data may split its classes (decision) — pipeline/todo.md § MODEL-8
 
 ## 6.4 The emitter's structure (one lane)
-- [ ] MODEL-17 The emitter reads a term in one place — pipeline/todo.md § MODEL-17
-- [ ] MODEL-18 Working columns apart from the result; emitter fills the solver input — pipeline/todo.md § MODEL-18 (needs: MODEL-17)
+- [ ] MODEL-23 Tests pin a product group's part in a reducer — pipeline/todo.md § MODEL-23
+- [ ] MODEL-18 Working columns apart from the result; emitter fills the solver input — pipeline/todo.md § MODEL-18
 
 ## 6.5 Layering (one lane)
 - [ ] MODEL-19 Stage 06 has one driver; the AVG under `<>` is the optimizer's — pipeline/todo.md § MODEL-19
