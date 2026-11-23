@@ -165,7 +165,7 @@ ExtremumBody SplitExtremumBody(const Expression &body, idx_t decide_index);
 //! What building the variant signatures of the user's clauses writes (LogicalDecide::signatures).
 struct DecideSignatures {
 	//! A relation-qualified reducer over decisions whose body has a field gets a scope of its own, appended here
-	//! (KeyedScopeInfo::signature), and its tag names it.
+	//! (KeyedScopeInfo::signature), and the reducer names it.
 	vector<KeyedScopeInfo> &keyed_scopes;
 	vector<DecideSignature> signatures;
 };

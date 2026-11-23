@@ -135,8 +135,7 @@ static void NameInputColumns(DecideDisplay &display, const DecideTree &tree, Log
 				// — recorded even when an earlier reference already supplied the name.
 				display.input_column_in_clause[r.index] = true;
 				if (display.input_column_names[r.index].empty()) {
-					display.input_column_names[r.index] =
-					    written_name(r, QuoteColumnName(StripDecideTags(r.GetName())));
+					display.input_column_names[r.index] = written_name(r, QuoteColumnName(r.GetName()));
 				}
 			}
 		}

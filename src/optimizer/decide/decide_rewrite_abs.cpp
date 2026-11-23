@@ -225,8 +225,7 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 	vector<DecideSplitTerm> terms;
 	DecideTermSplitter(context, decide).Split(argument, 1, terms);
 	ExpressionBuilder calc(context);
-	// The tree evaluates the check, so a frame marker keeps its tag and is read at the row the frame selects (`Of`
-	// strips it, which would read the marker as a reducer over the rows).
+	// The tree evaluates the check, so the value keeps the definitions its kept calls name (`Of` forgets them).
 	DecideNumberNames names;
 	names.clause = clause;
 	ExprPtr total;
@@ -325,7 +324,7 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	// Worklist, as LLVM's InstCombine revisits the users of a value it changed: a body whose ABS just got its helper
 	// is handed to the bilinear entry again, because a product with an ABS factor was not affine in the decisions
 	// until the helper existed. The bodies go in the order found, so the columns the products add follow every ABS
-	// helper. The pass tags and records only: the objective is not reinstalled.
+	// helper. The pass names definitions and records only: the objective is not reinstalled.
 	for (auto &revisit : worklist) {
 		FindAndReplaceBilinear(*revisit.slot, decide, revisit.origin);
 	}

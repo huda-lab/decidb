@@ -53,28 +53,6 @@ bool ContainsDecideFrame(const Expression &expr) {
 	return found;
 }
 
-//! The frame of each marker in `expr`, in walk order.
-static void CollectDecideFrames(const Expression &expr, vector<idx_t> &frames) {
-	idx_t frame;
-	if (TryGetDecideFrame(expr, frame)) {
-		frames.push_back(frame);
-	}
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { CollectDecideFrames(child, frames); });
-}
-
-bool DecideExpressionsEqual(const Expression &a, const Expression &b) {
-	if (!a.Equals(b)) {
-		return false;
-	}
-	// Equal trees walk alike, but for the children Equals compares as a set (a conjunction's): those may read their
-	// frames in another order, and are then held different, which only leaves two equal values apart.
-	vector<idx_t> a_frames;
-	vector<idx_t> b_frames;
-	CollectDecideFrames(a, a_frames);
-	CollectDecideFrames(b, b_frames);
-	return a_frames == b_frames;
-}
-
 //! The conjuncts of a reducer's filter that its `when` wrote. Its NULL tests (BoundDecideNullTestExpression) drop its
 //! own members only: a reducer inside reads its group whole.
 static void AddWrittenConditions(const Expression &filter, vector<const Expression *> &out) {

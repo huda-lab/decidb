@@ -509,7 +509,7 @@ private:
 		if ((a.filter == nullptr) != (b.filter == nullptr)) {
 			return false;
 		}
-		return !a.filter || DecideExpressionsEqual(*a.filter, *b.filter);
+		return !a.filter || Expression::Equals(*a.filter, *b.filter);
 	}
 
 	//! A NULL term of the objective is dropped (B1): its coefficient reads 0. This is

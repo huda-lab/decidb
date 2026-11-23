@@ -230,7 +230,7 @@ public:
 			return ReadRowPart(*leaf.Cast<BoundOperatorExpression>().children[0], read.lhs);
 		}
 		auto &comparison = leaf.Cast<BoundComparisonExpression>();
-		// Direct rules run before the MIN/MAX rewrite tags an easy extremum, so only a per-row bound reads here.
+		// Direct rules run before the MIN/MAX rewrite marks an easy extremum, so only a per-row bound reads here.
 		read.singleton_row = DecideReadSingletonRow(context, decide, comparison, clause.minmax_easy, read.bound);
 		// Folding never reads a clause under a `when`: `when c: x <= 0` does not bound `x` everywhere.
 		read.variable_bound = read.singleton_row && read.bound.folds && !clause.scope.when;
@@ -241,7 +241,7 @@ public:
 	// Objective
 	//===--------------------------------------------------------------------===//
 
-	//! Whether `expr` holds a reducer the canonicalizer tagged for the value rewrite: one holding a reducer (D81).
+	//! Whether `expr` holds a reducer the canonicalizer marked for the value rewrite: one holding a reducer (D81).
 	static bool HoldsValueRewrite(const Expression &expr) {
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER &&
 		    expr.Cast<BoundDecideReducerExpression>().holds_reducer) {

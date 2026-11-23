@@ -1182,7 +1182,7 @@ TEST_CASE("A kept call carries the helper definition it names beside what it com
 	decide.NameDefinition(other, 0);
 	REQUIRE(!kept.Equals(other));
 
-	// A stripped copy names none.
-	DecideStripTags(*copy);
+	// A copy that forgot its definitions names none.
+	DecideForgetDefinitions(*copy);
 	REQUIRE(copy->Equals(plain));
 }

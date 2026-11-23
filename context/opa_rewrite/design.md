@@ -112,6 +112,8 @@ own: its body and its scope each have one.
 | `BoundDecideFrameExpression` | `Expression` | an index into `frames` and its children: the payload, and the key a collated MIN or MAX range compares. A range's reducer is `DecideFrameSpec::reduce`, the bound aggregate over the children's positions, held once in the frames table; a point has none, and no `first` is bound. The node has no `by`, `per`, norm or filter, so a reader that means a reducer tests the reducer class and one that means a frame tests this one (`TryGetDecideFrame`). `DecideFrameFold` builds the executable aggregate from the two where a frame is lowered (R28) | a `BoundDecideReducerExpression` whose alias carries `__frame_<i>__` |
 | `BoundDecide::computed_values` | table of `DecideComputedValue` | a computed value read whole, found by equality with its `value`: whether it is one value for the whole query, and whether it is a flattened subquery. It holds the subquery placeholders only. A recorded reducer over data stores nothing here: its record says it (`DecideBoundAggregate`, whole-query `key`, `IsReadBy`), so the fact does not depend on which clause read the reducer first. A bound that reads a record stays data (`query_wide_bound` is false), so a repair edits it as data. No node wraps the read | `__query_wide_value__`, `__row_varying_subquery__`, `__bound_reducer__` on a leaf |
 
+| `BoundDecideNullGuardExpression` | `Expression` | `guard`, the COALESCE or CASE that reads a NULL coefficient as no term, and `Value()`, the coefficient it guards (a Decorator, R39). The linear form builds it (`DropNullObjectiveTerms`); a reader tests the class (`DecideIsGuarded`) and reads through it (`DecideUnguarded`); the executor runs `guard` | `__null_guard__` on the guard's alias |
+
 - **Existing types are reused.** A clause's scope is today's `DecideClauseScope` (`decide_tree_terms.hpp:107`) and
   its origin is today's `DecideRowOrigin` (`decide_source_info.hpp:203`), held by the clause from binding on.
   `DecideEnclosingScope`, a pair of pointers to wrapper nodes, goes.
@@ -251,7 +253,7 @@ three steps, where column bindings are final (`plan_decide.cpp:224`):
 One carrier at a time across every stage (branch by abstraction). Each step has three moves, each its own commit
 with goldens identical: (a) every reader goes through an accessor; (b) the accessor reads a field, and the binder
 or rewrite writes it; (c) the tags are deleted. [read] Much of (a) exists: `EnumerateBodies` (19 calls) hands each
-pass a clause's scope, and `DecideReducerGroupKey` and `TryGetDecideFrame` read a reducer's key and a frame node's index.
+pass a clause's scope, and a reducer's `by` field and `TryGetDecideFrame` give a reducer's key and a frame node's index.
 
 The steps run in order, one at a time: each touches files the next one touches.
 
@@ -259,17 +261,16 @@ The steps run in order, one at a time: each touches files the next one touches.
 |---|---|---|---|
 | TREE-1 | Parser nodes (§ 3.2.1) | 01, 02 | 4 parser tags, `decide_parsed_markers`, the string-typed declarator |
 | TREE-2 | `BoundDecide`, moved whole | 02, 03, planning | the field-by-field copies at each hop |
-| TREE-3 | Clause records | 02–05, planning, 08's readers, direct front end, EXPLAIN, DIAGNOSE | the AND tree, its wrappers, `constraint_sources`, 14 tags |
-| TREE-4 | Reducer node and value node | 02–05, DuckDB's statistics pass, planning, 08's readers, direct front end | 15 tags; `norm` as a patched SUM |
+| TREE-3 | Clause records | 02–05, planning, 08's readers, direct solve, EXPLAIN, DIAGNOSE | the AND tree, its wrappers, `constraint_sources`, 14 tags |
+| TREE-4 | Reducer node and value node | 02–05, DuckDB's statistics pass, planning, 08's readers, direct solve | 15 tags; `norm` as a patched SUM |
 | TREE-5 | Frame field | 02–05, planning | 3 tags |
 | TREE-6 | A typed reference on the kept call and one table of helper definitions (§ 3.2.3) | 05, planning | 9 tags; the five definition tables |
 | TREE-7 | One lowering walk; `DecideNode` by kind (§ 3.2.4) | planning, 08 (field access only) | the second lowering, the address join |
-| TREE-8 | Direct rules read `BoundDecide` (R17) | direct solve | `DirectIR` and its front end, the last tag |
+| TREE-8 | Direct rules read the bound operator (R17); the NULL guard node (R39) | direct solve, 05 | `DirectIR`, its front end and the driver's whole-query gate; the last tag |
 | TREE-9 | The tag machinery goes (R20) | all | the tag section of `enums/decide.hpp`, `DECIDE_TAGS`, the refusal of a name that holds a tag (BIND-3), tag stripping at renders; docs |
 
-**TREE-8 opens with its own short design.** [read] `DirectIR` is named about 130 times across the rules, and each
-rule reads it through shared readers (`DirectRead*`). The design says which readers take a clause record and which
-records of `DirectIR` are a view worth keeping; it is written when TREE-5 lands, and the owner approves it.
+**TREE-8's form** is § 5: a rule reads `LogicalDecide` and calls the shared readers on demand
+(`context/docs/direct_solve/architecture/readers.md`).
 
 **Checks.** Each commit: `make decide-test`, goldens identical. TREE-2 to TREE-4 add the serializer mode. TREE-4 is
 the first step with a new `Expression` class under DuckDB's passes, so it also runs the debug build. TREE-7 runs
@@ -305,12 +306,10 @@ goes with the later one.
 | TREE-4 | `WRITTEN_NAME_` | on a reducer: a field. On a scalar call (`@`, `**`): a display field `written_name` on `BoundFunctionExpression`, beside `is_operator`. The field stays (R36): the binder spells each function one way, and a node canonicalization builds has no text to cut a name from |
 | TREE-5 | `FRAME_`, `FRAME_TIGHTEST_BOUND` | the frame node's `frame` field; the clause field `tightest_frame_bound` |
 | TREE-5 | `FRAME_AGGREGATE_` | the data reducer's `frame_aggregate` field, naming its `frame_aggregates` record; the lowered column holds it as `DecideFrameColumn::aggregate` |
-| TREE-6 | `ABS_FUNCTION_`, `ABS_FUNCTION_NEG_`, `BILINEAR_FUNCTION_GROUP_`, `L0_INDICATOR_FUNCTION_`, `DEFINITION_FUNCTION_`, `BODY_DEFINITION`, `L0_AUTO_BOUND`, `L0_WRITTEN_BOUND`, `L0_TOLERANCE` | on a kept call: `BoundFunctionExpression::definition`, a typed reference to its entry of `helper_definitions`. On a row: the clause field `helper_row`; an L0 bound is automatic or written by its definition's `auto_m` |
+| TREE-6 | `ABS_FUNCTION_`, `ABS_FUNCTION_NEG_`, `BILINEAR_FUNCTION_GROUP_`, `L0_INDICATOR_FUNCTION_`, `DEFINITION_FUNCTION_`, `BODY_DEFINITION`, `L0_AUTO_BOUND`, `L0_WRITTEN_BOUND`, `L0_TOLERANCE` | on a kept call: `BoundFunctionExpression::definition`, a typed reference to its entry of `helper_definitions`. On a row: read from the row's owner (`DecideHelperDefinition::Rows`); an L0 bound is automatic or written by its definition's `auto_m` |
 | TREE-7 | `FRAME_COLUMN` | nothing: the render of a physical plan reads the source's column count (`DecideSourceNames::source_columns`), and a reference past it, a column the tree computes, prints its name as written |
-| TREE-8 | `NULL_GUARD` | a term's fact, applied when its program is compiled; the direct front end is its second writer † |
-| TREE-9 | the seven helper name prefixes (`ABS_AUX_NAME_`, `VALUE_LINK_NAME_`, …) | none: [read] no code reads a helper's origin from its name. They stay as display names and leave the tag list with the name refusal |
-
-† The home is proposed. The task's accessor move confirms it or names another, and no tag is kept for display.
+| TREE-8 | `NULL_GUARD` | the node `BoundDecideNullGuardExpression` (R39) |
+| TREE-9 | the seven helper name prefixes (`ABS_AUX_NAME_PREFIX`, `VALUE_LINK_NAME_PREFIX`, …) | none: no code reads a helper's origin from its name. They are display names, and a user's decision or column may carry one |
 
 ### 3.6 What Phase 6 needs from this phase
 
@@ -351,7 +350,6 @@ Ruled by the owner (`decisions.md` R21 to R26):
 | A DuckDB pass does not reach an expression inside a new class, or folds a reducer as a constant | TREE-4 | the four obligations of contract 2; the debug binding verifier after every pass |
 | A wide step breaks many files at once | TREE-3, TREE-4 | move (a) is a refactor with no change in behaviour and lands first |
 | EXPLAIN or DIAGNOSE text moves | TREE-3 | both print from the clause records in the same step; their tests are in the step's gate |
-| A proposed home (†) does not hold | TREE-4, TREE-8 | the task stops and names the home before it flips the accessor |
 | The direct rules' move is larger than one task | TREE-8 | its own design first |
 
 ### 3.9 Accepted when
@@ -393,11 +391,13 @@ no code, and was reverted. Step 5 has to replace the helper logic, not sit next 
 
 ## 5. Direct solve and the tree
 
-Direct solve reads its own `DirectIR`, built from `LogicalDecide` with the solver path's readers, and never the
-tree. By R17, each rule reads the bound tree directly and `DirectIR` goes; this lands in Phase 5, once the parser
-builds the tree before the rules run. A rule that fires lowers to ordinary relational operators and reads its bound
-values from SQL side tables; a miss leaves the solver path's meaning unchanged. Keep the driver, the rule interface
-and the shared readers; they are small and rule-agnostic.
+A direct rule is an optimizer rule over the bound operator (R17): `CheckCondition` receives `LogicalDecide`, as a
+DuckDB rule receives the `LogicalOperator` it matches, and never the executor's tree. It reads the operator's own
+fields and calls the shared readers when it needs their reading: `DirectReadClauses`, `DirectReadObjective`,
+`DirectReadKey`, and `DirectSourceFacts` for the source plan. The analysis is conservative: a reader that cannot read
+a clause returns false and the rule declines (R41), so a whole-query fact is refused by the reader that meets it and
+the driver holds no gate. A rule that fires lowers to ordinary relational operators and reads its bound values from
+SQL side tables; a miss leaves the solver path's meaning unchanged.
 
 ## 6. Tests and docs
 

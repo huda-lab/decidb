@@ -450,7 +450,7 @@ unique_ptr<Expression> DirectAggregateOf(const Expression &function, vector<uniq
 	auto result = function.Cast<BoundDecideReducerExpression>().ToAggregate();
 	auto &aggregate = result->Cast<BoundAggregateExpression>();
 	D_ASSERT(aggregate.children.empty() && !aggregate.filter);
-	// `function` is a copy of the reducer, whose alias carries its tags; a plan node shows none.
+	// `function` is a copy of the reducer; the plan's aggregate takes no alias from it.
 	aggregate.ClearAlias();
 	aggregate.children = std::move(arguments);
 	aggregate.filter = std::move(reads);

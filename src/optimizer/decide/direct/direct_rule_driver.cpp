@@ -142,19 +142,18 @@ void UnwrapNullGuards(unique_ptr<Expression> &expr) {
 	ExpressionIterator::EnumerateChildren(*expr, [](unique_ptr<Expression> &child) { UnwrapNullGuards(child); });
 }
 
-//! Strips the pipeline's tags from every expression of the operators above `source`, and unwraps the NULL guards. The
-//! row checks and the rule copy tagged expressions into those operators; nothing reads the tags there, and a plan
-//! prints an expression by its alias, so a tag left there would reach EXPLAIN. The source keeps its own aliases.
-void StripTagsAbove(LogicalOperator &op, const LogicalOperator &source) {
+//! Every expression of the operators above `source` as plain SQL: NULL guards unwrapped, kept calls naming no
+//! definition. The row checks and the rule copy the clauses' expressions into those operators, which DuckDB reads.
+void PlainExpressionsAbove(LogicalOperator &op, const LogicalOperator &source) {
 	if (&op == &source) {
 		return;
 	}
 	LogicalOperatorVisitor::EnumerateExpressions(op, [](unique_ptr<Expression> *expr) {
 		UnwrapNullGuards(*expr);
-		DecideStripTags(**expr);
+		DecideForgetDefinitions(**expr);
 	});
 	for (auto &child : op.children) {
-		StripTagsAbove(*child, source);
+		PlainExpressionsAbove(*child, source);
 	}
 }
 
@@ -287,7 +286,7 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	                                 std::move(output_types), std::move(prunable_sources), std::move(annotation),
 	                                 late_materialization);
 	auto &installed = *adapter;
-	StripTagsAbove(installed, source);
+	PlainExpressionsAbove(installed, source);
 	// The rules build their expressions generally, and DuckDB's rewriter has run before the DECIDE optimizer, so
 	// nothing has simplified them. Run it over the adapter's child as DuckDB does.
 	optimizer.rewriter.VisitOperator(*installed.children[0]);

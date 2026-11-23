@@ -141,8 +141,8 @@ struct Helpers {
 
 	//! The link holding `agg` as a clause of class key `class_key` reads it over `rows`, grouped by `path_key` -- its
 	//! path's (language/guide.md §5.5) --, or INVALID_INDEX. A helper is a reducer's value over the rows its path
-	//! keeps, one per group of its path key, so what it stands for is the reducer (DecideExpressionsEqual, which
-	//! leaves out its `per` and tells a range frame's marker, RewriteFrameRanges, from a reducer), the key scope of
+	//! keeps, one per group of its path key, so what it stands for is the reducer (Expression::Equals, which
+	//! leaves out its `per`), the key scope of
 	//! its own `per`, that path key, the rows and the clause's `per` key. Clauses that agree on all five share one
 	//! helper, however they spell the reducer.
 	idx_t Find(const BoundDecideReducerExpression &agg, const Expression *rows, idx_t path_key, idx_t class_key) const {
@@ -154,8 +154,8 @@ struct Helpers {
 			auto &link = *found;
 			auto &held = link.Reducer();
 			// A clause's rows carry copies of its `when`: the same condition.
-			const bool same_rows = rows ? link.when && DecideExpressionsEqual(*link.when, *rows) : !link.when;
-			if (DecideExpressionsEqual(held, agg) && link.path_key == path_key && same_rows &&
+			const bool same_rows = rows ? link.when && Expression::Equals(*link.when, *rows) : !link.when;
+			if (Expression::Equals(held, agg) && link.path_key == path_key && same_rows &&
 			    link.class_key == class_key) {
 				return i;
 			}
@@ -569,7 +569,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	};
 
 	// The objective is one expression under its sense (`MAXIMIZE b * sum(x)`): a reducer under a Boolean decision
-	// takes a helper decision the same way, and so does a reducer that holds a reducer, the canonicalizer's tag on it
+	// takes a helper decision the same way, and so does a reducer that holds a reducer, the canonicalizer's mark on it
 	// (D81), unless it is a sum of group sums read in place; every reducer inside it takes one keyed by its path. So
 	// does a reducer a function reads (`0 * sum(x) + abs(sum(x) - 2)`), as in a comparison (a reducer inside another
 	// expression is the VALUE shape): the function's value is of one number, which an aggregate row of its envelope
@@ -602,7 +602,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 			}
 		}
 		// Every product in the objective, whatever shape it was read in: a reducer a helper replaced inside a function
-		// or a nest may stand under a Boolean factor without the shape tag.
+		// or a nest may stand under a Boolean factor without the shape mark.
 		HandProductsToBilinear(body.expr, body.Origin());
 	};
 	decide.RewriteBodies(optimizer.context, [&](DecideOwnedBody &body) {

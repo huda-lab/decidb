@@ -71,7 +71,7 @@ _RENDERER_VOCABULARY = frozenset(
 )
 
 #: An internal column stands in for a term the user never named (`col3`), and every
-#: pipeline tag opens and closes with `__` (see `AddDecideTag`). Either one in a
+#: helper's name opens and closes with `__` (the name prefixes in `enums/decide.hpp`). Either one in a
 #: blamed clause means the user is reading our bookkeeping, not their query.
 _INTERNAL_NAME_RE = re.compile(r"\bcol\d+\b|__[A-Za-z0-9_]+__")
 

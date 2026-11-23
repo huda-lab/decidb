@@ -443,7 +443,7 @@ void DecideOptimizer::FoldSingletonRowsInClause(BoundDecideClause &clause, Logic
 		return;
 	}
 	// The comparison stays in the tree so EXPLAIN keeps rendering what the user
-	// wrote; the tag is what stops it also becoming a model row. The box takes the
+	// wrote; `folded_bound` is what stops it also becoming a model row. The box takes the
 	// admitted ends (`x <= 42.9999999` admits 42 for an INT), tightening
 	// unconditionally: a BOOLEAN restatement is a harmless no-op against its
 	// intrinsic box. A `-inf` floor writes the solver's "no bound", which frees `x`

@@ -401,7 +401,7 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 				}
 			}
 		}
-		auto name = StripDecideTags(colref.GetName());
+		auto name = colref.GetName();
 		if (!name.empty()) {
 			return KeywordHelper::WriteOptionallyQuoted(name);
 		}
@@ -410,7 +410,7 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 	case ExpressionClass::BOUND_REF: {
 		// A column the physical plan resolved to a chunk position keeps its name as alias; a column the tree computes
 		// (a frame column) is named by the frame as written.
-		auto name = StripDecideTags(expr.GetAlias());
+		auto &name = expr.GetAlias();
 		if (!name.empty()) {
 			return expr.Cast<BoundReferenceExpression>().index < ctx.source_columns
 			           ? KeywordHelper::WriteOptionallyQuoted(name)
@@ -475,7 +475,7 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 		break;
 	}
 	// Any other node prints in its own syntax over its children as written: its ToString would print a cast's child by
-	// its alias, which may be nothing but tags. Each child stands aside for its text while it prints, since a child
+	// its alias. Each child stands aside for its text while it prints, since a child
 	// holding a bound subquery cannot be copied. Rendered first, so nothing can throw with a child aside.
 	vector<string> written;
 	ExpressionIterator::EnumerateChildren(

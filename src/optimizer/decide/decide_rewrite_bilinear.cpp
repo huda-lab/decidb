@@ -60,7 +60,7 @@ void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {
 	// structural links, which the indicator F node owns and lowers later; and definition bodies, which survive outside
 	// the clause list.
 	//
-	// The tags this pass adds are read by no canonicalization, so the objective is not reinstalled.
+	// The definitions this pass names are read by no canonicalization, so the objective is not reinstalled.
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
 		if (BilinearReadsBody(decide, body)) {
 			FindAndReplaceBilinear(body.expr, decide, body.Origin());

@@ -173,42 +173,6 @@ inline bool IsRelaxableForElastic(ConstraintKind kind) {
 //!                    the reported edit is the max overshoot, not the sum.
 enum class ElasticShape : uint8_t { UNSET, PER_ROW_DATA, SHARED_SCALAR };
 
-//! DECIDE encodes one fact of a node in the `alias` of bound expressions. More
-//! than one tag can apply to the same node, so tags are **concatenated** and matched by search, never by equality.
-//! Every tag opens and closes with `__`, which is what makes concatenation unambiguous.
-inline void AddDecideTag(string &alias, const string &tag) {
-	alias += tag;
-}
-
-//! True when `alias` carries `tag`, whatever else it also carries.
-inline bool HasDecideTag(const string &alias, const string &tag) {
-	return alias.find(tag) != string::npos;
-}
-
-//! Remove every DECIDE tag from an alias, leaving whatever ordinary alias it was appended
-//! to: "cost__null_guard__" yields "cost", and an alias that was
-//! nothing but tags yields "".
-//!
-//! Tags are only ever appended (`AddDecideTag`), so they are always a suffix, and each one
-//! opens and closes with `__` without containing `__` internally. Peeling closing-delimited
-//! runs off the end therefore strips exactly the tags: a user alias is only touched if it
-//! itself ends in a `__`-delimited run.
-//!
-//! Use this at every user-facing render site. `GetName()` returns the alias whenever one is
-//! set, so a tagged expression prints its internal tag instead of its SQL unless the tags
-//! are stripped first.
-inline string StripDecideTags(const string &alias) {
-	string result = alias;
-	while (result.size() > 2 && result.compare(result.size() - 2, 2, "__") == 0) {
-		auto open = result.rfind("__", result.size() - 3);
-		if (open == string::npos) {
-			break;
-		}
-		result.erase(open);
-	}
-	return result;
-}
-
 //! What a helper definition is: the construct a rewrite kept and gave a helper decision.
 enum class DecideHelperKind : uint8_t {
 	//! `abs(e)` over a decision, kept where it is written (RewriteAbs). The helper stands for |body|; the tree states
@@ -259,9 +223,7 @@ struct DecideHelperRef {
 };
 
 //! The name prefixes a rewrite gives a helper decision it adds (AddAuxiliaryDecision). Each is the opening of a name
-//! `<prefix><n>__`.
-//! They are tags in a decision's or a column's name, so DecideNameContainsTag refuses a user name that holds one.
-//! A helper's origin is read from them until the helper carries it as a field (R20).
+//! `<prefix><n>__`. They are display names: no reader finds a helper by its name.
 //! The 0/1 indicator of an L0 count: the one whose big-M the optimizer picks, and the one whose big-M is written.
 static constexpr const char *L0_AUTO_INDICATOR_NAME_PREFIX = "__l0auto_ind_";
 static constexpr const char *L0_INDICATOR_NAME_PREFIX = "__l0_ind_";
@@ -275,23 +237,5 @@ static constexpr const char *BILINEAR_AUX_NAME_PREFIX = "__bilinear_aux_";
 static constexpr const char *BODY_NAME_PREFIX = "__body_";
 //! The helper standing for a reducer's value, one per link of a scoped rewrite.
 static constexpr const char *VALUE_LINK_NAME_PREFIX = "__value_";
-
-//! Every DECIDE tag above, the one list DecideNameContainsTag reads. A constant added above is added here.
-static constexpr const char *DECIDE_TAGS[] = {
-    L0_AUTO_INDICATOR_NAME_PREFIX, L0_INDICATOR_NAME_PREFIX, IN_INDICATOR_NAME_PREFIX, ABS_AUX_NAME_PREFIX,
-    BILINEAR_AUX_NAME_PREFIX,      BODY_NAME_PREFIX,         VALUE_LINK_NAME_PREFIX};
-
-//! True when a name a user wrote contains a DECIDE tag, in any letter case. The tags travel in expression aliases and
-//! are found by search (HasDecideTag), so such a name is read as the tag. Until the tags are gone (R20) DECIDE refuses
-//! it, as a decision's name and as a column a clause reads.
-inline bool DecideNameContainsTag(const string &name) {
-	auto lower = StringUtil::Lower(name);
-	for (auto tag : DECIDE_TAGS) {
-		if (lower.find(tag) != string::npos) {
-			return true;
-		}
-	}
-	return false;
-}
 
 } // namespace duckdb

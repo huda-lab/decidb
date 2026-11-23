@@ -163,7 +163,6 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 		if (bind_context.GetMatchingBinding(name) || bind_context.GetUsingBinding(name)) {
 			throw BinderException(declaration.location, "decision '%s' has the name of a column", name);
 		}
-		RefuseDecideTagInName(declaration.location, name);
 		if (!declared_names.insert(name).second) {
 			throw BinderException(declaration.location, "decision '%s' is declared twice", name);
 		}

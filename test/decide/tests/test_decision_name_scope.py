@@ -45,3 +45,22 @@ def test_data_column_in_where_still_filters(decidb_cli):
         DECIDE x(INT) SUCH THAT x <= 3 MAXIMIZE SUM(x)"""
     )
     assert [row[0] for row in rows] == [2]
+
+
+def _helper_named_query(decision, coefficient, key):
+    """A query whose ABS, reducer body and `per` key each give the optimizer a helper to name."""
+    return (
+        f'SELECT id, "{decision}" FROM (VALUES (1, 5.0, 1), (2, -3.0, 1), (3, 4.0, 2)) t(id, "{coefficient}", "{key}") '
+        f'DECIDE "{decision}"(INT) SUCH THAT "{decision}" <= 3 AND "{decision}" >= -3 '
+        f'AND per "{key}": SUM(ABS("{decision}")) <= 4 MAXIMIZE SUM("{decision}" * "{coefficient}")'
+    )
+
+
+@pytest.mark.parametrize("decision", ["__abs_aux_0__", "__null_guard__", "x__value_0__"])
+def test_decision_name_like_a_helper_solves(decidb_cli, decision):
+    """A helper is found by its index, never by its name: a decision and the columns a clause reads may carry a
+    helper's name, and the query solves as it does under any other names."""
+    plain, _ = decidb_cli.execute(_helper_named_query("x", "c", "k"))
+    named, _ = decidb_cli.execute(_helper_named_query(decision, "__body_0__", "__value_0__"))
+    assert named == plain
+    assert len(named) == 3

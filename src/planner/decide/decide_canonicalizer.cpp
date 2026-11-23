@@ -192,7 +192,7 @@ static bool NullOnlyFromColumns(const Expression &expr) {
 
 static void AddNullTest(const Expression &value, vector<unique_ptr<Expression>> &out) {
 	for (auto &seen : out) {
-		if (DecideExpressionsEqual(*seen, value)) {
+		if (Expression::Equals(*seen, value)) {
 			return;
 		}
 	}
@@ -505,8 +505,7 @@ static string UserFacingName(const Expression &expr) {
 		}
 		return StringUtil::Upper(agg.WrittenName()) + "(" + UserFacingName(*agg.children[0]) + ")";
 	}
-	auto name = StripDecideTags(cur->GetName());
-	return name.empty() ? cur->ToString() : name;
+	return cur->GetName();
 }
 
 unique_ptr<Expression> DecideCanonicalizer::WithoutDecisionNegation(const Expression &factor, bool &negated) const {
@@ -1203,7 +1202,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 		new_rhs = make_uniq<BoundConstantExpression>(Value::DOUBLE(0));
 	}
 
-	// K5: comparison tags are an out-of-band channel and must survive rebuilding.
+	// K5: the comparison keeps its alias through rebuilding.
 	auto result = make_uniq<BoundComparisonExpression>(cmp.type, std::move(new_lhs), std::move(new_rhs));
 	result->SetAlias(cmp.GetAlias());
 	DecideReplaces(*result, cmp);
@@ -1214,7 +1213,8 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 //! of each nest -- for the value rewrite: in the objective it is a helper decision, and so
 //! is every reducer inside it (D81). A reducer over data alone is a value per row: it stays in the objective's terms,
 //! as a constraint's does, so a body that squares around it is the objective's own quadratic.
-static void TagNestedObjectiveReducers(const DecideCanonicalizer &canonicalizer, Expression &expr, idx_t decide_index) {
+static void MarkNestedObjectiveReducers(const DecideCanonicalizer &canonicalizer, Expression &expr,
+                                        idx_t decide_index) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
 		auto &reducer = expr.Cast<BoundDecideReducerExpression>();
 		if (!reducer.children.empty() && BoundExpressionReferencesDecide(reducer, decide_index) &&
@@ -1224,7 +1224,7 @@ static void TagNestedObjectiveReducers(const DecideCanonicalizer &canonicalizer,
 		return;
 	}
 	ExpressionIterator::EnumerateChildren(
-	    expr, [&](Expression &child) { TagNestedObjectiveReducers(canonicalizer, child, decide_index); });
+	    expr, [&](Expression &child) { MarkNestedObjectiveReducers(canonicalizer, child, decide_index); });
 }
 
 BoundDecideClause DecideCanonicalizer::CanonicalizeObjective(const BoundDecideClause &objective,
@@ -1286,8 +1286,9 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 	}
 	auto result = BuildAdditive(decision_atoms);
 	// A reducer holding a reducer takes the value rewrite, as in a constraint: the shape is
-	// decided here, once, and the rewrite reads the tag.
-	TagNestedObjectiveReducers(*this, *result, decide_index);
+	// decided here, once, and the rewrite reads the mark
+	// (BoundDecideReducerExpression::holds_reducer).
+	MarkNestedObjectiveReducers(*this, *result, decide_index);
 	return result;
 }
 
@@ -1713,7 +1714,7 @@ void DecideCanonicalizer::CollectSignatureFields(const Expression &expr, idx_t k
 		DecideSignatureField field;
 		field.kind = DecideSignatureFieldKind::DECISION;
 		field.decision = expr.Cast<BoundColumnRefExpression>().binding.column_index;
-		field.text = StripDecideTags(expr.GetName());
+		field.text = expr.GetName();
 		add(std::move(field));
 		return;
 	}

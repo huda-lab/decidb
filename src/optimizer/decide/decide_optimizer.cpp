@@ -129,7 +129,7 @@ void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &r
 	// McCormick linearization for Boolean × anything bilinear products, the one pass over the bodies as they stand. A
 	// product a later pass exposes is handed to its entry where it appears (RewriteScopedReducers, RewriteAbs).
 	RunPass("optimizer.bilinear", &decide, [&] { RewriteBilinear(decide); });
-	// A MIN/MAX in its cheap direction keeps its reducer, tagged, before any pass reads the clause's direction.
+	// A MIN/MAX in its cheap direction keeps its reducer, marked, before any pass reads the clause's direction.
 	RunPass("optimizer.minmax", &decide, [&] { RewriteMinMax(decide); });
 	// Reserve the plan-time columns and F-node specs before later MIN/MAX rewrites and term splitting consume them.
 	// The tree owns the definition functions and emits their E rows when its instances are known.

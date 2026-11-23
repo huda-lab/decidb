@@ -49,8 +49,8 @@ struct DecideReducerPath {
 //! its parts are; INVALID_INDEX when every key is `by ()`.
 idx_t FindOrCreateDecidePathKey(const vector<idx_t> &path_keys, vector<DecideKey> &keys);
 
-//! The frame selector `expr` is the marker of -- the aggregate the binder binds a frame to,
-//! tagged with its index into LogicalDecide::frames -- or false. A frame is a tuple term
+//! The frame selector `expr` is the marker of -- the node the binder binds a frame to,
+//! which holds its index into LogicalDecide::frames -- or false. A frame is a tuple term
 //! read at another row (language/guide.md §5.6): no layer reads its marker as a reducer,
 //! and its payload holds none (D80).
 bool TryGetDecideFrame(const Expression &expr, idx_t &frame);
@@ -59,9 +59,5 @@ bool ContainsDecideFrame(const Expression &expr);
 //! The aggregate that folds a window of `frame`'s range over data: the range's reducer (DecideFrameSpec::reduce) over
 //! what the frame node reads. Null for a frame whose record holds no reducer (a point, a range over decisions).
 unique_ptr<Expression> DecideFrameFold(const DecideFrameSpec &spec, const BoundDecideFrameExpression &frame);
-//! Expression::Equals, with every frame marker the same frame in both: a marker names its frame only by its tag, an
-//! alias, which Equals ignores, so `at(previous: x)` and `at(next: x)` are otherwise one expression. Every DECIDE
-//! comparison of trees that may hold a frame reads this one.
-bool DecideExpressionsEqual(const Expression &a, const Expression &b);
 
 } // namespace duckdb

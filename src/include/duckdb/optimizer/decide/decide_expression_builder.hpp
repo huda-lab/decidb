@@ -23,10 +23,9 @@ namespace duckdb {
 class ClientContext;
 enum class DecideValueRole : uint8_t;
 
-//! Strips the DECIDE tags from every alias in `expr`: a plan prints an expression by its alias, so a tag would reach
-//! EXPLAIN. A user's own name (a column's) stays. It unsets the definition a kept call names as well
-//! (BoundFunctionExpression::definition).
-void DecideStripTags(Expression &expr);
+//! Unsets the definition every kept call in `expr` names (BoundFunctionExpression::definition): the copy is a plain
+//! call, read by none of the definition's readers.
+void DecideForgetDefinitions(Expression &expr);
 
 //! `x >= v`, `x > v`, and `x = v` all bound a count from below; `x <= v`, `x < v`, and `x = v` from above.
 bool DecideIsLowerBound(ExpressionType comparison);

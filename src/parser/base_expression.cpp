@@ -16,9 +16,7 @@ string BaseExpression::GetName() const {
 		return ToString();
 	}
 #endif
-	// DECIDE tags ride in the alias and are never part of a name.
-	auto name = StripDecideTags(alias);
-	return !name.empty() ? name : ToString();
+	return !alias.empty() ? alias : ToString();
 }
 
 bool BaseExpression::Equals(const BaseExpression &other) const {

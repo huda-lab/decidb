@@ -8,9 +8,9 @@ The internal-tag check is deliberately a *pattern* rather than a list of known
 symbol names. A named-symbol list only pins the leaks someone already found, and
 goes stale the moment the symbol is renamed or deleted — the previous version of
 this check still forbade ``ToSymbolicRecursive`` long after that function was
-removed with the SymbolicC++ layer, so it protected nothing. Every DECIDE tag
-opens and closes with ``__`` by construction (see ``AddDecideTag`` in
-``duckdb/common/enums/decide.hpp``), so matching that shape catches tags that do
+removed with the SymbolicC++ layer, so it protected nothing. Every helper's name
+opens and closes with ``__`` by construction (the name prefixes in
+``duckdb/common/enums/decide.hpp``), so matching that shape catches names that do
 not exist yet.
 """
 

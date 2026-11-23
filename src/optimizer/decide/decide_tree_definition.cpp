@@ -164,13 +164,13 @@ void CollectBodySites(Expression &expr, idx_t decide_index, const DecideTermSpli
 
 //! Copies of one reducer under one `when`: they share a helper.
 bool SameReducer(const BodySite &a, const BodySite &b) {
-	if (!DecideExpressionsEqual(*a.reducer, *b.reducer)) {
+	if (!Expression::Equals(*a.reducer, *b.reducer)) {
 		return false;
 	}
 	if (!a.when || !b.when) {
 		return !a.when && !b.when;
 	}
-	return DecideExpressionsEqual(*a.when, *b.when);
+	return Expression::Equals(*a.when, *b.when);
 }
 
 //! The clause's `when` and the reducer's own filter: the rows a helper is defined on.

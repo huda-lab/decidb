@@ -28,16 +28,6 @@ every one of them:
 - **Tests** (R32): focused tests in each task's **Done when**; `make decide-test` once at the end of each queue
   group; every other suite in TREE-28.
 
-## TREE-9 — The tag machinery goes
-
-- **Problem.** With no tag written, the code that finds, strips and refuses tags has no reader.
-- **Change.** Delete the tag section of `enums/decide.hpp` (the constants, `HasDecideTag`, `AddDecideTag`, the
-  parsers, `DECIDE_TAGS`), tag stripping at renders, `RebuiltAlias` and the splicing after it
-  (`decide_product_form.cpp:386-415`), and the refusal of a user name that holds a tag (BIND-3,
-  `decide_binder.cpp:49`) with its tests. The seven helper name prefixes stay as display names.
-- **Done when.** `enums/decide.hpp` holds no tag constant; a decision named like a former tag is accepted and
-  solves (`./test/decide/run_tests.sh -k "decision_name or tag"`).
-
 ## TREE-27 — The design and the stage docs state the system
 
 - **Problem.** design.md § 3 records forms the code does not have or no longer has (the reducer's kind, the frame
@@ -46,7 +36,6 @@ every one of them:
 - **Change.** design.md § 3 and § 3.5 match the code cell by cell; § 3.9's acceptance list is checked line by
   line. The stage docs (01 to 05, 08's planning part, `code_structure.md`, the glossary) describe the tree in the
   present tense.
-- **Needs.** TREE-9.
 - **Done when.** Every name design.md § 3 gives is found by `grep` in `src/`; § 3.9 holds line by line.
 
 ## TREE-28 — The test pass for the phase

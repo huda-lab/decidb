@@ -123,8 +123,8 @@ static bool SameSignedTerms(const Expression &left, const Expression &right, idx
 		bool found = false;
 		for (idx_t i = 0; i < right_atoms.size() && !found; i++) {
 			if (!matched[i] && right_atoms[i].sign * flip == atom.sign &&
-			    DecideExpressionsEqual(*UnwrapDecideCasts(*atom.term, decide_index),
-			                           *UnwrapDecideCasts(*right_atoms[i].term, decide_index))) {
+			    Expression::Equals(*UnwrapDecideCasts(*atom.term, decide_index),
+			                       *UnwrapDecideCasts(*right_atoms[i].term, decide_index))) {
 				matched[i] = true;
 				found = true;
 			}
@@ -138,7 +138,7 @@ static bool SameSignedTerms(const Expression &left, const Expression &right, idx
 
 bool DecideFactorsEqual(const Expression &left, const Expression &right, idx_t decide_index) {
 	// An additive form is a multiset of signed terms: `x + y` and `y + x` are one factor.
-	return DecideExpressionsEqual(left, right) || SameSignedTerms(left, right, decide_index, 1);
+	return Expression::Equals(left, right) || SameSignedTerms(left, right, decide_index, 1);
 }
 
 //! Whether `right` is `-left`: the same additive form with every sign reversed (`x - s` and `s - x`).
@@ -269,7 +269,7 @@ struct ProductReader {
 		    expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER ||
 		    expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_FRAME) {
 			for (auto *seen : form.zero_terms) {
-				if (DecideExpressionsEqual(*seen, expr)) {
+				if (Expression::Equals(*seen, expr)) {
 					return;
 				}
 			}
@@ -366,15 +366,6 @@ bool IsDecideProductNode(ClientContext &context, const Expression &expr, idx_t d
 	        TryGetDecideWholeExponent(context, *expr.Cast<BoundFunctionExpression>().children[1], exponent));
 }
 
-//! The alias of a node rebuilt in place of another. DECIDE tags are appended to an ordinary alias and stripped where a
-//! node is printed (StripDecideTags), so the rebuilt node keeps its own ordinary alias (a column's name, when the
-//! product is one decision), takes the replaced node's when it has none, and carries every tag the replaced node did.
-static string RebuiltAlias(const string &own, const string &replaced) {
-	auto replaced_name = StripDecideTags(replaced);
-	auto alias = StripDecideTags(own).empty() ? replaced_name + own : own;
-	return alias + replaced.substr(replaced_name.size());
-}
-
 //! `node` rewritten in the spelling, typed, named and located as `node`; null when it already is.
 static unique_ptr<Expression> RewriteProduct(ClientContext &context, idx_t decide_index, const Expression &node) {
 	auto form = ReadDecideProduct(context, node, decide_index);
@@ -387,15 +378,11 @@ static unique_ptr<Expression> RewriteProduct(ClientContext &context, idx_t decid
 	if (Expression::Equals(*rebuilt, node)) {
 		return nullptr;
 	}
-	auto alias = RebuiltAlias(rebuilt->GetAlias(), node.GetAlias());
-	if (spelled != rebuilt.get()) {
-		// A cast back is type reconciliation, which every reader looks through (UnwrapDecideCasts) before it reads a
-		// tag, so the node's tags go on the product under it and the cast keeps the name alone.
-		auto name = StripDecideTags(alias);
-		spelled->SetAlias(spelled->GetAlias() + alias.substr(name.size()));
-		alias = std::move(name);
+	// The rebuilt node keeps its own alias (a column's name, when the product is one decision) and takes the replaced
+	// node's when it has none.
+	if (rebuilt->GetAlias().empty()) {
+		rebuilt->SetAlias(node.GetAlias());
 	}
-	rebuilt->SetAlias(std::move(alias));
 	if (node.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
 	    spelled->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &call = spelled->Cast<BoundFunctionExpression>();

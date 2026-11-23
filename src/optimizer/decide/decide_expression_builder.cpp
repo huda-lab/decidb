@@ -33,17 +33,16 @@ ExprPtr ExpressionBuilder::Wrap(unique_ptr<Expression> expr) const {
 unique_ptr<Expression> ExpressionBuilder::Out(const ExprPtr &expr) const {
 	return expr->Copy();
 }
-void DecideStripTags(Expression &expr) {
-	expr.SetAlias(StripDecideTags(expr.GetAlias()));
+void DecideForgetDefinitions(Expression &expr) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		expr.Cast<BoundFunctionExpression>().definition = DecideHelperRef();
 	}
-	ExpressionIterator::EnumerateChildren(expr, [](Expression &child) { DecideStripTags(child); });
+	ExpressionIterator::EnumerateChildren(expr, [](Expression &child) { DecideForgetDefinitions(child); });
 }
 
 ExprPtr ExpressionBuilder::Of(const Expression &expr) const {
 	auto copy = expr.Copy();
-	DecideStripTags(*copy);
+	DecideForgetDefinitions(*copy);
 	return Wrap(std::move(copy));
 }
 ExprPtr ExpressionBuilder::Num(double value) const {

@@ -47,31 +47,13 @@ bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_m
 	return !colref.IsQualified() && variables.count(colref.GetColumnName()) > 0;
 }
 
-void RefuseDecideTagInName(optional_idx at, const string &name) {
-	if (DecideNameContainsTag(name)) {
-		throw BinderException(at, "'%s' is not allowed as a name in DECIDE", name);
-	}
-}
-
-static void StripTagsInPlace(ParsedExpression &expr) {
-	expr.SetAlias(StripDecideTags(expr.GetAlias()));
-	ParsedExpressionIterator::EnumerateChildren(expr, [&](ParsedExpression &child) { StripTagsInPlace(child); });
-}
-
-//! `expr` in DeciDB's own spelling: its ToString, without the binders' tags its arguments' aliases carry.
-static string DecideSpelling(const ParsedExpression &expr) {
-	auto copy = expr.Copy();
-	StripTagsInPlace(*copy);
-	return copy->ToString();
-}
-
 string DecideWrittenSql(const ParsedExpression &expr, const DecideSourceText *text) {
 	string written;
 	if (text && text->Cut(expr.GetQueryLocation(), DecideSpanRole::EXPR, written)) {
 		return written;
 	}
 	// A node with no span reprints.
-	return DecideSpelling(expr);
+	return expr.ToString();
 }
 
 //! ParsedExpressionIterator::EnumerateChildren, plus the body (SELECT list, WHERE,
@@ -543,8 +525,6 @@ unique_ptr<ParsedExpression> DecideBinder::QualifyColumnName(ColumnRefExpression
 	auto qualified = ExpressionBinder::QualifyColumnName(col_ref, error);
 	if (!qualified) {
 		ThrowIfOuterColumn(binder, col_ref);
-	} else {
-		RefuseDecideTagInName(col_ref.GetQueryLocation(), col_ref.column_names.back());
 	}
 	return qualified;
 }
@@ -569,7 +549,6 @@ static void ResolveKeyElement(Binder &binder, const ColumnRefExpression &element
 		    bind_context.GetBinding(RelationAlias(vector<string>(names.begin(), names.end() - 1)), names.back(), error);
 	}
 	if (binding) {
-		RefuseDecideTagInName(element.GetQueryLocation(), names.back());
 		AddKeyColumn(element, *binding, binding->GetBindingIndex(names.back()), columns, text);
 		return;
 	}
@@ -1001,7 +980,7 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 	spec.descending = frame.descending;
 	spec.cyclic = frame.cyclic;
 	spec.text = DecideWrittenSql(frame, source_text);
-	spec.spelling = DecideSpelling(frame);
+	spec.spelling = frame.ToString();
 	// Where the frame stands, when the query text holds a span for it (a table macro's tail has none).
 	spec.location = source_text ? DecideSpanLocation(*source_text, frame.GetQueryLocation()) : optional_idx();
 	spec.order_name = DecideWrittenSql(*frame.order, source_text);
