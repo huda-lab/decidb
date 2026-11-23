@@ -714,14 +714,14 @@ private:
 
 	//! Names, on every term and product group `agg`'s body produced since the marks, the tree node it ranges over
 	//! (DecideTerm::child) and the reducer whose `per` qualifies it; a group's forms too.
-	void Stamp(const BoundDecideReducerExpression &agg, vector<DecideTerm> &terms, vector<DecideProductGroup> &groups,
-	           idx_t linear, idx_t group_before) const {
+	void Stamp(const BoundDecideReducerExpression &agg, const BoundDecideReducerExpression &read,
+	           vector<DecideTerm> &terms, vector<DecideProductGroup> &groups, idx_t linear, idx_t group_before) const {
 		// The walk lowered this reducer's node from the same expression.
 		const auto reducer = reducers.find(&agg);
 		D_ASSERT(reducer != reducers.end());
 		const auto node = DecideTreeMembersOf(tree, reducer->second);
 		const auto qualifier_reducer =
-		    agg.per == DConstants::INVALID_INDEX ? DConstants::INVALID_INDEX : reducer->second;
+		    read.per == DConstants::INVALID_INDEX ? DConstants::INVALID_INDEX : reducer->second;
 		auto stamp = [&](DecideTerm &term) {
 			term.child = node;
 			if (qualifier_reducer != DConstants::INVALID_INDEX) {
@@ -794,7 +794,7 @@ private:
 		AttachReducerFilter(constraint, linear_before, group_before, agg.filter.get());
 		ApplyAggregateMetadata(constraint.lhs_terms, linear_before, agg);
 		ApplyAggregateMetadata(constraint.product_groups, group_before, agg);
-		Stamp(agg, constraint.lhs_terms, constraint.product_groups, linear_before, group_before);
+		Stamp(agg, agg, constraint.lhs_terms, constraint.product_groups, linear_before, group_before);
 	}
 
 	//! The per-row terms of a scoped easy MIN/MAX, `[-] [s *] max(when c: e)`: the terms of `e`,
@@ -818,7 +818,7 @@ private:
 		D_ASSERT(constraint.lhs_terms.empty() && constraint.product_groups.empty());
 		ExtractConstraintTerms(*agg->children[0], constraint, atom.sign);
 		AttachReducerFilter(constraint, 0, 0, agg->filter.get());
-		Stamp(*agg, constraint.lhs_terms, constraint.product_groups, 0, 0);
+		Stamp(*agg, *agg, constraint.lhs_terms, constraint.product_groups, 0, 0);
 		if (atom.scaled) {
 			ApplyScaleToExtracted(*atom.scale.function, *atom.scale.scale, atom.scale.divides, constraint.lhs_terms,
 			                      constraint.product_groups, 0, 0);
@@ -925,18 +925,22 @@ private:
 		}
 	}
 
+	//! The terms of the objective's reducer `agg`, which range over its node. A nest read in place
+	//! (decide_rewrite::ReadNestInPlace) gives the terms of its reading.
 	void ExtractReducerObjectiveTerms(const BoundDecideReducerExpression &agg, DecideObjective &obj, int sign) {
-		if (agg.kind != DecideReducerKind::SUM && agg.kind != DecideReducerKind::AVG) {
+		auto in_place = agg.holds_reducer ? decide_rewrite::ReadNestInPlace(op, agg) : nullptr;
+		auto &read = in_place ? *in_place : agg;
+		if (read.kind != DecideReducerKind::SUM && read.kind != DecideReducerKind::AVG) {
 			throw InternalException("DECIDE: the reducer '%s' reached the linear form", agg.ToString());
 		}
 		idx_t before = obj.terms.size();
 		idx_t group_before = obj.product_groups.size();
-		ExtractObjectiveBodyTerms(*agg.children[0], obj, sign, agg.filter.get());
-		ApplyAggregateMetadata(obj.terms, before, agg);
-		ApplyAggregateMetadata(obj.product_groups, group_before, agg);
-		ApplyAvgGroupKey(obj.terms, before, agg);
-		ApplyAvgGroupKey(obj.product_groups, group_before, agg);
-		Stamp(agg, obj.terms, obj.product_groups, before, group_before);
+		ExtractObjectiveBodyTerms(*read.children[0], obj, sign, read.filter.get());
+		ApplyAggregateMetadata(obj.terms, before, read);
+		ApplyAggregateMetadata(obj.product_groups, group_before, read);
+		ApplyAvgGroupKey(obj.terms, before, read);
+		ApplyAvgGroupKey(obj.product_groups, group_before, read);
+		Stamp(agg, read, obj.terms, obj.product_groups, before, group_before);
 	}
 
 	unique_ptr<DecideObjective> AnalyzeObjective(const BoundDecideClause &clause) {
@@ -951,12 +955,7 @@ private:
 
 			// Walk the SUM argument: its linear terms and its product groups, a mixed body
 			// (SUM(POWER(x-t, 2) + penalty*x)) included.
-			ExtractObjectiveBodyTerms(*agg.children[0], *lowered, 1, agg.filter.get());
-			ApplyAggregateMetadata(lowered->terms, 0, agg);
-			ApplyAggregateMetadata(lowered->product_groups, 0, agg);
-			ApplyAvgGroupKey(lowered->terms, 0, agg);
-			ApplyAvgGroupKey(lowered->product_groups, 0, agg);
-			Stamp(agg, lowered->terms, lowered->product_groups, 0, 0);
+			ExtractReducerObjectiveTerms(agg, *lowered, 1);
 
 			lowered->when_condition = std::move(when_cond);
 		} else if (DecideCanonicalizer::ContainsReducer(*expr) ||

@@ -82,9 +82,6 @@ public:
 	//! It is an objective's reducer over a decision reducer: the canonicalizer sets it once, and
 	//! DecideOptimizer::RewriteScopedReducers replaces the reducer by a helper decision.
 	bool holds_reducer = false;
-	//! The nest it was inlined in place of (InlineSumOfGroupSums), an index into LogicalDecide::retained_expressions,
-	//! which the tree lowers for it. INVALID_INDEX for none.
-	idx_t retained = DConstants::INVALID_INDEX;
 	//! It reads data and its argument reads a frame: its entry of LogicalDecide::frame_aggregates. No side table can
 	//! read a frame, so execution computes it after the frames. INVALID_INDEX for none.
 	idx_t frame_aggregate = DConstants::INVALID_INDEX;

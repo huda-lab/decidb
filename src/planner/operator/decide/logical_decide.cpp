@@ -364,9 +364,6 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 			callback(&aggregate.reads);
 		}
 	}
-	for (auto &expression : retained_expressions) {
-		callback(&expression);
-	}
 }
 
 BoundDecideReducerExpression &DecideHelperDefinition::Reducer() const {

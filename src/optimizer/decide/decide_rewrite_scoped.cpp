@@ -273,27 +273,29 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	ReplaceWithDecision(helpers.context, decide, decide.helper_definitions[link_idx]->helper, *site.slot);
 }
 
+} // namespace
+
 //! `sum([when c] per K: inner([when c'] e) by (G))` in the objective, `inner` a SUM or AVG with no `per` and no
 //! reducer inside, every element of K in G: each G group is one member, so the sum of the members is `inner` read
 //! over every group, `c` joined to `c'`. Written so, the objective sums -- or averages per G group -- `e` itself, a
-//! square included, which a helper could not define linearly (D81). Replaces the reducer at `slot` and returns true;
-//! false when it is not that shape.
-bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_ptr<Expression> &slot) {
-	auto &outer = slot->Cast<BoundDecideReducerExpression>();
+//! square included, which a helper could not define linearly (D81). The nest stays in the objective as written, which
+//! the tree lowers; this is its reading as terms, null when `outer` is not that shape.
+unique_ptr<BoundDecideReducerExpression> decide_rewrite::ReadNestInPlace(const LogicalDecide &decide,
+                                                                         const BoundDecideReducerExpression &outer) {
 	const idx_t qualifier = outer.per;
 	if (outer.kind != DecideReducerKind::SUM || outer.children.size() != 1 || outer.by != DConstants::INVALID_INDEX ||
 	    qualifier >= decide.bound.keyed_scopes.size()) {
-		return false;
+		return nullptr;
 	}
 	auto *body = UnwrapDecideCasts(*outer.children[0], decide.decide_index);
 	if (body->GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER) {
-		return false;
+		return nullptr;
 	}
 	auto &inner = body->Cast<BoundDecideReducerExpression>();
 	const bool sum_or_avg = inner.kind == DecideReducerKind::SUM || inner.kind == DecideReducerKind::AVG;
 	if (!sum_or_avg || inner.children.size() != 1 || DecideCanonicalizer::ContainsReducer(*inner.children[0]) ||
 	    inner.per != DConstants::INVALID_INDEX) {
-		return false;
+		return nullptr;
 	}
 	auto &by = DecideKeyElements(decide.bound.keys, inner.by);
 	for (auto &element : DecideKeyElements(decide.bound.keys, decide.bound.keyed_scopes[qualifier].key)) {
@@ -302,13 +304,11 @@ bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_
 			in_by = in_by || part.Grouping().Equals(element.Grouping());
 		}
 		if (!in_by) {
-			return false; // a G group holding two classes of K would be counted twice
+			return nullptr; // a G group holding two classes of K would be counted twice
 		}
 	}
-	auto inlined = inner.Copy();
-	auto &reducer = inlined->Cast<BoundDecideReducerExpression>();
-	reducer.retained = decide.retained_expressions.size();
-	decide.retained_expressions.push_back(outer.Copy());
+	auto read = unique_ptr_cast<Expression, BoundDecideReducerExpression>(inner.Copy());
+	auto &reducer = *read;
 	auto add_condition = [&](unique_ptr<Expression> condition) {
 		if (!reducer.filter) {
 			reducer.filter = std::move(condition);
@@ -330,11 +330,8 @@ bool InlineSumOfGroupSums(LogicalDecide &decide, ClientContext &context, unique_
 		}
 		add_condition(MakeDecideNullTest(part.expression->Copy()));
 	}
-	slot = BoundCastExpression::AddCastToType(context, std::move(inlined), outer.return_type);
-	return true;
+	return read;
 }
-
-} // namespace
 
 void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 	if (!decide.bound.objective.body) {
@@ -596,8 +593,9 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		}
 		for (auto &site : sites) {
 			const bool nest = (*site.slot)->Cast<BoundDecideReducerExpression>().holds_reducer;
+			// A nest the linear form reads in place stays as written.
 			if (nest && !site.under_decision && !site.under_function &&
-			    InlineSumOfGroupSums(decide, optimizer.context, *site.slot)) {
+			    ReadNestInPlace(decide, (*site.slot)->Cast<BoundDecideReducerExpression>())) {
 				continue;
 			}
 			// A MIN or MAX takes a helper in every shape; one a decision multiplies stays for the objective's own

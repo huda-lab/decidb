@@ -57,8 +57,8 @@ void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {
 	// expose (RewriteScopedReducers), and RewriteAbs those that read an ABS helper (AbsProductWorklist).
 	//
 	// The bodies that stand outside the written clauses have the same bilinear semantics as any other row: L0's three
-	// structural links, which the indicator F node owns and lowers later; definition bodies, which survive outside the
-	// clause list; and a retained reducer's body.
+	// structural links, which the indicator F node owns and lowers later; and definition bodies, which survive outside
+	// the clause list.
 	//
 	// The tags this pass adds are read by no canonicalization, so the objective is not reinstalled.
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {

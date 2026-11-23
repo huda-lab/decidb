@@ -624,8 +624,6 @@ public:
 	//! on the rows it reads (language/guide.md §6.1); a direct plan builds each as a side table
 	//! (DirectSourceReader::AddSideTable) and empties the list. Never serialized (the optimizer creates it).
 	vector<DecideBoundAggregate> bound_aggregates;
-	//! Semantic expressions before a destructive algebraic rewrite. Enumerated so their source bindings stay live.
-	vector<unique_ptr<Expression>> retained_expressions;
 
 	//! A reducer over data whose argument reads a frame (language/guide.md §5.6): no side table can read a frame, whose
 	//! values execution computes, so the reducer stays in the tree, naming its entry

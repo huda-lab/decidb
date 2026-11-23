@@ -111,7 +111,7 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
   a helper decision keyed by its path key (`DecideReducerPath`, `FindOrCreateDecidePathKey`), innermost first, over
   the rows its path keeps; a member is pinned on the side its readers push it, through `MIN` and `MAX` as through
   `SUM` and `AVG` (D79). The objective's `sum(per K:
-  inner(e) by (G))` with `K` in `G` is read in place instead (`InlineSumOfGroupSums`).
+  inner(e) by (G))` with `K` in `G` stays as written and is read in place (`decide_rewrite::ReadNestInPlace`).
 - `RewriteRhsAggregates` (`decide_rewrite_rhs_bounds.cpp`) turns every reducer on a bound into a side-table column of
   the source, grouped by its `by` key over the rows the clause keeps, and reduces a varying bound to its group's
   tightest value (keeping every value for `<>`). A reducer nested in a bound's reducer is recorded first, grouped by

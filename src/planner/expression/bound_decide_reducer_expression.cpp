@@ -59,7 +59,6 @@ void BoundDecideReducerExpression::CopyFacts(const BoundDecideReducerExpression 
 	norm = other.norm;
 	written_name = other.written_name;
 	holds_reducer = other.holds_reducer;
-	retained = other.retained;
 	frame_aggregate = other.frame_aggregate;
 }
 
@@ -104,8 +103,8 @@ bool BoundDecideReducerExpression::Equals(const BaseExpression &other_p) const {
 	// Every fact but the name it was written under, which is display. A NORM is the norm it names, and the norm of a
 	// definition is the one it was written as.
 	if (kind != other.kind || by != other.by || per != other.per || !(norm == other.norm) ||
-	    holds_reducer != other.holds_reducer || retained != other.retained ||
-	    frame_aggregate != other.frame_aggregate || (function && !(*other.function == *function))) {
+	    holds_reducer != other.holds_reducer || frame_aggregate != other.frame_aggregate ||
+	    (function && !(*other.function == *function))) {
 		return false;
 	}
 	return Expression::ListEquals(children, other.children) && Expression::Equals(other.filter, filter) &&
@@ -140,7 +139,6 @@ void BoundDecideReducerExpression::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault(208, "norm_bound", norm.bound, 0.0);
 	serializer.WritePropertyWithDefault(209, "written_name", written_name);
 	serializer.WritePropertyWithDefault(211, "holds_reducer", holds_reducer, false);
-	serializer.WritePropertyWithDefault(212, "retained", retained, DConstants::INVALID_INDEX);
 	serializer.WritePropertyWithDefault(214, "frame_aggregate", frame_aggregate, DConstants::INVALID_INDEX);
 }
 
@@ -167,7 +165,6 @@ unique_ptr<Expression> BoundDecideReducerExpression::Deserialize(Deserializer &d
 	deserializer.ReadPropertyWithExplicitDefault(208, "norm_bound", result->norm.bound, 0.0);
 	deserializer.ReadPropertyWithDefault(209, "written_name", result->written_name);
 	deserializer.ReadPropertyWithExplicitDefault(211, "holds_reducer", result->holds_reducer, false);
-	deserializer.ReadPropertyWithExplicitDefault(212, "retained", result->retained, DConstants::INVALID_INDEX);
 	deserializer.ReadPropertyWithExplicitDefault(214, "frame_aggregate", result->frame_aggregate,
 	                                             DConstants::INVALID_INDEX);
 	return std::move(result);

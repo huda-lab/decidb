@@ -889,8 +889,9 @@ A reducer a function reads (`0 * sum(x) + abs(sum(x) - 2)`; any node but a sum, 
 the same way, as a reducer inside a comparison is the VALUE shape: the function reads one value, and `RewriteAbs`, which
 runs later, would otherwise leave a raw aggregate in its envelope rows, which stage 06 reads per row.
 `sum([when c] per K: inner([when c'] e) by (G))`, `inner` a SUM or AVG with no `per` and
-no reducer inside, every element of `K` in `G`, and no function reading it, is read in place instead
-(`InlineSumOfGroupSums`): each `G` group is one member, so the sum of the members is
+no reducer inside, every element of `K` in `G`, and no function reading it, takes no helper and stays as written.
+The tree lowers the nest, and the linear form reads it as terms (`decide_rewrite::ReadNestInPlace`, R35): each `G`
+group is one member, so the sum of the members is
 `inner` over every group, `c` joined to `c'`, and a square inside it stays a quadratic
 objective (an AVG divides by its group's size, `avg_group_key`). A row in no `G` group --
 a NULL in an element that groups NULL as no group -- is no member of any, so the sum read in

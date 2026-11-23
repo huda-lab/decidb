@@ -12,12 +12,7 @@ the owner rules first.
 
 # Phase 5 — The parser builds the tree
 
-## 5.1 The reducer node (one lane)
-- [ ] TREE-12 Member tests: a reducer field, or the marker node (decision) — pipeline/todo.md § TREE-12
-- [ ] TREE-14 The side copy of an inlined reducer (decision) — pipeline/todo.md § TREE-14
-- [ ] TREE-15 The written name's home (decision) — pipeline/todo.md § TREE-15
-
-## 5.2 The clause record (needs: 5.1) (one lane)
+## 5.2 The clause record (one lane)
 - [ ] TREE-16 A clause's shape has one writer — pipeline/todo.md § TREE-16
 - [ ] TREE-17 The body enumeration re-canonicalizes what a pass marks — pipeline/todo.md § TREE-17 (needs: TREE-16)
 - [ ] TREE-18 The bound-read debug check states its condition — pipeline/todo.md § TREE-18 (needs: TREE-17)

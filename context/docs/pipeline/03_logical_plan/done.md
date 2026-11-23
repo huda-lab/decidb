@@ -49,7 +49,7 @@ objective's texts, `source_columns`, `optimized`, the solver choice and the tabl
 
 | Class | What it is | Holds |
 |---|---|---|
-| `BoundDecideReducerExpression` (`planner/expression/bound_decide_reducer_expression.hpp`) | a reducer (`sum`, `avg`, `min`, `max`, `count`, `norm`) | `kind` (`DecideReducerKind`, set where the node is built; every reader asks it), `function` and `bind_info` (the overload `FunctionBinder` picked, which DuckDB runs; none for a NORM), `children` (none for `count(*)`, two for a collated MIN or MAX), `filter` (the rows it reads); and its facts: `by` (an index into `keys`), `per` (an index into `keyed_scopes`), `norm` (`DecideNorm`: order and the L0 bound), `written_name`, `holds_reducer`, `retained`, `frame_aggregate` (an index into `LogicalDecide::frame_aggregates`, for a reducer over data whose argument reads a frame) |
+| `BoundDecideReducerExpression` (`planner/expression/bound_decide_reducer_expression.hpp`) | a reducer (`sum`, `avg`, `min`, `max`, `count`, `norm`) | `kind` (`DecideReducerKind`, set where the node is built; every reader asks it), `function` and `bind_info` (the overload `FunctionBinder` picked, which DuckDB runs; none for a NORM), `children` (none for `count(*)`, two for a collated MIN or MAX), `filter` (the rows it reads); and its facts: `by` (an index into `keys`), `per` (an index into `keyed_scopes`), `norm` (`DecideNorm`: order and the L0 bound), `written_name`, `holds_reducer`, `frame_aggregate` (an index into `LogicalDecide::frame_aggregates`, for a reducer over data whose argument reads a frame) |
 | `BoundDecideNullTestExpression` (`bound_decide_null_test_expression.hpp`) | an `IS NOT NULL` test a reducer's rows gain beside its written `when` (`DecideCanonicalizer::SkipNullData`), and the test around a recorded reducer's value (`RhsBoundRewriter::InKey`) | `test`: the `IS NOT NULL`, or TRUE once the statistics prove it |
 
 - **The reducer is laid out as DuckDB's `BoundWindowExpression` is**: the bound aggregate function with its bind data,
@@ -57,7 +57,7 @@ objective's texts, `source_columns`, `optimized`, the solver choice and the tabl
   DuckDB's executor never reaches it. The tree lowers it, and where DuckDB runs an aggregate (a tree G node, a frame
   column, a direct rule's plan) `ToAggregate()` makes the `BoundAggregateExpression` it names.
 - **`Equals` and `Hash` hold every fact of the reducer**: its kind, type, function, arguments, rows and bind data, its
-  `by` and `per`, the norm it is or was written as, and what the rewrites record (`holds_reducer`, `retained`,
+  `by` and `per`, the norm it is or was written as, and what the rewrites record (`holds_reducer`,
   `frame_aggregate`). `sum(x)` and `sum(x) by (g)` are different values, so `Expression::Equals` is the one
   comparison every reader uses. `written_name` is display only and is left out, as an alias is.
 - **Each owes DuckDB the obligations of an `Expression` class**: a case in `ExpressionIterator::EnumerateChildren`

@@ -37,6 +37,11 @@ namespace decide_rewrite {
 //! checked once, and the place the first raises at stays (the first error reached is the one raised).
 void AddValueCheck(LogicalDecide &decide, unique_ptr<Expression> check);
 
+//! The objective nest `sum([when c] per K: inner([when c'] e) by (G))` read as terms: `inner` over every row the two
+//! `when`s keep that lies in a G group. Null when `outer` is no such nest (RewriteScopedReducers states the shape).
+unique_ptr<BoundDecideReducerExpression> ReadNestInPlace(const LogicalDecide &decide,
+                                                         const BoundDecideReducerExpression &outer);
+
 //! `SUM(body)` bound as a reducer, reading the rows `filter` keeps (null: every row).
 unique_ptr<Expression> BindSumOver(Optimizer &optimizer, unique_ptr<Expression> body, const Expression *filter);
 

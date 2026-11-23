@@ -760,21 +760,6 @@ private:
 		if (kept.Is(DecideHelperKind::PRODUCT)) {
 			return Lower(owner, *op.helper_definitions[kept.index]->body, carried);
 		}
-		const idx_t retained = expression.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER
-		                           ? expression.Cast<BoundDecideReducerExpression>().retained
-		                           : DConstants::INVALID_INDEX;
-		if (retained != DConstants::INVALID_INDEX) {
-			if (retained >= op.retained_expressions.size()) {
-				throw InternalException("DECIDE tree: a retained expression is missing");
-			}
-			auto lowered = Lower(owner, *op.retained_expressions[retained], carried);
-			// The term half splits the inlined reducer that names it; it ranges over the nest the copy became.
-			if (lowered->GetExpressionClass() == ExpressionClass::BOUND_REF &&
-			    lowered->Cast<BoundReferenceExpression>().index >= tree->input_column_count) {
-				reducer_nodes[&expression] = lowered->Cast<BoundReferenceExpression>().index - tree->input_column_count;
-			}
-			return lowered;
-		}
 		carried = carried || IsDecideQueryWideValue(op.bound.computed_values, expression) ||
 		          expression.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_NULL_TEST;
 		auto record = FindRecord(expression);

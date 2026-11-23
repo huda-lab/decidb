@@ -1061,7 +1061,6 @@ TEST_CASE("A bound DECIDE reducer copies every field and compares by what it com
 	source.norm.order = DecideNorm::Order::L1;
 	source.written_name = "total";
 	source.holds_reducer = true;
-	source.retained = 3;
 	source.frame_aggregate = 5;
 	source.alias = "named";
 	source.query_location = 7;
@@ -1098,7 +1097,6 @@ TEST_CASE("A bound DECIDE reducer copies every field and compares by what it com
 	REQUIRE(changed([&](Reducer &r) { r.per = 0; }) == another);
 	REQUIRE(changed([&](Reducer &r) { r.norm.order = DecideNorm::Order::INF; }) == another);
 	REQUIRE(changed([&](Reducer &r) { r.holds_reducer = false; }) == another);
-	REQUIRE(changed([&](Reducer &r) { r.retained = 0; }) == another);
 	REQUIRE(changed([&](Reducer &r) { r.frame_aggregate = 0; }) == another);
 	// The written name and the alias are display only.
 	REQUIRE(changed([&](Reducer &r) { r.written_name = "sum"; }) == display_only);
