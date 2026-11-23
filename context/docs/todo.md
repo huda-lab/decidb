@@ -15,8 +15,8 @@ the owner rules first.
 ## 5.4 The tree (one lane)
 - [ ] TREE-25 Terms split from the finished nodes (decision) — pipeline/todo.md § TREE-25
 
-## 5.5 Parser, direct rules, tags (needs: 5.4) (one lane)
-- [ ] TREE-26 The parser's reducer node holds its call; one AND splitter — pipeline/todo.md § TREE-26
+## 5.5 Parser, direct rules, tags (one lane)
+- [ ] TREE-26 The parser's reducer node and its call (decision) — pipeline/todo.md § TREE-26
 - [ ] TREE-8 Direct rules read `BoundDecide` (decision) — pipeline/todo.md § TREE-8
 - [ ] TREE-9 The tag machinery goes — pipeline/todo.md § TREE-9 (needs: TREE-8)
 

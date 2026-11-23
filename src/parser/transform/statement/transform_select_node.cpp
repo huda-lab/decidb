@@ -140,16 +140,8 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
 				decide.variables.push_back(std::move(variable));
 			}
 			for (auto cell = decide_clause.constraints->head; cell; cell = cell->next) {
-				auto clause = TransformDecideItem(*PGPointerCast<duckdb_libpgquery::PGNode>(cell->data.ptr_value));
-				// `(a AND b)` with no scope in front is its constraints, each one a clause.
-				if (clause.scope.IsEmpty() && clause.body->GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
-					for (auto &child : clause.body->Cast<ConjunctionExpression>().children) {
-						decide.constraints.emplace_back();
-						decide.constraints.back().body = std::move(child);
-					}
-					continue;
-				}
-				decide.constraints.push_back(std::move(clause));
+				decide.constraints.push_back(
+				    TransformDecideItem(*PGPointerCast<duckdb_libpgquery::PGNode>(cell->data.ptr_value)));
 			}
 			if (decide_clause.sense == duckdb_libpgquery::PG_OBJ_MAXIMIZE) {
 				decide.sense = DecideSense::MAXIMIZE;

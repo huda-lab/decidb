@@ -40,16 +40,18 @@ every one of them:
   order that moves) and the owner rules on it.
 - **Done when.** The owner rules on the note; under option 1 the note's own Done-when holds.
 
-## TREE-26 — The parser's reducer node holds its call; one AND splitter
+## TREE-26 — The parser's reducer node and its call
 
-- **Problem.** `DecideReducerExpression` wraps a whole parsed `call` and prints by splicing text after the first
-  `(` (`decide_reducer_expression.cpp:13-17`); binders unwrap `.call` and cast it at five sites
-  (`decide_binder.cpp:162,336-341,652,862`). An unscoped `a AND b` is split by the transformer
-  (`transform_select_node.cpp:144-151`) and by the binder (`decide_constraints_binder.cpp:108-128`).
-- **Change.** The node holds a `FunctionExpression` by type, as `WindowExpression` holds its fields, and prints its
-  scope from the fields. The binder's splitter is the one splitter.
-- **Done when.** No binder casts a reducer's call; `./test/decide/run_tests.sh -k "parse or syntax or when or
-  between or scope"` and `build/release/test/unittest "[decidb]"` pass.
+- **Decision needed.** `DecideReducerExpression::call` is a `ParsedExpression`. The grammar lets a scope or a `by`
+  stand in any call, and three call shapes do not parse to a `FunctionExpression` (`ifnull(...)` is an operator,
+  `if(...)` a CASE). The binder refuses each with the text as written (`when or per inside 'ifnull(when id > 1: x,
+  0)', which is not a reducer`). One site casts the call (`decide_binder.cpp:354`).
+- **Options.** (1) Hold a `FunctionExpression` by type: the transformer refuses the other shapes with a parser
+  error, which moves those errors from the binder and changes their class and text. (2) Keep the call a
+  `ParsedExpression`; the node prints its scope after the call's name as today.
+- **Recommendation.** 2. Option 1 removes one cast and adds a second place that refuses a misplaced scope.
+- **Done when.** The owner rules; under option 1 no binder casts a reducer's call and
+  `./test/decide/run_tests.sh -k "parse or syntax or when or between or scope"` passes.
 
 ## TREE-8 — Direct rules read `BoundDecide`
 

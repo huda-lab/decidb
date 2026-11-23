@@ -248,8 +248,8 @@ clause as one `ParsedDecide` (`src/include/duckdb/parser/decide/parsed_decide.hp
 
 A `DecideScope` is `when` (null when none is written), `per` (`DecidePer`: `NONE`, `ROW`, `ALL`, `KEY`), `key` (the
 elements of `per K`) and `location` (of its `per`, else of its `when`). `TransformDecideScope` and `TransformDecideItem`
-(`transform_decide_reducer.cpp`) build a scope and a clause. A constraint with no scope whose body is a parenthesized
-`AND` becomes one clause per conjunct.
+(`transform_decide_reducer.cpp`) build a scope and a clause. A parenthesized `AND` stays one clause's body, scoped
+or not: the binder reads its rows (`CollectWrittenRows`, stage 02), the one place an `AND` is split.
 
 A frame selector is a parsed expression class of its own, `DecideFrameExpression`
 (`ExpressionClass::DECIDE_FRAME`, `src/include/duckdb/parser/expression/decide_frame_expression.hpp`), the way

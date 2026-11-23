@@ -315,8 +315,9 @@ Dedicated binding methods: `BindComparison`, `BindOperator`, `BindClause` (§4a)
 (`decide_tree_terms.hpp`), one record per row: the bound clauses are a list, and no expression joins them. A record
 holds the row's body (a comparison or a bound `IN`), its scope (`DecideClauseScope`: the bound `when`, the `per` and
 its key), where the `per` stands in the query, and which half of a `BETWEEN` the row is (`DecideBetweenHalf`). One
-written clause gives several records where its body holds several rows: `BindClause` reads the body's `AND`s, also
-parenthesized under a scope (`when c: (a AND b)`), and a `BETWEEN`'s two comparisons, and each row takes the clause's
+written clause gives several records where its body holds several rows: `BindClause` reads the body's `AND`s
+(`CollectWrittenRows`, the one place an `AND` is split), parenthesized with a scope (`when c: (a AND b)`) or
+without one, and a `BETWEEN`'s two comparisons, and each row takes the clause's
 whole scope. An `OR` in a constraint position (`x <= cap OR x <= 1`, also under a scope) is refused: no layer builds
 the indicator it needs. A conjunction inside an operand is data or refused (Data operands, below), and an `OR` in a
 `when` condition, a reducer's `when` or a subquery is data. The objective is one more record
