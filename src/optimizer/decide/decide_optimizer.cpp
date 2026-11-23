@@ -146,6 +146,7 @@ void DecideOptimizer::RewriteForSolver(LogicalDecide &decide, LogicalOperator &r
 	// that is itself a singleton-row bound, and every auxiliary variable must exist before the
 	// box is sized.
 	RunPass("optimizer.fold_singleton_rows", &decide, [&] { FoldSingletonRows(decide); });
+	RunPass("optimizer.helper_forms", &decide, [&] { ChooseHelperForms(decide); });
 
 	VerifyNormMarkersLowered(decide);
 }

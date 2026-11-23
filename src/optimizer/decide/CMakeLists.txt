@@ -4,6 +4,7 @@ add_library_unity(
   decide_singleton_row_folding.cpp
   decide_answer_choice.cpp
   decide_expression_builder.cpp
+  decide_helper_form.cpp
   decide_linear_form.cpp
   decide_optimizer.cpp
   decide_rewrite_abs.cpp

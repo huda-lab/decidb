@@ -4,20 +4,6 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
 `decisions.md`. How to work and the checks: [`../direct_solve/framework/todo.md`](../direct_solve/framework/todo.md)
 § How to work any task in these todo files.
 
-## MODEL-1 — The optimizer sets each reducer helper's form
-
-- **Problem.** Whether a SUM or AVG helper is a variable or is written into its readers is decided at the end of
-  assembly, from a nonzero count over the built model (`InlineReducerValueLinks`, `PlaceHelpers`). R43 makes it a rule
-  over the plan.
-- **Change.** A field on `DecideReducerValueDefinition` holds the form of
-  `context/opa_rewrite/review/ARCH-2-design.md` § 3, set by one optimizer pass that reads the helper's readers from
-  the plan. A debug build compares the field with what `InlineReducerValueLinks` decides and collects every
-  difference; the list of differing queries over the suite goes to the owner before MODEL-2. `EXPLAIN` prints the
-  form.
-- **Done when.** A test per row of § 3's table, each failing if its branch is removed;
-  `./test/decide/run_tests.sh -k "anr_inlining or anr_nested or anr_frames or explain"`;
-  `build/debug/test/unittest "[decidb]"`.
-
 ## MODEL-2 — A G hands its members to its reader at the node
 
 - **Problem.** A MIN or MAX over group values lists one member per input row (40 link rows for 8 distinct members;
@@ -26,8 +12,8 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   its groups' members to its reader's row or member list. A MIN or MAX group of one member is written as that member
   at the node (R44). `InlineReducerValueLinks`, `PlaceHelpers`, `HelperReads`, the second `VarIndexer::Build`,
   `DecideVarScope::INLINED` and the `VALUE_HELPER_INLINED` line for a sum are deleted with the tests that only
-  reached them. Each model golden that changes is inspected against the list MODEL-1 produced.
-- **Needs.** MODEL-1.
+  reached them. `EXPLAIN` prints the form at planning. Each model golden that changes is inspected against
+  `context/opa_rewrite/review/MODEL-1-form-differences.md`, and `DECIDB_FORM_DIFF` goes with the pass it compares.
 - **Done when.** `./test/decide/run_tests.sh -k "anr or nested_decide or nested_product or explain"`;
   `build/release/test/unittest "[decidb]"`; `benchmark/decide/anr_scaling.py --only nested` states one link row per
   distinct member.

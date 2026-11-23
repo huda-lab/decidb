@@ -255,9 +255,28 @@ term splitter use them:
 | 9 | `RewriteNotEqual` | Creates `<>` indicators. |
 | 10 | `AccountAvg` | Records the account of each AVG over decisions, which stays an AVG. |
 | 11 | `RewriteAbs` | Decides which ABS is exact from its body's owner, once the rewrites that join a helper's readers (2, 7, 8) have run. Allocates the ABS helpers, records each ABS in `helper_definitions` for the tree and stage 06, and adds the check of each ABS argument's data. It emits no row and no indicator. Hands each body whose ABS got a helper back to the bilinear entry. |
-| 12 | `FoldSingletonRows` | Must be last of all — see below. |
+| 12 | `FoldSingletonRows` | Must be last of all the rewrites — see below. |
+| 13 | `ChooseHelperForms` | Sets each reducer helper's form (`DecideReducerValueDefinition::form`) from where the plan reads it, a fact joined over the helper's readers, so it runs once every rewrite has added its readers. It rewrites nothing. |
 
 The `optimizer.decide` span of `DECIDB_PROFILE=1` times the whole block.
+
+**The form of a reducer helper** (`decide_helper_form.cpp`; context/opa_rewrite/decisions.md R42 to R44). A helper the
+value rewrite made is a column, or its members are written into what reads it. The pass reads every body through
+`EnumerateBodies` and each ABS operand with the walk every push is read from (`WalkPolarity`), and records per helper
+whether a reader states its column, how many linear rows read it, and the one other helper whose member reads it.
+
+| Form | Reducer | When |
+|---|---|---|
+| `WRITTEN_IN` | SUM, AVG | every reader takes a linear expression, and it is in a nest of sums (a SUM or AVG reads it, or it reads one), or it is a member of a MIN or MAX, or it is a range whose window moves with the row (`DecideFrameSpec::Relative`) and one row reads it |
+| `ONE_MEMBER_WRITTEN_IN` | MIN, MAX | every reader takes a linear expression: a group of one member is that member |
+| `VARIABLE` | any | any other |
+
+A reader states the column, so the helper keeps it, when it is a product or a square, a frame's payload, an exact ABS,
+a `<>`, a row that is not linear, a bound on one decision (which may fold into the column's box), a MIN or MAX pinned
+on both sides, or a second helper. A one-sided ABS states its operand in two rows, so it counts as two readers. A
+range of a whole timeline is one instance that every row of the timeline reads, so it keeps its column. The model
+builder does not read the form yet: `InlineReducerValueLinks` still decides from the built model, and
+`DECIDB_FORM_DIFF=<file>` lists each helper where the two differ.
 
 **Every pass that reads bodies reaches them through one enumerator** (`LogicalDecide::EnumerateBodies`, the Visitor
 pattern, as DuckDB's `LogicalOperatorVisitor::EnumerateExpressions` enumerates a node's expressions). It visits

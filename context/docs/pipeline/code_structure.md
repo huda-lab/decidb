@@ -90,6 +90,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `optimizer/decide/decide_tree_definition.cpp` | 05 | `PrepareDefinitionFunctions`: helpers for non-linear bodies |
 | `optimizer/decide/decide_rewrite_scoped.cpp` | 05 | The value rewrite (`RewriteScopedReducers`): each decision reducer of a VALUE-shape comparison, and every other MIN or MAX over decisions, becomes a helper decision per `by` group |
 | `optimizer/decide/decide_rewrite_frames.cpp` | 05 | `RewriteFrameRanges`: a range frame over decisions becomes a helper decision per window, before any rewrite copies it |
+| `optimizer/decide/decide_helper_form.cpp` | 05 | The form of each reducer helper (`ChooseHelperForms`): a column, or written into its readers |
 | `optimizer/decide/decide_singleton_row_folding.cpp` | 05 | Literal bounds folded into column boxes |
 | `optimizer/decide/decide_linear_form.cpp` | 05 | Flattens every constraint and the objective into `decide.prepared`; must run last |
 | `optimizer/decide/decide_answer_choice.cpp` | 05 | `ChooseDecideAnswer`: tries the direct-solve rules; when none applies, records the backend for the formulation passes (`ChooseDecideSolver`) |

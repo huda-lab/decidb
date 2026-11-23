@@ -13,8 +13,7 @@ the owner rules first.
 # Phase 6 — The model is written at the nodes
 
 ## 6.1 The helper's form is the optimizer's (one lane)
-- [ ] MODEL-1 The optimizer sets each reducer helper's form — pipeline/todo.md § MODEL-1
-- [ ] MODEL-2 A G hands its members to its reader — pipeline/todo.md § MODEL-2 (needs: MODEL-1)
+- [ ] MODEL-2 A G hands its members to its reader — pipeline/todo.md § MODEL-2
 
 ## 6.2 A record per group (one lane; needs: 6.1)
 - [ ] MODEL-3 Stage 06 reads a clause through its emitted rows — pipeline/todo.md § MODEL-3

@@ -409,6 +409,40 @@ void PhysicalDecide::ReportAnEmptyObjective(const SolverInput &input) const {
 	                     "is 0 whatever the decisions: each term has no value or a zero factor on every row");
 }
 
+// The side-by-side check of Phase 6 (context/opa_rewrite/design.md § 4): the form the optimizer chose for each reducer
+// helper against what InlineReducerValueLinks decided from the built model. Each difference is a line of the file
+// DECIDB_FORM_DIFF names. It goes with InlineReducerValueLinks.
+void PhysicalDecide::CompareHelperForms(const SolverInput &input) const {
+	const char *path = std::getenv("DECIDB_FORM_DIFF");
+	if (!path) {
+		return;
+	}
+	for (auto &node : tree->nodes) {
+		if (!node->Linked()) {
+			continue;
+		}
+		auto &definition = tree->Definition(*node)->Cast<DecideReducerValueDefinition>();
+		const auto helper = definition.helper;
+		const bool whole = input.variable_scopes[helper].scope == DecideVarScope::INLINED;
+		const bool singles = helper < input.written_in.size() &&
+		                     std::find(input.written_in[helper].begin(), input.written_in[helper].end(), true) !=
+		                         input.written_in[helper].end();
+		const bool extremum = IsDecideExtremum(definition.reducer);
+		// A MIN or MAX with no group of one member shows nothing of its form.
+		const bool differs = extremum ? (whole || singles) && definition.form != DecideHelperForm::ONE_MEMBER_WRITTEN_IN
+		                              : whole != (definition.form == DecideHelperForm::WRITTEN_IN);
+		if (!differs) {
+			continue;
+		}
+		std::ofstream out(path, std::ios::app);
+		out << (extremum ? "extremum" : "sum") << "\tplan=" << static_cast<int>(definition.form) << "\trun="
+		    << (whole     ? "written_in"
+		        : singles ? "one_member"
+		                  : "variable")
+		    << "\t" << definition.label << "\t" << StringUtil::Replace(display.source_text.text, "\n", " ") << "\n";
+	}
+}
+
 void PhysicalDecide::ReportInlinedHelpers(const SolverInput &input) const {
 	vector<idx_t> linked_nodes;
 	for (idx_t node = 0; node < tree->nodes.size(); node++) {
@@ -672,6 +706,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 			ec.emitted_rows = EmittedRows();
 		}
 	}
+	CompareHelperForms(solver_input);
 	return solver_input;
 }
 

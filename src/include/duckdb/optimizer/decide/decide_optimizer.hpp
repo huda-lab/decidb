@@ -111,6 +111,10 @@ private:
 	//! whose key has a NULL-skipping column, never contributes to a global bound.
 	void FoldSingletonRowsInClause(BoundDecideClause &clause, LogicalDecide &decide);
 
+	//! Sets the form of each reducer helper (DecideReducerValueDefinition::form) from where the plan reads it. Runs
+	//! after every rewrite, since each may add a reader.
+	void ChooseHelperForms(LogicalDecide &decide);
+
 	//! Records the account of each AVG over decisions in a clause or the objective. The reducer stays an AVG: the
 	//! linear form scales its terms by its row count.
 	void AccountAvg(LogicalDecide &decide);
