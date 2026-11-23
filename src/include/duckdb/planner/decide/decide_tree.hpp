@@ -155,17 +155,10 @@ struct DecideNode {
 	//! Every argument is retained: collated extrema have a value and comparison key.
 	vector<unique_ptr<Expression>> arguments;
 	unique_ptr<BoundAggregateExpression> function;
-	//! L0_INDICATOR: rows which define the indicator from its operand and the reverse ABS link.
-	vector<idx_t> l0_link_roots;
-	//! Set on a child clause root owned by an L0 indicator F node.
-	idx_t l0_function_owner = DConstants::INVALID_INDEX;
-	//! Definition F nodes own the structural row defining their helper value.
-	vector<idx_t> definition_roots;
-	//! Set on the structural clause root owned by a definition F node.
-	idx_t definition_function_owner = DConstants::INVALID_INDEX;
-	//! The roots of the two lower-envelope rows this F node owns, `aux >= operand` then `aux >= -operand` (MakeAbsRow).
-	//! They carry the operand per row to stage 06, which states every row of the ABS from them.
-	vector<idx_t> abs_envelope_roots;
+	//! An F node: the roots of the rows it owns, its children. An ABS's two lower-envelope rows, `aux >= operand` then
+	//! `aux >= -operand` (MakeAbsRow), which carry the operand per row to stage 06; an L0 indicator's link rows; the
+	//! one row that defines a definition's helper. Such a root's `parent` is the F node.
+	vector<idx_t> rows;
 	string aggregate;
 	//! The helper definition (DecideTree::definitions) the node holds the value of: an F node's, or the one whose
 	//! helper a linked G or O defines. INVALID_INDEX for every other node.
@@ -277,6 +270,10 @@ struct DecideTree {
 	//! The definition a node holds the value of, null for a node that holds none.
 	const DecideHelperDefinition *Definition(const DecideNode &node) const {
 		return node.definition == DConstants::INVALID_INDEX ? nullptr : definitions[node.definition].get();
+	}
+	//! Whether `root` is a row the F node of a definition of `kind` owns (DecideNode::rows).
+	bool OwnedBy(const DecideNode &root, DecideHelperKind kind) const {
+		return root.parent != DConstants::INVALID_INDEX && IsFunction(*nodes[root.parent], kind);
 	}
 	//! Whether `node` is the F node of a definition of `kind`.
 	bool IsFunction(const DecideNode &node, DecideHelperKind kind) const {

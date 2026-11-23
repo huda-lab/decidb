@@ -354,6 +354,16 @@ public:
 
 	//! The F node of helper definition `definition_index`: a hidden root holding the helper's value, one per instance
 	//! of the helper's scope, named as a plan names the helper.
+	//! Whether `node` is a row the F node of a definition of `kind` owns (DecideTree::OwnedBy, before the tree holds
+	//! the definitions).
+	bool OwnedByFunction(const DecideNode &node, DecideHelperKind kind) const {
+		if (node.parent == DConstants::INVALID_INDEX) {
+			return false;
+		}
+		auto &parent = *tree->nodes[node.parent];
+		return parent.kind == DecideNodeKind::FUNCTION && op.helper_definitions[parent.definition]->kind == kind;
+	}
+
 	DecideNode &FunctionNode(idx_t definition_index) {
 		const auto helper = op.helper_definitions[definition_index]->helper;
 		auto label = std::find_if(op.aux_var_expressions.begin(), op.aux_var_expressions.end(),
@@ -621,11 +631,11 @@ private:
 		node.origin = clause.origin;
 		node.text = RootText(node.origin.source_clause_id);
 		node.defined_var = clause.defines;
-		if (is_l0_link) {
-			node.l0_function_owner = function;
+		if (owned) {
+			// Before the row is lowered: a row a function owns reads its helper as a decision (Lower).
+			Edge(function, index);
 		}
 		if (is_definition) {
-			node.definition_function_owner = function;
 			node.hidden = true;
 			node.text = "definition of " + tree->nodes[function]->text;
 		}
@@ -640,14 +650,11 @@ private:
 		}
 		node.body = Lower(index, *row->left);
 		node.rhs = Lower(index, *row->right, canonical->query_wide_bound);
-		if (is_abs_envelope) {
-			tree->nodes[function]->abs_envelope_roots.push_back(index);
-			tree->nodes[function]->signature.clear();
-		} else if (is_l0_link) {
-			auto &l0 = *tree->nodes[function];
-			l0.l0_link_roots.push_back(index);
-			if (l0.l0_link_roots.size() == 1) {
-				l0.signature.clear();
+		if (owned) {
+			auto &owner_node = *tree->nodes[function];
+			owner_node.rows.push_back(index);
+			if (is_abs_envelope || (is_l0_link && owner_node.rows.size() == 1)) {
+				owner_node.signature.clear();
 			}
 		}
 		UseSignature(node, signature);
@@ -668,10 +675,6 @@ private:
 		node.signature.erase(end, node.signature.end());
 		GroupClass(node, *facts);
 		if (owned) {
-			if (is_definition) {
-				tree->nodes[function]->definition_roots.push_back(index);
-			}
-			Edge(function, index);
 			// A function's link scope may carry a class signature that splits its instances.
 			for (auto &field : node.signature) {
 				Signature(*tree->nodes[function], CopyField(field));
@@ -798,12 +801,12 @@ private:
 				for (auto function : tree->function_nodes) {
 					auto &function_node = *tree->nodes[function];
 					auto &definition = *op.helper_definitions[function_node.definition];
-					const bool l0_reader = definition.kind == DecideHelperKind::L0_INDICATOR &&
-					                       node.l0_function_owner == DConstants::INVALID_INDEX;
-					const bool definition_reader = definition.kind == DecideHelperKind::DEFINITION &&
-					                               node.definition_function_owner == DConstants::INVALID_INDEX;
-					if ((definition.kind == DecideHelperKind::BOOLEAN_PRODUCT || l0_reader || definition_reader) &&
-					    definition.helper == variable) {
+					// A row an indicator or a definition owns states the helper: it reads the decision, not the F.
+					const bool reads_function = definition.kind == DecideHelperKind::BOOLEAN_PRODUCT ||
+					                            ((definition.kind == DecideHelperKind::L0_INDICATOR ||
+					                              definition.kind == DecideHelperKind::DEFINITION) &&
+					                             !OwnedByFunction(node, definition.kind));
+					if (reads_function && definition.helper == variable) {
 						return Read(owner, function, expression.return_type, expression.GetAlias());
 					}
 				}
@@ -1114,9 +1117,9 @@ private:
 			auto &node = *tree->nodes[i];
 			auto variable = node.defined_var;
 			const bool abs_envelope = node.compiled.clause && IsDecideAbsEnvelope(node.compiled.clause->helper_row);
-			const bool function_link = node.l0_function_owner != DConstants::INVALID_INDEX ||
-			                           node.definition_function_owner != DConstants::INVALID_INDEX;
-			if (variable < definitions.size() && !abs_envelope && !function_link) {
+			if (variable < definitions.size() && !abs_envelope &&
+			    !OwnedByFunction(node, DecideHelperKind::L0_INDICATOR) &&
+			    !OwnedByFunction(node, DecideHelperKind::DEFINITION)) {
 				definitions[variable].push_back(i);
 			}
 		}
@@ -1223,54 +1226,25 @@ void DecideTree::Validate() const {
 		}
 		const auto value_var = ValueVar(node);
 		if (node.kind == DecideNodeKind::FUNCTION) {
-			const bool l0 = IsFunction(node, DecideHelperKind::L0_INDICATOR);
-			const bool definition = IsFunction(node, DecideHelperKind::DEFINITION);
-			if (value_var >= value_nodes.size() || (!variable_scopes.empty() && value_var >= variable_scopes.size()) ||
-			    node.defined_var != value_var || !node.body ||
-			    node.abs_envelope_roots.empty() != !IsFunction(node, DecideHelperKind::ABS) ||
-			    node.l0_link_roots.size() != (l0 ? 3 : 0) || node.definition_roots.size() != (definition ? 1 : 0)) {
+			auto &definition = *definitions[node.definition];
+			const bool abs = definition.kind == DecideHelperKind::ABS;
+			const idx_t expected_rows = abs                                                 ? 2
+			                            : definition.kind == DecideHelperKind::L0_INDICATOR ? 3
+			                            : definition.kind == DecideHelperKind::DEFINITION   ? 1
+			                                                                                : 0;
+			bool invalid = value_var >= value_nodes.size() ||
+			               (!variable_scopes.empty() && value_var >= variable_scopes.size()) ||
+			               node.defined_var != value_var || !node.body || node.rows.size() != expected_rows;
+			for (idx_t r = 0; r < node.rows.size() && !invalid; r++) {
+				const auto root = node.rows[r];
+				invalid = root >= nodes.size() || !nodes[root]->compiled.clause ||
+				          nodes[root]->compiled.clause->defined_var != value_var || nodes[root]->parent != i ||
+				          std::find(node.children.begin(), node.children.end(), root) == node.children.end() ||
+				          (abs && nodes[root]->compiled.clause->helper_row !=
+				                      (r == 0 ? DecideHelperRow::ABS_ENVELOPE : DecideHelperRow::ABS_NEGATED_ENVELOPE));
+			}
+			if (invalid) {
 				throw InternalException("DECIDE tree has an invalid function node %llu", i);
-			}
-		}
-		if (IsFunction(node, DecideHelperKind::ABS)) {
-			bool positive = false;
-			bool negative = false;
-			for (auto root : node.abs_envelope_roots) {
-				if (root >= nodes.size() || !nodes[root]->compiled.clause ||
-				    !IsDecideAbsEnvelope(nodes[root]->compiled.clause->helper_row) ||
-				    nodes[root]->compiled.clause->defined_var != value_var || nodes[root]->parent != i ||
-				    std::find(node.children.begin(), node.children.end(), root) == node.children.end()) {
-					throw InternalException("DECIDE tree ABS function node %llu has an invalid envelope row", i);
-				}
-				if (nodes[root]->compiled.clause->helper_row == DecideHelperRow::ABS_ENVELOPE) {
-					positive = true;
-				} else {
-					negative = true;
-				}
-			}
-			if (!positive || !negative) {
-				throw InternalException("DECIDE tree ABS function node %llu does not own both envelope rows", i);
-			}
-		}
-		if (IsFunction(node, DecideHelperKind::L0_INDICATOR)) {
-			for (auto root : node.l0_link_roots) {
-				if (root >= nodes.size() || !nodes[root]->compiled.clause ||
-				    nodes[root]->compiled.clause->defined_var != value_var || nodes[root]->l0_function_owner != i ||
-				    nodes[root]->parent != i ||
-				    std::find(node.children.begin(), node.children.end(), root) == node.children.end()) {
-					throw InternalException("DECIDE tree L0 indicator function node %llu has an invalid link row", i);
-				}
-			}
-		}
-		if (IsFunction(node, DecideHelperKind::DEFINITION)) {
-			for (auto root : node.definition_roots) {
-				if (root >= nodes.size() || !nodes[root]->compiled.clause ||
-				    nodes[root]->compiled.clause->defined_var != value_var ||
-				    nodes[root]->definition_function_owner != i || nodes[root]->parent != i ||
-				    std::find(node.children.begin(), node.children.end(), root) == node.children.end()) {
-					throw InternalException("DECIDE tree definition function node %llu has an invalid definition row",
-					                        i);
-				}
 			}
 		}
 		if (node.kind == DecideNodeKind::FUNCTION) {

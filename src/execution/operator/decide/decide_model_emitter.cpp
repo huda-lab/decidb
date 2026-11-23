@@ -402,19 +402,11 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 		auto &node = *tree.nodes[root];
 		if (node.kind == DecideNodeKind::FUNCTION) {
 			FunctionAbsence(root);
-			// The rows a function owns are of its own kind: the other two lists are empty.
-			const auto variable = tree.ValueVar(node);
-			for (auto envelope : node.abs_envelope_roots) {
-				DefinitionAbsence(envelope, variable);
+			for (auto row : node.rows) {
+				DefinitionAbsence(row, tree.ValueVar(node));
 			}
-			for (auto link : node.l0_link_roots) {
-				DefinitionAbsence(link, variable);
-			}
-			for (auto definition : node.definition_roots) {
-				DefinitionAbsence(definition, variable);
-			}
-		} else if (node.l0_function_owner != DConstants::INVALID_INDEX ||
-		           node.definition_function_owner != DConstants::INVALID_INDEX) {
+		} else if (tree.OwnedBy(node, DecideHelperKind::L0_INDICATOR) ||
+		           tree.OwnedBy(node, DecideHelperKind::DEFINITION)) {
 			// The owning F node resolves absence from its linked rows.
 		} else if (node.Linked()) {
 			mappings[tree.variable_scopes[tree.ValueVar(node)].keyed_scope_idx] = HelperMapping(root);
@@ -466,7 +458,7 @@ void DecideModelEmitter::DefinitionAbsence(idx_t root, idx_t variable) {
 	auto &body = tree.nodes[root]->compiled;
 	auto &clause = *body.clause;
 	auto &absent = gstate.absent_reads[variable];
-	const bool reducer_definition = tree.nodes[root]->definition_function_owner != DConstants::INVALID_INDEX;
+	const bool reducer_definition = tree.OwnedBy(*tree.nodes[root], DecideHelperKind::DEFINITION);
 	auto mark = [&](idx_t row) {
 		absent.resize(num_rows, false);
 		absent[row] = true;
@@ -552,7 +544,10 @@ void DecideModelEmitter::Constraints() {
 	vector<idx_t> abs_function_of_clause(roots.size(), DConstants::INVALID_INDEX);
 	for (auto function : tree.function_nodes) {
 		const auto &node = *tree.nodes[function];
-		for (auto root : node.abs_envelope_roots) {
+		if (!tree.IsFunction(node, DecideHelperKind::ABS)) {
+			continue;
+		}
+		for (auto root : node.rows) {
 			if (root >= tree.nodes.size()) {
 				throw InternalException("DECIDE model emitter: ABS F node has an invalid envelope root");
 			}
@@ -612,7 +607,7 @@ void DecideModelEmitter::Route(EmittedClause &&clause, bool folded) {
 void DecideModelEmitter::AbsEnvelope(idx_t function, idx_t root, bool counted) {
 	auto &node = *tree.nodes[function];
 	auto &definition = *tree.Definition(node);
-	const auto &envelopes = node.abs_envelope_roots;
+	const auto &envelopes = node.rows;
 	if (root >= tree.nodes.size() || std::find(envelopes.begin(), envelopes.end(), root) == envelopes.end()) {
 		throw InternalException("DECIDE model emitter: invalid ABS F envelope ownership");
 	}
@@ -652,8 +647,7 @@ EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
 	// each, or under `per K:` on one row of each variant of a class.
 	vector<bool> tested = columns.Tested(root);
 	vector<bool> definition_absent(num_rows, false);
-	if (node.definition_function_owner != DConstants::INVALID_INDEX &&
-	    clause.defined_var < gstate.absent_reads.size()) {
+	if (tree.OwnedBy(node, DecideHelperKind::DEFINITION) && clause.defined_var < gstate.absent_reads.size()) {
 		const auto &absent = gstate.absent_reads[clause.defined_var];
 		const auto &rows = descent.Containers()[root].rows;
 		for (idx_t entry = 0; entry < tested.size(); entry++) {

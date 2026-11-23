@@ -817,8 +817,8 @@ vector<DecideFunctionRow> CollectDecideFunctionRows(const DecideTree &tree, cons
 	// A definition's row restates the body its reducer already prints, so only ABS envelopes and L0 links are rows.
 	for (auto function : tree.function_nodes) {
 		auto &node = *tree.nodes[function];
-		for (auto *roots : {&node.abs_envelope_roots, &node.l0_link_roots}) {
-			for (auto root : *roots) {
+		if (!tree.IsFunction(node, DecideHelperKind::DEFINITION)) {
+			for (auto root : node.rows) {
 				auto &clause = tree.nodes[root]->compiled.clause;
 				rows.push_back({tree.nodes[root]->origin.source_clause_id,
 				                RenderFunctionRow(*clause, decide_variables, ctx, tree.Definition(node)->auto_m)});
