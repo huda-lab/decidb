@@ -57,7 +57,7 @@ struct Condition final : DirectApplicabilityCondition {
 };
 
 //! Whether `coarse` contains `fine`: every group of `fine` lies in one group of `coarse`, proved from the text of the
-//! two clauses (the IR carries no functional dependencies, so the data is not consulted). The `by` key of `coarse` is
+//! two clauses (the rule reads no functional dependencies, so the data is not consulted). The `by` key of `coarse` is
 //! a subset of `fine`'s, and `coarse` keeps every row `fine` keeps (it has no `when`, or the same one). The `per` of
 //! either clause is not compared: it does not group the sum (D6), only decides whether the clause has an instance, and
 //! each level reads that flag on its own (DirectRankedPrefix::ProjectScopes); a level with no instance leaves a chain
@@ -77,8 +77,11 @@ public:
 		DirectObjective objective;
 		vector<const DirectClause *> fixes, bounds;
 		if (!DirectIsOneRowDecision(decide, DirectDomain::BOOL) || !DirectReadClauses(context, decide, clauses) ||
-		    !DirectReadObjective(context, decide, objective) || !DirectSplitFixes(clauses, fixes, bounds) ||
-		    bounds.empty()) {
+		    !DirectReadObjective(context, decide, objective)) {
+			return nullptr;
+		}
+		DirectSplitFixes(clauses, fixes, bounds);
+		if (bounds.empty()) {
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();

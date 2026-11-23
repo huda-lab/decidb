@@ -336,27 +336,29 @@ TEST_CASE("A keyed decision's key is read as the plan reads it", "[decidb]") {
 	REQUIRE((key[0].name == "flag") != (key[1].name == "flag"));
 }
 
-TEST_CASE("The clause reader reads comparisons, membership, and right-hand sides", "[decidb]") {
+TEST_CASE("The clause reader reads comparisons and right-hand sides, and declines a membership", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	QueryReading query(con, ReadQuery("x(INT), y(INT)",
-	                                  "x + y <= 3 AND x <> 1 AND y IN (0, 2) AND SUM(x) <= cap AND "
+	                                  "x + y <= 3 AND x <> 1 AND SUM(x) <= cap AND "
 	                                  "SUM(y) <= (SELECT 5) AND SUM(x) BETWEEN 1 AND 2",
 	                                  "MAXIMIZE SUM(w*x)"));
 	REQUIRE(query.clauses_read);
 	auto &constraints = query.clauses;
-	REQUIRE(constraints.size() == 7);
+	REQUIRE(constraints.size() == 6);
 	// One constraint per row, holding both decisions.
 	REQUIRE(!constraints[0].Aggregate());
 	REQUIRE(constraints[0].lhs.size() == 1);
 	REQUIRE(!constraints[0].lhs[0].reduced);
 	REQUIRE(constraints[0].lhs[0].terms.size() == 2);
 	REQUIRE(constraints[1].Comparison() == ExpressionType::COMPARE_NOTEQUAL);
-	REQUIRE(constraints[2].Comparison() == ExpressionType::COMPARE_IN);
-	REQUIRE(constraints[3].Aggregate());
+	REQUIRE(constraints[2].Aggregate());
 	// BETWEEN is two written comparisons.
-	REQUIRE(constraints[5].Comparison() == ExpressionType::COMPARE_GREATERTHANOREQUALTO);
-	REQUIRE(constraints[6].Comparison() == ExpressionType::COMPARE_LESSTHANOREQUALTO);
+	REQUIRE(constraints[4].Comparison() == ExpressionType::COMPARE_GREATERTHANOREQUALTO);
+	REQUIRE(constraints[5].Comparison() == ExpressionType::COMPARE_LESSTHANOREQUALTO);
+	// No rule models a membership, so the reader declines the clauses that hold one.
+	QueryReading membership(con, ReadQuery("x(INT)", "x <= 3 AND x IN (0, 2)", "MAXIMIZE SUM(w*x)"));
+	REQUIRE(!membership.clauses_read);
 }
 
 TEST_CASE("The clause reader reads reducers, filters, qualifiers, scales and norms", "[decidb]") {
@@ -840,4 +842,25 @@ TEST_CASE("A clause keeps the shape and the direction bound reduction read", "[d
 		clause.bound_read_type = ExpressionType::COMPARE_EQUAL;
 		REQUIRE_NOTHROW(DecideOptimizer::VerifyBoundReads(*query.decide));
 	}
+}
+
+TEST_CASE("A clause whose every reducer becomes a helper ends what bound reduction read", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	REQUIRE_NO_FAIL(con.Query("SET decide_direct_solve='off'"));
+	// Both bounds differ between the rows of a group, so bound reduction reads each clause as one row per group.
+	// The hard MAX becomes a helper (RewriteScopedReducers) and its clause a row per row; the sum keeps its row.
+	auto plan = ReadPlan(con, ReadQuery("x(INT)", "x <= 5 AND max(x) >= cap AND sum(x) <= cap", "MINIMIZE sum(x)"));
+	auto *decide = FindReadDecide(*plan);
+	REQUIRE(decide != nullptr);
+	REQUIRE_NOTHROW(DecideOptimizer::VerifyBoundReads(*decide));
+	idx_t kept = 0;
+	for (auto &clause : decide->bound.clauses) {
+		if (clause.bound_read_shape == CanonicalConstraintClass::INVALID) {
+			continue;
+		}
+		REQUIRE(clause.shape == CanonicalConstraintClass::AGGREGATE);
+		kept++;
+	}
+	REQUIRE(kept == 1);
 }

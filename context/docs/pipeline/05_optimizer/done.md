@@ -213,7 +213,10 @@ the group's tightest value, and the comparison's direction, which says which val
 may differ within a group it records both on the clause (`bound_read_shape`, `bound_read_type`), and a debug build
 checks them after every pass, in the one place every pass runs (`RunPass`, `DecideOptimizer::VerifyBoundReads`). The
 check is the rule: a clause is one row per group exactly when it was read as one, and a clause read as one keeps its
-relation unless that was `=`, whose bound is the tightest of both directions. Nothing else is verified this way.
+relation unless that was `=`, whose bound is the tightest of both directions. One pass ends the record:
+`RewriteScopedReducers` unsets it on a clause whose every reducer becomes a helper (a hard MIN or MAX), because the
+helper is one instance per group and each row of the group states it against the bound the group read. Nothing else
+is verified this way.
 An `=` bound's checks are scope checks made before any rule runs: its NaN check, then its `=` check (two values in
 one group, `AddDisagreementCheck`): one check per `by` group, whose message names the group and points at the bound
 (R15), made before any rule can; the NaN check stands with it, so every path raises the same error of the two. Every
@@ -512,7 +515,7 @@ it into a bound on the auxiliary (`AddAbsValueCheck`): the sum of the argument's
 that hold no decision (`-v` in `ABS(x - v)`) must be finite on every row the ABS is read
 on. Each term is copied whole, so a frame among them is read at the row it selects, as a
 coefficient's is. A row where the sum is not finite raises the message every number the model reads raises
-(`DirectNumberMessage`, shared with the direct-solve plans): the first of its values that
+(`DecideInvalidValueMessage`, shared with the direct-solve plans): the first of its values that
 is NaN or infinite, as the user wrote it, or, when each is finite and their sum passes a
 DOUBLE, the clause or objective with `computes a number too large for a DOUBLE`. So the
 solver path and direct solve's A2 raise the same text, and no message names a bound the

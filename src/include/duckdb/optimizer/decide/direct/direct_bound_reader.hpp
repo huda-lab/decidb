@@ -343,8 +343,8 @@ const vector<DecideSplitTerm> *DirectFixedTerms(const DirectClause &constraint);
 bool DirectIsOneRowDecision(const LogicalDecide &decide, DirectDomain domain);
 
 //! Splits the constraints in order: the per-row clauses on the decision (DirectFixedTerms), which DirectReadFixedValues
-//! reads, go to `fixes`, and every other constraint goes to `others`. False on a membership constraint (`x IN (...)`).
-bool DirectSplitFixes(const vector<DirectClause> &clauses, vector<const DirectClause *> &fixes,
+//! reads, go to `fixes`, and every other constraint goes to `others`.
+void DirectSplitFixes(const vector<DirectClause> &clauses, vector<const DirectClause *> &fixes,
                       vector<const DirectClause *> &others);
 
 //! A value from the row that fixes `x`: it must be neither NULL nor, for a floating point value, NaN; a coefficient

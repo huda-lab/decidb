@@ -27,9 +27,9 @@ class Optimizer;
 // What a rule reads
 //===--------------------------------------------------------------------===//
 //
-// A rule reads the bound DECIDE operator before any DECIDE rewrite (context/docs/direct_solve/architecture/ir.md): the
-// decisions, the keys and each clause's scope are its fields. Two readings are made on demand by the rule that wants
-// them, with the solver path's own term splitter and bound classifier: a clause's left side and the objective as
+// A rule reads the bound DECIDE operator before any DECIDE rewrite (context/docs/direct_solve/architecture/readers.md):
+// the decisions, the keys and each clause's scope are its fields. Two readings are made on demand by the rule that
+// wants them, with the solver path's own term splitter and bound classifier: a clause's left side and the objective as
 // additive parts (DirectReadClauses, DirectReadObjective). Data-valued expressions (coefficients, bounds, `when`
 // conditions) stay DuckDB expressions over the source. A reader returns false for a clause no rule's plan reads.
 
@@ -139,7 +139,7 @@ struct DirectClause {
 	bool Aggregate() const {
 		return clause.shape == CanonicalConstraintClass::AGGREGATE;
 	}
-	//! COMPARE_LESSTHANOREQUALTO ... COMPARE_NOTEQUAL, or COMPARE_IN for a membership `x IN (v, ...)`.
+	//! COMPARE_LESSTHANOREQUALTO ... COMPARE_NOTEQUAL.
 	ExpressionType Comparison() const {
 		return clause.body->type;
 	}

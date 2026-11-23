@@ -55,8 +55,11 @@ public:
 		DirectObjective objective;
 		vector<const DirectClause *> fixes, bounds;
 		if (!DirectIsOneRowDecision(decide, DirectDomain::BOOL) || !DirectReadClauses(context, decide, clauses) ||
-		    !DirectReadObjective(context, decide, objective) || !DirectSplitFixes(clauses, fixes, bounds) ||
-		    bounds.empty()) {
+		    !DirectReadObjective(context, decide, objective)) {
+			return nullptr;
+		}
+		DirectSplitFixes(clauses, fixes, bounds);
+		if (bounds.empty()) {
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();

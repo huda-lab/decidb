@@ -89,8 +89,8 @@ bool DirectReadBounds(const LogicalDecide &decide, const vector<DirectClause> &c
 		}
 		auto &bound = ir_node.bound;
 		idx_t decision = bound.var_idx;
-		// The classifier and the IR read the comparison with the same term splitter: one part of linear terms in the
-		// decision.
+		// The classifier and the clause reader read the comparison with the same term splitter: one part of linear
+		// terms in the decision.
 		D_ASSERT(ir_node.singleton_row && ir_node.lhs.size() == 1);
 		if (!DirectIsSourceOnlyValue(ir_node.Rhs(), decide.decide_index, decide.SourceBindings())) {
 			return false;
@@ -483,15 +483,11 @@ bool DirectIsOneRowDecision(const LogicalDecide &decide, DirectDomain domain) {
 	       decide.bound.variable_scopes[0].scope == DecideVarScope::ROW && decide.bound.keyed_scopes.empty();
 }
 
-bool DirectSplitFixes(const vector<DirectClause> &clauses, vector<const DirectClause *> &fixes,
+void DirectSplitFixes(const vector<DirectClause> &clauses, vector<const DirectClause *> &fixes,
                       vector<const DirectClause *> &others) {
 	for (auto &constraint : clauses) {
-		if (constraint.Comparison() == ExpressionType::COMPARE_IN) {
-			return false;
-		}
 		(DirectFixedTerms(constraint) ? fixes : others).push_back(&constraint);
 	}
-	return true;
 }
 
 //! True when every term's coefficient is a finite constant or a number of the source row (`w`, `w / 2`, `w - 2`), which

@@ -343,7 +343,6 @@ duckdb::vector<Shape> S1DeclineShapes() {
 		decide.bound.keyed_scopes.emplace_back();
 	}));
 	// CheckCondition: the constraints.
-	shapes.push_back(S1("a membership constraint", "SUM(x) <= 2 AND x IN (0, 1)"));
 	shapes.push_back(S1("a count that is not a bound", "SUM(x) <> 1"));
 	shapes.push_back(S1("no count bound, only a fixed value", "x = 1"));
 	// FixedTerms and OnlyDecisionTerms: a per-row clause that is not a fix is read as a count bound, which declines.
@@ -405,8 +404,8 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	shapes.push_back(S1("a count body with a column coefficient", "SUM(w*x) <= 2"));
 	shapes.push_back(S1("a count body that adds up to two", "SUM(2*x) <= 2"));
 	shapes.push_back(S1("a count body that is a square", "SUM(POWER(x, 2)) <= 2"));
-	// The right-hand-side rewrite turns an aggregate on the right into a source column, so the IR holds one only when
-	// the rewrite leaves it.
+	// The right-hand-side rewrite turns an aggregate on the right into a source column, so the clause holds one only
+	// when the rewrite leaves it.
 	shapes.push_back(
 	    S1("a count bound that is an aggregate", "SUM(x) <= 2", [](LogicalDecide &decide, ClientContext &context) {
 		    Rhs(decide, 0) = make_uniq<BoundAggregateExpression>(CountStarFun::GetFunction(),
@@ -497,7 +496,6 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	shapes.push_back(A1("a query-wide decision", "s <= 3", nullptr, "MAXIMIZE s", "per (): s(REAL)"));
 	// CheckCondition: the constraints.
 	shapes.push_back(A1("an aggregate constraint", "SUM(x) <= 5"));
-	shapes.push_back(A1("a membership constraint", "x IN (1, 2)"));
 	shapes.push_back(A1("a not-equal constraint", "x <> 2", nullptr, A1_OBJECTIVE, "x(INT)"));
 	// A constraint that is not a bound on one decision.
 	shapes.push_back(A1("a product of two decisions", "x * y <= 4", nullptr, A1_OBJECTIVE, "x(REAL), y(REAL)"));
@@ -705,7 +703,6 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	shapes.push_back(R1("a per-row constraint that links two decisions",
 	                    "x <= cap AND y <= cap AND x + y <= 4 AND SUM(cap*x + cap*y) <= 5", nullptr,
 	                    "MAXIMIZE SUM(w*x + w*y)", "x(REAL), y(REAL)"));
-	shapes.push_back(R1("a membership constraint", "x IN (1, 2) AND SUM(cap*x) <= 5"));
 	// ProveBudgetScope: every clause of the budget covers the same rows.
 	shapes.push_back(R1("a key on one clause of the budget only", "SUM(cap*x) by (name) >= 1 AND SUM(cap*x) <= 5"));
 	shapes.push_back(R1("another key on the second clause", "SUM(cap*x) by (name) >= 1 AND SUM(cap*x) by (flag) <= 5"));
@@ -941,7 +938,6 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	// ProveLimitClause: the one aggregate clause.
 	shapes.push_back(N1("no aggregate clause", "x >= 0"));
 	shapes.push_back(N1("a per-row square", "POWER(x, 2) <= 9"));
-	shapes.push_back(N1("a per-row clause that is not one row's bound", "x IN (1, 2) AND SUM(POWER(x, 2)) <= 25"));
 	shapes.push_back(N1("two limit clauses", "SUM(POWER(x, 2)) <= 25 AND SUM(POWER(x, 2)) <= 9"));
 	shapes.push_back(N1("a limit from below as well", "SUM(POWER(x, 2)) >= 1 AND SUM(POWER(x, 2)) <= 25"));
 	shapes.push_back(N1("a BETWEEN limit", "SUM(POWER(x, 2)) BETWEEN 1 AND 25"));
@@ -1512,7 +1508,6 @@ duckdb::vector<Shape> S3DeclineShapes() {
 	// ProveConstraints: one budget, compared with `<=`, beside the per-row clauses that fix items.
 	shapes.push_back(S3("a second budget", "SUM(w*x) <= 9 AND SUM(cap*x) <= 9"));
 	shapes.push_back(S3("no budget, a fixed value alone", "x = 1"));
-	shapes.push_back(S3("a membership constraint beside the budget", "SUM(w*x) <= 9 AND x IN (0, 1)"));
 	shapes.push_back(S3("a fixed value no BOOL meets", "SUM(w*x) <= 9 AND x >= 2"));
 	shapes.back().refused = true;
 	shapes.push_back(S3("a fixed value fixed only within the query", "SUM(w*x) <= 9 AND x <= txid_current()"));
@@ -1645,7 +1640,6 @@ duckdb::vector<Shape> S2DeclineShapes() {
 	shapes.push_back(S2("a keyed scope", S2_CHAIN, [](LogicalDecide &decide, ClientContext &context) {
 		decide.bound.keyed_scopes.emplace_back();
 	}));
-	shapes.push_back(S2("a membership constraint", string(S2_CHAIN) + " AND x IN (0, 1)"));
 	shapes.push_back(S2("no count clause, only a fixed value", "x = 1"));
 	shapes.push_back(
 	    S2("a fixed value with an infinite coefficient", string(S2_CHAIN) + " AND CAST('inf' AS DOUBLE) * x <= 1"));
@@ -1779,7 +1773,7 @@ duckdb::vector<Shape> R4DeclineShapes() {
 	                    "x <= cap AND SUM(x) by (name) <= 9", nullptr, R4_OBJECTIVE, "per flag: x(REAL)"));
 	// ProveBudget: the clause.
 	shapes.push_back(R4("no budget clause", "x <= cap"));
-	shapes.push_back(R4("a per-row clause that is not one row's bound", "x IN (1, 2) AND SUM(x) <= 9"));
+	shapes.push_back(R4("a per-row clause that is not one row's bound", "POWER(x, 2) <= 9 AND SUM(x) <= 9"));
 	shapes.push_back(R4("two budget clauses", "x <= cap AND SUM(x) <= 9 AND SUM(2 * x) <= 20"));
 	shapes.push_back(R4("a budget from below", "x <= cap AND SUM(x) >= 1"));
 	shapes.push_back(R4("an equal budget", "x <= cap AND SUM(x) = 9"));
@@ -1857,7 +1851,7 @@ duckdb::vector<RuleShapes> EveryRuleWithItsShapes() {
 	return rows;
 }
 
-// The rules partition the problems they apply to: no two rules apply to one IR. Every rule is run against the
+// The rules partition the problems they apply to: no two rules apply to one query. Every rule is run against the
 // applying shapes of every other rule, so each ordered pair is checked.
 TEST_CASE("Every rule and every other rule never apply to the same query", "[decidb]") {
 	DuckDB db(nullptr);

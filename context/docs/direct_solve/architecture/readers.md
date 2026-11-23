@@ -48,6 +48,7 @@ follow from a gap in a reader. A decline carries no reason: the rule applies or 
 `DirectReadClauses` returns false at the first clause that is one of these:
 
 - a clause the query text holds no place for (no name in a message);
+- a membership (`x IN (...)`), which no rule models;
 - a comparison on a reducer's value, which became a helper decision (the VALUE shape, `BoundDecideClause::shape`);
 - a term that is neither linear nor an ABS, or a term inside an ABS or a square that is not linear;
 - an order-0 norm (it needs indicator variables);

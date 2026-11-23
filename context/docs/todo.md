@@ -10,14 +10,9 @@ Each phase is one architectural change. Phases run in order; groups
 inside a phase run in order; measurement runs fit between phases. `(decision)` marks a task whose **Decision needed**
 the owner rules first.
 
-# Phase 5 — The parser builds the tree
-
-## 5.6 Proof (one lane)
-- [ ] TREE-28 The test pass for the phase — pipeline/todo.md § TREE-28
-
 # Phase 6 — The model is written at the nodes
 
-## 6.1 Design (needs: Phase 5) (one lane)
+## 6.1 Design (one lane)
 - [ ] ARCH-2 Design Phase 6 and file its tasks (decision) — pipeline/todo.md § ARCH-2
 
 # Measurements (outside the phases; confirm each start with the owner)

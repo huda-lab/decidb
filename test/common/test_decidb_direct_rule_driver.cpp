@@ -481,7 +481,7 @@ TEST_CASE("With all three real rules registered each query shape reaches the rul
 		return rule;
 	};
 	// One REAL decision under a SUM budget is R1's, with or without a bound beside it; the same decision without the
-	// budget is A1's; a BOOL count bound is S1's. The three ask for disjoint IR, so none needs to know the others.
+	// budget is A1's; a BOOL count bound is S1's. The three ask for disjoint shapes, so none needs to know the others.
 	REQUIRE(rule_of("SELECT id, x FROM items DECIDE x(REAL) SUCH THAT x <= cap AND SUM(w*x) <= 7 "
 	                "MAXIMIZE SUM(score*x)") == "R1_CONTINUOUS_KNAPSACK");
 	REQUIRE(rule_of("SELECT id, x FROM items DECIDE x(REAL) SUCH THAT SUM(w*x) <= 7 MINIMIZE SUM(score*x)") ==

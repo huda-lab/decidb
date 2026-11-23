@@ -224,10 +224,9 @@ public:
 		    (!read.Aggregate() || !DirectReadKey(decide, clause.scope.class_key, read.classes))) {
 			return false;
 		}
-		// The binder admits only comparisons and IN as a constraint leaf.
-		if (leaf.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
-			D_ASSERT(leaf.type == ExpressionType::COMPARE_IN);
-			return ReadRowPart(*leaf.Cast<BoundOperatorExpression>().children[0], read.lhs);
+		// The binder admits only comparisons and IN as a constraint leaf, and no rule models a membership.
+		if (leaf.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+			return false;
 		}
 		auto &comparison = leaf.Cast<BoundComparisonExpression>();
 		// Direct rules run before the MIN/MAX rewrite marks an easy extremum, so only a per-row bound reads here.

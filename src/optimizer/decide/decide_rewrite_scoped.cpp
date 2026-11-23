@@ -488,11 +488,18 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		// Canonicalization put every decision reducer on the left.
 		auto sites = CollectReducerSites(optimizer.context, booleans, cmp.left);
 		if (!value_shape) {
+			const idx_t reducers = sites.size();
 			sites.erase(
 			    std::remove_if(sites.begin(), sites.end(), [](const ReducerSite &site) { return !site.IsExtremum(); }),
 			    sites.end());
 			if (sites.empty()) {
 				return;
+			}
+			if (sites.size() == reducers) {
+				// Every reducer becomes a helper, one instance per group, so the clause is a row per row that states
+				// that instance against the bound its group read: what bound reduction relied on ends with the
+				// aggregate row (BoundDecideClause::bound_read_shape).
+				clause.bound_read_shape = CanonicalConstraintClass::INVALID;
 			}
 		}
 		// When a direct outer SUM holds a simple, unfiltered nest in the same clause scope, keep the outer aggregate

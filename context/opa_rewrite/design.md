@@ -222,6 +222,9 @@ three steps, where column bindings are final (`plan_decide.cpp:224`):
    | `IsFoldable()` false | `expression.cpp:83` | [read] the default is "all children foldable", so `sum(1)` would read as a constant; DECIDE code asks it |
    | Copy, equality, hash, serialization | `expression.json` | contract 3 |
 
+   The NULL guard is the exception to the third row: it is a Decorator, foldable exactly when the expression it
+   holds is, which is the default.
+
    `BoundDecide` has one `EnumerateExpressions`: decisions, keys, frames, clauses, helper definitions.
    `LogicalDecide`'s adds its own `value_checks`. [read] Four DuckDB passes read it (column
    binding, column pruning, binding replacement, statistics), and the binder's `PlanSubqueries` lists the same
@@ -244,7 +247,9 @@ three steps, where column bindings are final (`plan_decide.cpp:224`):
    One transformation relies on a fact a later pass can change: bound reduction reads the comparison's direction and
    shape before the scoped-reducer pass runs (`decide_rewrite_scoped.cpp:565` states the hazard). It records what it
    relied on, on the clause, and a debug build checks that record after each pass, in the one place every pass runs
-   (`RunPass`, `decide_optimizer.cpp:66`). Nothing else is verified this way.
+   (`RunPass`, `decide_optimizer.cpp:66`). The scoped-reducer pass ends the record on a clause whose every reducer
+   becomes a helper: the helper is one instance per group, so each row states it against the bound its group read.
+   Nothing else is verified this way.
 5. **An error is raised where it is found.** Every node and record carries its query location, so the expression in
    hand has one and nothing is built to supply it.
 

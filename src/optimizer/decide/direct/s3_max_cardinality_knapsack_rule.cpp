@@ -99,7 +99,8 @@ private:
 bool Rule::ProveConstraints(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
                             Condition &condition, const DirectClause *&clause) const {
 	vector<const DirectClause *> fixes, budgets;
-	if (!DirectSplitFixes(clauses, fixes, budgets) || budgets.size() != 1) {
+	DirectSplitFixes(clauses, fixes, budgets);
+	if (budgets.size() != 1) {
 		return false;
 	}
 	clause = budgets[0];
