@@ -8,7 +8,7 @@
 // per-row or keyed decision, under a factor that varies by row, next to a reducer with
 // another `by` key, or inside another expression -- is not one model row per `by` group.
 // Its decision reducers become helper decisions with one instance per `by` group,
-// defined once (LogicalDecide::reducer_value_links; stage 06 emits the definition),
+// defined once (LogicalDecide::helper_definitions; stage 06 emits the definition),
 // except a direct, unfiltered nested SUM whose scope matches its clause. That shape
 // keeps the outer G in the clause and lets its parent read the nested G value directly.
 // Deck example 1, `ship <= 0.20 * sum(ship)`, costs N rows and one helper rather than
@@ -60,11 +60,11 @@ void decide_rewrite::DecideHelperSides(const string &agg_name, ExtremumPush push
 	need_closing = push == ExtremumPush::NONE || !easy;
 }
 
-idx_t decide_rewrite::AddValueHelper(LogicalDecide &decide, LogicalDecide::ReducerValueLink link,
+idx_t decide_rewrite::AddValueHelper(LogicalDecide &decide, unique_ptr<DecideHelperDefinition> link,
                                      const KeyedScopeInfo &scope, bool whole, idx_t source_clause_id,
                                      LogicalDecide::RewriteAccount::Kind account) {
-	const idx_t link_idx = decide.reducer_value_links.size();
-	link.source_clause_id = source_clause_id;
+	const idx_t link_idx = decide.helper_definitions.size();
+	link->origin = DecideRowOrigin::OfClause(source_clause_id);
 	// One instance per class of a scope of its own (KeyedScopeInfo::value_link), which execution builds from the link.
 	KeyedScopeInfo helper_scope = scope;
 	helper_scope.value_link = link_idx;
@@ -73,12 +73,13 @@ idx_t decide_rewrite::AddValueHelper(LogicalDecide &decide, LogicalDecide::Reduc
 	// Whole-numbered when the value is, so a strict bound on a row reading it still steps on the integer lattice.
 	// F6: a diagnosis, and a plan, name the helper by what it holds.
 	LogicalType aux_type = whole ? LogicalType::INTEGER : LogicalType::DOUBLE;
-	link.value_var = AddAuxiliaryDecision(decide, string(VALUE_LINK_NAME_PREFIX) + to_string(link_idx) + "__", aux_type,
-	                                      false, var_scope, link.label);
-	AddRewriteAccount(decide, source_clause_id, account, link.label);
+	const auto name =
+	    string(VALUE_LINK_NAME_PREFIX) + to_string(decide.HelperCount(DecideHelperKind::REDUCER_VALUE)) + "__";
+	link->helper = AddAuxiliaryDecision(decide, name, aux_type, false, var_scope, link->label);
+	AddRewriteAccount(decide, source_clause_id, account, link->label);
 	// A reducer's value may be negative: no default floor. The formulation pass boxes it by its members' reach.
-	decide.signed_helper_vars.push_back(link.value_var);
-	decide.reducer_value_links.push_back(std::move(link));
+	decide.signed_helper_vars.push_back(link->helper);
+	decide.helper_definitions.push_back(std::move(link));
 	return link_idx;
 }
 
@@ -149,7 +150,7 @@ struct Helpers {
 	ClientContext &context;
 	LogicalDecide &decide;
 	vector<unique_ptr<Expression>> reducers; //!< each helper's reducer, as written
-	vector<idx_t> links;                     //!< parallel: its link, into decide.reducer_value_links
+	vector<idx_t> links;                     //!< parallel: its link, into decide.helper_definitions
 
 	//! The class key of a clause: its `per` key, DECIDE_ROW_KEY with no `per`.
 	static idx_t ClassKeyOf(const DecideClauseScope &scope) {
@@ -166,7 +167,7 @@ struct Helpers {
 	           idx_t class_key) const {
 		const idx_t qualifier = agg.per;
 		for (idx_t i = 0; i < reducers.size(); i++) {
-			auto &link = decide.reducer_value_links[links[i]];
+			auto &link = *decide.helper_definitions[links[i]];
 			// A clause's rows carry copies of its `when`: the same condition.
 			const bool same_rows = rows ? link.when && DecideExpressionsEqual(*link.when, *rows) : !link.when;
 			if (DecideExpressionsEqual(*reducers[i], agg) && link.group_key == group_key &&
@@ -255,7 +256,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	                                                           : LogicalDecide::RewriteAccount::Kind::HELPER_PER_GROUP;
 	idx_t link_idx = helpers.Find(agg, rows.get(), group_key, class_key);
 	if (link_idx != DConstants::INVALID_INDEX) {
-		auto &link = decide.reducer_value_links[link_idx];
+		auto &link = *decide.helper_definitions[link_idx];
 		link.need_envelope |= need_envelope;
 		link.need_closing |= need_closing;
 		// Each clause that reads the helper says so in its own plan, once.
@@ -267,33 +268,33 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 		if (!told) {
 			AddRewriteAccount(decide, source_clause_id, account_kind, plan_label);
 		}
-		ReplaceWithDecision(helpers.context, decide, link.value_var, *site.slot);
+		ReplaceWithDecision(helpers.context, decide, link.helper, *site.slot);
 		return;
 	}
 
-	LogicalDecide::ReducerValueLink link;
-	link.agg_name = agg_name;
+	auto link = make_uniq<DecideHelperDefinition>(DecideHelperKind::REDUCER_VALUE);
+	link->agg_name = agg_name;
 	// Its columns are named by the reducer it holds, `by` included: a refusal's remedy bounds that (F6).
-	link.label = plan_label;
-	link.group_key = group_key;
-	link.qualifier_scope_idx = agg.per;
-	link.inner_expr = agg.children[0]->Copy();
+	link->label = plan_label;
+	link->group_key = group_key;
+	link->qualifier_scope_idx = agg.per;
+	link->body = agg.children[0]->Copy();
 	if (agg.filter) {
-		link.filter = agg.filter->Copy();
+		link->filter = agg.filter->Copy();
 	}
-	link.when = std::move(rows);
-	link.class_key = class_key;
-	link.need_envelope = need_envelope;
-	link.need_closing = need_closing;
+	link->when = std::move(rows);
+	link->class_key = class_key;
+	link->need_envelope = need_envelope;
+	link->need_closing = need_closing;
 
 	// The helper decision: one instance per group of its path key among the rows its path keeps -- `by ()`
 	// throughout is one group, or none when no row holds a member.
 	KeyedScopeInfo scope;
-	scope.key = link.group_key;
+	scope.key = group_key;
 	link_idx = AddValueHelper(decide, std::move(link), scope, whole, source_clause_id, account_kind);
 	helpers.reducers.push_back(agg.Copy());
 	helpers.links.push_back(link_idx);
-	ReplaceWithDecision(helpers.context, decide, decide.reducer_value_links[link_idx].value_var, *site.slot);
+	ReplaceWithDecision(helpers.context, decide, decide.helper_definitions[link_idx]->helper, *site.slot);
 }
 
 //! `sum([when c] per K: inner([when c'] e) by (G))` in the objective, `inner` a SUM or AVG with no `per` and no

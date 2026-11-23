@@ -93,7 +93,7 @@ struct KeyedScopeInfo {
 	//! Which decide_variables indices this scope keys
 	vector<idx_t> scoped_variable_indices;
 	//! A helper decision's scope (DecideOptimizer::RewriteScopedReducers): the link into
-	//! `LogicalDecide::reducer_value_links` it holds. Its classes are the groups of
+	//! `LogicalDecide::helper_definitions` it holds. Its classes are the groups of
 	//! `key` -- the link's `by` key -- among the rows the link's clause keeps, so
 	//! execution builds the mapping from the link. INVALID_INDEX for every scope the
 	//! binder creates. Deliberately absent from the serialization: the optimizer creates
@@ -272,6 +272,106 @@ struct DecideSourceColumnName {
 ColumnBinding DecideSourceColumnKey(const LogicalOperator &source, const ColumnBinding &binding,
                                     const vector<DecideSourceColumnName> &named);
 
+//! What a helper definition is: the construct a rewrite kept and gave a helper decision.
+enum class DecideHelperKind : uint8_t {
+	//! `abs(e)` over a decision, kept where it is written (RewriteAbs). The helper stands for |body|; the tree states
+	//! its two lower-envelope rows, `helper >= body` and `helper >= -body` (MakeAbsRow), and stage 06 its encoding.
+	ABS,
+	//! A written product of two forms over decisions, kept where it is written (FindAndReplaceBilinear). `body` is its
+	//! expansion, which the term splitter and the tree read in its place: the product distributed over its factors'
+	//! terms, each product of two decisions with a Boolean factor read as that BOOLEAN_PRODUCT's helper and every other
+	//! one left as a term of degree 2. It has no helper of its own: the expansion is a sum over any number of them.
+	PRODUCT,
+	//! `first_factor * second_factor` of two decisions, one of them Boolean: the helper a PRODUCT's expansion reads,
+	//! linked to its factors by stage 06 (LinearizeBilinear). It has no body: the two decisions are the product.
+	BOOLEAN_PRODUCT,
+	//! The indicator of one counted row of `norm(e, 0)` (RewriteNorm): `links` are its three formulation rows, kept
+	//! beside the clauses so the later rewrites give a nested ABS or product its helper; the first holds the counted
+	//! expression and the rows it is read on.
+	L0_INDICATOR,
+	//! A reducer's nonlinear body, kept where it is written: the helper is `relation` its body on the rows `when`
+	//! keeps, and the tree builds that row beneath the F node (MakeDefinitionRow).
+	DEFINITION,
+	//! A decision reducer of a scoped comparison in the VALUE shape (CanonicalConstraintClass::VALUE), or a range frame
+	//! over decisions, replaced by the helper that holds `agg_name([when filter] [per K']: body) by (G)` over the rows
+	//! `when` keeps: one instance per G group of those rows, or per window of `frame`, defined once by stage 06 -- an
+	//! equality row per group for SUM/AVG, an extremum link per group for MIN/MAX. One per reducer over one set of
+	//! rows, shared by every row that reads it; its definition belongs to no clause (owner ruling B10), so a DROP of a
+	//! reading clause leaves it and DIAGNOSE reads it as part of the fixed model.
+	REDUCER_VALUE,
+};
+
+//! One construct a rewrite kept, with the helper decision that stands for it (LogicalDecide::helper_definitions): the
+//! symbol table's entry, as a compiler's declaration is to the uses that name it. The head is what every kind says;
+//! the rest is each kind's own. An optimized plan is never serialized, so neither is this.
+struct DecideHelperDefinition {
+	explicit DecideHelperDefinition(DecideHelperKind kind) : kind(kind) {
+	}
+
+	DecideHelperKind kind;
+	//! The helper decision, an index into the decisions. INVALID_INDEX for a PRODUCT.
+	idx_t helper = DConstants::INVALID_INDEX;
+	//! What the helper stands for: an ABS's operand (recorded once the bodies are final, RecordAbsOperands), a
+	//! PRODUCT's expansion, a DEFINITION's body, a REDUCER_VALUE's member -- `e` as bound, the ABS and bilinear
+	//! rewrites applied; with a `frame`, the payload at the rows a window reads. Null for a BOOLEAN_PRODUCT and an
+	//! L0_INDICATOR.
+	unique_ptr<Expression> body;
+	//! The rows the construct is read on: the `when` its clause keeps that also passes the `when` of each reducer
+	//! around it. Null for every row.
+	unique_ptr<Expression> when;
+	//! The clause the construct was written in, or the objective, which the rows it makes carry to EXPLAIN and
+	//! diagnostics. A DEFINITION and a REDUCER_VALUE are shared by every clause that reads them and join none of their
+	//! removal groups: they keep the first reader's `source_clause_id` alone (INVALID_INDEX for the objective), which a
+	//! message about them quotes. An L0_INDICATOR's is its links'.
+	DecideRowOrigin origin;
+	//! The construct as a message names it: an ABS as the user wrote it (RenderDecideSource), an indicator's norm, a
+	//! reducer with its `by`.
+	string label;
+
+	//! ABS: true when nothing the clause or the objective pushes pins the helper to |body| (a hard direction, an
+	//! objective sense pushing it up, an unknown sign, an ABS inside another ABS, a body its readers push up):
+	//! FindExactAbs.
+	bool exact = false;
+	//! ABS: the helper's scope (ScopeOf its operand); the rows are stated once per instance of it.
+	DecideVarScopeInfo scope;
+
+	//! BOOLEAN_PRODUCT: the two decisions, in the order written.
+	idx_t first_factor = DConstants::INVALID_INDEX;
+	idx_t second_factor = DConstants::INVALID_INDEX;
+
+	//! L0_INDICATOR: the bound `m` of `|e| <= m * z`, and whether stage 06 fills it from the box.
+	bool auto_m = false;
+	double m = 1.0;
+	vector<BoundDecideClause> links;
+
+	//! DEFINITION: how the helper compares with its body (`=`, `>=` or `<=`).
+	ExpressionType relation = ExpressionType::INVALID;
+
+	//! REDUCER_VALUE: "sum", "avg", "min" or "max".
+	string agg_name;
+	//! REDUCER_VALUE: the reducer's own `when`, or null.
+	unique_ptr<Expression> filter;
+	//! REDUCER_VALUE: its own `per K'`, the key scope whose classes it counts once; INVALID_INDEX for per row.
+	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
+	//! REDUCER_VALUE: its path key (language/guide.md §5.5), into `keys`: every enclosing reducer's `by` key and its
+	//! own; INVALID_INDEX for `by ()` throughout, every kept row.
+	idx_t group_key = DConstants::INVALID_INDEX;
+	//! REDUCER_VALUE: the sides that pin the helper, read from the way the clause pushes it and joined over the rows
+	//! that share it; both when the sign of its factor is not known before the query runs or the comparison is `=` or
+	//! `<>`. MIN/MAX: the extremum link's envelope and closing sides (ExtremumLinkSpec). SUM/AVG: `value >= members`
+	//! (`need_envelope`) and `value <= members` (`need_closing`), the equality when both.
+	bool need_envelope = false;
+	bool need_closing = false;
+	//! REDUCER_VALUE: the clause's `per` key (into `keys`, INVALID_INDEX for `per ()`), DECIDE_ROW_KEY for a clause
+	//! with none.
+	idx_t class_key = DECIDE_ROW_KEY;
+	//! REDUCER_VALUE: a range frame over decisions (index into `frames`; DecideOptimizer::RewriteFrameRanges): the
+	//! helper has one instance per window of the frame, its members `body` at the rows the window reads and, with an
+	//! `else`, its `else` at the window's anchor once per missing position (the O's DecideBody::members and fallback,
+	//! LowerDecideTree). INVALID_INDEX for a reducer, whose groups are its path key's.
+	idx_t frame = DConstants::INVALID_INDEX;
+};
+
 //! One expression the optimizer reads or rewrites, with what its owner says about it (LogicalDecide::EnumerateBodies).
 //! A clause is read one comparison at a time, since a relation pushes the comparison it stands in and not the clause
 //! beside it; every other owner holds one expression.
@@ -279,38 +379,35 @@ struct DecideOwnedBody {
 	enum class Owner : uint8_t {
 		//! A clause of SUCH THAT: a comparison, or the placeholder an earlier rewrite left.
 		CLAUSE,
-		//! The body of a nonlinear reducer's definition (LogicalDecide::definition_functions).
-		DEFINITION,
 		//! The objective.
 		OBJECTIVE,
-		//! The members of a reducer's helper decision (LogicalDecide::reducer_value_links).
-		VALUE_LINK,
-		//! One of the three rows an L0 indicator stands for, a clause as SUCH THAT's is
-		//! (LogicalDecide::l0_indicator_functions).
-		L0_LINK,
+		//! A helper definition (LogicalDecide::helper_definitions): the body of a DEFINITION or a REDUCER_VALUE, or one
+		//! of the three rows of an L0_INDICATOR, a clause as SUCH THAT's is.
+		HELPER,
 	};
 
 	DecideOwnedBody(Owner owner, idx_t index, unique_ptr<Expression> &expr) : owner(owner), index(index), expr(expr) {
 	}
 
 	Owner owner;
-	//! The entry of the owner's container the body belongs to: a definition, a link or an indicator. INVALID_INDEX for
-	//! a clause and the objective.
+	//! The helper definition the body belongs to, an index into LogicalDecide::helper_definitions. INVALID_INDEX for a
+	//! clause and the objective.
 	idx_t index;
 	//! The slot that owns the expression, so a rewrite may replace the expression itself.
 	unique_ptr<Expression> &expr;
 	//! The sign a term of `expr` must carry, read as a sum from sign +1 (the way a comparison reads as `LHS - RHS`), to
 	//! be pushed down by its owner: +1 under `<=`, `<` and the minimized objective, -1 under `>=` and `>`, and 0 when
 	//! nothing is pushed (`=`, `<>`, a leaf that is no comparison). A definition `t >= q` pushes `q` down, `t <= q` up;
-	//! a value link its sides, as the members of its helper are read (ReducerValueLink::need_envelope, need_closing).
+	//! a REDUCER_VALUE its sides, as the members of its helper are read (DecideHelperDefinition::need_envelope,
+	//! need_closing).
 	int push = 0;
 	//! The rows the body is read on: the `when` of its clause, of its definition or its link, which a reducer's own
-	//! `when` in the body narrows further. Null for every row. Borrowed from the clause or the container, or from
-	//! `kept_rows` when the owner keeps two conditions (a link's `when` and its own filter).
+	//! `when` in the body narrows further. Null for every row. Borrowed from the clause or the definition, or from
+	//! `kept_rows` when the owner keeps two conditions (a REDUCER_VALUE's `when` and its own filter).
 	const Expression *rows = nullptr;
 	unique_ptr<Expression> kept_rows;
 	//! The record the body is the body of, with its scope and origin: a clause, the objective or an L0 link. Null for
-	//! a definition and a value link, which hold an expression and no clause.
+	//! a DEFINITION and a REDUCER_VALUE, which hold an expression and no clause.
 	optional_ptr<BoundDecideClause> clause;
 
 	//! The clause the body was written in (the source clause, or the objective), which every row made of it carries on
@@ -442,62 +539,14 @@ public:
 	// Number of auxiliary variables at the end of decide_variables (created by binder and optimizer)
 	idx_t num_auxiliary_vars = 0;
 
-	//! The intact Boolean-product expressions and the plan-time helper allocation needed by stage 05. Executable
-	//! bilinear links are materialized from these specs as BOOLEAN_PRODUCT F nodes in DecideTree.
-	vector<DecideBilinearFunctionGroup> bilinear_function_groups;
-
-	//! The three formulation rows for each L0 indicator, retained as function-owned tree input rather than ordinary
-	//! DECIDE clauses. They stay as expressions through the remaining optimizer passes so nested ABS/products receive
-	//! their usual helpers; stage 06 evaluates the rows from the indicator F node's child scopes.
-	struct L0IndicatorFunction {
-		idx_t value_var = DConstants::INVALID_INDEX;
-		bool auto_m = false;
-		double m = 1.0;
-		string label;
-		vector<BoundDecideClause> links;
-	};
-	vector<L0IndicatorFunction> l0_indicator_functions;
-
-	//! The plan-time helper index, source body and relation for a nonlinear reducer definition. Written reducer bodies
-	//! carry a tag that makes the tree read this F value at their original site; tree construction synthesizes the
-	//! helper's definition row from this untagged source body.
-	struct DefinitionFunction {
-		idx_t value_var = DConstants::INVALID_INDEX;
-		ExpressionType relation = ExpressionType::INVALID;
-		unique_ptr<Expression> body;
-		unique_ptr<Expression> condition;
-		//! The first clause that reads the helper, which a message about its row quotes; INVALID_INDEX for none.
-		idx_t source_clause_id = DConstants::INVALID_INDEX;
-	};
-	vector<DefinitionFunction> definition_functions;
-
-	//! One ABS over a decision, as RewriteAbs records it: the shape and nothing of its encoding. Stage 05 allocates the
-	//! auxiliary and decides whether the exact encoding is needed (FindExactAbs); it emits no row and allocates no
-	//! indicator. The tree gives the ABS an F node and its two lower-envelope rows, `aux >= operand` and `aux >=
-	//! -operand`, read on the rows the ABS is read on (MakeAbsRow); stage 06 states them, and for an exact ABS either
-	//! the backend's `aux = |t|` or a sign indicator with its Big-M rows (EmitAbsEnvelopes, EmitAbsConstraints). The
-	//! ABS is a pseudo-operation that the lowering legalizes or expands.
-	struct AbsFunction {
-		idx_t aux_idx = DConstants::INVALID_INDEX; //!< the helper decision standing for |operand|
-		//! The bound operand. The retained function expression keeps its own copy in the clause; this one is read by
-		//! the F node, which cannot find itself while lowering a clause a rewrite has consumed (an ABS that is a factor
-		//! of a Boolean product).
-		unique_ptr<Expression> operand;
-		//! True when nothing the clause or the objective pushes pins `aux` to |operand| (a hard direction, an objective
-		//! sense pushing it up, an unknown sign, an ABS inside another ABS, a body its readers push up): FindExactAbs.
-		bool exact = false;
-		//! The rows the ABS is read on: the `when` its clause keeps that also passes the `when` of each reducer around
-		//! it. Null for every row.
-		unique_ptr<Expression> when;
-		//! The auxiliary's scope (ScopeOf its operand): the rows are stated once per instance of it.
-		DecideVarScopeInfo scope;
-		//! The clause the ABS was written in (or the objective), which the rows it makes carry to EXPLAIN and
-		//! diagnostics.
-		DecideRowOrigin origin;
-		//! The ABS as the user wrote it (RenderDecideSource), for a message that points at it.
-		string written;
-	};
-	vector<AbsFunction> abs_functions;
+	//! Every construct a rewrite kept, each with its helper decision (DecideHelperDefinition), in the order made:
+	//! innermost first, so a definition reads only helpers of definitions before it -- a range's, made first, and the
+	//! reducers nested in it -- which stage 06's inlining relies on. A kept call's tag, KeyedScopeInfo::value_link and
+	//! DecideOwnedBody::index index it. Each entry is held by pointer: a pass appends a definition while it holds the
+	//! body of another (EnumerateBodies).
+	vector<unique_ptr<DecideHelperDefinition>> helper_definitions;
+	//! The number of definitions of `kind`, which names the next helper of that kind.
+	idx_t HelperCount(DecideHelperKind kind) const;
 
 	//! The helper decisions that hold a value of either sign: a value rewrite's reducer (RewriteScopedReducers), a
 	//! definition function's output, and a product with a non-Boolean factor (AddBooleanProduct). FoldSingletonRows
@@ -512,55 +561,6 @@ public:
 	//! unbounded diagnosis to name an escaping aux column by its source expression
 	//! rather than its internal __abs_aux_N__ name.
 	vector<pair<idx_t, string>> aux_var_expressions;
-
-	//! A decision reducer of a scoped comparison in the VALUE shape
-	//! (CanonicalConstraintClass::VALUE), replaced by the helper decision `value_var`
-	//! that holds `agg([when c'] [per K']: e) by (Γ)` over the rows the clause keeps: one
-	//! instance per Γ group of those rows, defined once by stage 06 -- an equality row per
-	//! group for SUM/AVG, an extremum link per group for MIN/MAX. Produced by
-	//! DecideOptimizer::RewriteScopedReducers; an optimized plan is never serialized.
-	//!
-	//! One link per reducer over one set of rows, shared by every row that reads it: the
-	//! copies an earlier rewrite made (an ABS envelope pair) and every clause holding the
-	//! same reducer. The sides a shared MIN/MAX helper needs are the union of its rows'
-	//! needs. Its definition belongs to no clause (owner ruling B10), so it carries no
-	//! clause provenance: a DROP of a reading clause leaves it, and DIAGNOSE reads it as
-	//! part of the fixed model.
-	struct ReducerValueLink {
-		idx_t value_var = DConstants::INVALID_INDEX;
-		string agg_name; //!< "sum", "avg", "min" or "max"
-		string label;    //!< the reducer as the user wrote it, `by` included, for messages
-		//! The clause that first read it, for a message naming that clause as written (DecideWrittenClause);
-		//! INVALID_INDEX is the objective.
-		idx_t source_clause_id = DConstants::INVALID_INDEX;
-		unique_ptr<Expression> inner_expr; //!< e, as bound; the ABS and bilinear rewrites applied
-		unique_ptr<Expression> filter;     //!< the reducer's own `when`, or null
-		//! Its own `per K'`: the key scope whose classes it counts once; INVALID_INDEX
-		//! for per row.
-		idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
-		//! Its path key (language/guide.md §5.5), into `keys`: every enclosing reducer's `by`
-		//! key and its own; INVALID_INDEX for `by ()` throughout, every kept row.
-		idx_t group_key = DConstants::INVALID_INDEX;
-		//! The rows its path keeps: the clause's `when`, then each enclosing reducer's own; null for every row.
-		unique_ptr<Expression> when;
-		//! The sides that pin the helper, read from the way the clause pushes it; both when the sign of its
-		//! factor is not known before the query runs or the comparison is `=` or `<>`. MIN/MAX: the
-		//! extremum link's envelope and closing sides (ExtremumLinkSpec). SUM/AVG: `value >= members`
-		//! (`need_envelope`) and `value <= members` (`need_closing`), the equality when both.
-		bool need_envelope = false;
-		bool need_closing = false;
-		//! The clause's `per` key (into `keys`, INVALID_INDEX for `per ()`), DECIDE_ROW_KEY for a clause with none.
-		idx_t class_key = DECIDE_ROW_KEY;
-		//! A range frame over decisions (index into `frames`; DecideOptimizer::RewriteFrameRanges): the helper has
-		//! one instance per window of the frame, its members the payload `inner_expr` at the rows the window reads
-		//! and, with an `else`, its `else` at the window's anchor once per missing position (the O's
-		//! DecideBody::members and fallback, LowerDecideTree). INVALID_INDEX for a reducer, whose groups are its path
-		//! key's.
-		idx_t frame = DConstants::INVALID_INDEX;
-	};
-	//! Innermost first: a link reads only helpers of links before it -- a range's, made first, and the reducers
-	//! nested in it -- which stage 06's inlining relies on.
-	vector<ReducerValueLink> reducer_value_links;
 
 	//! What a rewrite made of a construct, for EXPLAIN: the construct as a plan prints it
 	//! (`subject`) and what it became (`kind`), worded by the renderer in one place
@@ -734,17 +734,17 @@ public:
 	//! LogicalOperatorVisitor dispatcher, ColumnBindingResolver, RemoveUnusedColumns)
 	//! call through it instead of each re-listing these fields by hand, so no visitor can miss one.
 	void EnumerateExpressions(const std::function<void(unique_ptr<Expression> *)> &callback);
-	//! Calls back with every body the optimizer's passes read or rewrite: the objective, the clauses, the definitions,
-	//! the value links and the L0 links, in that order (DecideOwnedBody). The order is the one the columns a pass adds
-	//! stand in, which the model dumps pin. The Visitor pattern, as DuckDB's
-	//! `LogicalOperatorVisitor::EnumerateExpressions` gives one: this is the single place that knows which containers
-	//! hold a body and what each says about it, so a pass that reads bodies filters by `owner` in its callback instead
-	//! of looping over the containers itself, and a container that gains a body is added here and in no pass.
+	//! Calls back with every body the optimizer's passes read or rewrite: the objective, the clauses, and each helper
+	//! definition's in the order made (DecideOwnedBody). The order is the one the columns a pass adds stand in, which
+	//! the model dumps pin. The Visitor pattern, as DuckDB's
+	//! `LogicalOperatorVisitor::EnumerateExpressions` gives one: this is the single place that knows what holds
+	//! a body and what each says about it, so a pass that reads bodies filters by `owner` in its callback instead of
+	//! looping over the holders itself, and a kind that gains a body is added here and in no pass.
 	//!
-	//! The callback may replace the expression in `body.expr` and append to `decide_variables` and the other
-	//! containers, but not to the container of the body it was handed. A pass that rewrote the objective hands it back
-	//! through SetObjective once the enumeration is over, and one that rewrote a clause through CanonicalizeClause,
-	//! the canonicalizing boundaries.
+	//! The callback may replace the expression in `body.expr` and append to `decide_variables` and the helper
+	//! definitions; a definition with a body that it appends is visited in its turn. A pass that rewrote the objective
+	//! hands it back through SetObjective once the enumeration is over, and one that rewrote a clause through
+	//! CanonicalizeClause, the canonicalizing boundaries.
 	void EnumerateBodies(const std::function<void(DecideOwnedBody &)> &callback);
 	//! The columns the node's expressions read from its input: the child's, then the placeholders of the bound
 	//! aggregates the path has not built yet (bound_aggregates).

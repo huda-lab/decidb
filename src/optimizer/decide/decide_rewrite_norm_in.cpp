@@ -98,11 +98,11 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		    auto z_scope = ScopeOf(decide, canonicalizer, *aggregate.children[0]);
 		    const idx_t z_idx = AddAuxiliaryDecision(decide, z_name, LogicalType::INTEGER, true, z_scope,
 		                                             "(" + RenderForPlan(*aggregate.children[0], decide) + " <> 0)");
-		    LogicalDecide::L0IndicatorFunction indicator;
-		    indicator.value_var = z_idx;
-		    indicator.auto_m = auto_m;
-		    indicator.m = m;
-		    indicator.label = RenderForPlan(aggregate, decide);
+		    auto indicator = make_uniq<DecideHelperDefinition>(DecideHelperKind::L0_INDICATOR);
+		    indicator->helper = z_idx;
+		    indicator->auto_m = auto_m;
+		    indicator->m = m;
+		    indicator->label = RenderForPlan(aggregate, decide);
 		    auto z = MakeDecisionRef(decide, z_idx);
 		    AddRewriteAccount(decide, origin.source_clause_id, LogicalDecide::RewriteAccount::Kind::HELPER_PER_ROW,
 		                      RenderForPlan(aggregate, decide));
@@ -117,7 +117,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 			    auto link = MakeFormulationRow(std::move(comparison), origin, z_idx, role);
 			    link.scope.when = when ? when->Copy() : nullptr;
 			    ScopeRowPerInstance(decide, link, z_scope);
-			    indicator.links.push_back(std::move(link));
+			    indicator->links.push_back(std::move(link));
 		    };
 		    add_link(DecideHelperRow::L0_BOUND, make_mz(), aggregate.children[0]->Copy());
 		    add_link(DecideHelperRow::L0_BOUND, make_mz(),
@@ -135,7 +135,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		    count->Cast<BoundDecideReducerExpression>().norm = DecideNorm();
 		    expr = std::move(count);
 		    lowered = true;
-		    decide.l0_indicator_functions.push_back(std::move(indicator));
+		    decide.helper_definitions.push_back(std::move(indicator));
 	    };
 
 	// Lowering swaps a marker for a `SUM` of indicators under the factor the canonicalizer peeled, so each clause is

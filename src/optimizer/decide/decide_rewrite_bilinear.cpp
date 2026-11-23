@@ -44,8 +44,8 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 // ---------------------------------------------------------------------------
 
 bool decide_rewrite::BilinearReadsBody(const LogicalDecide &decide, const DecideOwnedBody &body) {
-	return body.owner != DecideOwnedBody::Owner::VALUE_LINK ||
-	       decide.reducer_value_links[body.index].frame == DConstants::INVALID_INDEX;
+	return body.owner != DecideOwnedBody::Owner::HELPER ||
+	       decide.helper_definitions[body.index]->frame == DConstants::INVALID_INDEX;
 }
 
 void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {
@@ -144,8 +144,7 @@ bool AffineFromTerms(Optimizer &optimizer, vector<DecideSplitTerm> &terms, const
 //! The auxiliary `w = first * second` for two decisions, one of them Boolean (`first` and `second` are in the order
 //! the user wrote them): AND for two Booleans, else the McCormick link whose rows stage 06 emits against the other
 //! factor's box. Returns the auxiliary's decision index.
-idx_t AddBooleanProduct(LogicalDecide &decide, DecideBilinearFunctionGroup &group, const DecideRowOrigin &origin,
-                        idx_t first, idx_t second) {
+idx_t AddBooleanProduct(LogicalDecide &decide, const DecideRowOrigin &origin, idx_t first, idx_t second) {
 	auto is_bool = [&](idx_t var) {
 		return decide.bound.is_boolean_var[var];
 	};
@@ -184,12 +183,12 @@ idx_t AddBooleanProduct(LogicalDecide &decide, DecideBilinearFunctionGroup &grou
 	// there: the McCormick rows against the other factor's box (the structural `w <= x` is not emitted here, being
 	// wrong for a negative-domain x: it would force x >= 0 when b = 0), and for two Booleans the AND (`w <= b1`,
 	// `w <= b2`, `w >= b1 + b2 - 1`).
-	DecideBilinearFunctionProduct product;
-	product.aux_idx = aux_idx;
-	product.first_var_idx = first;
-	product.second_var_idx = second;
-	product.origin = origin;
-	group.products.push_back(product);
+	auto product = make_uniq<DecideHelperDefinition>(DecideHelperKind::BOOLEAN_PRODUCT);
+	product->helper = aux_idx;
+	product->first_factor = first;
+	product->second_factor = second;
+	product->origin = origin;
+	decide.helper_definitions.push_back(std::move(product));
 	return aux_idx;
 }
 
@@ -202,11 +201,11 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 	}
 	idx_t definition_aux;
 	if (TryParseDecideIndexTag(expr->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
-		return; // its source body is compiled from DefinitionFunction metadata, exactly once
+		return; // its source body is compiled from its definition, exactly once
 	}
 	idx_t existing_group;
 	if (TryParseDecideIndexTag(expr->GetAlias(), BILINEAR_FUNCTION_GROUP_TAG_PREFIX, existing_group)) {
-		if (existing_group >= decide.bilinear_function_groups.size()) {
+		if (existing_group >= decide.helper_definitions.size()) {
 			throw InternalException("DECIDE bilinear function group %llu is missing", existing_group);
 		}
 		return;
@@ -306,7 +305,6 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					scale = MultiplyCoefficients(optimizer, std::move(scale), factor.base->Copy());
 				}
 				unique_ptr<Expression> sum;
-				DecideBilinearFunctionGroup group;
 				for (auto &term : product) {
 					unique_ptr<Expression> factor;
 					if (term.first == DConstants::INVALID_INDEX) {
@@ -314,7 +312,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					} else if (term.second == DConstants::INVALID_INDEX) {
 						factor = column(term.first);
 					} else if (is_bool(term.first) || is_bool(term.second)) {
-						factor = column(AddBooleanProduct(decide, group, origin, term.first, term.second));
+						factor = column(AddBooleanProduct(decide, origin, term.first, term.second));
 					} else {
 						// Two decisions, neither Boolean: the Q matrix's.
 						factor = optimizer.BindScalarFunction("*", column(term.first), column(term.second));
@@ -327,12 +325,12 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 				// Keep the product the user wrote. The copied expansion is the term splitter's recipe; every
 				// Boolean cross term in it names a helper that tree lowering turns into a BOOLEAN_PRODUCT F read.
 				// If there is no Boolean cross term, the expansion still exposes the distributed quadratic terms.
-				group.expansion = std::move(sum);
-				const auto group_idx = decide.bilinear_function_groups.size();
+				auto kept = make_uniq<DecideHelperDefinition>(DecideHelperKind::PRODUCT);
+				kept->body = std::move(sum);
 				auto alias = expr->GetAlias();
-				AddDecideTag(alias, MakeBilinearFunctionGroupTag(group_idx));
+				AddDecideTag(alias, MakeBilinearFunctionGroupTag(decide.helper_definitions.size()));
 				expr->SetAlias(std::move(alias));
-				decide.bilinear_function_groups.push_back(std::move(group));
+				decide.helper_definitions.push_back(std::move(kept));
 				return;
 			}
 		}

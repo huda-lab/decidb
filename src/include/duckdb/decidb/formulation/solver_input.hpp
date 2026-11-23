@@ -375,7 +375,7 @@ struct BilinearLinkSpec {
 	DecideRowOrigin origin;
 };
 
-//! One ABS, as stage 05 recorded it (LogicalDecide::AbsFunction) and the emitter evaluated it. Stage 05 picks the
+//! One ABS, as stage 05 recorded it (DecideHelperKind::ABS) and the emitter evaluated it. Stage 05 picks the
 //! shape (the auxiliary, its operand, whether the exact encoding is needed); this stage picks the encoding: every row
 //! is emitted here, as a legalization pass emits what a target cannot state natively (LLVM's legalize: the ABS is a
 //! pseudo-operation, the target either has it or has it expanded).
@@ -443,7 +443,7 @@ struct ReducerValueMembers {
 	}
 };
 
-//! A helper decision of the value rewrite (LogicalDecide::ReducerValueLink), evaluated: its members per group, each a
+//! A helper decision of the value rewrite (DecideHelperKind::REDUCER_VALUE), evaluated: its members per group, each a
 //! linear expression over decisions read at rows (an AVG's carry its 1/n) -- a `by` group's rows, or what a range
 //! frame's window reads. A SUM or AVG helper is defined by one row per group over the members and the helper's own
 //! term, on the sides the clauses push it against: `value >= members` (`need_envelope`), `value <= members`

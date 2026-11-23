@@ -184,7 +184,7 @@ struct DecideNode {
 	DecideDefinitionRelation definition_relation = DecideDefinitionRelation::INVALID;
 	//! Set on the structural clause root owned by a definition F node.
 	idx_t definition_function_owner = DConstants::INVALID_INDEX;
-	//! An ABS F node's record from RewriteAbs (LogicalDecide::AbsFunction): whether its exact encoding is needed. Stage
+	//! An ABS F node's record from RewriteAbs (DecideHelperKind::ABS): whether its exact encoding is needed. Stage
 	//! 06 chooses the encoding, so the node holds no indicator.
 	bool abs_exact = false;
 	//! An ABS F node's call as the user wrote it, which a message about its value points at.

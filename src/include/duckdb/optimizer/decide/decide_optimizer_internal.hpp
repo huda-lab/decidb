@@ -67,12 +67,12 @@ void ScopeRowPerClause(ClientContext &context, LogicalDecide &decide, BoundDecid
 //! columns of `scope` is the same on every row of an instance. A row that has its clause's `per` keeps it.
 void ScopeRowPerInstance(const LogicalDecide &decide, BoundDecideClause &row, const DecideVarScopeInfo &scope);
 
-//! A lower-envelope row the tree states for a recorded ABS (LogicalDecide::AbsFunction), under its F node: `aux >=
+//! A lower-envelope row the tree states for a recorded ABS (DecideHelperKind::ABS), under its F node: `aux >=
 //! operand`, or `aux >= -operand` when `negated`, on the rows the ABS is read on, once per instance of the auxiliary's
 //! scope, attributed to the clause the ABS was written in. The emitter evaluates each per row, and stage 06 states
 //! every row of the ABS from them (EmitAbsEnvelopes, EmitAbsConstraints).
 BoundDecideClause MakeAbsRow(ClientContext &context, const LogicalDecide &decide,
-                             const LogicalDecide::AbsFunction &function, bool negated);
+                             const DecideHelperDefinition &function, bool negated);
 
 //! What the way down to a node passed through, besides the sign it carries (WalkPolarity).
 struct PolarityPath {
@@ -159,15 +159,15 @@ void AddRewriteAccount(LogicalDecide &decide, idx_t source_clause_id, LogicalDec
 
 //! The sides a helper decision holding `agg_name` (a reducer, or a range frame's reducer) pushed `push` needs: its
 //! envelope (`value >= members` for SUM, AVG and MAX, the extremum link's envelope) when pushed its cheap way, its
-//! closing side the other way, both under NONE (ReducerValueLink::need_envelope, need_closing).
+//! closing side the other way, both under NONE (DecideHelperDefinition::need_envelope, need_closing).
 void DecideHelperSides(const string &agg_name, ExtremumPush push, bool &need_envelope, bool &need_closing);
 
-//! The helper decision holding `link`'s value, appended to the plan's (LogicalDecide::reducer_value_links), its floor
+//! The helper decision holding `link`'s value, appended to the plan's (LogicalDecide::helper_definitions), its floor
 //! free: whole-numbered when `whole`; one instance per class of `scope` -- a copy of which becomes the helper's own,
 //! naming the link; a `by ()` key is one class, or none when no row holds a member, so a read of it skips its
-//! instance (D68) --; named by `link.label` in a plan and a diagnosis, and under `account` in EXPLAIN for the clause
+//! instance (D68) --; named by `link->label` in a plan and a diagnosis, and under `account` in EXPLAIN for the clause
 //! `source_clause_id`. Returns the link's index.
-idx_t AddValueHelper(LogicalDecide &decide, LogicalDecide::ReducerValueLink link, const KeyedScopeInfo &scope,
+idx_t AddValueHelper(LogicalDecide &decide, unique_ptr<DecideHelperDefinition> link, const KeyedScopeInfo &scope,
                      bool whole, idx_t source_clause_id, LogicalDecide::RewriteAccount::Kind account);
 
 } // namespace decide_rewrite

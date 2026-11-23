@@ -163,7 +163,7 @@ public:
 			}
 			tree->keys.push_back(std::move(copy));
 		}
-		link_nodes.assign(op.reducer_value_links.size(), DConstants::INVALID_INDEX);
+		definition_nodes.assign(op.helper_definitions.size(), DConstants::INVALID_INDEX);
 		frame_nodes.assign(op.bound.frames.size(), DConstants::INVALID_INDEX);
 		record_nodes.assign(op.bound_aggregates.size(), DConstants::INVALID_INDEX);
 		tree->frame_aggregate_nodes.assign(op.frame_aggregates.size(), DConstants::INVALID_INDEX);
@@ -171,14 +171,8 @@ public:
 
 	//! The nodes, their edges, sigma, gates and definitions, before stage 05 lowers the clauses.
 	void Structure() {
-		// Register definition F nodes before lowering any other function body: an ABS or product written inside a
-		// nonlinear reducer body reads that F node. Its own body is lowered only after ABS, product and L0 nodes have
-		// been registered, so the reverse dependency resolves too.
-		RegisterDefinitionFunctions();
-		PrepareBilinearFunctions();
-		PrepareAbsFunctions();
-		PrepareL0IndicatorFunctions();
-		LowerDefinitionFunctionBodies();
+		RegisterHelperDefinitions();
+		LowerHelperDefinitions();
 		for (auto &check : op.value_checks) {
 			auto index = NewNode(DecideNodeKind::SCOPE);
 			auto &node = *tree->nodes[index];
@@ -206,21 +200,18 @@ public:
 				Root(tree->nodes[*function]->definition_row);
 			}
 		}
-		// RewriteNorm used to append these structural link rows after every written constraint. Preserve that order
-		// while keeping the rows as children of their L0 indicator F nodes in the tree.
-		for (auto &indicator : op.l0_indicator_functions) {
-			for (auto &link : indicator.links) {
+		// The rows a helper definition owns follow every written constraint, in the order the definitions were made
+		// (an indicator's by RewriteNorm, before every ABS), as children of their F nodes: an L0 indicator's three
+		// links and an ABS's two envelope rows.
+		for (idx_t i = 0; i < op.helper_definitions.size(); i++) {
+			auto &definition = *op.helper_definitions[i];
+			for (auto &link : definition.links) {
 				Root(link);
 			}
-		}
-		for (auto &function : op.abs_functions) {
-			auto node = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(),
-			                         [&](idx_t index) { return tree->nodes[index]->value_var == function.aux_idx; });
-			if (node == tree->function_nodes.end()) {
-				throw InternalException("DECIDE tree: ABS helper %llu has no function node", function.aux_idx);
-			}
-			for (auto &row : tree->nodes[*node]->abs_rows) {
-				Root(row);
+			if (definition.kind == DecideHelperKind::ABS) {
+				for (auto &row : tree->nodes[definition_nodes[i]]->abs_rows) {
+					Root(row);
+				}
 			}
 		}
 		if (op.bound.objective.body) {
@@ -239,8 +230,9 @@ public:
 		}
 		// A helper or data check can outlive the reading clause (D88). Preserve
 		// that definition as an explicit root rather than relying on registry order.
-		for (idx_t i = 0; i < op.reducer_value_links.size(); i++) {
-			if (link_nodes[i] == DConstants::INVALID_INDEX) {
+		for (idx_t i = 0; i < op.helper_definitions.size(); i++) {
+			if (op.helper_definitions[i]->kind == DecideHelperKind::REDUCER_VALUE &&
+			    definition_nodes[i] == DConstants::INVALID_INDEX) {
 				AddOrphan(Link(i));
 			}
 		}
@@ -253,294 +245,175 @@ public:
 		Definitions();
 	}
 
-	//! Create ABS F nodes before lowering clauses, so retained function expressions can read their nodes even when
-	//! the envelope rows occur later in source order. The optimizer records each ABS (LogicalDecide::AbsFunction) and
-	//! this tree builds the two rows beneath its F node, as it does for a definition (MakeDefinitionExpression).
-	void PrepareAbsFunctions() {
-		for (auto &function : op.abs_functions) {
-			auto index = AbsFunctionNode(function.aux_idx, function.origin.source_clause_id);
-			auto &node = *tree->nodes[index];
-			node.abs_exact = function.exact;
-			node.abs_written = function.written;
-			node.abs_rows[0] = decide_rewrite::MakeAbsRow(context, op, function, false);
-			node.abs_rows[1] = decide_rewrite::MakeAbsRow(context, op, function, true);
-		}
-		for (auto &function : op.abs_functions) {
-			auto found = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(),
-			                          [&](idx_t index) { return tree->nodes[index]->value_var == function.aux_idx; });
-			auto &node = *tree->nodes[*found];
-			if (!node.body) {
-				node.body = Lower(*found, *function.operand);
+	//! Gives each helper definition its F node, in the order made, before any body is lowered (declare, then define):
+	//! a body reads the F node of whichever helper it names, an ABS or a product inside a nonlinear reducer body as
+	//! much as a definition inside an ABS. A PRODUCT is read where it is kept and a REDUCER_VALUE gets its G where it
+	//! is first read (Link); neither has an F node.
+	void RegisterHelperDefinitions() {
+		for (idx_t i = 0; i < op.helper_definitions.size(); i++) {
+			auto &definition = *op.helper_definitions[i];
+			switch (definition.kind) {
+			case DecideHelperKind::ABS: {
+				// The optimizer records the ABS; the tree builds its two rows beneath the F node, as it does a
+				// definition's.
+				auto &node = FunctionNode(i, DecideFunctionKind::ABS);
+				node.origin.source_clause_id = definition.origin.source_clause_id;
+				node.abs_exact = definition.exact;
+				node.abs_written = definition.label;
+				node.abs_rows[0] = decide_rewrite::MakeAbsRow(context, op, definition, false);
+				node.abs_rows[1] = decide_rewrite::MakeAbsRow(context, op, definition, true);
+				break;
 			}
-		}
-		// All F nodes exist now, so gates can themselves resolve nested ABS function reads.
-		for (auto &function : op.abs_functions) {
-			auto found = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(),
-			                          [&](idx_t index) { return tree->nodes[index]->value_var == function.aux_idx; });
-			Gates(*found, function.when.get());
-		}
-	}
-
-	//! Each optimizer-allocated Boolean product becomes a rooted F node. The function's body names its two decision
-	//! factors; tree-owned BilinearLinkSpec records are handed to stage 06 by way of these nodes.
-	void PrepareBilinearFunctions() {
-		for (auto &group : op.bilinear_function_groups) {
-			for (auto &product : group.products) {
-				if (product.aux_idx >= op.bound.variables.size() ||
-				    product.first_var_idx >= op.bound.variables.size() ||
-				    product.second_var_idx >= op.bound.variables.size()) {
+			case DecideHelperKind::BOOLEAN_PRODUCT: {
+				// The function's body names its two factors; the tree-owned BilinearLinkSpec records are handed to
+				// stage 06 by way of these nodes.
+				const auto first = definition.first_factor;
+				const auto second = definition.second_factor;
+				if (first >= op.bound.is_boolean_var.size() || second >= op.bound.is_boolean_var.size()) {
 					throw InternalException("DECIDE tree: bilinear function references an invalid decision");
 				}
-				const auto is_boolean = [&](idx_t var) {
-					return var < op.bound.is_boolean_var.size() && op.bound.is_boolean_var[var];
-				};
-				const auto bool_var =
-				    is_boolean(product.first_var_idx) ? product.first_var_idx : product.second_var_idx;
-				const auto other_var =
-				    bool_var == product.first_var_idx ? product.second_var_idx : product.first_var_idx;
+				auto &node = FunctionNode(i, DecideFunctionKind::BOOLEAN_PRODUCT);
+				node.product_bool_var = op.bound.is_boolean_var[first] ? first : second;
+				node.product_other_var = op.bound.is_boolean_var[first] ? second : first;
+				node.origin = definition.origin;
+				break;
+			}
+			case DecideHelperKind::L0_INDICATOR: {
+				if (definition.links.size() != 3) {
+					throw InternalException("DECIDE tree: malformed L0 indicator function");
+				}
+				auto &node = FunctionNode(i, DecideFunctionKind::L0_INDICATOR);
+				node.l0_auto_m = definition.auto_m;
+				node.l0_m = definition.m;
+				node.text = definition.label;
+				node.origin = definition.links[0].origin;
+				break;
+			}
+			case DecideHelperKind::DEFINITION: {
+				// The row stands beneath the F node, at the placeholder's clause position.
+				auto &node = FunctionNode(i, DecideFunctionKind::DEFINITION);
+				node.definition_relation = definition.relation == ExpressionType::COMPARE_EQUAL
+				                               ? DecideDefinitionRelation::EQUAL
+				                           : definition.relation == ExpressionType::COMPARE_GREATERTHANOREQUALTO
+				                               ? DecideDefinitionRelation::AT_LEAST
+				                           : definition.relation == ExpressionType::COMPARE_LESSTHANOREQUALTO
+				                               ? DecideDefinitionRelation::AT_MOST
+				                               : DecideDefinitionRelation::INVALID;
+				if (node.definition_relation == DecideDefinitionRelation::INVALID) {
+					throw InternalException("DECIDE tree: nonlinear body definition has an unsupported comparison");
+				}
+				Gates(definition_nodes[i], definition.when.get());
+				node.definition_row = MakeDefinitionRow(definition);
+				break;
+			}
+			case DecideHelperKind::PRODUCT:
+			case DecideHelperKind::REDUCER_VALUE:
+				break;
+			}
+		}
+	}
 
-				auto index = NewNode(DecideNodeKind::FUNCTION);
+	//! Lowers each F node's body and the rows it is read on, once every F node exists.
+	void LowerHelperDefinitions() {
+		for (idx_t i = 0; i < op.helper_definitions.size(); i++) {
+			auto &definition = *op.helper_definitions[i];
+			const auto index = definition_nodes[i];
+			switch (definition.kind) {
+			case DecideHelperKind::ABS:
+				tree->nodes[index]->body = Lower(index, *definition.body);
+				Gates(index, definition.when.get());
+				break;
+			case DecideHelperKind::BOOLEAN_PRODUCT: {
 				auto &node = *tree->nodes[index];
-				node.function_kind = DecideFunctionKind::BOOLEAN_PRODUCT;
-				node.product_bool_var = bool_var;
-				node.product_other_var = other_var;
-				node.root = node.hidden = node.decision_value = true;
-				node.value_var = node.defined_var = product.aux_idx;
-				node.origin = product.origin;
-				auto label = std::find_if(op.aux_var_expressions.begin(), op.aux_var_expressions.end(),
-				                          [&](const auto &entry) { return entry.first == product.aux_idx; });
-				node.text = label == op.aux_var_expressions.end()
-				                ? "Boolean product helper " + std::to_string(product.aux_idx)
-				                : label->second;
-				if (product.aux_idx < tree->variable_scopes.size()) {
-					auto &variable_scope = tree->variable_scopes[product.aux_idx];
-					if (variable_scope.IsKeyed() || variable_scope.scope == DecideVarScope::INLINED) {
-						if (variable_scope.keyed_scope_idx >= op.bound.keyed_scopes.size()) {
-							if (variable_scope.scope != DecideVarScope::INLINED ||
-							    variable_scope.keyed_scope_idx != DConstants::INVALID_INDEX) {
-								throw InternalException("DECIDE tree: product helper %llu has an invalid keyed scope",
-								                        product.aux_idx);
-							}
-						} else {
-							node.per = DecideTreePer::KEY;
-							node.key = op.bound.keyed_scopes[variable_scope.keyed_scope_idx].key;
-						}
-					} else if (variable_scope.IsGlobal()) {
-						node.per = DecideTreePer::ONE;
-					}
-				}
-				tree->function_nodes.push_back(index);
-				tree->roots.push_back(index);
+				vector<unique_ptr<Expression>> children;
+				children.push_back(op.bound.variables[node.product_bool_var]->Copy());
+				children.push_back(op.bound.variables[node.product_other_var]->Copy());
+				auto body = DecideRebindOperator(context, "*", std::move(children));
+				node.body = Lower(index, *body);
+				break;
 			}
-		}
-
-		// Register every product F before lowering any product body, so a nested helper can be read if a later rewrite
-		// made one product's factor another product's auxiliary.
-		for (auto function : tree->function_nodes) {
-			auto &node = *tree->nodes[function];
-			if (node.function_kind != DecideFunctionKind::BOOLEAN_PRODUCT) {
-				continue;
+			case DecideHelperKind::L0_INDICATOR: {
+				// The first link holds the counted expression and the rows it is read on.
+				auto &first_link = definition.links[0];
+				Gates(index, first_link.scope.when.get());
+				tree->nodes[index]->body = Lower(index, *first_link.body->Cast<BoundComparisonExpression>().right);
+				break;
 			}
-			vector<unique_ptr<Expression>> children;
-			children.push_back(op.bound.variables[node.product_bool_var]->Copy());
-			children.push_back(op.bound.variables[node.product_other_var]->Copy());
-			auto body = DecideRebindOperator(context, "*", std::move(children));
-			node.body = Lower(function, *body);
-		}
-	}
-
-	//! Each L0 indicator's three structural links are owned by its F node. The links remain optimizer metadata so
-	//! stage-05 rewrites can prepare nested ABS and product functions; stage 06 evaluates them as child roots.
-	void PrepareL0IndicatorFunctions() {
-		for (auto &indicator : op.l0_indicator_functions) {
-			if (indicator.value_var >= op.bound.variables.size() || indicator.links.size() != 3) {
-				throw InternalException("DECIDE tree: malformed L0 indicator function");
+			case DecideHelperKind::DEFINITION:
+				tree->nodes[index]->body = Lower(index, *definition.body);
+				break;
+			case DecideHelperKind::PRODUCT:
+			case DecideHelperKind::REDUCER_VALUE:
+				break;
 			}
-			auto index = NewNode(DecideNodeKind::FUNCTION);
-			auto &node = *tree->nodes[index];
-			node.function_kind = DecideFunctionKind::L0_INDICATOR;
-			node.root = node.hidden = node.decision_value = true;
-			node.value_var = node.defined_var = indicator.value_var;
-			node.l0_auto_m = indicator.auto_m;
-			node.l0_m = indicator.m;
-			node.text = indicator.label;
-			if (indicator.value_var < tree->variable_scopes.size()) {
-				auto &variable_scope = tree->variable_scopes[indicator.value_var];
-				if (variable_scope.IsKeyed() || variable_scope.scope == DecideVarScope::INLINED) {
-					if (variable_scope.keyed_scope_idx >= op.bound.keyed_scopes.size()) {
-						if (variable_scope.scope != DecideVarScope::INLINED ||
-						    variable_scope.keyed_scope_idx != DConstants::INVALID_INDEX) {
-							throw InternalException("DECIDE tree: L0 indicator %llu has an invalid keyed scope",
-							                        indicator.value_var);
-						}
-					} else {
-						node.per = DecideTreePer::KEY;
-						node.key = op.bound.keyed_scopes[variable_scope.keyed_scope_idx].key;
-					}
-				} else if (variable_scope.IsGlobal()) {
-					node.per = DecideTreePer::ONE;
-				}
-			}
-			node.origin = indicator.links[0].origin;
-			tree->function_nodes.push_back(index);
-			tree->roots.push_back(index);
-		}
-
-		// Register every indicator before lowering its operand, so nested ABS/product references can resolve.
-		for (auto &indicator : op.l0_indicator_functions) {
-			auto function = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(), [&](idx_t index) {
-				return tree->nodes[index]->function_kind == DecideFunctionKind::L0_INDICATOR &&
-				       tree->nodes[index]->value_var == indicator.value_var;
-			});
-			if (function == tree->function_nodes.end()) {
-				throw InternalException("DECIDE tree: L0 indicator %llu has no function node", indicator.value_var);
-			}
-			auto &first_link = indicator.links[0];
-			const Expression *operand = first_link.body->Cast<BoundComparisonExpression>().right.get();
-			const Expression *condition = first_link.scope.when.get();
-			auto &node = *tree->nodes[*function];
-			Gates(*function, condition);
-			node.body = Lower(*function, *operand);
-		}
-	}
-
-	//! A nonlinear reducer body's helper and structural definition row form an F node. The optimizer retains the body
-	//! and relation; this tree constructs the row beneath the F node at the placeholder's original clause position.
-	void RegisterDefinitionFunctions() {
-		for (auto &definition : op.definition_functions) {
-			const auto value_var = definition.value_var;
-			if (value_var >= op.bound.variables.size() || !definition.body) {
-				throw InternalException("DECIDE tree: nonlinear body definition has no valid helper or source body");
-			}
-			auto index = NewNode(DecideNodeKind::FUNCTION);
-			auto &node = *tree->nodes[index];
-			node.function_kind = DecideFunctionKind::DEFINITION;
-			node.root = node.hidden = node.decision_value = true;
-			node.value_var = node.defined_var = value_var;
-			auto label = std::find_if(op.aux_var_expressions.begin(), op.aux_var_expressions.end(),
-			                          [&](const auto &entry) { return entry.first == value_var; });
-			node.text = label == op.aux_var_expressions.end() ? "nonlinear body helper " + std::to_string(value_var)
-			                                                  : label->second;
-			node.definition_relation =
-			    definition.relation == ExpressionType::COMPARE_EQUAL ? DecideDefinitionRelation::EQUAL
-			    : definition.relation == ExpressionType::COMPARE_GREATERTHANOREQUALTO
-			        ? DecideDefinitionRelation::AT_LEAST
-			    : definition.relation == ExpressionType::COMPARE_LESSTHANOREQUALTO ? DecideDefinitionRelation::AT_MOST
-			                                                                       : DecideDefinitionRelation::INVALID;
-			if (node.definition_relation == DecideDefinitionRelation::INVALID) {
-				throw InternalException("DECIDE tree: nonlinear body definition has an unsupported comparison");
-			}
-			if (value_var < tree->variable_scopes.size()) {
-				auto &variable_scope = tree->variable_scopes[value_var];
-				if (variable_scope.IsKeyed() || variable_scope.scope == DecideVarScope::INLINED) {
-					if (variable_scope.keyed_scope_idx >= op.bound.keyed_scopes.size()) {
-						if (variable_scope.scope != DecideVarScope::INLINED ||
-						    variable_scope.keyed_scope_idx != DConstants::INVALID_INDEX) {
-							throw InternalException("DECIDE tree: body helper %llu has an invalid keyed scope",
-							                        value_var);
-						}
-					} else {
-						node.per = DecideTreePer::KEY;
-						node.key = op.bound.keyed_scopes[variable_scope.keyed_scope_idx].key;
-					}
-				} else if (variable_scope.IsGlobal()) {
-					node.per = DecideTreePer::ONE;
-				}
-			}
-			Gates(index, definition.condition.get());
-			node.definition_row = MakeDefinitionRow(definition);
-			tree->function_nodes.push_back(index);
-			tree->roots.push_back(index);
-		}
-	}
-
-	//! Lower definition bodies after all F nodes exist, allowing definitions to read nested ABS, product, L0 and
-	//! definition values through the tree.
-	void LowerDefinitionFunctionBodies() {
-		for (auto &definition : op.definition_functions) {
-			auto function = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(), [&](idx_t index) {
-				return tree->nodes[index]->function_kind == DecideFunctionKind::DEFINITION &&
-				       tree->nodes[index]->value_var == definition.value_var;
-			});
-			if (function == tree->function_nodes.end()) {
-				throw InternalException("DECIDE tree: nonlinear body helper %llu has no function node",
-				                        definition.value_var);
-			}
-			auto &node = *tree->nodes[*function];
-			node.body = Lower(*function, *definition.body);
 		}
 	}
 
 	//! The row that defines a definition's helper from its body, on the rows its condition keeps, one per instance of
 	//! the helper.
-	BoundDecideClause MakeDefinitionRow(const LogicalDecide::DefinitionFunction &definition) const {
+	BoundDecideClause MakeDefinitionRow(const DecideHelperDefinition &definition) const {
 		const auto &body = *definition.body;
-		auto left = BoundCastExpression::AddCastToType(context, op.bound.variables[definition.value_var]->Copy(),
+		auto left = BoundCastExpression::AddCastToType(context, op.bound.variables[definition.helper]->Copy(),
 		                                               body.return_type);
 		BoundDecideClause row;
 		row.body = make_uniq<BoundComparisonExpression>(definition.relation, std::move(left), body.Copy());
 		row.structural = true;
-		row.defines = definition.value_var;
+		row.defines = definition.helper;
 		row.helper_row = DecideHelperRow::DEFINITION;
-		row.origin = DecideRowOrigin::OfClause(definition.source_clause_id);
-		if (definition.value_var < op.bound.variable_scopes.size()) {
-			auto &scope = op.bound.variable_scopes[definition.value_var];
+		row.origin = definition.origin;
+		if (definition.helper < op.bound.variable_scopes.size()) {
+			auto &scope = op.bound.variable_scopes[definition.helper];
 			if (scope.IsGlobal() || scope.IsKeyed()) {
 				row.scope = DecideClauseScope::Per(scope.IsKeyed() ? op.bound.keyed_scopes[scope.keyed_scope_idx].key
 				                                                   : DConstants::INVALID_INDEX);
 			}
 		}
-		row.scope.when = definition.condition ? definition.condition->Copy() : nullptr;
+		row.scope.when = definition.when ? definition.when->Copy() : nullptr;
 		return row;
 	}
 
-	//! The ABS F node owns the helper's scope and both lower-envelope rows. Its operand stays as an expression until
-	//! the function lowering compiles it; the envelope roots carry executable row programs.
-	idx_t AbsFunctionNode(idx_t aux, idx_t source_clause) {
-		for (auto existing : tree->function_nodes) {
-			if (tree->nodes[existing]->value_var == aux) {
-				return existing;
-			}
-		}
-		if (!tree->variable_scopes.empty() && aux >= tree->variable_scopes.size()) {
-			throw InternalException("DECIDE tree: ABS helper %llu has no variable scope", aux);
+	//! The F node of helper definition `definition_index`: a hidden root holding the helper's value, one per instance
+	//! of the helper's scope, named as a plan names the helper.
+	DecideNode &FunctionNode(idx_t definition_index, DecideFunctionKind kind) {
+		const auto helper = op.helper_definitions[definition_index]->helper;
+		auto label = std::find_if(op.aux_var_expressions.begin(), op.aux_var_expressions.end(),
+		                          [&](const pair<idx_t, string> &entry) { return entry.first == helper; });
+		if (helper >= tree->variable_scopes.size() || label == op.aux_var_expressions.end()) {
+			throw InternalException("DECIDE tree: helper %llu has no scope or no label", helper);
 		}
 		auto index = NewNode(DecideNodeKind::FUNCTION);
+		definition_nodes[definition_index] = index;
 		auto &node = *tree->nodes[index];
-		node.function_kind = DecideFunctionKind::ABS;
-		node.root = true;
-		node.value_var = aux;
-		node.defined_var = aux;
-		node.hidden = true;
-		node.decision_value = true;
-		node.origin.source_clause_id = source_clause;
-		auto label = std::find_if(op.aux_var_expressions.begin(), op.aux_var_expressions.end(),
-		                          [&](const auto &entry) { return entry.first == aux; });
-		node.text = label == op.aux_var_expressions.end() ? "abs helper " + std::to_string(aux) : label->second;
-		if (aux < tree->variable_scopes.size()) {
-			auto &variable_scope = tree->variable_scopes[aux];
-			if (variable_scope.IsKeyed() || variable_scope.scope == DecideVarScope::INLINED) {
-				if (variable_scope.keyed_scope_idx >= op.bound.keyed_scopes.size()) {
-					if (variable_scope.scope != DecideVarScope::INLINED ||
-					    variable_scope.keyed_scope_idx != DConstants::INVALID_INDEX) {
-						throw InternalException("DECIDE tree: ABS helper %llu has an invalid keyed scope", aux);
-					}
-				} else {
-					node.per = DecideTreePer::KEY;
-					node.key = op.bound.keyed_scopes[variable_scope.keyed_scope_idx].key;
+		node.function_kind = kind;
+		node.root = node.hidden = node.decision_value = true;
+		node.value_var = node.defined_var = helper;
+		node.text = label->second;
+		auto &variable_scope = tree->variable_scopes[helper];
+		if (variable_scope.IsKeyed() || variable_scope.scope == DecideVarScope::INLINED) {
+			if (variable_scope.keyed_scope_idx >= op.bound.keyed_scopes.size()) {
+				if (variable_scope.scope != DecideVarScope::INLINED ||
+				    variable_scope.keyed_scope_idx != DConstants::INVALID_INDEX) {
+					throw InternalException("DECIDE tree: helper %llu has an invalid keyed scope", helper);
 				}
-			} else if (variable_scope.IsGlobal()) {
-				node.per = DecideTreePer::ONE;
+			} else {
+				node.per = DecideTreePer::KEY;
+				node.key = op.bound.keyed_scopes[variable_scope.keyed_scope_idx].key;
 			}
+		} else if (variable_scope.IsGlobal()) {
+			node.per = DecideTreePer::ONE;
 		}
 		tree->function_nodes.push_back(index);
 		tree->roots.push_back(index);
-		return index;
+		return node;
 	}
 
 	//! The bodies from what stage 05 lowered, then the order they read.
 	unique_ptr<DecideTree> Finish() {
-		sources.link_nodes = link_nodes;
+		for (idx_t i = 0; i < definition_nodes.size(); i++) {
+			if (op.helper_definitions[i]->kind == DecideHelperKind::REDUCER_VALUE) {
+				sources.link_nodes.push_back(definition_nodes[i]);
+			}
+		}
 		sources.record_nodes = record_nodes;
 		tree->frame_nodes = frame_nodes;
 		CompileDecideTree(context, op, *tree, sources);
@@ -581,7 +454,7 @@ public:
 	}
 
 	void TakeLinkTerms(idx_t link, vector<DecideTerm> members, vector<DecideTerm> fallback) {
-		auto &body = tree->nodes[link_nodes[link]]->compiled;
+		auto &body = tree->nodes[definition_nodes[link]]->compiled;
 		body.members = std::move(members);
 		body.fallback = std::move(fallback);
 	}
@@ -599,7 +472,9 @@ private:
 	const LogicalDecide &op;
 	unique_ptr<DecideTree> tree;
 	vector<ColumnBinding> bindings;
-	vector<idx_t> link_nodes;
+	//! Each helper definition's node: its F node, or a REDUCER_VALUE's G or O once it is read (Link). INVALID_INDEX
+	//! for a PRODUCT.
+	vector<idx_t> definition_nodes;
 	vector<idx_t> frame_nodes;
 	vector<idx_t> record_nodes;
 	DecideTreeSources sources;
@@ -749,15 +624,15 @@ private:
 				}
 			}
 			if (copy.kind == DecideSignatureFieldKind::DECISION) {
-				for (auto &link : op.reducer_value_links) {
-					if (copy.decision == link.value_var) {
+				for (auto &link : op.helper_definitions) {
+					if (link->kind == DecideHelperKind::REDUCER_VALUE && copy.decision == link->helper) {
 						copy.decision = DConstants::INVALID_INDEX;
-						if (link.frame == DConstants::INVALID_INDEX) {
+						if (link->frame == DConstants::INVALID_INDEX) {
 							copy.kind = DecideSignatureFieldKind::BY_KEY;
-							copy.key = link.group_key;
+							copy.key = link->group_key;
 						} else {
 							copy.kind = DecideSignatureFieldKind::FRAME;
-							copy.frame = link.frame;
+							copy.frame = link->frame;
 						}
 						break;
 					}
@@ -862,7 +737,16 @@ private:
 		node.facts->rhs_expr = node.rhs->Copy();
 		idx_t abs_function = DConstants::INVALID_INDEX;
 		if (is_abs_envelope) {
-			abs_function = AbsFunctionNode(node.facts->defined_var, node.origin.source_clause_id);
+			auto function =
+			    std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(), [&](idx_t candidate) {
+				    return tree->nodes[candidate]->function_kind == DecideFunctionKind::ABS &&
+				           tree->nodes[candidate]->value_var == node.facts->defined_var;
+			    });
+			if (function == tree->function_nodes.end()) {
+				throw InternalException("DECIDE tree: ABS envelope has no function node for helper %llu",
+				                        node.facts->defined_var);
+			}
+			abs_function = *function;
 			tree->nodes[abs_function]->abs_envelope_roots.push_back(index);
 			tree->nodes[abs_function]->signature.clear();
 		} else if (is_l0_link) {
@@ -1002,11 +886,10 @@ private:
 		}
 		idx_t product_group;
 		if (TryParseDecideIndexTag(expression.GetAlias(), BILINEAR_FUNCTION_GROUP_TAG_PREFIX, product_group)) {
-			if (product_group >= op.bilinear_function_groups.size() ||
-			    !op.bilinear_function_groups[product_group].expansion) {
+			if (product_group >= op.helper_definitions.size() || !op.helper_definitions[product_group]->body) {
 				throw InternalException("DECIDE tree: bilinear function group %llu has no expansion", product_group);
 			}
-			return Lower(owner, *op.bilinear_function_groups[product_group].expansion, carried);
+			return Lower(owner, *op.helper_definitions[product_group]->body, carried);
 		}
 		const idx_t retained = expression.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER
 		                           ? expression.Cast<BoundDecideReducerExpression>().retained
@@ -1055,8 +938,9 @@ private:
 						return Read(owner, function, expression.return_type, expression.GetAlias());
 					}
 				}
-				for (idx_t link = 0; link < op.reducer_value_links.size(); link++) {
-					if (op.reducer_value_links[link].value_var == variable) {
+				for (idx_t link = 0; link < op.helper_definitions.size(); link++) {
+					if (op.helper_definitions[link]->kind == DecideHelperKind::REDUCER_VALUE &&
+					    op.helper_definitions[link]->helper == variable) {
 						auto child = Link(link);
 						const auto &read_text = tree->nodes[child]->text;
 						return Read(owner, child, expression.return_type,
@@ -1173,35 +1057,35 @@ private:
 	}
 
 	idx_t Link(idx_t link_index) {
-		if (link_nodes[link_index] != DConstants::INVALID_INDEX) {
-			return link_nodes[link_index];
+		if (definition_nodes[link_index] != DConstants::INVALID_INDEX) {
+			return definition_nodes[link_index];
 		}
-		auto &link = op.reducer_value_links[link_index];
+		auto &link = *op.helper_definitions[link_index];
 		if (link.frame != DConstants::INVALID_INDEX) {
-			auto index = Frame(link.frame, nullptr, link.inner_expr.get());
-			link_nodes[link_index] = index;
+			auto index = Frame(link.frame, nullptr, link.body.get());
+			definition_nodes[link_index] = index;
 			auto &node = *tree->nodes[index];
 			node.link = link_index;
-			node.value_var = link.value_var;
+			node.value_var = link.helper;
 			node.value_link_label = link.label;
-			node.value_link_clause = link.source_clause_id;
+			node.value_link_clause = link.origin.source_clause_id;
 			node.value_link_needs_envelope = link.need_envelope;
 			node.value_link_needs_closing = link.need_closing;
 			node.qualifier_scope = link.qualifier_scope_idx;
 			node.decision_value = true;
-			if (link.value_var < tree->value_nodes.size()) {
-				tree->value_nodes[link.value_var] = index;
+			if (link.helper < tree->value_nodes.size()) {
+				tree->value_nodes[link.helper] = index;
 			}
 			return index;
 		}
 		auto index = NewNode(DecideNodeKind::REDUCER);
-		link_nodes[link_index] = index;
+		definition_nodes[link_index] = index;
 		auto &node = *tree->nodes[index];
 		node.link = link_index;
-		node.value_var = link.value_var;
+		node.value_var = link.helper;
 		node.aggregate = link.agg_name;
 		node.value_link_label = link.label;
-		node.value_link_clause = link.source_clause_id;
+		node.value_link_clause = link.origin.source_clause_id;
 		node.value_link_needs_envelope = link.need_envelope;
 		node.value_link_needs_closing = link.need_closing;
 		node.qualifier_scope = link.qualifier_scope_idx;
@@ -1209,8 +1093,8 @@ private:
 		node.text = link.label;
 		node.decision_value = true;
 		Gates(index, link.when.get());
-		if (link.value_var < tree->value_nodes.size()) {
-			tree->value_nodes[link.value_var] = index;
+		if (link.helper < tree->value_nodes.size()) {
+			tree->value_nodes[link.helper] = index;
 		}
 		auto operand = NewNode(DecideNodeKind::SCOPE);
 		Edge(index, operand);
@@ -1221,8 +1105,8 @@ private:
 			entry.key = op.bound.keyed_scopes[link.qualifier_scope_idx].key;
 			entry.per = entry.key == DConstants::INVALID_INDEX ? DecideTreePer::ONE : DecideTreePer::KEY;
 		}
-		if (link.inner_expr) {
-			entry.body = Lower(operand, *link.inner_expr);
+		if (link.body) {
+			entry.body = Lower(operand, *link.body);
 		}
 		if (link.qualifier_scope_idx < op.bound.keyed_scopes.size()) {
 			Qualified(operand, link.qualifier_scope_idx);

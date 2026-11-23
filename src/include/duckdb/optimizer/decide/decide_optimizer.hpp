@@ -126,7 +126,7 @@ private:
 
 	//! The value rewrite (language/guide.md §6.4): a decision reducer of a comparison in
 	//! the VALUE shape (BoundDecideClause::shape) becomes a helper decision defined once per `by`
-	//! group (LogicalDecide::reducer_value_links), and the comparison is then one row per
+	//! group (LogicalDecide::helper_definitions), and the comparison is then one row per
 	//! class. A direct, unfiltered outer SUM with the same key as its clause stays in the
 	//! tree; its nested reducers still become helpers, innermost first, keyed by their path
 	//! (language/guide.md §5.5). Objective reducers tagged for holding one become helpers,
@@ -146,7 +146,7 @@ private:
 
 	//! Range frames over decisions (language/guide.md §5.6, D78): each becomes a helper decision with one instance per
 	//! window of the frame -- a timeline, or a position on one -- defined once per window
-	//! (LogicalDecide::reducer_value_links, with its frame), so every later rewrite reads it as an ordinary keyed
+	//! (LogicalDecide::helper_definitions, with its frame), so every later rewrite reads it as an ordinary keyed
 	//! decision and the canonical shape stands. Runs first among the rewrites, before any copies a clause; a MIN/MAX
 	//! helper is pinned on the side its comparison pushes it, through SUM, AVG, MIN and MAX (D79).
 	void RewriteFrameRanges(LogicalDecide &decide);
@@ -162,7 +162,7 @@ private:
 	                           vector<BoundDecideClause> &new_clauses);
 
 	//! Detect ABS(expr) over decide variables, allocate the plan-time helper, and record each ABS
-	//! (LogicalDecide::abs_functions) for the tree's ABS F node: the shape only, which stage 06 encodes.
+	//! (LogicalDecide::helper_definitions) for the tree's ABS F node: the shape only, which stage 06 encodes.
 	void RewriteAbs(LogicalDecide &decide);
 
 	//! Annotate bilinear products (x * y) where at least one factor is Boolean, retaining the written expression for
@@ -180,10 +180,10 @@ private:
 	void FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide, const DecideRowOrigin &origin);
 
 	//! Helper: recursively find BoundFunctionExpression for ABS over decide vars, allocate a helper, tag the retained
-	//! function expression and record the ABS (LogicalDecide::abs_functions), innermost first. Whether the ABS needs
-	//! its exact encoding is read from `exact`, which RewriteAbs filled from every body's owner; this walk decides
-	//! nothing about it. `rows` is the rows the expression is read on (DecideOwnedBody::rows, null for every row),
-	//! which the `when` of each reducer around an ABS narrows further.
+	//! function expression and record the ABS (LogicalDecide::helper_definitions), innermost first. Whether the ABS
+	//! needs its exact encoding is read from `exact`, which RewriteAbs filled from every body's owner; this walk
+	//! decides nothing about it. `rows` is the rows the expression is read on (DecideOwnedBody::rows, null for every
+	//! row), which the `when` of each reducer around an ABS narrows further.
 	void FindAbsAndAllocateAux(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                           const DecideCanonicalizer &canonicalizer, const AbsExactSet &exact,
 	                           const DecideRowOrigin &origin, const Expression *rows);

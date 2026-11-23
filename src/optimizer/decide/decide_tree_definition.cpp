@@ -301,15 +301,15 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 		                      : down ? ExpressionType::COMPARE_GREATERTHANOREQUALTO
 		                             : ExpressionType::COMPARE_LESSTHANOREQUALTO;
 		auto condition = HelperCondition(first);
-		LogicalDecide::DefinitionFunction definition;
-		definition.value_var = helper;
-		definition.relation = relation;
-		definition.body = body->Copy();
-		definition.condition = condition ? condition->Copy() : nullptr;
+		auto definition = make_uniq<DecideHelperDefinition>(DecideHelperKind::DEFINITION);
+		definition->helper = helper;
+		definition->relation = relation;
+		definition->body = body->Copy();
+		definition->when = condition ? condition->Copy() : nullptr;
 		// A message about the row quotes the first clause that reads the helper. Only that id is kept: the row is
 		// shared by every clause that reads the helper, so it joins none of their removal groups.
-		definition.source_clause_id = first.origin.source_clause_id;
-		decide.definition_functions.push_back(std::move(definition));
+		definition->origin = DecideRowOrigin::OfClause(first.origin.source_clause_id);
+		decide.helper_definitions.push_back(std::move(definition));
 		// Tree construction owns the function's row. This placeholder keeps its former clause-list position for
 		// EXPLAIN and source ordering until that tree attaches the row below the F node.
 		BoundDecideClause placeholder;

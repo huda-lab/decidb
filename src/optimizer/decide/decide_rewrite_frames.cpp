@@ -6,7 +6,7 @@
 // Range frames over decisions (language/guide.md §5.6, D78). A range `agg(from F1 to F2 ...: e) over (...)` is a
 // reducer whose groups are the frame's windows -- the range several anchors share: a timeline when neither end
 // depends on the anchor, else a position on one -- so it becomes a helper decision with one instance per window,
-// defined once from what the window reads (LogicalDecide::reducer_value_links, with its frame; stage 08 lists each
+// defined once from what the window reads (LogicalDecide::helper_definitions, with its frame; stage 08 lists each
 // window's members from the frame map). It runs first among the rewrites, so every pass after it reads an ordinary
 // keyed decision and none copies a range. A point frame is read in place (decide_linear_form.cpp) -- one a product of
 // decisions or a square reads is the range of its one position first -- and a range over data is a value of the row.
@@ -153,23 +153,23 @@ public:
 		// per window. It needs every side any of them does.
 		auto made = helper_of_frame.find(frame);
 		if (made != helper_of_frame.end()) {
-			auto &link = decide.reducer_value_links[made->second];
+			auto &link = *decide.helper_definitions[made->second];
 			link.need_envelope = link.need_envelope || need_envelope;
 			link.need_closing = link.need_closing || need_closing;
-			ReplaceWithDecision(context, decide, link.value_var, slot);
+			ReplaceWithDecision(context, decide, link.helper, slot);
 			return;
 		}
 		auto &marker = slot->Cast<BoundDecideReducerExpression>();
 		if (marker.children.size() != 1) {
 			throw InternalException("DECIDE: a range frame marker reads no payload: %s", spec.text);
 		}
-		LogicalDecide::ReducerValueLink link;
-		link.agg_name = spec.reducer;
-		link.label = spec.spelling;
-		link.inner_expr = marker.children[0]->Copy();
-		link.frame = frame;
-		link.need_envelope = need_envelope;
-		link.need_closing = need_closing;
+		auto link = make_uniq<DecideHelperDefinition>(DecideHelperKind::REDUCER_VALUE);
+		link->agg_name = spec.reducer;
+		link->label = spec.spelling;
+		link->body = marker.children[0]->Copy();
+		link->frame = frame;
+		link->need_envelope = need_envelope;
+		link->need_closing = need_closing;
 		// One instance per window: a timeline, or a position on one. The key names the instances; execution numbers
 		// them from the frame map.
 		KeyedScopeInfo scope;
@@ -181,7 +181,7 @@ public:
 		const bool whole = DecideValueIsWholeNumbered(marker, decide.decide_index);
 		const idx_t link_idx = AddValueHelper(decide, std::move(link), scope, whole, source_clause_id, account);
 		helper_of_frame[frame] = link_idx;
-		ReplaceWithDecision(context, decide, decide.reducer_value_links[link_idx].value_var, slot);
+		ReplaceWithDecision(context, decide, decide.helper_definitions[link_idx]->helper, slot);
 	}
 
 private:

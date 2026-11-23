@@ -345,8 +345,8 @@ static void VerifyNormMarkersLowered(LogicalDecide &decide) {
 static void VerifyExtremumBodiesLinear(ClientContext &context, LogicalDecide &decide) {
 	DecideTermSplitter splitter(context, decide);
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
-		if (body.owner == DecideOwnedBody::Owner::VALUE_LINK &&
-		    IsExtremumName(decide.reducer_value_links[body.index].agg_name) && !splitter.IsLinear(*body.expr)) {
+		if (body.owner == DecideOwnedBody::Owner::HELPER &&
+		    IsExtremumName(decide.helper_definitions[body.index]->agg_name) && !splitter.IsLinear(*body.expr)) {
 			throw InternalException("DECIDE MIN/MAX member '%s' is not linear", body.expr->ToString());
 		}
 	});
@@ -432,7 +432,7 @@ void decide_rewrite::ScopeRowPerInstance(const LogicalDecide &decide, BoundDecid
 	// window say the same.
 	if (scope.IsKeyed()) {
 		auto link = decide.bound.keyed_scopes[scope.keyed_scope_idx].value_link;
-		if (link != DConstants::INVALID_INDEX && decide.reducer_value_links[link].frame != DConstants::INVALID_INDEX) {
+		if (link != DConstants::INVALID_INDEX && decide.helper_definitions[link]->frame != DConstants::INVALID_INDEX) {
 			return;
 		}
 	}

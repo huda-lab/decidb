@@ -178,10 +178,13 @@ static void NameInputColumns(DecideDisplay &display, const DecideTree &tree, Log
 			harvest_key(field.key);
 		}
 	}
-	// A lifted reducer's expressions live beside the tree: a helper decision's (reducer_value_links). The columns
+	// A lifted reducer's expressions live beside the tree: a helper decision's (helper_definitions). The columns
 	// they read explain the answer too.
-	for (auto &link : op.reducer_value_links) {
-		for (auto *expr : {link.inner_expr.get(), link.filter.get(), link.when.get()}) {
+	for (auto &link : op.helper_definitions) {
+		if (link->kind != DecideHelperKind::REDUCER_VALUE) {
+			continue;
+		}
+		for (auto *expr : {link->body.get(), link->filter.get(), link->when.get()}) {
 			if (expr) {
 				harvest(*expr);
 			}

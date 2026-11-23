@@ -143,59 +143,43 @@ static void MarkExactAbs(ClientContext &context, const BooleanDecisions &boolean
 //! Big-M over their members, and every helper those members read, whose own members box it in turn. A helper held by
 //! pressure alone has no box, so the ABS in the body of such a helper takes the exact envelope whatever pushes the
 //! helper itself.
-struct BoxedHelpers {
-	vector<bool> links;
-	vector<bool> definitions;
-};
-
-static BoxedHelpers FindBoxedHelpers(LogicalDecide &decide) {
-	BoxedHelpers boxed {vector<bool>(decide.reducer_value_links.size(), false),
-	                    vector<bool>(decide.definition_functions.size(), false)};
-	auto binding_of = [&](idx_t var) {
-		return decide.bound.variables[var]->Cast<BoundColumnRefExpression>().binding;
+//! Indexed as LogicalDecide::helper_definitions.
+static vector<bool> FindBoxedHelpers(LogicalDecide &decide) {
+	auto &definitions = decide.helper_definitions;
+	vector<bool> boxed(definitions.size(), false);
+	std::function<void(const Expression &)> demand;
+	auto box = [&](idx_t i) {
+		if (!boxed[i]) {
+			boxed[i] = true;
+			demand(*definitions[i]->body);
+		}
 	};
-	std::function<void(const Expression &)> demand = [&](const Expression &expr) {
-		// A non-linear body stays where it was written, tagged as a read of its definition's helper.
-		idx_t defined;
-		if (TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, defined)) {
-			for (idx_t i = 0; i < decide.definition_functions.size(); i++) {
-				auto &definition = decide.definition_functions[i];
-				if (!boxed.definitions[i] && definition.value_var == defined) {
-					boxed.definitions[i] = true;
-					if (definition.body) {
-						demand(*definition.body);
-					}
-				}
+	demand = [&](const Expression &expr) {
+		// A non-linear body stays where it was written, tagged as a read of its definition's helper; a reducer the
+		// value rewrite lifted is read as its helper's column, and so is a definition's helper in a row made of it.
+		idx_t helper;
+		if (!TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, helper)) {
+			if (expr.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+				ExpressionIterator::EnumerateChildren(expr, demand);
+				return;
 			}
-			return;
-		}
-		if (expr.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
-			ExpressionIterator::EnumerateChildren(expr, demand);
-			return;
-		}
-		auto &binding = expr.Cast<BoundColumnRefExpression>().binding;
-		for (idx_t i = 0; i < decide.reducer_value_links.size(); i++) {
-			auto &link = decide.reducer_value_links[i];
-			if (!boxed.links[i] && binding_of(link.value_var) == binding) {
-				boxed.links[i] = true;
-				demand(*link.inner_expr);
+			auto &binding = expr.Cast<BoundColumnRefExpression>().binding;
+			if (binding.table_index != decide.decide_index) {
+				return;
 			}
+			helper = binding.column_index;
 		}
-		for (idx_t i = 0; i < decide.definition_functions.size(); i++) {
-			auto &definition = decide.definition_functions[i];
-			if (!boxed.definitions[i] && binding_of(definition.value_var) == binding) {
-				boxed.definitions[i] = true;
-				if (definition.body) {
-					demand(*definition.body);
-				}
+		for (idx_t i = 0; i < definitions.size(); i++) {
+			const auto kind = definitions[i]->kind;
+			if ((kind == DecideHelperKind::DEFINITION || kind == DecideHelperKind::REDUCER_VALUE) &&
+			    definitions[i]->helper == helper) {
+				box(i);
 			}
 		}
 	};
-	for (idx_t i = 0; i < decide.reducer_value_links.size(); i++) {
-		auto &link = decide.reducer_value_links[i];
-		if (!boxed.links[i] && IsExtremumName(link.agg_name) && link.need_closing) {
-			boxed.links[i] = true;
-			demand(*link.inner_expr);
+	for (idx_t i = 0; i < definitions.size(); i++) {
+		if (IsExtremumName(definitions[i]->agg_name) && definitions[i]->need_closing) {
+			box(i);
 		}
 	}
 	return boxed;
@@ -210,8 +194,7 @@ static AbsExactSet FindExactAbs(ClientContext &context, LogicalDecide &decide) {
 	const BooleanDecisions booleans {decide.decide_index, decide.bound.is_boolean_var};
 	const auto boxed = FindBoxedHelpers(decide);
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
-		const bool is_boxed = (body.owner == DecideOwnedBody::Owner::DEFINITION && boxed.definitions[body.index]) ||
-		                      (body.owner == DecideOwnedBody::Owner::VALUE_LINK && boxed.links[body.index]);
+		const bool is_boxed = body.owner == DecideOwnedBody::Owner::HELPER && boxed[body.index];
 		MarkExactAbs(context, booleans, body.expr, 1, is_boxed ? 0 : body.push, exact);
 	});
 	return exact;
@@ -275,7 +258,7 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 	AddValueCheck(decide, calc.Out(DecideCheckOnKeptRows(calc, kept, check)));
 }
 
-//! Records the operand of each ABS in `expr` (LogicalDecide::AbsFunction::operand) as the bodies stand once the
+//! Records the operand of each ABS in `expr` (DecideHelperDefinition::body) as the bodies stand once the
 //! bilinear entry has run over them, so the record holds the products it tagged, and refuses an operand that still
 //! holds a product or a power of decisions, at the ABS. This is the only place that records an operand: a copy taken
 //! when the ABS got its helper would lack the tags of a product with an ABS factor.
@@ -284,9 +267,9 @@ static void RecordAbsOperands(const Expression &expr, LogicalDecide &decide, con
 	if (TryParseDecideIndexTag(expr.GetAlias(), ABS_FUNCTION_TAG_PREFIX, aux_idx)) {
 		auto &operand = *expr.Cast<BoundFunctionExpression>().children[0];
 		RequireLinearOperand(splitter, operand, expr, "ABS");
-		for (auto &function : decide.abs_functions) {
-			if (function.aux_idx == aux_idx) {
-				function.operand = operand.Copy();
+		for (auto &function : decide.helper_definitions) {
+			if (function->kind == DecideHelperKind::ABS && function->helper == aux_idx) {
+				function->body = operand.Copy();
 			}
 		}
 	}
@@ -301,7 +284,7 @@ static void RecordAbsOperands(const Expression &expr, LogicalDecide &decide, con
 void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	// Find ABS(expr) nodes over decide vars and allocate their helper variables. Keep the function expressions in the
 	// user's clauses; the tree owns their value through an F node, and term extraction resolves the tagged function to
-	// the already allocated helper column. Each ABS is recorded (LogicalDecide::abs_functions) with its operand
+	// the already allocated helper column. Each ABS is recorded (LogicalDecide::helper_definitions) with its operand
 	// (RecordAbsOperands), the clause it was written in (or the objective, DecideRowOrigin::objective) and whether it
 	// needs the exact encoding.
 	//
@@ -337,9 +320,9 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	};
 	vector<Revisit> worklist;
 	decide.EnumerateBodies([&](DecideOwnedBody &body) {
-		const auto helpers_before = decide.abs_functions.size();
+		const auto helpers_before = decide.helper_definitions.size();
 		FindAbsAndAllocateAux(body.expr, decide, canonicalizer, exact, body.Origin(), body.rows);
-		if (decide.abs_functions.size() != helpers_before && BilinearReadsBody(decide, body)) {
+		if (decide.helper_definitions.size() != helpers_before && BilinearReadsBody(decide, body)) {
 			worklist.push_back({&body.expr, body.Origin()});
 		}
 	});
@@ -358,11 +341,11 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 }
 
 BoundDecideClause decide_rewrite::MakeAbsRow(ClientContext &context, const LogicalDecide &decide,
-                                             const LogicalDecide::AbsFunction &function, bool negated) {
+                                             const DecideHelperDefinition &function, bool negated) {
 	// `aux >= inner` or `aux >= -inner`, in its natural form, which can leave decisions on both sides. The tree brings
 	// each through the canonical boundary as it does any clause.
-	auto &aux = decide.bound.variables[function.aux_idx]->Cast<BoundColumnRefExpression>();
-	unique_ptr<Expression> bound = function.operand->Copy();
+	auto &aux = decide.bound.variables[function.helper]->Cast<BoundColumnRefExpression>();
+	unique_ptr<Expression> bound = function.body->Copy();
 	if (negated) {
 		// `0 - inner`
 		vector<unique_ptr<Expression>> children;
@@ -378,7 +361,7 @@ BoundDecideClause decide_rewrite::MakeAbsRow(ClientContext &context, const Logic
 	auto comparison = make_uniq<BoundComparisonExpression>(
 	    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 	    make_uniq<BoundColumnRefExpression>(aux.alias, aux.return_type, aux.binding), std::move(bound));
-	auto row = MakeFormulationRow(std::move(comparison), function.origin, function.aux_idx,
+	auto row = MakeFormulationRow(std::move(comparison), function.origin, function.helper,
 	                              negated ? DecideHelperRow::ABS_NEGATED_ENVELOPE : DecideHelperRow::ABS_ENVELOPE);
 	row.scope.when = function.when ? function.when->Copy() : nullptr;
 	ScopeRowPerInstance(decide, row, function.scope);
@@ -393,7 +376,7 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 	}
 	idx_t definition_aux;
 	if (TryParseDecideIndexTag(expr->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
-		return; // its body is visited through DefinitionFunction metadata below
+		return; // its body is visited through its definition below
 	}
 
 	// A term of a reducer with its own `when` reads only the rows that `when` keeps.
@@ -429,9 +412,8 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 
 		// A column defined by its argument: one per instance of the scopes the argument reads.
 		auto aux_scope = ScopeOf(decide, canonicalizer, *func.children[0]);
-		idx_t aux_idx =
-		    AddAuxiliaryDecision(decide, string(ABS_AUX_NAME_PREFIX) + to_string(decide.abs_functions.size()) + "__",
-		                         aux_type, false, aux_scope, label);
+		const auto name = string(ABS_AUX_NAME_PREFIX) + to_string(decide.HelperCount(DecideHelperKind::ABS)) + "__";
+		idx_t aux_idx = AddAuxiliaryDecision(decide, name, aux_type, false, aux_scope, label);
 
 		// FindExactAbs is the one place that decides exactness: for an ABS in a clause or the objective, in a helper's
 		// body, and in another ABS (which it reads as unknown sign).
@@ -446,15 +428,15 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 		// stage 06 its encoding.
 		AddRewriteAccount(decide, origin.source_clause_id, LogicalDecide::RewriteAccount::Kind::HELPER,
 		                  std::move(label));
-		LogicalDecide::AbsFunction function;
-		function.aux_idx = aux_idx;
-		function.exact = needs_exact;
-		function.when = std::move(read_rows);
-		function.scope = aux_scope;
-		function.origin = origin;
-		function.written =
+		auto function = make_uniq<DecideHelperDefinition>(DecideHelperKind::ABS);
+		function->helper = aux_idx;
+		function->exact = needs_exact;
+		function->when = std::move(read_rows);
+		function->scope = aux_scope;
+		function->origin = origin;
+		function->label =
 		    RenderDecideSource(func, decide.bound.source_text, decide.bound.keyed_scopes, &decide.bound.keys);
-		decide.abs_functions.push_back(std::move(function));
+		decide.helper_definitions.push_back(std::move(function));
 
 		// Preserve ABS(inner) in the clause tree and tag its value-helper mapping for
 		// the F-aware term splitter.

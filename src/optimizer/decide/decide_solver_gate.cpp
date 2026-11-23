@@ -30,7 +30,7 @@ bool IsIntegralColumnType(const LogicalType &type) {
 //! the binder admits over whole-numbered decisions only, so the loop has already answered;
 //! a MIN/MAX held by indicator rows, read here off the marks the MIN/MAX rewrites leave; and
 //! an exact ABS, whose sign indicator the lowering adds, read here off its record
-//! (`LogicalDecide::abs_functions`). Whether such an ABS is lowered is decided later, so the
+//! (`LogicalDecide::helper_definitions`). Whether such an ABS is lowered is decided later, so the
 //! answer is "may". A lowering that starts adding a binary without a mark is caught when the
 //! built model is checked (`AssertBackendAcceptsBuiltModel`), as an internal error rather
 //! than a wrong answer.
@@ -43,13 +43,8 @@ bool MayHaveIntegralColumn(const LogicalDecide &op) {
 			return true;
 		}
 	}
-	for (auto &link : op.reducer_value_links) {
-		if (link.agg_name == "min" || link.agg_name == "max") {
-			return true;
-		}
-	}
-	for (auto &function : op.abs_functions) {
-		if (function.exact) {
+	for (auto &definition : op.helper_definitions) {
+		if (definition->agg_name == "min" || definition->agg_name == "max" || definition->exact) {
 			return true;
 		}
 	}

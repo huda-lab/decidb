@@ -92,18 +92,19 @@ public:
 				AnalyzeConstraint(node.definition_row);
 			}
 		}
-		// The L0 indicator's formulation rows remain outside the written constraint list. Prepare them in the same
-		// position they had when RewriteNorm appended them, while their tree F node owns their execution scopes.
-		for (auto &indicator : op.l0_indicator_functions) {
-			for (auto &link : indicator.links) {
+		// The rows a helper definition owns stand after the written constraints, in the order the definitions were
+		// made (an indicator's by RewriteNorm, before every ABS): an L0 indicator's three formulation rows, and an
+		// ABS's two lower-envelope rows (MakeAbsRow), built beneath its F node from the optimizer's record.
+		for (auto &definition : op.helper_definitions) {
+			for (auto &link : definition->links) {
 				AnalyzeConstraint(link);
 			}
-		}
-		// An ABS's two lower-envelope rows (MakeAbsRow) are built beneath its F node, from the optimizer's record.
-		for (auto &function : op.abs_functions) {
+			if (definition->kind != DecideHelperKind::ABS) {
+				continue;
+			}
 			for (auto index : tree.Tree().function_nodes) {
 				auto &node = *tree.Tree().nodes[index];
-				if (node.function_kind != DecideFunctionKind::ABS || node.value_var != function.aux_idx) {
+				if (node.function_kind != DecideFunctionKind::ABS || node.value_var != definition->helper) {
 					continue;
 				}
 				for (auto &row : node.abs_rows) {
@@ -118,11 +119,14 @@ public:
 		// The reducers the value rewrite lifted into helper decisions are lowered too; a range frame's helper also
 		// reads its `else`, at the window's anchor.
 		const BoundConstantExpression one(Value::INTEGER(1));
-		link_terms.resize(op.reducer_value_links.size());
-		link_fallbacks.resize(op.reducer_value_links.size());
-		for (idx_t l = 0; l < op.reducer_value_links.size(); l++) {
-			auto &link = op.reducer_value_links[l];
-			ExtractLinearTerms(*link.inner_expr, link_terms[l]);
+		link_terms.resize(op.helper_definitions.size());
+		link_fallbacks.resize(op.helper_definitions.size());
+		for (idx_t l = 0; l < op.helper_definitions.size(); l++) {
+			auto &link = *op.helper_definitions[l];
+			if (link.kind != DecideHelperKind::REDUCER_VALUE) {
+				continue;
+			}
+			ExtractLinearTerms(*link.body, link_terms[l]);
 			if (link.frame != DConstants::INVALID_INDEX) {
 				AppendFallbackTerms(link.frame, one, 1, link_fallbacks[l]);
 			}
@@ -167,7 +171,9 @@ public:
 			tree.TakeObjective(std::move(lowered_objective));
 		}
 		for (idx_t l = 0; l < link_terms.size(); l++) {
-			tree.TakeLinkTerms(l, std::move(link_terms[l]), std::move(link_fallbacks[l]));
+			if (op.helper_definitions[l]->kind == DecideHelperKind::REDUCER_VALUE) {
+				tree.TakeLinkTerms(l, std::move(link_terms[l]), std::move(link_fallbacks[l]));
+			}
 		}
 		tree.TakeFrameReads(std::move(frame_reads));
 	}
@@ -499,10 +505,13 @@ private:
 			LowerFrames(lowered_objective->product_groups);
 		}
 		for (idx_t l = 0; l < link_terms.size(); l++) {
+			if (op.helper_definitions[l]->kind != DecideHelperKind::REDUCER_VALUE) {
+				continue;
+			}
 			LowerFrames(link_terms[l]);
 			LowerFrames(link_fallbacks[l]);
-			LowerFrames(op.reducer_value_links[l].filter);
-			LowerFrames(op.reducer_value_links[l].when);
+			LowerFrames(op.helper_definitions[l]->filter);
+			LowerFrames(op.helper_definitions[l]->when);
 		}
 	}
 

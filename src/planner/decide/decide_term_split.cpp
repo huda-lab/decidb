@@ -98,7 +98,7 @@ static unique_ptr<Expression> MultiplyCoefficients(ClientContext &context, const
 
 DecideTermSplitter::DecideTermSplitter(ClientContext &context, const LogicalDecide &decide)
     : context(context), decide_index(decide.decide_index), decide_variables(decide.bound.variables),
-      bilinear_groups(decide.bilinear_function_groups) {
+      helper_definitions(decide.helper_definitions) {
 	for (idx_t i = 0; i < decide_variables.size(); i++) {
 		variable_indexes[decide_variables[i]->Cast<BoundColumnRefExpression>().binding] = i;
 	}
@@ -115,10 +115,10 @@ bool DecideTermSplitter::ExpandBilinearGroups(const Expression &expr, unique_ptr
 	}
 	idx_t group_idx;
 	if (TryParseDecideIndexTag(expr.GetAlias(), BILINEAR_FUNCTION_GROUP_TAG_PREFIX, group_idx)) {
-		if (group_idx >= bilinear_groups.size() || !bilinear_groups[group_idx].expansion) {
+		if (group_idx >= helper_definitions.size() || !helper_definitions[group_idx]->body) {
 			throw InternalException("DECIDE term splitter: bilinear function group %llu is missing", group_idx);
 		}
-		expanded = bilinear_groups[group_idx].expansion->Copy();
+		expanded = helper_definitions[group_idx]->body->Copy();
 		unique_ptr<Expression> nested;
 		if (ExpandBilinearGroups(*expanded, nested)) {
 			expanded = std::move(nested);

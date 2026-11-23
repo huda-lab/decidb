@@ -35,22 +35,7 @@ class ClientContext;
 class BoundFunctionExpression;
 class LogicalDecide;
 
-//! One Boolean product helper allocated while the optimizer annotates a written product. The tree turns this
-//! specification into a BOOLEAN_PRODUCT F node and owns the executable BilinearLinkSpec record.
-struct DecideBilinearFunctionProduct {
-	idx_t aux_idx = DConstants::INVALID_INDEX;
-	idx_t first_var_idx = DConstants::INVALID_INDEX;
-	idx_t second_var_idx = DConstants::INVALID_INDEX;
-	DecideRowOrigin origin;
-};
-
-//! An intact written product plus the expression the term splitter reads. `expansion` replaces Boolean products by
-//! their plan-time helper columns while leaving non-Boolean products as terms of degree 2.
-struct DecideBilinearFunctionGroup {
-	unique_ptr<Expression> expansion;
-	vector<DecideBilinearFunctionProduct> products;
-};
-
+struct DecideHelperDefinition;
 struct DecideSplitFactor;
 
 //! One additive term: `sign * coefficient * ...`, where what follows the coefficient is its degree's part.
@@ -147,7 +132,7 @@ private:
 	idx_t decide_index;
 	column_binding_map_t<idx_t> variable_indexes;
 	const vector<unique_ptr<Expression>> &decide_variables;
-	const vector<DecideBilinearFunctionGroup> &bilinear_groups;
+	const vector<unique_ptr<DecideHelperDefinition>> &helper_definitions;
 };
 
 } // namespace duckdb

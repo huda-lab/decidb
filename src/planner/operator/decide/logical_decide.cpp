@@ -327,21 +327,15 @@ void BoundDecide::EnumerateExpressions(const std::function<void(unique_ptr<Expre
 
 void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Expression> *)> &callback) {
 	bound.EnumerateExpressions([&](unique_ptr<Expression> &expression) { callback(&expression); });
-	// The value rewrite lifts each reducer it replaces out of the constraint and objective trees, so visiting them
-	// above no longer reaches it.
-	for (auto &link : reducer_value_links) {
-		for (auto *expr : {&link.inner_expr, &link.filter, &link.when}) {
+	// A helper definition holds what a rewrite lifted out of the clauses, or copied beside them.
+	for (auto &definition : helper_definitions) {
+		for (auto *expr : {&definition->body, &definition->filter, &definition->when}) {
 			if (*expr) {
 				callback(expr);
 			}
 		}
-	}
-	// Nonlinear reducer bodies are tree-owned F definitions, retained after their clause-list placeholders are made.
-	for (auto &definition : definition_functions) {
-		for (auto *expr : {&definition.body, &definition.condition}) {
-			if (*expr) {
-				callback(expr);
-			}
+		for (auto &link : definition->links) {
+			link.EnumerateExpressions([&](unique_ptr<Expression> &expression) { callback(&expression); });
 		}
 	}
 	for (auto &check : value_checks) {
@@ -358,24 +352,12 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 	for (auto &expression : retained_expressions) {
 		callback(&expression);
 	}
-	for (auto &function : abs_functions) {
-		if (function.operand) {
-			callback(&function.operand);
-		}
-		if (function.when) {
-			callback(&function.when);
-		}
-	}
-	for (auto &group : bilinear_function_groups) {
-		if (group.expansion) {
-			callback(&group.expansion);
-		}
-	}
-	for (auto &function : l0_indicator_functions) {
-		for (auto &link : function.links) {
-			link.EnumerateExpressions([&](unique_ptr<Expression> &expression) { callback(&expression); });
-		}
-	}
+}
+
+idx_t LogicalDecide::HelperCount(DecideHelperKind kind) const {
+	return NumericCast<idx_t>(
+	    std::count_if(helper_definitions.begin(), helper_definitions.end(),
+	                  [&](const unique_ptr<DecideHelperDefinition> &definition) { return definition->kind == kind; }));
 }
 
 //! `<` and `<=` push a positive term down, `>` and `>=` a negative one; nothing else pushes (DecideOwnedBody::push).
@@ -396,12 +378,12 @@ static int ComparisonPush(const Expression &leaf) {
 }
 
 //! The sign a term of a value link's members must carry to be pushed down, from the sides the link states
-//! (ReducerValueLink::need_envelope, need_closing), which join every reader's push (RewriteScopedReducers): `value >=
-//! members` of a SUM, AVG or MAX holds the members down, `value <= members` of a MIN holds them up, and `value <=
-//! members` of a SUM or AVG holds them up as well, the sign it reads them with the other way round. A MIN or MAX's
-//! closing side is the hard direction, encoded with a Big-M over its members, and both sides read the members from
-//! both directions: no sign is pinned, which is 0.
-static int ValueLinkPush(const LogicalDecide::ReducerValueLink &link) {
+//! (DecideHelperDefinition::need_envelope, need_closing), which join every reader's push (RewriteScopedReducers):
+//! `value >= members` of a SUM, AVG or MAX holds the members down, `value <= members` of a MIN holds them up, and
+//! `value <= members` of a SUM or AVG holds them up as well, the sign it reads them with the other way round. A MIN or
+//! MAX's closing side is the hard direction, encoded with a Big-M over its members, and both sides read the members
+//! from both directions: no sign is pinned, which is 0.
+static int ValueLinkPush(const DecideHelperDefinition &link) {
 	if (link.need_envelope == link.need_closing) {
 		return 0;
 	}
@@ -412,7 +394,7 @@ static int ValueLinkPush(const LogicalDecide::ReducerValueLink &link) {
 	return extremum ? 0 : -1;
 }
 
-//! The body of `clause`, which the clause list or an L0 indicator holds.
+//! The body of `clause`, which the clause list or an L0 indicator (`index`) holds.
 static DecideOwnedBody ClauseBody(DecideOwnedBody::Owner owner, idx_t index, BoundDecideClause &clause) {
 	DecideOwnedBody body(owner, index, clause.body);
 	body.push = ComparisonPush(*clause.body);
@@ -435,30 +417,38 @@ void LogicalDecide::EnumerateBodies(const std::function<void(DecideOwnedBody &)>
 		auto body = ClauseBody(Owner::CLAUSE, DConstants::INVALID_INDEX, clause);
 		callback(body);
 	}
-	// A definition stands apart from the clause list; `t >= q` holds the body down, `t <= q` up, `t = q` neither.
-	for (idx_t i = 0; i < definition_functions.size(); i++) {
-		auto &definition = definition_functions[i];
-		DecideOwnedBody body(Owner::DEFINITION, i, definition.body);
-		body.push = definition.relation == ExpressionType::COMPARE_GREATERTHANOREQUALTO ? 1
-		            : definition.relation == ExpressionType::COMPARE_LESSTHANOREQUALTO  ? -1
-		                                                                                : 0;
-		body.rows = definition.condition.get();
-		callback(body);
-	}
-	// A reducer value helper's body belongs to no clause: it is read on the rows its path and its own `when` keep.
-	for (idx_t i = 0; i < reducer_value_links.size(); i++) {
-		auto &link = reducer_value_links[i];
-		DecideOwnedBody body(Owner::VALUE_LINK, i, link.inner_expr);
-		body.push = ValueLinkPush(link);
-		body.kept_rows = DecideRowsKeptByBoth(link.when.get(), link.filter.get());
-		body.rows = body.kept_rows.get();
-		callback(body);
-	}
-	// An L0 indicator's three rows stand beside the clauses, where the tree's indicator F node reads them.
-	for (idx_t i = 0; i < l0_indicator_functions.size(); i++) {
-		for (auto &link : l0_indicator_functions[i].links) {
-			auto body = ClauseBody(Owner::L0_LINK, i, link);
+	for (idx_t i = 0; i < helper_definitions.size(); i++) {
+		auto &definition = *helper_definitions[i];
+		switch (definition.kind) {
+		case DecideHelperKind::DEFINITION: {
+			// A definition stands apart from the clause list; `t >= q` holds the body down, `t <= q` up, `t = q`
+			// neither.
+			DecideOwnedBody body(Owner::HELPER, i, definition.body);
+			body.push = definition.relation == ExpressionType::COMPARE_GREATERTHANOREQUALTO ? 1
+			            : definition.relation == ExpressionType::COMPARE_LESSTHANOREQUALTO  ? -1
+			                                                                                : 0;
+			body.rows = definition.when.get();
 			callback(body);
+			break;
+		}
+		case DecideHelperKind::REDUCER_VALUE: {
+			// A reducer value helper's body belongs to no clause: it is read on the rows its path and its own `when`
+			// keep.
+			DecideOwnedBody body(Owner::HELPER, i, definition.body);
+			body.push = ValueLinkPush(definition);
+			body.kept_rows = DecideRowsKeptByBoth(definition.when.get(), definition.filter.get());
+			body.rows = body.kept_rows.get();
+			callback(body);
+			break;
+		}
+		default:
+			// An L0 indicator's three rows stand beside the clauses, where the tree's indicator F node reads them. An
+			// ABS's operand and a product's expansion are copies of what a body holds, and no body.
+			for (auto &link : definition.links) {
+				auto body = ClauseBody(Owner::HELPER, i, link);
+				callback(body);
+			}
+			break;
 		}
 	}
 }
