@@ -119,9 +119,9 @@ void PhysicalDecide::CheckDecisionDomains(const vector<LogicalDecide::UserBoundS
 		DecideWrittenBox written = written_box(var);
 		// A product takes its factor's sign (`b * x` with x >= -5 reaches -5, AddBooleanProduct): its floor is
 		// the factor's where that is negative, and none where the factor holds a value of either sign.
-		for (auto &product : tree->definitions) {
-			if (product->kind != DecideHelperKind::BOOLEAN_PRODUCT || product->helper != var ||
-			    product->other_factor >= num_decide_vars) {
+		for (auto &definition : tree->definitions) {
+			auto product = definition->TryCast<DecideBooleanProductDefinition>();
+			if (!product || product->helper != var || product->other_factor >= num_decide_vars) {
 				continue;
 			}
 			const auto other = product->other_factor;

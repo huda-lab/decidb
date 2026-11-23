@@ -369,8 +369,9 @@ void DecideModelEmitter::ReadAbsence(vector<KeyedMapping> &mappings) {
 	gstate.absent_reads.assign(tree.decide_variables.size(), vector<bool>());
 	columns.Absence().ReadClasses(mappings, gstate.absent_reads);
 	gstate.evaluated_bilinear_links.clear();
-	for (auto &product : tree.definitions) {
-		if (product->kind != DecideHelperKind::BOOLEAN_PRODUCT) {
+	for (auto &definition : tree.definitions) {
+		auto product = definition->TryCast<DecideBooleanProductDefinition>();
+		if (!product) {
 			continue;
 		}
 		BilinearLinkSpec link;
@@ -606,7 +607,7 @@ void DecideModelEmitter::Route(EmittedClause &&clause, bool folded) {
 
 void DecideModelEmitter::AbsEnvelope(idx_t function, idx_t root, bool counted) {
 	auto &node = *tree.nodes[function];
-	auto &definition = *tree.Definition(node);
+	auto &definition = tree.Definition(node)->Cast<DecideAbsDefinition>();
 	const auto &envelopes = node.rows;
 	if (root >= tree.nodes.size() || std::find(envelopes.begin(), envelopes.end(), root) == envelopes.end()) {
 		throw InternalException("DECIDE model emitter: invalid ABS F envelope ownership");
@@ -1559,7 +1560,7 @@ void DecideModelEmitter::ValueLinks() {
 		if (!tree_node.Linked()) {
 			continue;
 		}
-		auto &definition = *tree.Definition(tree_node);
+		auto &definition = tree.Definition(tree_node)->Cast<DecideReducerValueDefinition>();
 		auto &body = tree_node.compiled;
 		auto spec = ReducerValueLinkSpec();
 		spec.value_var = definition.helper;

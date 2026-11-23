@@ -192,7 +192,8 @@ public:
 				if (definition == op.helper_definitions.end()) {
 					throw InternalException("DECIDE tree: body-definition placeholder has no F node");
 				}
-				Root(MakeDefinitionRow(**definition), NumericCast<idx_t>(definition - op.helper_definitions.begin()));
+				Root(MakeDefinitionRow((*definition)->Cast<DecideBodyDefinition>()),
+				     NumericCast<idx_t>(definition - op.helper_definitions.begin()));
 			}
 		}
 		// The rows a helper definition owns follow every written constraint, in the order the definitions were made
@@ -200,12 +201,14 @@ public:
 		// links and an ABS's two envelope rows.
 		for (idx_t i = 0; i < op.helper_definitions.size(); i++) {
 			auto &definition = *op.helper_definitions[i];
-			for (auto &link : definition.links) {
-				Root(link, i);
+			if (auto indicator = definition.TryCast<DecideL0IndicatorDefinition>()) {
+				for (auto &link : indicator->links) {
+					Root(link, i);
+				}
 			}
-			if (definition.kind == DecideHelperKind::ABS) {
-				Root(decide_rewrite::MakeAbsRow(context, op, definition, false), i);
-				Root(decide_rewrite::MakeAbsRow(context, op, definition, true), i);
+			if (auto abs = definition.TryCast<DecideAbsDefinition>()) {
+				Root(decide_rewrite::MakeAbsRow(context, op, *abs, false), i);
+				Root(decide_rewrite::MakeAbsRow(context, op, *abs, true), i);
 			}
 		}
 		if (op.bound.objective.body) {
@@ -239,7 +242,8 @@ public:
 		// Each helper's G or O holds its reducer's members, split after the objective's terms.
 		for (idx_t i = 0; i < op.helper_definitions.size(); i++) {
 			if (op.helper_definitions[i]->kind == DecideHelperKind::REDUCER_VALUE) {
-				terms.Members(*op.helper_definitions[i], tree->nodes[definition_nodes[i]]->compiled);
+				terms.Members(op.helper_definitions[i]->Cast<DecideReducerValueDefinition>(),
+				              tree->nodes[definition_nodes[i]]->compiled);
 			}
 		}
 		terms.Frames(*tree);
@@ -268,12 +272,13 @@ public:
 				break;
 			}
 			case DecideHelperKind::L0_INDICATOR: {
-				if (definition.links.size() != 3) {
+				auto &links = definition.Cast<DecideL0IndicatorDefinition>().links;
+				if (links.size() != 3) {
 					throw InternalException("DECIDE tree: malformed L0 indicator function");
 				}
 				auto &node = FunctionNode(i);
 				node.text = definition.label;
-				node.origin = definition.links[0].origin;
+				node.origin = links[0].origin;
 				break;
 			}
 			case DecideHelperKind::DEFINITION: {
@@ -295,27 +300,28 @@ public:
 			const auto index = definition_nodes[i];
 			switch (definition.kind) {
 			case DecideHelperKind::ABS:
-				tree->nodes[index]->body = Lower(index, *definition.body);
+				tree->nodes[index]->body = Lower(index, *definition.Cast<DecideAbsDefinition>().body);
 				Gates(index, definition.when.get());
 				break;
 			case DecideHelperKind::BOOLEAN_PRODUCT: {
 				auto &node = *tree->nodes[index];
 				vector<unique_ptr<Expression>> children;
-				children.push_back(op.bound.variables[definition.bool_factor]->Copy());
-				children.push_back(op.bound.variables[definition.other_factor]->Copy());
+				auto &product = definition.Cast<DecideBooleanProductDefinition>();
+				children.push_back(op.bound.variables[product.bool_factor]->Copy());
+				children.push_back(op.bound.variables[product.other_factor]->Copy());
 				auto body = DecideRebindOperator(context, "*", std::move(children));
 				node.body = Lower(index, *body);
 				break;
 			}
 			case DecideHelperKind::L0_INDICATOR: {
 				// The first link holds the counted expression and the rows it is read on.
-				auto &first_link = definition.links[0];
+				auto &first_link = definition.Cast<DecideL0IndicatorDefinition>().links[0];
 				Gates(index, first_link.scope.when.get());
 				tree->nodes[index]->body = Lower(index, *first_link.body->Cast<BoundComparisonExpression>().right);
 				break;
 			}
 			case DecideHelperKind::DEFINITION:
-				tree->nodes[index]->body = Lower(index, *definition.body);
+				tree->nodes[index]->body = Lower(index, *definition.Cast<DecideBodyDefinition>().body);
 				break;
 			case DecideHelperKind::PRODUCT:
 			case DecideHelperKind::REDUCER_VALUE:
@@ -326,7 +332,7 @@ public:
 
 	//! The row that defines a definition's helper from its body, on the rows its condition keeps, one per instance of
 	//! the helper.
-	BoundDecideClause MakeDefinitionRow(const DecideHelperDefinition &definition) const {
+	BoundDecideClause MakeDefinitionRow(const DecideBodyDefinition &definition) const {
 		const auto &body = *definition.body;
 		auto left = BoundCastExpression::AddCastToType(context, op.bound.variables[definition.helper]->Copy(),
 		                                               body.return_type);
@@ -564,8 +570,9 @@ private:
 				}
 			}
 			if (copy.kind == DecideSignatureFieldKind::DECISION) {
-				for (auto &link : op.helper_definitions) {
-					if (link->kind == DecideHelperKind::REDUCER_VALUE && copy.decision == link->helper) {
+				for (auto &definition : op.helper_definitions) {
+					auto link = definition->TryCast<DecideReducerValueDefinition>();
+					if (link && copy.decision == link->helper) {
 						copy.decision = DConstants::INVALID_INDEX;
 						const idx_t frame = link->Frame();
 						if (frame == DConstants::INVALID_INDEX) {
@@ -755,7 +762,7 @@ private:
 			return Read(owner, definition_nodes[kept.index], expression.return_type, expression.GetAlias());
 		}
 		if (kept.Is(DecideHelperKind::PRODUCT)) {
-			return Lower(owner, *op.helper_definitions[kept.index]->body, carried);
+			return Lower(owner, *op.helper_definitions[kept.index]->Cast<DecideProductDefinition>().body, carried);
 		}
 		carried = carried || IsDecideQueryWideValue(op.bound, expression) ||
 		          expression.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_NULL_TEST;
@@ -899,7 +906,7 @@ private:
 		if (definition_nodes[link_index] != DConstants::INVALID_INDEX) {
 			return definition_nodes[link_index];
 		}
-		auto &link = *op.helper_definitions[link_index];
+		auto &link = op.helper_definitions[link_index]->Cast<DecideReducerValueDefinition>();
 		if (link.Frame() != DConstants::INVALID_INDEX) {
 			auto index = Frame(link.Frame(), nullptr, link.Member().get());
 			definition_nodes[link_index] = index;
@@ -1357,9 +1364,11 @@ string DecideTree::ToString() const {
 			           : definition.kind == DecideHelperKind::L0_INDICATOR    ? "l0_indicator"
 			                                                                  : "definition")
 			       << " value=x" << definition.helper << " body=(" << node.body->ToString() << ")";
-			if (definition.kind == DecideHelperKind::ABS) {
-				result << (definition.exact ? " exact=big-m" : " exact=pressure-or-bound");
-			} else if (definition.kind == DecideHelperKind::L0_INDICATOR && definition.auto_m) {
+			auto abs = definition.TryCast<DecideAbsDefinition>();
+			auto indicator = definition.TryCast<DecideL0IndicatorDefinition>();
+			if (abs) {
+				result << (abs->exact ? " exact=big-m" : " exact=pressure-or-bound");
+			} else if (indicator && indicator->auto_m) {
 				result << " M=auto";
 			}
 		}

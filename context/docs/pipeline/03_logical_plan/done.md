@@ -77,8 +77,16 @@ whole-query key, `IsReadBy`).
 
 **What a rewrite keeps is an entry of one table.** `LogicalDecide::helper_definitions` is the symbol table of the
 constructs the rewrites kept and gave a helper decision (`DecideHelperDefinition`), in the order they were made:
-innermost first, so a definition reads only helpers of definitions before it. Every entry has one head (`kind`,
-`helper`, `body`, `when`, `origin`, `label`) and its kind's own fields.
+innermost first, so a definition reads only helpers of definitions before it. An entry is a class per kind over one base, DuckDB's tagged hierarchy (as `LogicalOperator`): the base
+`DecideHelperDefinition` holds the head every kind says (`kind`, `helper`, `when`, `origin`, `label`), and
+`DecideAbsDefinition`, `DecideProductDefinition`, `DecideBooleanProductDefinition`, `DecideL0IndicatorDefinition`,
+`DecideBodyDefinition` (kind `DEFINITION`) and `DecideReducerValueDefinition` each hold their own fields, so a field
+exists only on the kind that has it. A reader reaches a kind by `Cast<T>()`, which raises on another kind, or by
+`TryCast<T>()`, which is null for another kind. `EnumerateExpressions` and `Bodies` are virtual: the operator's two
+enumerations call them and name no kind. The tree builder gives each kind its F node in a switch over the kind with a
+`Cast`, as DuckDB's physical planner does over operator types. A kept call's reference (`DecideHelperRef`) carries
+the kind beside the index for a reader that has the call and no table; the entry's `kind` is `const`, so the two
+agree.
 
 | Kind | The construct | `helper` | `body` | Its own fields |
 |---|---|---|---|---|

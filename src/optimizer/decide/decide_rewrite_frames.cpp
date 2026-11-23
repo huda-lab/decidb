@@ -149,7 +149,7 @@ public:
 		// per window. It needs every side any of them does.
 		auto made = helper_of_frame.find(frame);
 		if (made != helper_of_frame.end()) {
-			auto &link = *decide.helper_definitions[made->second];
+			auto &link = decide.helper_definitions[made->second]->Cast<DecideReducerValueDefinition>();
 			link.push = JoinExtremumPush(link.push, push);
 			ReplaceWithDecision(context, decide, link.helper, slot);
 			return;
@@ -158,7 +158,7 @@ public:
 		if (marker.children.size() != 1) {
 			throw InternalException("DECIDE: a range frame marker reads no payload: %s", spec.text);
 		}
-		auto link = make_uniq<DecideHelperDefinition>(DecideHelperKind::REDUCER_VALUE);
+		auto link = make_uniq<DecideReducerValueDefinition>();
 		link->reducer = spec.reducer;
 		link->label = spec.spelling;
 		link->body = marker.Copy();

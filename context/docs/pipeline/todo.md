@@ -28,17 +28,6 @@ every one of them:
 - **Tests** (R32): focused tests in each task's **Done when**; `make decide-test` once at the end of each queue
   group; every other suite in TREE-28.
 
-## TREE-21 — A definition class per kind
-
-- **Problem.** `DecideHelperDefinition` is one struct used six ways, its fields labelled by comment
-  (`logical_decide.hpp:280-350`). `EnumerateExpressions` branches on the kind and `EnumerateBodies` has a three-way
-  switch (`logical_decide.cpp:332-351,437-466`). `DecideHelperRef::kind` copies the entry's kind.
-- **Change.** A base with the head fields and a derived class per kind, reached by `Cast<T>()`, with virtual
-  `EnumerateExpressions` and `Bodies`, as `LogicalOperator` does. A field exists only on the kind that has it.
-- **Done when.** No reader switches on the kind to pick fields;
-  `./test/decide/run_tests.sh -k "abs or product or bilinear or norm or minmax or helper or definition"` and
-  `build/release/test/unittest "[decidb]"` pass.
-
 ## TREE-22 — A definition owns its rows and its facts
 
 - **Problem.** Every clause holds `helper_row`, `structural` and `defines`, while the tree's `Root(clause, owner)`
@@ -48,7 +37,7 @@ every one of them:
   table (`logical_decide.hpp:103,534,542`).
 - **Change.** Each definition owns its rows in named members, made in one place for every kind. A row's role is
   "owned by definition i", read from the owner. The three side lists are fields of the definition.
-- **Needs.** TREE-21.
+
 - **Done when.** `helper_row` is named nowhere or only on the definition;
   `./test/decide/run_tests.sh -k "abs or norm or l0 or definition or explain or diagnos"` passes; a stored plan
   of a query mixing an ABS, an L0 count and a product pins the order of helper rows (R30).

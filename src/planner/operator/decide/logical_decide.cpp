@@ -328,28 +328,7 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 	bound.EnumerateExpressions([&](unique_ptr<Expression> &expression) { callback(&expression); });
 	// A helper definition holds what a rewrite lifted out of the clauses, or copied beside them.
 	for (auto &definition : helper_definitions) {
-		if (definition->kind == DecideHelperKind::REDUCER_VALUE) {
-			// The reducer is the helper's definition and no reducer of a clause: a walk reads what it holds.
-			if (definition->Frame() != DConstants::INVALID_INDEX) {
-				callback(&definition->Member());
-				continue;
-			}
-			auto &reducer = definition->Reducer();
-			for (auto &child : reducer.children) {
-				callback(&child);
-			}
-			if (reducer.filter) {
-				callback(&reducer.filter);
-			}
-		} else if (definition->body) {
-			callback(&definition->body);
-		}
-		if (definition->when) {
-			callback(&definition->when);
-		}
-		for (auto &link : definition->links) {
-			link.EnumerateExpressions([&](unique_ptr<Expression> &expression) { callback(&expression); });
-		}
+		definition->EnumerateExpressions([&](unique_ptr<Expression> &expression) { callback(&expression); });
 	}
 	for (auto &check : value_checks) {
 		callback(&check);
@@ -364,17 +343,17 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 	}
 }
 
-BoundDecideReducerExpression &DecideHelperDefinition::Reducer() const {
+BoundDecideReducerExpression &DecideReducerValueDefinition::Reducer() const {
 	return body->Cast<BoundDecideReducerExpression>();
 }
 
-idx_t DecideHelperDefinition::Frame() const {
+idx_t DecideReducerValueDefinition::Frame() const {
 	return body->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_FRAME
 	           ? body->Cast<BoundDecideFrameExpression>().frame
 	           : DConstants::INVALID_INDEX;
 }
 
-unique_ptr<Expression> &DecideHelperDefinition::Member() const {
+unique_ptr<Expression> &DecideReducerValueDefinition::Member() const {
 	return Frame() == DConstants::INVALID_INDEX ? Reducer().children[0]
 	                                            : body->Cast<BoundDecideFrameExpression>().children[0];
 }
@@ -416,7 +395,7 @@ static int ComparisonPush(const Expression &leaf) {
 //! (DecideHelperDefinition::push), a SUM or AVG being linear in them and a MIN or MAX never decreasing when one grows.
 //! A MIN or MAX's closing side is the hard direction, encoded with a Big-M over its members, which reads them from
 //! both directions: no sign is pinned, which is 0, as under no push.
-static int ValueLinkPush(const DecideHelperDefinition &link) {
+static int ValueLinkPush(const DecideReducerValueDefinition &link) {
 	if (IsDecideExtremum(link.reducer) && link.NeedsClosing()) {
 		return 0;
 	}
@@ -430,6 +409,79 @@ static DecideOwnedBody ClauseBody(DecideOwnedBody::Owner owner, idx_t index, Bou
 	body.rows = clause.scope.when.get();
 	body.clause = &clause;
 	return body;
+}
+
+void DecideHelperDefinition::EnumerateExpressions(const std::function<void(unique_ptr<Expression> &)> &callback) {
+	if (when) {
+		callback(when);
+	}
+}
+
+void DecideHelperDefinition::Bodies(idx_t, const std::function<void(DecideOwnedBody &)> &) {
+}
+
+void DecideAbsDefinition::EnumerateExpressions(const std::function<void(unique_ptr<Expression> &)> &callback) {
+	if (body) {
+		callback(body);
+	}
+	DecideHelperDefinition::EnumerateExpressions(callback);
+}
+
+void DecideProductDefinition::EnumerateExpressions(const std::function<void(unique_ptr<Expression> &)> &callback) {
+	callback(body);
+	DecideHelperDefinition::EnumerateExpressions(callback);
+}
+
+void DecideL0IndicatorDefinition::EnumerateExpressions(const std::function<void(unique_ptr<Expression> &)> &callback) {
+	DecideHelperDefinition::EnumerateExpressions(callback);
+	for (auto &link : links) {
+		link.EnumerateExpressions(callback);
+	}
+}
+
+void DecideL0IndicatorDefinition::Bodies(idx_t index, const std::function<void(DecideOwnedBody &)> &callback) {
+	for (auto &link : links) {
+		auto body = ClauseBody(DecideOwnedBody::Owner::HELPER, index, link);
+		callback(body);
+	}
+}
+
+void DecideBodyDefinition::EnumerateExpressions(const std::function<void(unique_ptr<Expression> &)> &callback) {
+	callback(body);
+	DecideHelperDefinition::EnumerateExpressions(callback);
+}
+
+void DecideBodyDefinition::Bodies(idx_t index, const std::function<void(DecideOwnedBody &)> &callback) {
+	DecideOwnedBody owned(DecideOwnedBody::Owner::HELPER, index, body);
+	owned.push = relation == ExpressionType::COMPARE_GREATERTHANOREQUALTO ? 1
+	             : relation == ExpressionType::COMPARE_LESSTHANOREQUALTO  ? -1
+	                                                                      : 0;
+	owned.rows = when.get();
+	callback(owned);
+}
+
+void DecideReducerValueDefinition::EnumerateExpressions(const std::function<void(unique_ptr<Expression> &)> &callback) {
+	if (Frame() != DConstants::INVALID_INDEX) {
+		callback(Member());
+	} else {
+		auto &reducer = Reducer();
+		for (auto &child : reducer.children) {
+			callback(child);
+		}
+		if (reducer.filter) {
+			callback(reducer.filter);
+		}
+	}
+	DecideHelperDefinition::EnumerateExpressions(callback);
+}
+
+void DecideReducerValueDefinition::Bodies(idx_t index, const std::function<void(DecideOwnedBody &)> &callback) {
+	const bool frame = Frame() != DConstants::INVALID_INDEX;
+	DecideOwnedBody owned(DecideOwnedBody::Owner::HELPER, index, Member());
+	owned.push = ValueLinkPush(*this);
+	owned.kept_rows = DecideRowsKeptByBoth(when.get(), frame ? nullptr : Reducer().filter.get());
+	owned.rows = owned.kept_rows.get();
+	callback(owned);
 }
 
 void LogicalDecide::RewriteBodies(ClientContext &context, const std::function<void(DecideOwnedBody &)> &callback) {
@@ -464,40 +516,7 @@ void LogicalDecide::EnumerateBodies(const std::function<void(DecideOwnedBody &)>
 		callback(body);
 	}
 	for (idx_t i = 0; i < helper_definitions.size(); i++) {
-		auto &definition = *helper_definitions[i];
-		switch (definition.kind) {
-		case DecideHelperKind::DEFINITION: {
-			// A definition stands apart from the clause list; `t >= q` holds the body down, `t <= q` up, `t = q`
-			// neither.
-			DecideOwnedBody body(Owner::HELPER, i, definition.body);
-			body.push = definition.relation == ExpressionType::COMPARE_GREATERTHANOREQUALTO ? 1
-			            : definition.relation == ExpressionType::COMPARE_LESSTHANOREQUALTO  ? -1
-			                                                                                : 0;
-			body.rows = definition.when.get();
-			callback(body);
-			break;
-		}
-		case DecideHelperKind::REDUCER_VALUE: {
-			// A reducer value helper's body belongs to no clause: it is read on the rows its path and its own `when`
-			// keep.
-			const bool frame = definition.Frame() != DConstants::INVALID_INDEX;
-			DecideOwnedBody body(Owner::HELPER, i, definition.Member());
-			body.push = ValueLinkPush(definition);
-			body.kept_rows =
-			    DecideRowsKeptByBoth(definition.when.get(), frame ? nullptr : definition.Reducer().filter.get());
-			body.rows = body.kept_rows.get();
-			callback(body);
-			break;
-		}
-		default:
-			// An L0 indicator's three rows stand beside the clauses, where the tree's indicator F node reads them. An
-			// ABS's operand and a product's expansion are copies of what a body holds, and no body.
-			for (auto &link : definition.links) {
-				auto body = ClauseBody(Owner::HELPER, i, link);
-				callback(body);
-			}
-			break;
-		}
+		helper_definitions[i]->Bodies(i, callback);
 	}
 }
 

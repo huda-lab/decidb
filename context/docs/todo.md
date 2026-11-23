@@ -15,8 +15,7 @@ the owner rules first.
 ## 5.2 The clause record (one lane)
 
 ## 5.3 The helper definitions (needs: 5.2) (one lane)
-- [ ] TREE-21 A definition class per kind — pipeline/todo.md § TREE-21
-- [ ] TREE-22 A definition owns its rows and its facts — pipeline/todo.md § TREE-22 (needs: TREE-21)
+- [ ] TREE-22 A definition owns its rows and its facts — pipeline/todo.md § TREE-22
 
 ## 5.4 The tree (needs: 5.3) (one lane)
 - [ ] TREE-7 Each atom of a clause is handed over with its node — pipeline/todo.md § TREE-7

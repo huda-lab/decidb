@@ -114,7 +114,7 @@ bool DecideTermSplitter::ExpandBilinearGroups(const Expression &expr, unique_ptr
 		return false;
 	}
 	if (kept.Is(DecideHelperKind::PRODUCT)) {
-		expanded = helper_definitions[kept.index]->body->Copy();
+		expanded = helper_definitions[kept.index]->Cast<DecideProductDefinition>().body->Copy();
 		unique_ptr<Expression> nested;
 		if (ExpandBilinearGroups(*expanded, nested)) {
 			expanded = std::move(nested);

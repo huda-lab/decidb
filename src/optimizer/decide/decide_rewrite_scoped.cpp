@@ -48,7 +48,7 @@ namespace duckdb {
 
 using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 
-idx_t decide_rewrite::AddValueHelper(LogicalDecide &decide, unique_ptr<DecideHelperDefinition> link,
+idx_t decide_rewrite::AddValueHelper(LogicalDecide &decide, unique_ptr<DecideReducerValueDefinition> link,
                                      const KeyedScopeInfo &scope, bool whole, idx_t source_clause_id,
                                      LogicalDecide::RewriteAccount::Kind account) {
 	const idx_t link_idx = decide.helper_definitions.size();
@@ -151,10 +151,11 @@ struct Helpers {
 	//! helper, however they spell the reducer.
 	idx_t Find(const BoundDecideReducerExpression &agg, const Expression *rows, idx_t path_key, idx_t class_key) const {
 		for (idx_t i = 0; i < decide.helper_definitions.size(); i++) {
-			auto &link = *decide.helper_definitions[i];
-			if (link.kind != DecideHelperKind::REDUCER_VALUE || link.Frame() != DConstants::INVALID_INDEX) {
+			auto found = decide.helper_definitions[i]->TryCast<DecideReducerValueDefinition>();
+			if (!found || found->Frame() != DConstants::INVALID_INDEX) {
 				continue;
 			}
+			auto &link = *found;
 			auto &held = link.Reducer();
 			// A clause's rows carry copies of its `when`: the same condition.
 			const bool same_rows = rows ? link.when && DecideExpressionsEqual(*link.when, *rows) : !link.when;
@@ -240,7 +241,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 	                                                           : LogicalDecide::RewriteAccount::Kind::HELPER_PER_GROUP;
 	idx_t link_idx = helpers.Find(agg, rows.get(), group_key, class_key);
 	if (link_idx != DConstants::INVALID_INDEX) {
-		auto &link = *decide.helper_definitions[link_idx];
+		auto &link = decide.helper_definitions[link_idx]->Cast<DecideReducerValueDefinition>();
 		link.push = JoinExtremumPush(link.push, push);
 		// Each clause that reads the helper says so in its own plan, once.
 		bool told = false;
@@ -255,7 +256,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Bool
 		return;
 	}
 
-	auto link = make_uniq<DecideHelperDefinition>(DecideHelperKind::REDUCER_VALUE);
+	auto link = make_uniq<DecideReducerValueDefinition>();
 	link->reducer = agg.kind;
 	// Its columns are named by the reducer it holds, `by` included: a refusal's remedy bounds that (F6).
 	link->label = plan_label;

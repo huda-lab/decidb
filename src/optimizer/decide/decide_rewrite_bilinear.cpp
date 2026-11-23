@@ -47,8 +47,8 @@ bool decide_rewrite::BilinearReadsBody(const LogicalDecide &decide, const Decide
 	if (body.owner != DecideOwnedBody::Owner::HELPER) {
 		return true;
 	}
-	auto &definition = *decide.helper_definitions[body.index];
-	return definition.kind != DecideHelperKind::REDUCER_VALUE || definition.Frame() == DConstants::INVALID_INDEX;
+	auto link = decide.helper_definitions[body.index]->TryCast<DecideReducerValueDefinition>();
+	return !link || link->Frame() == DConstants::INVALID_INDEX;
 }
 
 void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {
@@ -186,7 +186,7 @@ idx_t AddBooleanProduct(LogicalDecide &decide, const DecideRowOrigin &origin, id
 	// there: the McCormick rows against the other factor's box (the structural `w <= x` is not emitted here, being
 	// wrong for a negative-domain x: it would force x >= 0 when b = 0), and for two Booleans the AND (`w <= b1`,
 	// `w <= b2`, `w >= b1 + b2 - 1`).
-	auto product = make_uniq<DecideHelperDefinition>(DecideHelperKind::BOOLEAN_PRODUCT);
+	auto product = make_uniq<DecideBooleanProductDefinition>();
 	product->helper = aux_idx;
 	product->bool_factor = bool_var_idx;
 	product->other_factor = other_var_idx;
@@ -323,7 +323,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 				// Keep the product the user wrote. The copied expansion is the term splitter's recipe; every
 				// Boolean cross term in it names a helper that tree lowering turns into a BOOLEAN_PRODUCT F read.
 				// If there is no Boolean cross term, the expansion still exposes the distributed quadratic terms.
-				auto kept = make_uniq<DecideHelperDefinition>(DecideHelperKind::PRODUCT);
+				auto kept = make_uniq<DecideProductDefinition>();
 				kept->body = std::move(sum);
 				decide.helper_definitions.push_back(std::move(kept));
 				decide.NameDefinition(*expr, decide.helper_definitions.size() - 1);

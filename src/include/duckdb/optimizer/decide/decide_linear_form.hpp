@@ -18,7 +18,7 @@ class LogicalDecide;
 struct BoundDecideClause;
 struct DecideBody;
 struct DecideConstraint;
-struct DecideHelperDefinition;
+struct DecideReducerValueDefinition;
 struct DecideObjective;
 struct DecideTree;
 
@@ -50,7 +50,7 @@ public:
 	//! The objective's records, null for one that reads no decision.
 	unique_ptr<DecideObjective> Objective(const BoundDecideClause &objective);
 	//! A helper's member terms and its frame's `else` terms, into the body of its G or O.
-	void Members(DecideHelperDefinition &link, DecideBody &body);
+	void Members(DecideReducerValueDefinition &link, DecideBody &body);
 	//! Once every term is split: the frames left in the records become the columns they read, and the frame columns
 	//! go to `tree` (DecideTree::frame_reads).
 	void Frames(DecideTree &tree);

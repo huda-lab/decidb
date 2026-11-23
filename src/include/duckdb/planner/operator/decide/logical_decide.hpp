@@ -278,20 +278,20 @@ struct DecideSourceColumnName {
 ColumnBinding DecideSourceColumnKey(const LogicalOperator &source, const ColumnBinding &binding,
                                     const vector<DecideSourceColumnName> &named);
 
+struct DecideOwnedBody;
+
 //! One construct a rewrite kept, with the helper decision that stands for it (LogicalDecide::helper_definitions): the
-//! symbol table's entry, as a compiler's declaration is to the uses that name it. The head is what every kind says;
-//! the rest is each kind's own. An optimized plan is never serialized, so neither is this.
+//! symbol table's entry, as a compiler's declaration is to the uses that name it. The base is what every kind says;
+//! each kind is a class of its own with its own fields, reached by Cast, as a LogicalOperator's is. An optimized plan
+//! is never serialized, so neither is this.
 struct DecideHelperDefinition {
 	explicit DecideHelperDefinition(DecideHelperKind kind) : kind(kind) {
 	}
+	virtual ~DecideHelperDefinition() = default;
 
-	DecideHelperKind kind;
+	const DecideHelperKind kind;
 	//! The helper decision, an index into the decisions. INVALID_INDEX for a PRODUCT.
 	idx_t helper = DConstants::INVALID_INDEX;
-	//! What the helper stands for: an ABS's operand (recorded once the bodies are final, RecordAbsOperands), a
-	//! PRODUCT's expansion, a DEFINITION's body, a REDUCER_VALUE's reducer (Reducer). Null for a BOOLEAN_PRODUCT and
-	//! an L0_INDICATOR.
-	unique_ptr<Expression> body;
 	//! The rows the construct is read on: the `when` its clause keeps that also passes the `when` of each reducer
 	//! around it. Null for every row.
 	unique_ptr<Expression> when;
@@ -304,43 +304,136 @@ struct DecideHelperDefinition {
 	//! reducer with its `by`.
 	string label;
 
-	//! ABS: true when nothing the clause or the objective pushes pins the helper to |body| (a hard direction, an
+	//! Every expression the definition holds, for a pass that rebinds or replaces columns.
+	virtual void EnumerateExpressions(const std::function<void(unique_ptr<Expression> &)> &callback);
+	//! The bodies a rewrite reads or replaces (LogicalDecide::EnumerateBodies), `index` being the definition's own.
+	//! None by default: a copy of what a clause's body holds is no body.
+	virtual void Bodies(idx_t index, const std::function<void(DecideOwnedBody &)> &callback);
+
+	template <class TARGET>
+	TARGET &Cast() {
+		if (kind != TARGET::KIND) {
+			throw InternalException("DECIDE: a helper definition is read as another kind");
+		}
+		return reinterpret_cast<TARGET &>(*this);
+	}
+	template <class TARGET>
+	const TARGET &Cast() const {
+		if (kind != TARGET::KIND) {
+			throw InternalException("DECIDE: a helper definition is read as another kind");
+		}
+		return reinterpret_cast<const TARGET &>(*this);
+	}
+	//! The definition as a TARGET, or null when it is of another kind.
+	template <class TARGET>
+	optional_ptr<TARGET> TryCast() {
+		return kind == TARGET::KIND ? reinterpret_cast<TARGET *>(this) : nullptr;
+	}
+	template <class TARGET>
+	optional_ptr<const TARGET> TryCast() const {
+		return kind == TARGET::KIND ? reinterpret_cast<const TARGET *>(this) : nullptr;
+	}
+};
+
+//! `abs(e)` over a decision (DecideHelperKind::ABS).
+struct DecideAbsDefinition : public DecideHelperDefinition {
+	static constexpr const DecideHelperKind KIND = DecideHelperKind::ABS;
+	DecideAbsDefinition() : DecideHelperDefinition(KIND) {
+	}
+
+	//! The operand, recorded once the bodies are final (RecordAbsOperands).
+	unique_ptr<Expression> body;
+	//! True when nothing the clause or the objective pushes pins the helper to |body| (a hard direction, an
 	//! objective sense pushing it up, an unknown sign, an ABS inside another ABS, a body its readers push up):
 	//! FindExactAbs.
 	bool exact = false;
-	//! ABS: the helper's scope (ScopeOf its operand); the rows are stated once per instance of it.
+	//! The helper's scope (ScopeOf its operand); the rows are stated once per instance of it.
 	DecideVarScopeInfo scope;
 
-	//! BOOLEAN_PRODUCT: the two decisions, a Boolean one and the other.
+	void EnumerateExpressions(const std::function<void(unique_ptr<Expression> &)> &callback) override;
+};
+
+//! A written product of two forms over decisions (DecideHelperKind::PRODUCT). It has no helper.
+struct DecideProductDefinition : public DecideHelperDefinition {
+	static constexpr const DecideHelperKind KIND = DecideHelperKind::PRODUCT;
+	DecideProductDefinition() : DecideHelperDefinition(KIND) {
+	}
+
+	//! The product's expansion.
+	unique_ptr<Expression> body;
+
+	void EnumerateExpressions(const std::function<void(unique_ptr<Expression> &)> &callback) override;
+};
+
+//! The product of two decisions, one of them Boolean (DecideHelperKind::BOOLEAN_PRODUCT).
+struct DecideBooleanProductDefinition : public DecideHelperDefinition {
+	static constexpr const DecideHelperKind KIND = DecideHelperKind::BOOLEAN_PRODUCT;
+	DecideBooleanProductDefinition() : DecideHelperDefinition(KIND) {
+	}
+
+	//! The two decisions, a Boolean one and the other.
 	idx_t bool_factor = DConstants::INVALID_INDEX;
 	idx_t other_factor = DConstants::INVALID_INDEX;
+};
 
-	//! L0_INDICATOR: whether stage 06 fills the bound `m` of `|e| <= m * z` from the box; a written one is in `links`.
+//! The indicator of one counted row of `norm(e, 0)` (DecideHelperKind::L0_INDICATOR).
+struct DecideL0IndicatorDefinition : public DecideHelperDefinition {
+	static constexpr const DecideHelperKind KIND = DecideHelperKind::L0_INDICATOR;
+	DecideL0IndicatorDefinition() : DecideHelperDefinition(KIND) {
+	}
+
+	//! Whether stage 06 fills the bound `m` of `|e| <= m * z` from the box; a written one is in `links`.
 	bool auto_m = false;
 	vector<BoundDecideClause> links;
 
-	//! DEFINITION: how the helper compares with its body (`=`, `>=` or `<=`).
+	void EnumerateExpressions(const std::function<void(unique_ptr<Expression> &)> &callback) override;
+	//! Its three rows stand beside the clauses, where the tree's indicator F node reads them.
+	void Bodies(idx_t index, const std::function<void(DecideOwnedBody &)> &callback) override;
+};
+
+//! A body kept for the helper it defines (DecideHelperKind::DEFINITION).
+struct DecideBodyDefinition : public DecideHelperDefinition {
+	static constexpr const DecideHelperKind KIND = DecideHelperKind::DEFINITION;
+	DecideBodyDefinition() : DecideHelperDefinition(KIND) {
+	}
+
+	unique_ptr<Expression> body;
+	//! How the helper compares with its body (`=`, `>=` or `<=`).
 	ExpressionType relation = ExpressionType::INVALID;
 
-	//! REDUCER_VALUE: the reducer `body` is, as written where the helper stands. Its argument is the helper's member
+	void EnumerateExpressions(const std::function<void(unique_ptr<Expression> &)> &callback) override;
+	//! It stands apart from the clause list; `t >= q` holds the body down, `t <= q` up, `t = q` neither.
+	void Bodies(idx_t index, const std::function<void(DecideOwnedBody &)> &callback) override;
+};
+
+//! A reducer over decisions, or a frame's range over them, read as the helper that holds its value
+//! (DecideHelperKind::REDUCER_VALUE).
+struct DecideReducerValueDefinition : public DecideHelperDefinition {
+	static constexpr const DecideHelperKind KIND = DecideHelperKind::REDUCER_VALUE;
+	DecideReducerValueDefinition() : DecideHelperDefinition(KIND) {
+	}
+
+	//! The reducer (Reducer), or the frame's node (Frame).
+	unique_ptr<Expression> body;
+	//! The reducer `body` is, as written where the helper stands. Its argument is the helper's member
 	//! -- `e` as bound, the reducers inside it helpers, the ABS and bilinear rewrites applied -- which EnumerateBodies
 	//! hands out with its `when`; its `per` is the key scope whose classes it counts once. With a `frame` it is the
 	//! range's marker (DecideOptimizer::RewriteFrameRanges): the helper has one instance per window of the frame, its
 	//! members the payload at the rows the window reads and, with an `else`, the `else` at the window's anchor once
 	//! per missing position (the O's DecideBody::members and fallback, DecideTermLowering).
 	BoundDecideReducerExpression &Reducer() const;
-	//! REDUCER_VALUE: the frame whose range over decisions the helper is, when its body is that frame's node
+	//! The frame whose range over decisions the helper is, when its body is that frame's node
 	//! (BoundDecideFrameExpression); INVALID_INDEX when its body is a reducer.
 	idx_t Frame() const;
-	//! REDUCER_VALUE: what the helper reduces, the reducer's argument or the frame's payload.
+	//! What the helper reduces, the reducer's argument or the frame's payload.
 	unique_ptr<Expression> &Member() const;
-	//! REDUCER_VALUE: SUM, AVG, MIN or MAX: the reducer's kind, or its frame's (DecideFrameSpec::reducer).
+	//! SUM, AVG, MIN or MAX: the reducer's kind, or its frame's (DecideFrameSpec::reducer).
 	DecideReducerKind reducer = DecideReducerKind::SUM;
-	//! REDUCER_VALUE: the key the helper has one instance per among the rows `when` keeps, into `keys`: the reducer's
+	//! The key the helper has one instance per among the rows `when` keeps, into `keys`: the reducer's
 	//! path key (language/guide.md §5.5), every enclosing reducer's `by` key and its own. INVALID_INDEX for `by ()`
 	//! throughout, every kept row, and for a frame's, whose instances are its windows.
 	idx_t path_key = DConstants::INVALID_INDEX;
-	//! REDUCER_VALUE: the way the rows that read the helper push it, joined over them (JoinExtremumPush): NONE when
+	//! The way the rows that read the helper push it, joined over them (JoinExtremumPush): NONE when
 	//! two push it opposite ways, the sign of its factor is not known before the query runs, or the comparison is `=`
 	//! or `<>`. The side that pins the helper is the one a row would otherwise let it escape through (the epigraph
 	//! form; the Plaisted-Greenbaum polarity of a definition). Pushed down, a MAX needs its envelope (`value >=
@@ -348,16 +441,21 @@ struct DecideHelperDefinition {
 	//! never decreases when a member grows, needs `value >= members`, its envelope. Pushed up is the mirror, and NONE
 	//! needs both: the extremum link's two sides (ExtremumLinkSpec), the equality of a SUM or AVG.
 	ExtremumPush push = ExtremumPush::NONE;
-	//! REDUCER_VALUE: whether `push` needs the helper's envelope, and its closing side.
+	//! Whether `push` needs the helper's envelope, and its closing side.
 	bool NeedsEnvelope() const {
 		return push == ExtremumPush::NONE || IsEasyExtremum(reducer != DecideReducerKind::MIN, push);
 	}
 	bool NeedsClosing() const {
 		return !IsEasyExtremum(reducer != DecideReducerKind::MIN, push);
 	}
-	//! REDUCER_VALUE: the clause's `per` key (into `keys`, INVALID_INDEX for `per ()`), DECIDE_ROW_KEY for a clause
+	//! The clause's `per` key (into `keys`, INVALID_INDEX for `per ()`), DECIDE_ROW_KEY for a clause
 	//! with none.
 	idx_t class_key = DECIDE_ROW_KEY;
+
+	//! The reducer is the helper's definition and no reducer of a clause: a walk reads what it holds.
+	void EnumerateExpressions(const std::function<void(unique_ptr<Expression> &)> &callback) override;
+	//! Its member belongs to no clause: it is read on the rows its path and its own `when` keep.
+	void Bodies(idx_t index, const std::function<void(DecideOwnedBody &)> &callback) override;
 };
 
 //! One expression the optimizer reads or rewrites, with what its owner says about it (LogicalDecide::EnumerateBodies).

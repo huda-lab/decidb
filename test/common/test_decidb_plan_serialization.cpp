@@ -1158,8 +1158,8 @@ TEST_CASE("A DECIDE member NULL test copies and compares as itself, not as the t
 
 TEST_CASE("A kept call carries the helper definition it names beside what it computes", "[decidb]") {
 	LogicalDecide decide;
-	decide.helper_definitions.push_back(make_uniq<DecideHelperDefinition>(DecideHelperKind::ABS));
-	decide.helper_definitions.push_back(make_uniq<DecideHelperDefinition>(DecideHelperKind::DEFINITION));
+	decide.helper_definitions.push_back(make_uniq<DecideAbsDefinition>());
+	decide.helper_definitions.push_back(make_uniq<DecideBodyDefinition>());
 	ScalarFunction function("f", {}, LogicalType::INTEGER, nullptr);
 	BoundFunctionExpression plain(LogicalType::INTEGER, function, {}, nullptr);
 	REQUIRE(!DecideDefinitionOf(plain).IsSet());

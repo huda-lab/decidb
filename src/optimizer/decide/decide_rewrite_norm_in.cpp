@@ -96,7 +96,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		    auto z_scope = ScopeOf(decide, canonicalizer, *aggregate.children[0]);
 		    const idx_t z_idx = AddAuxiliaryDecision(decide, z_name, LogicalType::INTEGER, true, z_scope,
 		                                             "(" + RenderForPlan(*aggregate.children[0], decide) + " <> 0)");
-		    auto indicator = make_uniq<DecideHelperDefinition>(DecideHelperKind::L0_INDICATOR);
+		    auto indicator = make_uniq<DecideL0IndicatorDefinition>();
 		    indicator->helper = z_idx;
 		    indicator->auto_m = auto_m;
 		    indicator->label = RenderForPlan(aggregate, decide);

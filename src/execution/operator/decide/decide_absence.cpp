@@ -38,8 +38,9 @@ bool DecideAbsence::At(idx_t variable, idx_t row) const {
 		return true;
 	}
 	// A product's auxiliary has none where either factor has none.
-	for (auto &product : tree.definitions) {
-		if (product->kind == DecideHelperKind::BOOLEAN_PRODUCT && product->helper == variable &&
+	for (auto &definition : tree.definitions) {
+		auto product = definition->TryCast<DecideBooleanProductDefinition>();
+		if (product && product->helper == variable &&
 		    (At(product->bool_factor, row) || At(product->other_factor, row))) {
 			return true;
 		}
@@ -63,9 +64,9 @@ bool DecideAbsence::MayBe(idx_t variable) const {
 	if (auxiliaries && !(*auxiliaries)[variable].empty()) {
 		return true;
 	}
-	for (auto &product : tree.definitions) {
-		if (product->kind == DecideHelperKind::BOOLEAN_PRODUCT && product->helper == variable &&
-		    (MayBe(product->bool_factor) || MayBe(product->other_factor))) {
+	for (auto &definition : tree.definitions) {
+		auto product = definition->TryCast<DecideBooleanProductDefinition>();
+		if (product && product->helper == variable && (MayBe(product->bool_factor) || MayBe(product->other_factor))) {
 			return true;
 		}
 	}

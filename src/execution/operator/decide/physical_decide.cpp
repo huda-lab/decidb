@@ -593,7 +593,8 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// on x.
 	solver_input.abs_links = std::move(gstate.evaluated_abs_links);
 	for (auto &definition : tree->definitions) {
-		if (definition->kind == DecideHelperKind::L0_INDICATOR && definition->auto_m) {
+		auto indicator = definition->TryCast<DecideL0IndicatorDefinition>();
+		if (indicator && indicator->auto_m) {
 			solver_input.l0_auto_indicators.push_back(definition->helper);
 		}
 	}

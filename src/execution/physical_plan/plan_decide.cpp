@@ -179,8 +179,9 @@ static void NameInputColumns(DecideDisplay &display, const DecideTree &tree, Log
 	}
 	// A lifted reducer's expressions live beside the tree: a helper decision's (helper_definitions). The columns
 	// they read explain the answer too.
-	for (auto &link : op.helper_definitions) {
-		if (link->kind != DecideHelperKind::REDUCER_VALUE) {
+	for (auto &definition : op.helper_definitions) {
+		auto link = definition->TryCast<DecideReducerValueDefinition>();
+		if (!link) {
 			continue;
 		}
 		auto *filter = link->Frame() == DConstants::INVALID_INDEX ? link->Reducer().filter.get() : nullptr;

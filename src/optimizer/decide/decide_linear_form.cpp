@@ -122,7 +122,7 @@ public:
 
 	//! A reducer the value rewrite lifted into a helper decision: its member terms into `body`; a range frame's
 	//! helper also reads its `else`, at the window's anchor.
-	void Members(DecideHelperDefinition &link, DecideBody &body) {
+	void Members(DecideReducerValueDefinition &link, DecideBody &body) {
 		ExtractLinearTerms(*link.Member(), body.members);
 		if (link.Frame() != DConstants::INVALID_INDEX) {
 			const BoundConstantExpression one(Value::INTEGER(1));
@@ -979,7 +979,7 @@ private:
 	//! term is split.
 	vector<DecideConstraint *> clauses;
 	DecideObjective *objective = nullptr;
-	vector<pair<DecideHelperDefinition *, DecideBody *>> links;
+	vector<pair<DecideReducerValueDefinition *, DecideBody *>> links;
 	//! The frame columns the lowering reads (DecideTree::frame_reads).
 	DecideFrameReads frame_reads;
 	idx_t decide_index;
@@ -1010,7 +1010,7 @@ unique_ptr<DecideObjective> DecideTermLowering::Objective(const BoundDecideClaus
 	return builder->Objective(objective);
 }
 
-void DecideTermLowering::Members(DecideHelperDefinition &link, DecideBody &body) {
+void DecideTermLowering::Members(DecideReducerValueDefinition &link, DecideBody &body) {
 	builder->Members(link, body);
 }
 

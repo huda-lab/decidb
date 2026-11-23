@@ -827,10 +827,11 @@ vector<DecideFunctionRow> CollectDecideFunctionRows(const DecideTree &tree, cons
 	for (auto function : tree.function_nodes) {
 		auto &node = *tree.nodes[function];
 		if (!tree.IsFunction(node, DecideHelperKind::DEFINITION)) {
+			auto indicator = tree.Definition(node)->TryCast<DecideL0IndicatorDefinition>();
 			for (auto root : node.rows) {
 				auto &clause = tree.nodes[root]->compiled.clause;
 				rows.push_back({tree.nodes[root]->origin.source_clause_id,
-				                RenderFunctionRow(*clause, decide_variables, ctx, tree.Definition(node)->auto_m)});
+				                RenderFunctionRow(*clause, decide_variables, ctx, indicator && indicator->auto_m)});
 			}
 		}
 	}

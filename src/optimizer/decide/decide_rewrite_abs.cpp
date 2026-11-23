@@ -151,7 +151,7 @@ static vector<bool> FindBoxedHelpers(LogicalDecide &decide) {
 	auto box = [&](idx_t i) {
 		if (!boxed[i]) {
 			boxed[i] = true;
-			demand(*definitions[i]->body);
+			definitions[i]->EnumerateExpressions([&](unique_ptr<Expression> &held) { demand(*held); });
 		}
 	};
 	demand = [&](const Expression &expr) {
@@ -179,7 +179,8 @@ static vector<bool> FindBoxedHelpers(LogicalDecide &decide) {
 		}
 	};
 	for (idx_t i = 0; i < definitions.size(); i++) {
-		if (IsDecideExtremum(definitions[i]->reducer) && definitions[i]->NeedsClosing()) {
+		auto link = definitions[i]->TryCast<DecideReducerValueDefinition>();
+		if (link && IsDecideExtremum(link->reducer) && link->NeedsClosing()) {
 			box(i);
 		}
 	}
@@ -268,7 +269,7 @@ static void RecordAbsOperands(const Expression &expr, LogicalDecide &decide, con
 	if (kept.Is(DecideHelperKind::ABS)) {
 		auto &operand = *expr.Cast<BoundFunctionExpression>().children[0];
 		RequireLinearOperand(splitter, operand, expr, "ABS");
-		decide.helper_definitions[kept.index]->body = operand.Copy();
+		decide.helper_definitions[kept.index]->Cast<DecideAbsDefinition>().body = operand.Copy();
 	}
 	ExpressionIterator::EnumerateChildren(expr,
 	                                      [&](const Expression &child) { RecordAbsOperands(child, decide, splitter); });
@@ -336,7 +337,7 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 }
 
 BoundDecideClause decide_rewrite::MakeAbsRow(ClientContext &context, const LogicalDecide &decide,
-                                             const DecideHelperDefinition &function, bool negated) {
+                                             const DecideAbsDefinition &function, bool negated) {
 	// `aux >= inner` or `aux >= -inner`, in its natural form, which can leave decisions on both sides. The tree brings
 	// each through the canonical boundary as it does any clause.
 	auto &aux = decide.bound.variables[function.helper]->Cast<BoundColumnRefExpression>();
@@ -422,7 +423,7 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 		// stage 06 its encoding.
 		AddRewriteAccount(decide, origin.source_clause_id, LogicalDecide::RewriteAccount::Kind::HELPER,
 		                  std::move(label));
-		auto function = make_uniq<DecideHelperDefinition>(DecideHelperKind::ABS);
+		auto function = make_uniq<DecideAbsDefinition>();
 		function->helper = aux_idx;
 		function->exact = needs_exact;
 		function->when = std::move(read_rows);

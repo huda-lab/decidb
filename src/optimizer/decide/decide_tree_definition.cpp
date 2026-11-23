@@ -299,7 +299,7 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 		                      : down ? ExpressionType::COMPARE_GREATERTHANOREQUALTO
 		                             : ExpressionType::COMPARE_LESSTHANOREQUALTO;
 		auto condition = HelperCondition(first);
-		auto definition = make_uniq<DecideHelperDefinition>(DecideHelperKind::DEFINITION);
+		auto definition = make_uniq<DecideBodyDefinition>();
 		definition->helper = helper;
 		definition->relation = relation;
 		definition->body = body->Copy();
