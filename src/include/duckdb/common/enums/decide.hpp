@@ -166,12 +166,10 @@ inline bool IsRelaxableForElastic(ConstraintKind kind) {
 //!                    the reported edit is the max overshoot, not the sum.
 enum class ElasticShape : uint8_t { UNSET, PER_ROW_DATA, SHARED_SCALAR };
 
-//! DECIDE encodes pipeline metadata in the `alias` of bound expressions. More than one
-//! tag can apply to the same node — a relation-qualified AVG is tagged by the binder
-//! (which relation it reduces over) and again by the AVG->SUM rewrite (that its
-//! coefficients need the 1/N denominator) — so tags are **concatenated** and matched by
-//! search, never by equality. Every tag opens and closes with `__`, which is what makes
-//! concatenation unambiguous and lets a prefix tag's payload be read back below.
+//! DECIDE encodes the pipeline metadata of a frame and of a function in the `alias` of bound expressions. More than
+//! one tag can apply to the same node, so tags are **concatenated** and matched by search, never by equality. Every
+//! tag opens and closes with `__`, which is what makes concatenation unambiguous and lets a prefix tag's payload be
+//! read back below.
 inline void AddDecideTag(string &alias, const string &tag) {
 	alias += tag;
 }
@@ -181,17 +179,8 @@ inline bool HasDecideTag(const string &alias, const string &tag) {
 	return alias.find(tag) != string::npos;
 }
 
-//! Remove every occurrence of an exact DECIDE tag while preserving ordinary aliases
-//! and any other concatenated tags.
-inline void RemoveDecideTag(string &alias, const string &tag) {
-	idx_t pos;
-	while ((pos = alias.find(tag)) != string::npos) {
-		alias.erase(pos, tag.size());
-	}
-}
-
 //! Remove every DECIDE tag from an alias, leaving whatever ordinary alias it was appended
-//! to: "cost__source_clause_0____when_filter__" yields "cost", and an alias that was
+//! to: "cost__frame_0____frame_column__" yields "cost", and an alias that was
 //! nothing but tags yields "".
 //!
 //! Tags are only ever appended (`AddDecideTag`), so they are always a suffix, and each one
@@ -215,9 +204,9 @@ inline string StripDecideTags(const string &alias) {
 }
 
 //! Reads the payload of a prefix-shaped tag out of a possibly multi-tag alias:
-//! ("__qualified_by_2____avg_rewrite__", "__qualified_by_") yields "2". The payload runs
+//! ("__frame_2____frame_column__", "__frame_") yields "2". The payload runs
 //! from the end of the prefix to the tag's closing `__`, so payloads may contain single
-//! underscores ("0_min"). Returns false when the tag is absent or has an empty payload.
+//! underscores. Returns false when the tag is absent or has an empty payload.
 inline bool ExtractDecideTagPayload(const string &alias, const string &prefix, string &payload) {
 	auto start = alias.find(prefix);
 	if (start == string::npos) {
@@ -242,26 +231,8 @@ inline bool TryParseDecideIndexTag(const string &alias, const string &prefix, id
 	return true;
 }
 
-//! Tag prefix recording a reducer's own key, `sum(per K: e)` (on
-//! BoundAggregateExpression.alias). Format: "__qualified_by_<keyed_scope_idx>__" — the
-//! index is into LogicalDecide::keyed_scopes, whose entry supplies the classes
-//! the reducer takes one value from. The scope may have no variable declared on it.
-static constexpr const char *QUALIFIED_REDUCER_SCOPE_TAG_PREFIX = "__qualified_by_";
-
-//! Tag on an objective's reducer that holds a reducer: the canonicalizer stamps it once, and
-//! DecideOptimizer::RewriteScopedReducers replaces the reducer by a helper decision
-//! (LogicalDecide::reducer_value_links). A clause in the VALUE shape says so in a field
-//! (BoundDecideClause::shape).
-static constexpr const char *VALUE_REWRITE_TAG = "__value_rewrite__";
-
-//! Tag prefix naming a `BY (key)`: "__group_key_<i>__" indexes LogicalDecide::keys.
-//! On a reducer, the rows it reads at a class are the kept rows sharing the class's key
-//! value. No tag means `BY ()`: every kept row. The key the decision reducers of an aggregate
-//! clause share is the clause's (BoundDecideClause::group_key).
-static constexpr const char *GROUP_KEY_TAG_PREFIX = "__group_key_";
-
 //! Tag prefix naming a frame selector: "__frame_<i>__" indexes LogicalDecide::frames. It
-//! stands on the aggregate a frame binds to -- `first(e)` for a point frame, its reducer
+//! stands on the BoundDecideReducerExpression a frame binds to -- `first(e)` for a point frame, its reducer
 //! for a range -- whose rows at an anchor row are the ones the frame selects there
 //! (language/guide.md §5.6).
 static constexpr const char *FRAME_TAG_PREFIX = "__frame_";
@@ -270,19 +241,10 @@ inline string MakeFrameTag(idx_t frame_idx) {
 	return string(FRAME_TAG_PREFIX) + to_string(frame_idx) + "__";
 }
 
-//! Tag used to identify AVG→SUM rewritten aggregates (terms need coefficient scaling at execution)
-static constexpr const char *AVG_REWRITE_TAG = "__avg_rewrite__";
-
-//! Metadata for the executable tree when a flat MIN/MAX carrier deliberately
-//! drops its qualifier. Term extraction and rendering do not read these.
-static constexpr const char *TREE_RETAINED_EXPRESSION_TAG_PREFIX = "__tree_retained_expression_";
-static constexpr const char *TREE_REDUCER_SCOPE_TAG_PREFIX = "__tree_reducer_scope_";
-static constexpr const char *TREE_REDUCER_KEY_TAG_PREFIX = "__tree_reducer_key_";
-
 //! Tag marking a reducer with a nonlinear body held by a tree-owned definition F node. The source body remains at its
 //! written site as a DEFINITION_FUNCTION_TAG_PREFIX read, while this aggregate marker tells MIN/MAX planning that its
 //! members are helper columns. A helper has no box, so stage 08 states a MIN/MAX over it natively.
-//! Set on the BoundAggregateExpression.alias and on the BoundComparisonExpression.alias of the row defining the
+//! Set on the BoundDecideReducerExpression.alias and on the BoundComparisonExpression.alias of the row defining the
 //! helper, which EXPLAIN leaves out: it restates the body, and the clause's account line says how it is held.
 static constexpr const char *BODY_DEFINITION_TAG = "__body_definition__";
 
@@ -298,45 +260,6 @@ static constexpr const char *L0_AUTO_BOUND_TAG = "__l0_auto_bound__";
 static constexpr const char *L0_WRITTEN_BOUND_TAG = "__l0_written_bound__";
 static constexpr const char *L0_TOLERANCE_TAG = "__l0_tolerance__";
 
-//! A private aggregate marker emitted by the DECIDE binder for norm(expr, p).
-//! The marker is only a transport representation: canonicalization replaces the
-//! orders `1`, `2` and `inf` with their definitions, and DecideOptimizer lowers the
-//! L0 orders `0_auto` and `0_<positive-double>` before physical planning.
-static constexpr const char *NORM_MARKER_TAG_PREFIX = "__decide_norm_";
-
-//! Display-only spelling on an aggregate canonicalization built from `norm(e, p)`:
-//! `SUM(ABS(e))` for `1`, `SUM(POWER(e, 2))` for `2`, `MAX(ABS(e))` for `inf`. The
-//! tree means what it says; the tag only lets the canonical text read as the user
-//! wrote it. RewriteNorm strips it before the optimizer formulates the clause. Its
-//! prefix must not contain NORM_MARKER_TAG_PREFIX.
-static constexpr const char *WRITTEN_NORM_TAG_PREFIX = "__written_norm_";
-
-//! On a call whose name was rewritten to its primary's: `abs` for `@`, `pow`, `power` and `^` for `**`, `mean` for
-//! `avg`. DuckDB registers each alias with its primary's implementation, so the binder renames every such call in a
-//! DECIDE clause's algebra (RespellDecideAliases) and every check matches the primary alone. The tag holds the name
-//! the user wrote, which a plan and a message print. Display only: two calls that differ in it are equal.
-static constexpr const char *WRITTEN_NAME_TAG_PREFIX = "__written_name_";
-
-//! Semantic provenance stamped on the flattened value produced by an UNCORRELATED
-//! scalar subquery. Shape alone cannot distinguish that query-wide column ref from
-//! ordinary row data after PlanSubqueries.
-static constexpr const char *QUERY_WIDE_VALUE_TAG = "__query_wide_value__";
-
-//! Semantic provenance stamped on a flattened CORRELATED scalar subquery. It remains
-//! row-varying; the tag exists so downstream diagnostics never quote DuckDB's internal
-//! `SUBQUERY` placeholder as if it were user SQL.
-static constexpr const char *ROW_VARYING_SUBQUERY_TAG = "__row_varying_subquery__";
-
-//! Semantic provenance stamped on what stands for a reducer the bound-side rewrite recorded (its placeholder column, or
-//! the guard over one that is NULL outside the reducer's groups): a computed value, read whole. A signature counts it
-//! as the reducer's key alone (DirectBoundTables), and the tree carries it as a value no decision reads. Messages quote
-//! it by its query location (DecideReplaces), not by this tag.
-static constexpr const char *BOUND_REDUCER_TAG = "__bound_reducer__";
-
-//! On the `IS NOT NULL` test a reducer's own `when` gains for a value its body reads
-//! (DecideCanonicalizer::SkipNullData): the query never wrote it, so no render prints it.
-static constexpr const char *SKIP_NULL_TAG = "__skip_null__";
-
 //! On the COALESCE or CASE that reads a NULL coefficient as 0 (DecideOptimizer's DropNullObjectiveTerms, the direct
 //! IR's GuardCoefficients): the query never wrote it, so a render prints the value it guards.
 static constexpr const char *NULL_GUARD_TAG = "__null_guard__";
@@ -344,11 +267,6 @@ static constexpr const char *NULL_GUARD_TAG = "__null_guard__";
 inline bool TryParseFrameTag(const string &alias, idx_t &frame_idx) {
 	return TryParseDecideIndexTag(alias, FRAME_TAG_PREFIX, frame_idx);
 }
-
-//! Classification stamped by DecideCanonicalizer on the complete canonical RHS when
-//! every component is query-wide. Physical evaluation consumes this fact and does not
-//! re-decide the RHS shape.
-static constexpr const char *QUERY_WIDE_BOUND_TAG = "__query_wide_bound__";
 
 //! On the comparison of a clause over groups: its bound reads a frame and may differ within a group, so it takes the
 //! group's tightest value among the rows where it has one (D85). No side table can read a frame, so execution takes it.
@@ -437,27 +355,12 @@ static constexpr const char *BODY_NAME_PREFIX = "__body_";
 static constexpr const char *VALUE_LINK_NAME_PREFIX = "__value_";
 
 //! Every DECIDE tag above, the one list DecideNameContainsTag reads. A constant added above is added here.
-static constexpr const char *DECIDE_TAGS[] = {QUALIFIED_REDUCER_SCOPE_TAG_PREFIX,
-                                              VALUE_REWRITE_TAG,
-                                              GROUP_KEY_TAG_PREFIX,
-                                              FRAME_TAG_PREFIX,
-                                              AVG_REWRITE_TAG,
-                                              TREE_RETAINED_EXPRESSION_TAG_PREFIX,
-                                              TREE_REDUCER_SCOPE_TAG_PREFIX,
-                                              TREE_REDUCER_KEY_TAG_PREFIX,
+static constexpr const char *DECIDE_TAGS[] = {FRAME_TAG_PREFIX,
                                               BODY_DEFINITION_TAG,
                                               L0_AUTO_BOUND_TAG,
                                               L0_WRITTEN_BOUND_TAG,
                                               L0_TOLERANCE_TAG,
-                                              NORM_MARKER_TAG_PREFIX,
-                                              WRITTEN_NORM_TAG_PREFIX,
-                                              WRITTEN_NAME_TAG_PREFIX,
-                                              QUERY_WIDE_VALUE_TAG,
-                                              ROW_VARYING_SUBQUERY_TAG,
-                                              BOUND_REDUCER_TAG,
-                                              SKIP_NULL_TAG,
                                               NULL_GUARD_TAG,
-                                              QUERY_WIDE_BOUND_TAG,
                                               FRAME_TIGHTEST_BOUND_TAG,
                                               FRAME_COLUMN_TAG,
                                               FRAME_AGGREGATE_TAG_PREFIX,

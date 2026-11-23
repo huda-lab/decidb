@@ -202,7 +202,7 @@ def test_alias_explain_shows_a_name_in_data_and_a_reducer_as_written(decidb_cli)
         f"SELECT id, x FROM {_T} DECIDE x(INT) SUCH THAT x <= 6 AND mean(x) >= 2 MINIMIZE SUM(x * abs(v - 3))",
     )
     assert "abs(v-3)" in plan and "mean(x)>=2" in plan, plan
-    assert "@" not in plan and "avg(" not in plan and "__written_name_" not in plan, plan
+    assert "@" not in plan and "avg(" not in plan and "__" not in plan, plan
 
 
 @pytest.mark.error

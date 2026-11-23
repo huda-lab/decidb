@@ -933,8 +933,7 @@ class TestRefusalsInEverySpelling:
 
     def test_decision_free_objective_term_named_in_sql(self, decidb_cli):
         """The refusal of a row-varying objective term, which stays a term the objective reads and takes more
-        than one value, names the term in SQL, not by an internal alias
-        ('__source_fragment_0____row_varying_subquery__'). A subquery prints as DuckDB renders it (logged in
+        than one value, names the term in SQL, not by an internal alias. A subquery prints as DuckDB renders it (logged in
         issues/bugs.md), so only its text is pinned."""
         decidb_cli.assert_error_at(
             f"""{TABLES}
@@ -989,8 +988,8 @@ class TestRefusalsInEverySpelling:
         ],
     )
     def test_a_decision_free_term_is_quoted_as_written(self, decidb_cli, term):
-        """Binding casts a factor's operand, and a cast prints its child by its alias, so the bound name held the tag
-        `__written_norm_inf__`; the term's own spelling holds no internal name (D40)."""
+        """Binding casts a factor's operand, and a cast prints its child by its alias; the term's own
+        spelling holds no internal name (D40)."""
         decidb_cli.assert_error_at(
             f"SELECT id, x FROM (VALUES (1, 3), (2, 4)) t(id, cap) DECIDE x(REAL) SUCH THAT x <= 7 MAXIMIZE {term}",
             kind="Binder Error",
@@ -1241,7 +1240,7 @@ class TestTagNamesRefused:
         [
             # DecideBinder::QualifyColumnName's refusal, reached from a constraint's bound side
             # (marker_names.sql query 2) and from a reducer's body (query 3).
-            ("w__query_wide_value__", 'SUCH THAT "w__query_wide_value__" * SUM(x) <= 2 MAXIMIZE SUM(x * v)'),
+            ("w__null_guard__", 'SUCH THAT "w__null_guard__" * SUM(x) <= 2 MAXIMIZE SUM(x * v)'),
             (
                 "__definition_function_0__",
                 'SUCH THAT x <= 5 AND SUM("__definition_function_0__" * x + v) <= 40 MAXIMIZE SUM(x)',
@@ -1252,7 +1251,7 @@ class TestTagNamesRefused:
         rows = f'SELECT id, x FROM (VALUES (1, 1.0, 5.0), (2, 2.0, 6.0)) t(id, "{name}", v) '
         decidb_cli.assert_error_at(f"{rows}DECIDE x(INT) {tail}", kind="Binder Error", at=f'"{name}"')
 
-    @pytest.mark.parametrize("name", ["__skip_null__", "__abs_aux_0__"])  # a tag, and a helper decision's name prefix
+    @pytest.mark.parametrize("name", ["__null_guard__", "__abs_aux_0__"])  # a tag, and a helper decision's name prefix
     def test_decision_name(self, decidb_cli, name):
         """DecideDeclarationsBinder's refusal of a declared name."""
         decidb_cli.assert_error_at(

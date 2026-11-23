@@ -26,10 +26,6 @@ string BoundDecideNullTestExpression::ToString() const {
 	return test->ToString();
 }
 
-hash_t BoundDecideNullTestExpression::Hash() const {
-	return CombineHash(Expression::Hash(), test->Hash());
-}
-
 bool BoundDecideNullTestExpression::Equals(const BaseExpression &other_p) const {
 	return Expression::Equals(other_p) &&
 	       Expression::Equals(*test, *other_p.Cast<BoundDecideNullTestExpression>().test);

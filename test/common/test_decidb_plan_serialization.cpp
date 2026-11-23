@@ -11,6 +11,13 @@
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_decide_null_test_expression.hpp"
+#include "duckdb/planner/expression/bound_decide_reducer_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
+
+#include <functional>
 
 using namespace duckdb;
 
@@ -93,6 +100,19 @@ duckdb::unique_ptr<LogicalOperator> RoundTrip(Connection &con, LogicalOperator &
 	REQUIRE_NO_FAIL(con.Query("COMMIT"));
 	return copied;
 }
+
+//! Bind data that compares by a number.
+struct NumberedBindData : public FunctionData {
+	explicit NumberedBindData(idx_t number) : number(number) {
+	}
+	idx_t number;
+	duckdb::unique_ptr<FunctionData> Copy() const override {
+		return make_uniq<NumberedBindData>(number);
+	}
+	bool Equals(const FunctionData &other) const override {
+		return other.Cast<NumberedBindData>().number == number;
+	}
+};
 
 //! Parse exactly one SELECT-shaped statement. DIAGNOSE is represented as a SELECT
 //! over ShowRef too, so it intentionally belongs here.
@@ -998,4 +1018,138 @@ TEST_CASE("A key gives no signature field to a value or a by key it holds by con
 	REQUIRE(fields("sum(per site: cap * x) <= 60") == Kinds {DecideSignatureFieldKind::DECISION});
 	REQUIRE(fields("sum(per r_name: cap * x) <= 60") ==
 	        Kinds {DecideSignatureFieldKind::VALUE, DecideSignatureFieldKind::DECISION});
+}
+
+TEST_CASE("A bound DECIDE reducer copies every field and compares by what it computes", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	SetUp(con);
+	auto plan = con.ExtractPlan("SELECT s_key FROM site DECIDE x(INT) SUCH THAT sum(when cap > 30: x) <= 6 "
+	                            "AND avg(x) <= 7 AND norm(x, 0, 9) <= 2 MAXIMIZE sum(x)");
+	auto *decide = FindDecide(*plan);
+	REQUIRE(decide != nullptr);
+	using Reducer = BoundDecideReducerExpression;
+	// The bound reducers of the three clauses: a SUM with a `when`, an AVG, and a norm no definition replaced.
+	Reducer *sum = nullptr, *avg = nullptr, *marker = nullptr;
+	for (auto &clause : decide->bound.clauses) {
+		ExpressionIterator::EnumerateExpression(clause.body, [&](Expression &expression) {
+			if (expression.GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER) {
+				return;
+			}
+			auto &reducer = expression.Cast<Reducer>();
+			(!reducer.function ? marker : reducer.function->name == "sum" ? sum : avg) = &reducer;
+		});
+	}
+	REQUIRE(sum);
+	REQUIRE(avg);
+	REQUIRE(marker);
+	REQUIRE(sum->filter);
+	REQUIRE(avg->function->name == "avg");
+	REQUIRE(marker->norm.order == DecideNorm::Order::L0);
+	REQUIRE(marker->norm.bound == 9);
+
+	// A reducer with every field set.
+	auto source_owner = sum->Copy();
+	auto &source = source_owner->Cast<Reducer>();
+	source.bind_info = make_uniq<NumberedBindData>(1);
+	source.by = 1;
+	source.per = 2;
+	source.norm.order = DecideNorm::Order::L1;
+	source.written_name = "total";
+	source.count_scale = true;
+	source.holds_reducer = true;
+	source.retained = 3;
+	source.alias = "named";
+	source.query_location = 7;
+
+	// Copy: what Equals compares (the type, the function, the arguments, the rows, the bind data), then each fact.
+	auto copy_owner = source.Copy();
+	auto &copy = copy_owner->Cast<Reducer>();
+	REQUIRE(copy.Equals(source));
+	REQUIRE(copy.Hash() == source.Hash());
+	REQUIRE(copy.FactsEqual(source));
+	REQUIRE(copy.written_name == "total");
+	REQUIRE(copy.alias == "named");
+	REQUIRE(copy.query_location == source.query_location);
+
+	// Whether a copy of the source with one part changed is another reducer, and whether its facts are other facts.
+	auto changed = [&](const std::function<void(Reducer &)> &change) {
+		auto other = source.Copy();
+		change(other->Cast<Reducer>());
+		REQUIRE(other->Equals(source) == source.Equals(*other));
+		return std::make_pair(!other->Equals(source), !other->Cast<Reducer>().FactsEqual(source));
+	};
+	const auto another = std::make_pair(true, false);
+	const auto another_fact = std::make_pair(false, true);
+	const auto display_only = std::make_pair(false, false);
+	// What it computes: its arguments, its rows, its function and the function's bind data.
+	REQUIRE(changed([&](Reducer &r) { r.children[0] = make_uniq<BoundConstantExpression>(Value::INTEGER(1)); }) ==
+	        another);
+	REQUIRE(changed([&](Reducer &r) { r.filter.reset(); }) == another);
+	REQUIRE(changed([&](Reducer &r) { r.filter = make_uniq<BoundConstantExpression>(Value::BOOLEAN(true)); }) ==
+	        another);
+	REQUIRE(changed([&](Reducer &r) { r.function = make_uniq<AggregateFunction>(*avg->function); }) == another);
+	REQUIRE(changed([&](Reducer &r) { r.bind_info = make_uniq<NumberedBindData>(2); }) == another);
+	REQUIRE(changed([&](Reducer &r) { r.bind_info.reset(); }) == another);
+	// What the rewrites record on it is left out of Equals, as an alias is, and compared by FactsEqual. The norm of
+	// a reducer with a function is the spelling of its definition, so it is one of them.
+	REQUIRE(changed([&](Reducer &r) { r.by = 0; }) == another_fact);
+	REQUIRE(changed([&](Reducer &r) { r.per = 0; }) == another_fact);
+	REQUIRE(changed([&](Reducer &r) { r.norm.order = DecideNorm::Order::INF; }) == another_fact);
+	REQUIRE(changed([&](Reducer &r) { r.count_scale = false; }) == another_fact);
+	REQUIRE(changed([&](Reducer &r) { r.holds_reducer = false; }) == another_fact);
+	REQUIRE(changed([&](Reducer &r) { r.retained = 0; }) == another_fact);
+	// The written name and the alias are display only.
+	REQUIRE(changed([&](Reducer &r) { r.written_name = "sum"; }) == display_only);
+	REQUIRE(changed([&](Reducer &r) { r.alias = "renamed"; }) == display_only);
+	// The hash reads the function.
+	auto averaged = source.Copy();
+	averaged->Cast<Reducer>().function = make_uniq<AggregateFunction>(*avg->function);
+	REQUIRE(averaged->Hash() != source.Hash());
+
+	// A norm no definition replaced has no function: its copy has none, and it is the norm its order and bound name.
+	auto marker_owner = marker->Copy();
+	auto &marker_copy = marker_owner->Cast<Reducer>();
+	REQUIRE(!marker_copy.function);
+	REQUIRE(marker_copy.norm == marker->norm);
+	REQUIRE(marker_copy.Equals(*marker));
+	REQUIRE(marker_copy.Hash() == marker->Hash());
+	marker_copy.norm.bound = 0;
+	REQUIRE(!marker_copy.Equals(*marker));
+	marker_copy.norm = marker->norm;
+	marker_copy.norm.order = DecideNorm::Order::L1;
+	REQUIRE(!marker_copy.Equals(*marker));
+	// It is not the SUM over its body, whichever of the two is asked.
+	marker_copy.norm = marker->norm;
+	marker_copy.function = make_uniq<AggregateFunction>(*sum->function);
+	REQUIRE(!marker_copy.Equals(*marker));
+	REQUIRE(!marker->Equals(marker_copy));
+}
+
+TEST_CASE("A DECIDE member NULL test copies and compares as itself, not as the test it wraps", "[decidb]") {
+	auto is_not_null = [](idx_t column) {
+		auto test = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NOT_NULL, LogicalType::BOOLEAN);
+		test->children.push_back(make_uniq<BoundReferenceExpression>(LogicalType::INTEGER, column));
+		return test;
+	};
+	BoundDecideNullTestExpression member(is_not_null(0));
+	member.alias = "named";
+	member.query_location = 7;
+
+	auto copy = member.Copy();
+	REQUIRE(copy->Equals(member));
+	REQUIRE(copy->Hash() == member.Hash());
+	auto &copied_test = copy->Cast<BoundDecideNullTestExpression>().test;
+	REQUIRE(copied_test.get() != member.test.get());
+	REQUIRE(copied_test->Equals(*member.test));
+	REQUIRE(copy->alias == "named");
+	REQUIRE(copy->query_location == member.query_location);
+
+	// The test it wraps is what it compares.
+	BoundDecideNullTestExpression other(is_not_null(1));
+	REQUIRE(!other.Equals(member));
+	// A test the query wrote is another expression, whichever of the two is asked.
+	auto written = is_not_null(0);
+	REQUIRE(!member.Equals(*written));
+	REQUIRE(!written->Equals(member));
 }

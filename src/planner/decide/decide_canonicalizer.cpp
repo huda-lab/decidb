@@ -36,11 +36,11 @@ static void CollectExpressionChildren(const Expression &expr, vector<const Expre
 	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { children.push_back(&child); });
 }
 
-//! Expression::Equals deliberately ignores aliases, while DECIDE stores structural
-//! and provenance tags in aliases. Canonical fixed-point verification therefore needs
-//! the normal semantic comparison plus an ordered, recursive alias comparison.
+//! Expression::Equals ignores an alias and the facts of a reducer that do not change what it computes (its `by`, its
+//! `per`, the norm it was written as), which canonicalization must keep. Canonical fixed-point verification therefore
+//! needs the semantic comparison plus an ordered, recursive comparison of both (DecideFactsEqual).
 static bool CanonicalTreesEqual(const Expression &left, const Expression &right) {
-	if (!Expression::Equals(left, right) || left.GetAlias() != right.GetAlias()) {
+	if (!Expression::Equals(left, right) || !DecideFactsEqual(left, right)) {
 		return false;
 	}
 	vector<const Expression *> left_children;
