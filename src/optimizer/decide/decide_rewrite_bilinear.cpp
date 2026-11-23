@@ -203,15 +203,10 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 	if (!expr) {
 		return;
 	}
-	idx_t definition_aux;
-	if (TryParseDecideIndexTag(expr->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
-		return; // its source body is compiled from its definition, exactly once
-	}
-	idx_t existing_group;
-	if (TryParseDecideIndexTag(expr->GetAlias(), BILINEAR_FUNCTION_GROUP_TAG_PREFIX, existing_group)) {
-		if (existing_group >= decide.helper_definitions.size()) {
-			throw InternalException("DECIDE bilinear function group %llu is missing", existing_group);
-		}
+	// A body kept for its definition is compiled from that definition, exactly once; a kept product has its
+	// expansion.
+	const auto kept = DecideDefinitionOf(*expr);
+	if (kept.Is(DecideHelperKind::DEFINITION) || kept.Is(DecideHelperKind::PRODUCT)) {
 		return;
 	}
 
@@ -331,10 +326,8 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 				// If there is no Boolean cross term, the expansion still exposes the distributed quadratic terms.
 				auto kept = make_uniq<DecideHelperDefinition>(DecideHelperKind::PRODUCT);
 				kept->body = std::move(sum);
-				auto alias = expr->GetAlias();
-				AddDecideTag(alias, MakeBilinearFunctionGroupTag(decide.helper_definitions.size()));
-				expr->SetAlias(std::move(alias));
 				decide.helper_definitions.push_back(std::move(kept));
+				decide.NameDefinition(*expr, decide.helper_definitions.size() - 1);
 				return;
 			}
 		}

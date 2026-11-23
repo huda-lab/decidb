@@ -50,10 +50,9 @@ DecideTermDegree DecideDegreeOf(ClientContext &context, const Expression &expr, 
 		return result;
 	}
 	auto &node = *UnwrapDecideCasts(expr, decide_index);
-	idx_t function_aux;
-	// A function the optimizer gave a helper decision (DEFINITION_FUNCTION_TAG_PREFIX) reads as that decision.
+	// A body kept for its definition (DecideHelperKind::DEFINITION) reads as that definition's helper decision.
 	if (node.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
-	    TryParseDecideIndexTag(node.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, function_aux)) {
+	    DecideDefinitionOf(node).Is(DecideHelperKind::DEFINITION)) {
 		result.degree = 1;
 		return result;
 	}
@@ -417,9 +416,11 @@ static unique_ptr<Expression> RewriteProduct(ClientContext &context, idx_t decid
 	if (node.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
 	    spelled->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &call = spelled->Cast<BoundFunctionExpression>();
+		auto &written = node.Cast<BoundFunctionExpression>();
 		if (call.written_name.empty()) {
-			call.written_name = node.Cast<BoundFunctionExpression>().written_name;
+			call.written_name = written.written_name;
 		}
+		call.definition = written.definition;
 	}
 	// The product is the written term respelled, equal to it for every input, so it points where the term was
 	// written, as the cast back does.

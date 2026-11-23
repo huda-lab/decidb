@@ -28,9 +28,13 @@ namespace duckdb {
 bool IsDecideNormMarker(const Expression &expr, DecideNorm &norm);
 bool IsDecideNormMarker(const Expression &expr);
 
-//! Whether two nodes agree on every fact Expression::Equals leaves out: their names' tags and, for two reducers,
-//! their facts (BoundDecideReducerExpression::FactsEqual). On a decision-bearing node these are structure (a
-//! reducer's `by` and `per`).
+//! The helper definition `expr` names: a kept call's (BoundFunctionExpression::definition), unset for any other
+//! node.
+DecideHelperRef DecideDefinitionOf(const Expression &expr);
+
+//! Whether two nodes agree on every fact Expression::Equals leaves out: their names' tags, the definitions they name
+//! and, for two reducers, their facts (BoundDecideReducerExpression::FactsEqual). On a decision-bearing node these
+//! are structure (a reducer's `by` and `per`).
 bool DecideFactsEqual(const Expression &a, const Expression &b);
 
 //===--------------------------------------------------------------------===//

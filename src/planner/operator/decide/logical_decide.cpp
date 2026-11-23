@@ -369,6 +369,16 @@ BoundDecideReducerExpression &DecideHelperDefinition::Reducer() const {
 	return body->Cast<BoundDecideReducerExpression>();
 }
 
+void LogicalDecide::NameDefinition(Expression &call, idx_t index) {
+	if (call.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		throw InternalException("DECIDE: a helper definition is kept for '%s', which is no function call",
+		                        call.ToString());
+	}
+	auto &definition = call.Cast<BoundFunctionExpression>().definition;
+	definition.kind = helper_definitions[index]->kind;
+	definition.index = index;
+}
+
 idx_t LogicalDecide::HelperCount(DecideHelperKind kind) const {
 	return NumericCast<idx_t>(
 	    std::count_if(helper_definitions.begin(), helper_definitions.end(),

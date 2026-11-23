@@ -93,8 +93,7 @@ void DecideOptimizer::RewriteAvgToSum(LogicalDecide &decide) {
 
 bool DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                              const DecideRowOrigin &origin) {
-	idx_t definition_aux;
-	if (TryParseDecideIndexTag(expr->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
+	if (DecideDefinitionOf(*expr).Is(DecideHelperKind::DEFINITION)) {
 		return false; // AVG syntax inside this body belongs to the tree F node's definition expression
 	}
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {

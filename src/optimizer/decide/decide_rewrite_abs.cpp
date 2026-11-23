@@ -155,24 +155,25 @@ static vector<bool> FindBoxedHelpers(LogicalDecide &decide) {
 		}
 	};
 	demand = [&](const Expression &expr) {
-		// A non-linear body stays where it was written, tagged as a read of its definition's helper; a reducer the
-		// value rewrite lifted is read as its helper's column, and so is a definition's helper in a row made of it.
-		idx_t helper;
-		if (!TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, helper)) {
-			if (expr.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
-				ExpressionIterator::EnumerateChildren(expr, demand);
-				return;
-			}
-			auto &binding = expr.Cast<BoundColumnRefExpression>().binding;
-			if (binding.table_index != decide.decide_index) {
-				return;
-			}
-			helper = binding.column_index;
+		// A non-linear body stays where it was written, naming its definition; a reducer the value rewrite lifted is
+		// read as its helper's column, and so is a definition's helper in a row made of it.
+		const auto kept = DecideDefinitionOf(expr);
+		if (kept.Is(DecideHelperKind::DEFINITION)) {
+			box(kept.index);
+			return;
+		}
+		if (expr.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+			ExpressionIterator::EnumerateChildren(expr, demand);
+			return;
+		}
+		auto &binding = expr.Cast<BoundColumnRefExpression>().binding;
+		if (binding.table_index != decide.decide_index) {
+			return;
 		}
 		for (idx_t i = 0; i < definitions.size(); i++) {
 			const auto kind = definitions[i]->kind;
 			if ((kind == DecideHelperKind::DEFINITION || kind == DecideHelperKind::REDUCER_VALUE) &&
-			    definitions[i]->helper == helper) {
+			    definitions[i]->helper == binding.column_index) {
 				box(i);
 			}
 		}
@@ -263,15 +264,11 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 //! holds a product or a power of decisions, at the ABS. This is the only place that records an operand: a copy taken
 //! when the ABS got its helper would lack the tags of a product with an ABS factor.
 static void RecordAbsOperands(const Expression &expr, LogicalDecide &decide, const DecideTermSplitter &splitter) {
-	idx_t aux_idx;
-	if (TryParseDecideIndexTag(expr.GetAlias(), ABS_FUNCTION_TAG_PREFIX, aux_idx)) {
+	const auto kept = DecideDefinitionOf(expr);
+	if (kept.Is(DecideHelperKind::ABS)) {
 		auto &operand = *expr.Cast<BoundFunctionExpression>().children[0];
 		RequireLinearOperand(splitter, operand, expr, "ABS");
-		for (auto &function : decide.helper_definitions) {
-			if (function->kind == DecideHelperKind::ABS && function->helper == aux_idx) {
-				function->body = operand.Copy();
-			}
-		}
+		decide.helper_definitions[kept.index]->body = operand.Copy();
 	}
 	ExpressionIterator::EnumerateChildren(expr,
 	                                      [&](const Expression &child) { RecordAbsOperands(child, decide, splitter); });
@@ -374,8 +371,7 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 	if (!expr) {
 		return;
 	}
-	idx_t definition_aux;
-	if (TryParseDecideIndexTag(expr->GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
+	if (DecideDefinitionOf(*expr).Is(DecideHelperKind::DEFINITION)) {
 		return; // its body is visited through its definition below
 	}
 
@@ -438,9 +434,8 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 		    RenderDecideSource(func, decide.bound.source_text, decide.bound.keyed_scopes, &decide.bound.keys);
 		decide.helper_definitions.push_back(std::move(function));
 
-		// Preserve ABS(inner) in the clause tree and tag its value-helper mapping for
-		// the F-aware term splitter.
-		AddDecideTag(func.alias, MakeAbsFunctionTag(aux_idx));
+		// ABS(inner) stays in the clause tree, naming its definition for the term splitter and the tree.
+		decide.NameDefinition(func, decide.helper_definitions.size() - 1);
 		return;
 	}
 

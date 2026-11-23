@@ -91,6 +91,7 @@ unique_ptr<Expression> BoundFunctionExpression::Copy() const {
 	auto copy = make_uniq<BoundFunctionExpression>(return_type, function, std::move(new_children),
 	                                               std::move(new_bind_info), is_operator);
 	copy->written_name = written_name;
+	copy->definition = definition;
 	copy->CopyProperties(*this);
 	return std::move(copy);
 }

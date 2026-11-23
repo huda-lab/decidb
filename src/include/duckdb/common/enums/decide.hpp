@@ -166,10 +166,9 @@ inline bool IsRelaxableForElastic(ConstraintKind kind) {
 //!                    the reported edit is the max overshoot, not the sum.
 enum class ElasticShape : uint8_t { UNSET, PER_ROW_DATA, SHARED_SCALAR };
 
-//! DECIDE encodes the pipeline metadata of a frame and of a function in the `alias` of bound expressions. More than
-//! one tag can apply to the same node, so tags are **concatenated** and matched by search, never by equality. Every
-//! tag opens and closes with `__`, which is what makes concatenation unambiguous and lets a prefix tag's payload be
-//! read back below.
+//! DECIDE encodes two facts of a node in the `alias` of bound expressions (NULL_GUARD_TAG, FRAME_COLUMN_TAG). More
+//! than one tag can apply to the same node, so tags are **concatenated** and matched by search, never by equality.
+//! Every tag opens and closes with `__`, which is what makes concatenation unambiguous.
 inline void AddDecideTag(string &alias, const string &tag) {
 	alias += tag;
 }
@@ -180,7 +179,7 @@ inline bool HasDecideTag(const string &alias, const string &tag) {
 }
 
 //! Remove every DECIDE tag from an alias, leaving whatever ordinary alias it was appended
-//! to: "cost__abs_function_0____null_guard__" yields "cost", and an alias that was
+//! to: "cost__frame_column____null_guard__" yields "cost", and an alias that was
 //! nothing but tags yields "".
 //!
 //! Tags are only ever appended (`AddDecideTag`), so they are always a suffix, and each one
@@ -203,34 +202,6 @@ inline string StripDecideTags(const string &alias) {
 	return result;
 }
 
-//! Reads the payload of a prefix-shaped tag out of a possibly multi-tag alias:
-//! ("__abs_function_2____null_guard__", "__abs_function_") yields "2". The payload runs
-//! from the end of the prefix to the tag's closing `__`, so payloads may contain single
-//! underscores. Returns false when the tag is absent or has an empty payload.
-inline bool ExtractDecideTagPayload(const string &alias, const string &prefix, string &payload) {
-	auto start = alias.find(prefix);
-	if (start == string::npos) {
-		return false;
-	}
-	start += prefix.size();
-	auto end = alias.find("__", start);
-	if (end == string::npos) {
-		return false;
-	}
-	payload = alias.substr(start, end - start);
-	return !payload.empty();
-}
-
-//! The index a tag "<prefix><i>__" carries; false (leaving `value` untouched) when the alias carries no such tag.
-inline bool TryParseDecideIndexTag(const string &alias, const string &prefix, idx_t &value) {
-	string digits;
-	if (!ExtractDecideTagPayload(alias, prefix, digits) || digits.find_first_not_of("0123456789") != string::npos) {
-		return false;
-	}
-	value = static_cast<idx_t>(std::stoull(digits));
-	return true;
-}
-
 //! On the COALESCE or CASE that reads a NULL coefficient as 0 (DecideOptimizer's DropNullObjectiveTerms, the direct
 //! IR's GuardCoefficients): the query never wrote it, so a render prints the value it guards.
 static constexpr const char *NULL_GUARD_TAG = "__null_guard__";
@@ -239,26 +210,54 @@ static constexpr const char *NULL_GUARD_TAG = "__null_guard__";
 //! message prints as it stands, not as an identifier.
 static constexpr const char *FRAME_COLUMN_TAG = "__frame_column__";
 
-//! Tag on an ABS function in a clause: it names the auxiliary the ABS became.
-static constexpr const char *ABS_FUNCTION_TAG_PREFIX = "__abs_function_";
+//! What a helper definition is: the construct a rewrite kept and gave a helper decision.
+enum class DecideHelperKind : uint8_t {
+	//! `abs(e)` over a decision, kept where it is written (RewriteAbs). The helper stands for |body|; the tree states
+	//! its two lower-envelope rows, `helper >= body` and `helper >= -body` (MakeAbsRow), and stage 06 its encoding.
+	ABS,
+	//! A written product of two forms over decisions, kept where it is written (FindAndReplaceBilinear). `body` is its
+	//! expansion, which the term splitter and the tree read in its place: the product distributed over its factors'
+	//! terms, each product of two decisions with a Boolean factor read as that BOOLEAN_PRODUCT's helper and every other
+	//! one left as a term of degree 2. It has no helper of its own: the expansion is a sum over any number of them.
+	PRODUCT,
+	//! `first_factor * second_factor` of two decisions, one of them Boolean: the helper a PRODUCT's expansion reads,
+	//! linked to its factors by stage 06 (LinearizeBilinear). It has no body: the two decisions are the product.
+	BOOLEAN_PRODUCT,
+	//! The indicator of one counted row of `norm(e, 0)` (RewriteNorm): `links` are its three formulation rows, kept
+	//! beside the clauses so the later rewrites give a nested ABS or product its helper; the first holds the counted
+	//! expression and the rows it is read on.
+	L0_INDICATOR,
+	//! A reducer's nonlinear body, kept where it is written: the helper is `relation` its body on the rows `when`
+	//! keeps, and the tree builds that row beneath the F node (MakeDefinitionRow).
+	DEFINITION,
+	//! A decision reducer of a scoped comparison in the VALUE shape (CanonicalConstraintClass::VALUE), or a range frame
+	//! over decisions, replaced by the helper that holds the reducer (DecideHelperDefinition::Reducer) over the rows
+	//! `when` keeps: one instance per group of its path key among those rows, or per window of its frame, defined once
+	//! by stage 06 -- an equality row per group for SUM/AVG, an extremum link per group for MIN/MAX. One per reducer
+	//! over one set of rows, shared by every row that reads it; its definition belongs to no clause (owner ruling
+	//! B10), so a DROP of a reading clause leaves it and DIAGNOSE reads it as part of the fixed model.
+	REDUCER_VALUE,
+};
 
-//! Tag on a written Boolean product that the optimizer has described as an F-node group. The expression remains
-//! intact in the plan; term extraction and tree lowering read the group's expansion from LogicalDecide metadata.
-static constexpr const char *BILINEAR_FUNCTION_GROUP_TAG_PREFIX = "__bilinear_function_group_";
-//! Tag on a nonlinear reducer body left intact in the clause tree. The F node owns its value and definition row.
-static constexpr const char *DEFINITION_FUNCTION_TAG_PREFIX = "__definition_function_";
+//! The definition a kept call names (BoundFunctionExpression::definition): its entry of
+//! LogicalDecide::helper_definitions and that entry's kind, as a compiler's use node holds its declaration. The kind
+//! is the entry's, written beside the index by the one writer (LogicalDecide::NameDefinition) for the readers that
+//! hold a call and no table. Unset on every call no rewrite kept.
+struct DecideHelperRef {
+	DecideHelperKind kind = DecideHelperKind::ABS;
+	idx_t index = DConstants::INVALID_INDEX;
 
-inline string MakeBilinearFunctionGroupTag(idx_t group_idx) {
-	return string(BILINEAR_FUNCTION_GROUP_TAG_PREFIX) + to_string(group_idx) + "__";
-}
-
-inline string MakeDefinitionFunctionTag(idx_t var_idx) {
-	return string(DEFINITION_FUNCTION_TAG_PREFIX) + to_string(var_idx) + "__";
-}
-
-inline string MakeAbsFunctionTag(idx_t var_idx) {
-	return string(ABS_FUNCTION_TAG_PREFIX) + to_string(var_idx) + "__";
-}
+	bool IsSet() const {
+		return index != DConstants::INVALID_INDEX;
+	}
+	//! Whether it names a definition of `kind`.
+	bool Is(DecideHelperKind kind_p) const {
+		return IsSet() && kind == kind_p;
+	}
+	bool operator==(const DecideHelperRef &other) const {
+		return index == other.index && kind == other.kind;
+	}
+};
 
 //! The name prefixes a rewrite gives a helper decision it adds (AddAuxiliaryDecision). Each is the opening of a name
 //! `<prefix><n>__`.
@@ -279,18 +278,10 @@ static constexpr const char *BODY_NAME_PREFIX = "__body_";
 static constexpr const char *VALUE_LINK_NAME_PREFIX = "__value_";
 
 //! Every DECIDE tag above, the one list DecideNameContainsTag reads. A constant added above is added here.
-static constexpr const char *DECIDE_TAGS[] = {NULL_GUARD_TAG,
-                                              FRAME_COLUMN_TAG,
-                                              ABS_FUNCTION_TAG_PREFIX,
-                                              BILINEAR_FUNCTION_GROUP_TAG_PREFIX,
-                                              DEFINITION_FUNCTION_TAG_PREFIX,
-                                              L0_AUTO_INDICATOR_NAME_PREFIX,
-                                              L0_INDICATOR_NAME_PREFIX,
-                                              IN_INDICATOR_NAME_PREFIX,
-                                              ABS_AUX_NAME_PREFIX,
-                                              BILINEAR_AUX_NAME_PREFIX,
-                                              BODY_NAME_PREFIX,
-                                              VALUE_LINK_NAME_PREFIX};
+static constexpr const char *DECIDE_TAGS[] = {
+    NULL_GUARD_TAG,           FRAME_COLUMN_TAG,         L0_AUTO_INDICATOR_NAME_PREFIX,
+    L0_INDICATOR_NAME_PREFIX, IN_INDICATOR_NAME_PREFIX, ABS_AUX_NAME_PREFIX,
+    BILINEAR_AUX_NAME_PREFIX, BODY_NAME_PREFIX,         VALUE_LINK_NAME_PREFIX};
 
 //! True when a name a user wrote contains a DECIDE tag, in any letter case. The tags travel in expression aliases and
 //! are found by search (HasDecideTag), so such a name is read as the tag. Until the tags are gone (R20) DECIDE refuses

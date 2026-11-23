@@ -35,6 +35,9 @@ unique_ptr<Expression> ExpressionBuilder::Out(const ExprPtr &expr) const {
 }
 void DecideStripTags(Expression &expr) {
 	expr.SetAlias(StripDecideTags(expr.GetAlias()));
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		expr.Cast<BoundFunctionExpression>().definition = DecideHelperRef();
+	}
 	ExpressionIterator::EnumerateChildren(expr, [](Expression &child) { DecideStripTags(child); });
 }
 

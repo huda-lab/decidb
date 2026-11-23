@@ -74,11 +74,15 @@ bool DecideSplitTerm::IsAbs() const {
 	return opaque && IsAbsFunction(*opaque);
 }
 
-//! A function the optimizer gave a helper decision of its own: an ABS (ABS_FUNCTION_TAG_PREFIX) or a definition
-//! (DEFINITION_FUNCTION_TAG_PREFIX). It reads as that decision.
-static bool TryGetFunctionAuxIndex(const Expression &expr, idx_t &var_idx) {
-	return (IsAbsFunction(expr) && TryParseDecideIndexTag(expr.GetAlias(), ABS_FUNCTION_TAG_PREFIX, var_idx)) ||
-	       TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, var_idx);
+//! A call kept for a helper decision of its own, an ABS or a DEFINITION: it reads as that decision.
+static bool TryGetFunctionAuxIndex(const vector<unique_ptr<DecideHelperDefinition>> &definitions,
+                                   const Expression &expr, idx_t &var_idx) {
+	const auto kept = DecideDefinitionOf(expr);
+	if (!kept.Is(DecideHelperKind::ABS) && !kept.Is(DecideHelperKind::DEFINITION)) {
+		return false;
+	}
+	var_idx = definitions[kept.index]->helper;
+	return true;
 }
 
 //! `left * right` for two coefficients, `right` null for 1. A bare decision's literal 1 stays out of the product, so
@@ -105,20 +109,12 @@ DecideTermSplitter::DecideTermSplitter(ClientContext &context, const LogicalDeci
 }
 
 bool DecideTermSplitter::ExpandBilinearGroups(const Expression &expr, unique_ptr<Expression> &expanded) const {
-	idx_t definition_aux;
-	if (TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
-		if (definition_aux >= decide_variables.size()) {
-			throw InternalException("DECIDE term splitter: definition function references invalid helper %llu",
-			                        definition_aux);
-		}
+	const auto kept = DecideDefinitionOf(expr);
+	if (kept.Is(DecideHelperKind::DEFINITION)) {
 		return false;
 	}
-	idx_t group_idx;
-	if (TryParseDecideIndexTag(expr.GetAlias(), BILINEAR_FUNCTION_GROUP_TAG_PREFIX, group_idx)) {
-		if (group_idx >= helper_definitions.size() || !helper_definitions[group_idx]->body) {
-			throw InternalException("DECIDE term splitter: bilinear function group %llu is missing", group_idx);
-		}
-		expanded = helper_definitions[group_idx]->body->Copy();
+	if (kept.Is(DecideHelperKind::PRODUCT)) {
+		expanded = helper_definitions[kept.index]->body->Copy();
 		unique_ptr<Expression> nested;
 		if (ExpandBilinearGroups(*expanded, nested)) {
 			expanded = std::move(nested);
@@ -153,16 +149,16 @@ bool DecideTermSplitter::IsLinear(const Expression &expr) const {
 	if (!ExpandBilinearGroups(expr, lowered)) {
 		lowered = expr.Copy();
 	}
-	ReplaceTaggedFunctions(lowered);
+	ReplaceKeptCalls(lowered);
 	return DecideDegreeOf(context, *lowered, decide_index).IsLinear();
 }
 
-void DecideTermSplitter::ReplaceTaggedFunctions(unique_ptr<Expression> &expression) const {
+void DecideTermSplitter::ReplaceKeptCalls(unique_ptr<Expression> &expression) const {
 	if (!expression) {
 		return;
 	}
 	idx_t aux_idx;
-	if (TryGetFunctionAuxIndex(*expression, aux_idx)) {
+	if (TryGetFunctionAuxIndex(helper_definitions, *expression, aux_idx)) {
 		if (aux_idx >= decide_variables.size()) {
 			throw InternalException("DECIDE term splitter: function references invalid helper %llu", aux_idx);
 		}
@@ -170,13 +166,12 @@ void DecideTermSplitter::ReplaceTaggedFunctions(unique_ptr<Expression> &expressi
 		expression = BoundCastExpression::AddCastToType(context, decide_variables[aux_idx]->Copy(), type);
 		return;
 	}
-	ExpressionIterator::EnumerateChildren(*expression,
-	                                      [&](unique_ptr<Expression> &child) { ReplaceTaggedFunctions(child); });
+	ExpressionIterator::EnumerateChildren(*expression, [&](unique_ptr<Expression> &child) { ReplaceKeptCalls(child); });
 }
 
 idx_t DecideTermSplitter::FindVariable(const Expression &expr) const {
 	idx_t aux_idx;
-	if (TryGetFunctionAuxIndex(expr, aux_idx)) {
+	if (TryGetFunctionAuxIndex(helper_definitions, expr, aux_idx)) {
 		return aux_idx;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
@@ -280,7 +275,7 @@ void DecideTermSplitter::SplitNode(const Expression &expr, int sign, vector<Deci
 		return;
 	}
 	idx_t aux_idx;
-	if (TryGetFunctionAuxIndex(expr, aux_idx)) {
+	if (TryGetFunctionAuxIndex(helper_definitions, expr, aux_idx)) {
 		if (aux_idx >= decide_variables.size()) {
 			throw InternalException("DECIDE term splitter: function references invalid helper %llu", aux_idx);
 		}

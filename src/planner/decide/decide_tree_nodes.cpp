@@ -30,8 +30,14 @@ bool IsDecideNormMarker(const Expression &expr) {
 	       !expr.Cast<BoundDecideReducerExpression>().function;
 }
 
+DecideHelperRef DecideDefinitionOf(const Expression &expr) {
+	return expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION
+	           ? expr.Cast<BoundFunctionExpression>().definition
+	           : DecideHelperRef();
+}
+
 bool DecideFactsEqual(const Expression &a, const Expression &b) {
-	if (a.GetAlias() != b.GetAlias()) {
+	if (a.GetAlias() != b.GetAlias() || !(DecideDefinitionOf(a) == DecideDefinitionOf(b))) {
 		return false;
 	}
 	return a.GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER ||

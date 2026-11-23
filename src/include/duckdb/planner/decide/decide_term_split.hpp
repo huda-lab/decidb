@@ -115,7 +115,7 @@ public:
 	bool IsLinear(const Expression &expr) const;
 	//! Replaces every function the optimizer gave a helper decision (an ABS, a definition) with its helper, cast to the
 	//! function's type: the casts around the function were bound to that type, and a helper's is its decision's.
-	void ReplaceTaggedFunctions(unique_ptr<Expression> &expression) const;
+	void ReplaceKeptCalls(unique_ptr<Expression> &expression) const;
 	//! Copy and expand any optimizer-annotated product groups in an expression; false leaves `expanded` unset.
 	bool ExpandBilinearGroups(const Expression &expr, unique_ptr<Expression> &expanded) const;
 	//! The index of the first decision variable referenced anywhere in `expr`, or INVALID_INDEX.

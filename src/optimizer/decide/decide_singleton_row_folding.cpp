@@ -149,11 +149,9 @@ static void AdmittedInterval(const ExpressionBuilder &calc, ExpressionType compa
 //! A frame inside a tagged F body determines that helper's value, not the row on which the surrounding bound is
 //! read. After the function value is replaced by its helper, the bound can still be folded into that helper's box.
 //! Other frame reads remain row-dependent and keep the conservative refusal below.
-static bool ContainsFrameOutsideTaggedFunction(const Expression &expression) {
-	idx_t aux;
-	if (TryParseDecideIndexTag(expression.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, aux) ||
-	    (expression.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
-	     TryParseDecideIndexTag(expression.GetAlias(), ABS_FUNCTION_TAG_PREFIX, aux))) {
+static bool ContainsFrameOutsideKeptCall(const Expression &expression) {
+	const auto definition = DecideDefinitionOf(expression);
+	if (definition.Is(DecideHelperKind::DEFINITION) || definition.Is(DecideHelperKind::ABS)) {
 		return false;
 	}
 	idx_t frame;
@@ -162,7 +160,7 @@ static bool ContainsFrameOutsideTaggedFunction(const Expression &expression) {
 	}
 	bool found = false;
 	ExpressionIterator::EnumerateChildren(
-	    expression, [&](const Expression &child) { found = found || ContainsFrameOutsideTaggedFunction(child); });
+	    expression, [&](const Expression &child) { found = found || ContainsFrameOutsideKeptCall(child); });
 	return found;
 }
 
@@ -178,7 +176,7 @@ static unique_ptr<Expression> ReadAsRow(const ExpressionBuilder &calc, const Log
 	if (splitter.ExpandBilinearGroups(*source_row, expanded)) {
 		source_row = std::move(expanded);
 	}
-	splitter.ReplaceTaggedFunctions(source_row);
+	splitter.ReplaceKeptCalls(source_row);
 	auto row = calc.Out(calc.Of(*source_row));
 	if (minmax_easy) {
 		ReplaceDecisionTerm(
@@ -270,7 +268,7 @@ bool DecideReadSingletonRow(ClientContext &context, const LogicalDecide &decide,
 	}
 	// A frame selector reads another row, or nothing, which no admitted interval over the row says. A tagged ABS
 	// helper is its own decision, so a frame inside that F node's operand does not make a bound on its value vary.
-	if (ContainsFrameOutsideTaggedFunction(comparison)) {
+	if (ContainsFrameOutsideKeptCall(comparison)) {
 		return false;
 	}
 	ExpressionBuilder calc(context);

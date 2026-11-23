@@ -273,36 +273,6 @@ struct DecideSourceColumnName {
 ColumnBinding DecideSourceColumnKey(const LogicalOperator &source, const ColumnBinding &binding,
                                     const vector<DecideSourceColumnName> &named);
 
-//! What a helper definition is: the construct a rewrite kept and gave a helper decision.
-enum class DecideHelperKind : uint8_t {
-	//! `abs(e)` over a decision, kept where it is written (RewriteAbs). The helper stands for |body|; the tree states
-	//! its two lower-envelope rows, `helper >= body` and `helper >= -body` (MakeAbsRow), and stage 06 its encoding.
-	ABS,
-	//! A written product of two forms over decisions, kept where it is written (FindAndReplaceBilinear). `body` is its
-	//! expansion, which the term splitter and the tree read in its place: the product distributed over its factors'
-	//! terms, each product of two decisions with a Boolean factor read as that BOOLEAN_PRODUCT's helper and every other
-	//! one left as a term of degree 2. It has no helper of its own: the expansion is a sum over any number of them.
-	PRODUCT,
-	//! `first_factor * second_factor` of two decisions, one of them Boolean: the helper a PRODUCT's expansion reads,
-	//! linked to its factors by stage 06 (LinearizeBilinear). It has no body: the two decisions are the product.
-	BOOLEAN_PRODUCT,
-	//! The indicator of one counted row of `norm(e, 0)` (RewriteNorm): `links` are its three formulation rows, kept
-	//! beside the clauses so the later rewrites give a nested ABS or product its helper; the first holds the counted
-	//! expression and the rows it is read on.
-	L0_INDICATOR,
-	//! A reducer's nonlinear body, kept where it is written: the helper is `relation` its body on the rows `when`
-	//! keeps, and the tree builds that row beneath the F node (MakeDefinitionRow).
-	DEFINITION,
-	//! A decision reducer of a scoped comparison in the VALUE shape (CanonicalConstraintClass::VALUE), or a range frame
-	//! over decisions, replaced by the helper that holds the reducer (DecideHelperDefinition::Reducer) over the rows
-	//! `when` keeps: one instance per group of its path key among those rows, or per window of its frame, defined once
-	//! by stage 06 -- an
-	//! equality row per group for SUM/AVG, an extremum link per group for MIN/MAX. One per reducer over one set of
-	//! rows, shared by every row that reads it; its definition belongs to no clause (owner ruling B10), so a DROP of a
-	//! reading clause leaves it and DIAGNOSE reads it as part of the fixed model.
-	REDUCER_VALUE,
-};
-
 //! One construct a rewrite kept, with the helper decision that stands for it (LogicalDecide::helper_definitions): the
 //! symbol table's entry, as a compiler's declaration is to the uses that name it. The head is what every kind says;
 //! the rest is each kind's own. An optimized plan is never serialized, so neither is this.
@@ -541,10 +511,13 @@ public:
 
 	//! Every construct a rewrite kept, each with its helper decision (DecideHelperDefinition), in the order made:
 	//! innermost first, so a definition reads only helpers of definitions before it -- a range's, made first, and the
-	//! reducers nested in it -- which stage 06's inlining relies on. A kept call's tag, KeyedScopeInfo::value_link and
-	//! DecideOwnedBody::index index it. Each entry is held by pointer: a pass appends a definition while it holds the
-	//! body of another (EnumerateBodies).
+	//! reducers nested in it -- which stage 06's inlining relies on. A kept call's reference,
+	//! KeyedScopeInfo::value_link and DecideOwnedBody::index index it. Each entry is held by pointer: a pass appends a
+	//! definition while it holds the body of another (EnumerateBodies).
 	vector<unique_ptr<DecideHelperDefinition>> helper_definitions;
+	//! Makes `call`, the function a rewrite kept where it is written, name `helper_definitions[index]`
+	//! (BoundFunctionExpression::definition): the one writer of a kept call's reference.
+	void NameDefinition(Expression &call, idx_t index);
 	//! The number of definitions of `kind`, which names the next helper of that kind.
 	idx_t HelperCount(DecideHelperKind kind) const;
 

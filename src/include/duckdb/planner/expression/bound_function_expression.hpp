@@ -10,6 +10,7 @@
 
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/planner/expression.hpp"
+#include "duckdb/common/enums/decide.hpp"
 
 namespace duckdb {
 class ScalarFunctionCatalogEntry;
@@ -36,6 +37,10 @@ public:
 	//! several names (`abs` for `@`; `pow`, `power` and `^` for `**`), and the binder renames each such call in a
 	//! DECIDE clause to its primary, so every check matches one name. Empty for a call written under `function.name`.
 	string written_name;
+	//! The helper definition a DECIDE rewrite kept the call for (LogicalDecide::NameDefinition); unset otherwise.
+	//! Copied with the call; Equals and Hash leave it out, as they do an alias (DecideFactsEqual compares it). An
+	//! optimized plan is never serialized, so neither is this.
+	DecideHelperRef definition;
 
 public:
 	bool IsVolatile() const override;

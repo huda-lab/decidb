@@ -872,25 +872,13 @@ private:
 	//! A child read adds its key field either way.
 	unique_ptr<Expression> Lower(idx_t owner, const Expression &expression, bool carried = false) {
 		auto &node = *tree->nodes[owner];
-		idx_t definition_value;
-		if (TryParseDecideIndexTag(expression.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_value)) {
-			auto function = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(), [&](idx_t index) {
-				auto &candidate = *tree->nodes[index];
-				return candidate.function_kind == DecideFunctionKind::DEFINITION &&
-				       candidate.value_var == definition_value;
-			});
-			if (function == tree->function_nodes.end()) {
-				throw InternalException("DECIDE tree: nonlinear body helper %llu has no function node",
-				                        definition_value);
-			}
-			return Read(owner, *function, expression.return_type, expression.GetAlias());
+		// A kept call reads its definition's F node (definition_nodes), or lowers as its product's expansion.
+		const auto kept = DecideDefinitionOf(expression);
+		if (kept.Is(DecideHelperKind::DEFINITION)) {
+			return Read(owner, definition_nodes[kept.index], expression.return_type, expression.GetAlias());
 		}
-		idx_t product_group;
-		if (TryParseDecideIndexTag(expression.GetAlias(), BILINEAR_FUNCTION_GROUP_TAG_PREFIX, product_group)) {
-			if (product_group >= op.helper_definitions.size() || !op.helper_definitions[product_group]->body) {
-				throw InternalException("DECIDE tree: bilinear function group %llu has no expansion", product_group);
-			}
-			return Lower(owner, *op.helper_definitions[product_group]->body, carried);
+		if (kept.Is(DecideHelperKind::PRODUCT)) {
+			return Lower(owner, *op.helper_definitions[kept.index]->body, carried);
 		}
 		const idx_t retained = expression.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER
 		                           ? expression.Cast<BoundDecideReducerExpression>().retained
@@ -967,27 +955,16 @@ private:
 			Column(node, expression, !carried);
 			return expression.Copy();
 		}
-		if (expression.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-			idx_t abs_aux_idx;
-			if (TryParseDecideIndexTag(expression.GetAlias(), ABS_FUNCTION_TAG_PREFIX, abs_aux_idx)) {
-				auto function = std::find_if(tree->function_nodes.begin(), tree->function_nodes.end(),
-				                             [&](idx_t index) { return tree->nodes[index]->value_var == abs_aux_idx; });
-				if (function == tree->function_nodes.end()) {
-					throw InternalException("DECIDE tree: ABS helper %llu has no function node", abs_aux_idx);
-				}
-				// The F node is registered before its readers so nested ABS references can resolve in gates. Lower its
-				// operand on the first source-tree read: reducers and nested helpers then join the same tree as their
-				// written occurrence, instead of leaving an unresolved aggregate expression in F metadata.
-				auto &abs_node = *tree->nodes[*function];
-				if (!abs_node.body) {
-					auto &abs = expression.Cast<BoundFunctionExpression>();
-					if (abs.children.size() != 1) {
-						throw InternalException("DECIDE tree: ABS function helper %llu has no operand", abs_aux_idx);
-					}
-					abs_node.body = Lower(*function, *abs.children[0]);
-				}
-				return Read(owner, *function, expression.return_type, expression.GetAlias());
+		if (kept.Is(DecideHelperKind::ABS)) {
+			// The F node is registered before its readers so nested ABS references can resolve in gates. Lower its
+			// operand on the first source-tree read: reducers and nested helpers then join the same tree as their
+			// written occurrence, instead of leaving an unresolved aggregate expression in F metadata.
+			const idx_t function = definition_nodes[kept.index];
+			auto &abs_node = *tree->nodes[function];
+			if (!abs_node.body) {
+				abs_node.body = Lower(function, *expression.Cast<BoundFunctionExpression>().children[0]);
 			}
+			return Read(owner, function, expression.return_type, expression.GetAlias());
 		}
 		// The children are lowered from the operator's own expressions, so a reducer's address is the one stage 05
 		// lowers (reducer_nodes); the copy only holds the results.

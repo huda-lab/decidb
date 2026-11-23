@@ -334,8 +334,7 @@ void DecideCanonicalizer::SkipNullData(Expression &expr, const vector<KeyedScope
 //! definition's body are none (see the header).
 template <class COUNTS>
 static bool HoldsReducer(const Expression &expr, COUNTS &&counts) {
-	idx_t definition_aux;
-	if (TryParseDecideIndexTag(expr.GetAlias(), DEFINITION_FUNCTION_TAG_PREFIX, definition_aux)) {
+	if (DecideDefinitionOf(expr).Is(DecideHelperKind::DEFINITION)) {
 		return false; // the F node owns this body; callers see its scalar value, not its source reducers
 	}
 	idx_t frame;

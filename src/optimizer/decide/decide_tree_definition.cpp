@@ -310,6 +310,7 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 		// shared by every clause that reads the helper, so it joins none of their removal groups.
 		definition->origin = DecideRowOrigin::OfClause(first.origin.source_clause_id);
 		decide.helper_definitions.push_back(std::move(definition));
+		const idx_t definition_index = decide.helper_definitions.size() - 1;
 		// Tree construction owns the function's row. This placeholder keeps its former clause-list position for
 		// EXPLAIN and source ordering until that tree attaches the row below the F node.
 		BoundDecideClause placeholder;
@@ -321,13 +322,14 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 
 		for (auto member : members) {
 			auto &reducer = *sites[member].reducer;
-			// Keep the nonlinear expression where it was written. The tree lowers this marker as a read of the
-			// definition F node, while the term splitter reads the same helper column in optimizer-owned formulations
-			// such as hard MIN/MAX. The F node's retained body above stays untagged, so its own equation compiles the
+			// Keep the nonlinear expression where it was written. The tree lowers the call as a read of the definition
+			// F node, while the term splitter reads the same helper column in optimizer-owned formulations such as
+			// hard MIN/MAX. The F node's retained body above names no definition, so its own equation compiles the
 			// source expression instead of recursively reading itself.
-			// The tag goes under the casts: every reader looks through a cast (UnwrapDecideCasts) before it reads tags.
-			AddDecideTag(UnwrapDecideCasts(*reducer.children[0], decide_index)->alias,
-			             MakeDefinitionFunctionTag(helper));
+			// The call under the casts names it: every reader looks through a cast (UnwrapDecideCasts) first. A
+			// product that already names its expansion (FindAndReplaceBilinear) names the definition from here on,
+			// which every reader asks for first; the retained body keeps the expansion's.
+			decide.NameDefinition(*UnwrapDecideCasts(*reducer.children[0], decide_index), definition_index);
 		}
 	}
 

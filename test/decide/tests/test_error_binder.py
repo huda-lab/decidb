@@ -1242,8 +1242,8 @@ class TestTagNamesRefused:
             # (marker_names.sql query 2) and from a reducer's body (query 3).
             ("w__null_guard__", 'SUCH THAT "w__null_guard__" * SUM(x) <= 2 MAXIMIZE SUM(x * v)'),
             (
-                "__definition_function_0__",
-                'SUCH THAT x <= 5 AND SUM("__definition_function_0__" * x + v) <= 40 MAXIMIZE SUM(x)',
+                "__body_0__",
+                'SUCH THAT x <= 5 AND SUM("__body_0__" * x + v) <= 40 MAXIMIZE SUM(x)',
             ),
         ],
     )
@@ -1264,10 +1264,10 @@ class TestTagNamesRefused:
     def test_key_column(self, decidb_cli):
         """ResolveKeyElement's refusal of a `per` key column; the key is no QualifyColumnName read."""
         decidb_cli.assert_error_at(
-            'SELECT id, x FROM (VALUES (1, 1, 5.0), (2, 1, 6.0), (3, 2, 7.0)) t(id, "__abs_function_0__", v) '
-            'DECIDE x(INT) SUCH THAT x <= 3 AND per "__abs_function_0__": SUM(x) <= 4 MAXIMIZE SUM(x * v)',
+            'SELECT id, x FROM (VALUES (1, 1, 5.0), (2, 1, 6.0), (3, 2, 7.0)) t(id, "__abs_aux_0__", v) '
+            'DECIDE x(INT) SUCH THAT x <= 3 AND per "__abs_aux_0__": SUM(x) <= 4 MAXIMIZE SUM(x * v)',
             kind="Binder Error",
-            at='"__abs_function_0__"',
+            at='"__abs_aux_0__"',
         )
 
     def test_every_tag_constant_is_in_the_list(self):
