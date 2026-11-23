@@ -104,7 +104,7 @@
     <h2><a class="anchor" href="#router">The router</a></h2>
     <p class="lead">A solve can end four ways: solved, infeasible, unbounded or stopped by a limit. The router is the one
       place that decides what each ending turns into: the query's rows, a diagnosis engine, or the plain error.</p>
-    <p>This page explains how <code>DIAGNOSE</code> works inside. What it returns and how to read it are on the
+    <p>This page explains how <code><span class="tk-d">DIAGNOSE</span></code> works inside. What it returns and how to read it are on the
       <a href="../features.html#diagnose">Novel features page</a>; the Guide shows
       <a href="../guide.html#no-answer">when to reach for it</a>.</p>
     <p>Three terms recur. <strong>Infeasible</strong> means no assignment of the decisions meets every constraint.
@@ -112,13 +112,13 @@
       growing. A <strong>terminal</strong> is one leaf of the router's decision tree: where a run ends up.</p>
 
     <h3 id="trigger"><a class="anchor" href="#trigger">From prefix to operator</a></h3>
-    <p><code>DIAGNOSE</code> is a statement prefix, built the way DuckDB builds <code>SUMMARIZE</code>: one grammar
+    <p><code><span class="tk-d">DIAGNOSE</span></code> is a statement prefix, built the way DuckDB builds <code>SUMMARIZE</code>: one grammar
       alternative and a flag. The flag travels with the plan and is never read from a session setting, so a query
       without the prefix never pays for a diagnosis.</p>
     <ol class="steps">
-      <li><strong>Parser.</strong> <code>DIAGNOSE SelectStmt</code> is an alternative of <code>VariableShowStmt</code>
-        and sets <code>is_diagnose</code>. The transformer makes a <code>ShowRef</code> of type <code>DIAGNOSE</code>,
-        so <code>FROM (DIAGNOSE ...)</code> works through the grammar's existing parenthesized form.</li>
+      <li><strong>Parser.</strong> <code><span class="tk-d">DIAGNOSE</span> SelectStmt</code> is an alternative of <code>VariableShowStmt</code>
+        and sets <code>is_diagnose</code>. The transformer makes a <code>ShowRef</code> of type <code><span class="tk-d">DIAGNOSE</span></code>,
+        so <code><span class="tk-k">FROM</span> (<span class="tk-d">DIAGNOSE</span> ...)</code> works through the grammar's existing parenthesized form.</li>
       <li><strong>Binder.</strong> <code>Binder::BindDiagnose</code> binds the inner query unchanged and counts its
         DECIDE operators. A query with none, or with more than one, is refused here: one relation cannot say which
         solve it describes. It sets <code>LogicalDecide::diagnose</code> on the one operator and puts a
@@ -132,8 +132,8 @@
     </ol>
     <p>Why an operator and not a different result? The decision columns are bound into the query's output before the
       solve runs, so a failed solve cannot switch the result's columns at run time. A prefix declares the findings'
-      columns at bind time instead, which makes <code>DIAGNOSE</code> a different statement, as
-      <code>EXPLAIN</code> is.</p>
+      columns at bind time instead, which makes <code><span class="tk-d">DIAGNOSE</span></code> a different statement, as
+      <code><span class="tk-k">EXPLAIN</span></code> is.</p>
 
     <h3 id="statuses"><a class="anchor" href="#statuses">From status to terminal</a></h3>
     <p>The solve facade, <code>SolveModel</code>, returns a status rather than throwing (see
@@ -141,7 +141,7 @@
       what it can:</p>
     <ol class="steps">
       <li><strong>Proven before solving.</strong> A model whose own bounds contradict, such as
-        <code>x &gt;= 5 AND x &lt;= 1</code> folded into one column, is answered <code>INFEASIBLE</code> without
+        <code>x &gt;= <span class="tk-n">5</span> <span class="tk-k">AND</span> x &lt;= <span class="tk-n">1</span></code> folded into one column, is answered <code>INFEASIBLE</code> without
         reaching a backend (<code>SolverModel::ProvesInfeasible</code>). The model is kept, so the clause can still be
         named.</li>
       <li><strong>Solve</strong> on the backend the optimizer chose.</li>
@@ -154,7 +154,7 @@
     <p><code>RouteSolveResult</code> then maps the status and the prefix flag to a terminal. It is a pure function:
       it runs no engine and touches no DuckDB operator, so its whole decision tree is tested without a solver.</p>
     <div class="table-wrap"><table>
-      <thead><tr><th scope="col">Solver status</th><th scope="col">With <code>DIAGNOSE</code></th><th scope="col">Without</th></tr></thead>
+      <thead><tr><th scope="col">Solver status</th><th scope="col">With <code><span class="tk-d">DIAGNOSE</span></code></th><th scope="col">Without</th></tr></thead>
       <tbody>
         <tr><td><code>OPTIMAL</code>, <code>SUBOPTIMAL</code></td><td><code>SOLVED</code></td><td><code>SOLVED</code></td></tr>
         <tr><td><code>INFEASIBLE</code></td><td><code>INFEASIBLE</code></td><td><code>UNDIAGNOSED</code></td></tr>
@@ -174,24 +174,24 @@
       dependencies arrive as callbacks (dependency injection): the infeasible engine's solver call, the unbounded
       engine's categorical candidates. So an engine can change behind its terminal without touching the router, and is
       tested without DuckDB's operators. Under the prefix, a query that solves returns one row:</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">DIAGNOSE</span>
-<span class="tk-k">SELECT</span> item, x <span class="tk-k">FROM</span> Items
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">50</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>1 row</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="dec">state</th><th scope="col" class="">clause</th><th scope="col" class="">suggested_change</th><th scope="col" class="">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td class="dec">feasible</td><td class="null">NULL</td><td class="null">NULL</td><td class="null">NULL</td><td class="null">NULL</td><td class="null">NULL</td><td class="null">NULL</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DIAGNOSE</span>
+<span class="tk-k">SELECT</span> item, <span class="tk-v">x</span> <span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">50</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>1 row</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="dec">state</th><th scope="col" class="">clause</th><th scope="col" class="">suggested_change</th><th scope="col" class="">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td class="dec">feasible</td><td class="null">NULL</td><td class="null">NULL</td><td class="null">NULL</td><td class="null">NULL</td><td class="null">NULL</td><td class="null">NULL</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
 
     <h3 id="inf-or-unbd"><a class="anchor" href="#inf-or-unbd">Infeasible or unbounded</a></h3>
     <p>Some solvers stop at an ambiguous answer, <code>INF_OR_UNBD</code>: "infeasible or unbounded". HiGHS gives it
       for an unbounded integer model. An improving direction alone does not settle it, because a model with no
-      solution can have one: <code>x - y &lt;= -10 AND y - x &lt;= -10</code> has no solution, yet raising
-      <code>x</code> and <code>y</code> together leaves both rows unchanged and improves <code>MAXIMIZE x</code>
+      solution can have one: <code>x - y &lt;= -<span class="tk-n">10</span> <span class="tk-k">AND</span> y - x &lt;= -<span class="tk-n">10</span></code> has no solution, yet raising
+      <code>x</code> and <code>y</code> together leaves both rows unchanged and improves <code><span class="tk-d">MAXIMIZE</span> x</code>
       forever.</p>
     <p>So <code>DisambiguateInfOrUnbd</code> solves a copy of the model with its objective replaced by zero. That copy
       cannot be unbounded. If it solves, the region is not empty and the original is <code>UNBOUNDED</code>; if it is
       infeasible, so is the original. Every solve goes through this step: the primary solve and every diagnostic one.</p>
     <p>When the zero-objective solve cannot decide either (it hits a limit or fails), the status stays
       <code>INF_OR_UNBD</code> and the router lets the ray choose. A ray sends the run to the unbounded engine; if that
-      engine cannot name a decision, its finding keeps <code>state = 'infeasible or unbounded'</code> rather than hide
+      engine cannot name a decision, its finding keeps <code>state = <span class="tk-s">&#x27;infeasible or unbounded&#x27;</span></code> rather than hide
       the doubt. No ray means no improving direction, so the run goes to the infeasible engine.</p>
 <div class="code" data-lang="text"><div class="code__head"><span class="code__title">src/decidb/diagnostics/decide_router.cpp</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>case SolverStatus::INF_OR_UNBD:
 	if (!armed) {
@@ -199,9 +199,9 @@
 	}
 	return result.ray.empty() ? DiagnosisTerminal::INFEASIBLE : DiagnosisTerminal::UNBOUNDED;</code></pre></div>
     <div class="src"><strong>In the source</strong><ul>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/third_party/libpg_query/grammar/statements/variable_show.y"><code>third_party/libpg_query/grammar/statements/variable_show.y</code></a>: the <code>DIAGNOSE</code> alternative</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/third_party/libpg_query/grammar/statements/variable_show.y"><code>third_party/libpg_query/grammar/statements/variable_show.y</code></a>: the <code><span class="tk-d">DIAGNOSE</span></code> alternative</li>
       <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/planner/binder/tableref/bind_showref.cpp"><code>src/planner/binder/tableref/bind_showref.cpp</code></a>: <code>Binder::BindDiagnose</code></li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_answer_choice.cpp"><code>src/optimizer/decide/decide_answer_choice.cpp</code></a>: a <code>DIAGNOSE</code> query keeps the solver path</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_answer_choice.cpp"><code>src/optimizer/decide/decide_answer_choice.cpp</code></a>: a <code><span class="tk-d">DIAGNOSE</span></code> query keeps the solver path</li>
       <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/diagnostics/decide_router.cpp"><code>src/decidb/diagnostics/decide_router.cpp</code></a>: <code>RouteSolveResult</code> and <code>DiagnosisTerminal</code></li>
       <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/solver/ilp_solver.cpp"><code>src/decidb/solver/ilp_solver.cpp</code></a>: <code>SolveModel</code>, <code>DisambiguateInfOrUnbd</code>,
         <code>RejectIntegerCeilingOptimum</code>, <code>ThrowDecideSolveError</code></li>
@@ -238,16 +238,16 @@ a·x  = b   becomes   a·x - s⁺ + s⁻ = b       s⁺, s⁻ &gt;= 0</code></pr
     </dl>
     <p>A slack on a mechanism row would be measured in the mechanism's units, and it would name a clause the user never
       typed. So the repair goes to rows that carry the user's own bound.</p>
-    <p>One clause often becomes many rows. <code>per category: SUM(x) by (category) &gt;= 3</code> becomes one row
+    <p>One clause often becomes many rows. <code><span class="tk-d">per</span> category: <span class="tk-f">SUM</span>(x) <span class="tk-d">by</span> (category) &gt;= <span class="tk-n">3</span></code> becomes one row
       per category. The engine puts the slack on the knob the user edits, not on each row: the rows of one clause share
       one slack, which settles at the largest shortfall. That one number is the edit to the literal that fixes every
       row. This is why DeciDB builds the elastic model itself instead of calling Gurobi's <code>feasRelax</code>,
       which puts one slack on each row; it also means the engine runs the same way on HiGHS.</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">DIAGNOSE</span>
-<span class="tk-k">SELECT</span> item, x <span class="tk-k">FROM</span> Items
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">per</span> category: <span class="tk-f">SUM</span>(x) <span class="tk-p">by</span> (category) &gt;= <span class="tk-n">3</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>2 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="num dec">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td>infeasible</td><td>per category: SUM(x) by (category) &gt;= 3</td><td class="dec">per category: SUM(x) by (category) &gt;= 2</td><td class="num dec">1.0</td><td class="null">NULL</td><td class="null">NULL</td><td>source_literal</td><td class="null">NULL</td><td class="null">NULL</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">395.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DIAGNOSE</span>
+<span class="tk-k">SELECT</span> item, <span class="tk-v">x</span> <span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-d">per</span> category: <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) <span class="tk-d">by</span> (category) &gt;= <span class="tk-n">3</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>2 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="num dec">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td>infeasible</td><td>per category: SUM(x) by (category) &gt;= 3</td><td class="dec">per category: SUM(x) by (category) &gt;= 2</td><td class="num dec">1.0</td><td class="null">NULL</td><td class="null">NULL</td><td>source_literal</td><td class="null">NULL</td><td class="null">NULL</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">395.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
     <p>The bag has three <code>tech</code> items and two <code>gear</code> items. The <code>gear</code> row can reach
       2, so the shared slack is 1 and the literal moves from 3 to 2. One slack gives one edit: the literal the user
       wrote, not a separate number per category.</p>
@@ -259,7 +259,7 @@ a·x  = b   becomes   a·x - s⁺ + s⁻ = b       s⁺, s⁻ &gt;= 0</code></pr
       <code>OpenElasticColumnBox</code>. A column widens by ten times its own magnitude, or by what one row demands of
       it (the row's bound divided by the column's coefficient), whichever is larger. The widening is per column, so a
       large number in one clause does not inflate the constants of an unrelated column. A type's own range, such as a
-      <code>BOOL</code>'s 0 and 1, never widens.</p>
+      <code><span class="tk-t">BOOL</span></code>'s 0 and 1, never widens.</p>
 
     <h3 id="smallest"><a class="anchor" href="#smallest">Finding the smallest edit</a></h3>
     <p>"Smallest" is lexicographic: a priority order where each step keeps the optimum of the steps before it.
@@ -269,7 +269,7 @@ a·x  = b   becomes   a·x - s⁺ + s⁻ = b       s⁺, s⁻ &gt;= 0</code></pr
         cannot be repaired by any finite amount. Each one is reported as <code>unreachable_bound</code>, with no amount,
         and no elastic model is built.</li>
       <li><strong>Fewest removed clauses.</strong> Some clauses have no bound to loosen: <code>&lt;&gt;</code>,
-        <code>IN (...)</code> and a constraint with an L0 <code>norm</code>. Each is one removal group, dropped whole
+        <code><span class="tk-k">IN</span> (...)</code> and a constraint with an L0 <code>norm</code>. Each is one removal group, dropped whole
         with every row it lowers into, or kept. The engine tries no removal, then each single removal, then each pair,
         and stops at the first count with a repair: an exact search by increasing cardinality.</li>
       <li><strong>Least data offset.</strong> A bound read from a column, such as <code>ship &lt;= available</code>, has
@@ -293,15 +293,15 @@ a·x  = b   becomes   a·x - s⁺ + s⁻ = b       s⁺, s⁻ &gt;= 0</code></pr
         last reading keeps every amount and repairs by construction, so a printed edit always works.</li>
     </ol>
     <p>A clause that can only be dropped shows step 2. This decision must be neither 0 nor 1, which no
-      <code>BOOL</code> can be:</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">DIAGNOSE</span>
-<span class="tk-k">SELECT</span> item, x <span class="tk-k">FROM</span> Items
+      <code><span class="tk-t">BOOL</span></code> can be:</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DIAGNOSE</span>
+<span class="tk-k">SELECT</span> item, <span class="tk-v">x</span> <span class="tk-k">FROM</span> Items
 <span class="tk-k">WHERE</span> item = <span class="tk-s">&#x27;Lens&#x27;</span>
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> x &lt;&gt; <span class="tk-n">0</span> <span class="tk-k">AND</span> x &lt;&gt; <span class="tk-n">1</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>2 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="dec">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td>infeasible</td><td>x &lt;&gt; 1</td><td class="dec">remove this clause</td><td class="null dec">NULL</td><td class="null">NULL</td><td class="null">NULL</td><td>remove_only</td><td class="null">NULL</td><td class="null">NULL</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">75.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
-    <p>Dropping either clause is one removal. Without <code>x &lt;&gt; 1</code> the lens is taken and the bag is worth
-      75; without <code>x &lt;&gt; 0</code> it would be worth 0. Candidates of the same size and the same repair cost
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">x</span> &lt;&gt; <span class="tk-n">0</span> <span class="tk-k">AND</span> <span class="tk-v">x</span> &lt;&gt; <span class="tk-n">1</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>2 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="dec">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td>infeasible</td><td>x &lt;&gt; 1</td><td class="dec">remove this clause</td><td class="null dec">NULL</td><td class="null">NULL</td><td class="null">NULL</td><td>remove_only</td><td class="null">NULL</td><td class="null">NULL</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">75.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
+    <p>Dropping either clause is one removal. Without <code>x &lt;&gt; <span class="tk-n">1</span></code> the lens is taken and the bag is worth
+      75; without <code>x &lt;&gt; <span class="tk-n">0</span></code> it would be worth 0. Candidates of the same size and the same repair cost
       are compared by their objective, so the engine reports the better drop.</p>
     <p>Two other outcomes have no edit. If the elastic model itself has no solution, the conflict lies in rigid rows,
       and one <code>rigid_conflict</code> finding says that loosening the written clauses cannot fix it. If there is
@@ -313,29 +313,29 @@ a·x  = b   becomes   a·x - s⁺ + s⁻ = b       s⁺, s⁻ &gt;= 0</code></pr
       answers "which generated rows or classes are tight?"</p>
     <p>The whole difference is how <code>BuildElasticModel</code> groups slacks. Two small functions decide it:
       <code>folds()</code> says whether a row shares a slack, and <code>block_key()</code> says with which rows. In the
-      <code>query</code> scope the key is the clause's repair group alone, so every class of a <code>per</code> clause
+      <code>query</code> scope the key is the clause's repair group alone, so every class of a <code><span class="tk-d">per</span></code> clause
       shares one slack, and a bound read from data folds into one offset. In the <code>expanded</code> scope the key
-      adds the row's class, so each <code>per</code> class gets its own slack, and a data bound keeps one slack per row.
+      adds the row's class, so each <code><span class="tk-d">per</span></code> class gets its own slack, and a data bound keeps one slack per row.
       The bag above, under <code>expanded</code>, reports one finding for <code>gear</code>, with <code>gear</code> in
       the <code>group</code> column.</p>
     <p>A bound read from data shows the difference best. Two order lines ask for more than their stock:</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">DIAGNOSE</span>
-<span class="tk-k">SELECT</span> line, ship <span class="tk-k">FROM</span> Lines
-<span class="tk-k">DECIDE</span> ship(<span class="tk-k">INT</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> ship &gt;= ordered <span class="tk-k">AND</span> ship &lt;= available
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(ship);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>2 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="num dec">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td>infeasible</td><td>ship &lt;= available</td><td class="dec">ship &lt;= available + 7</td><td class="num dec">7.0</td><td class="null">NULL</td><td class="null">NULL</td><td>virtual_offset</td><td class="null">NULL</td><td class="null">NULL</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">128.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DIAGNOSE</span>
+<span class="tk-k">SELECT</span> line, <span class="tk-v">ship</span> <span class="tk-k">FROM</span> Lines
+<span class="tk-d">DECIDE</span> <span class="tk-v">ship</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">ship</span> &gt;= ordered <span class="tk-k">AND</span> <span class="tk-v">ship</span> &lt;= available
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>2 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="num dec">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td>infeasible</td><td>ship &lt;= available</td><td class="dec">ship &lt;= available + 7</td><td class="num dec">7.0</td><td class="null">NULL</td><td class="null">NULL</td><td>virtual_offset</td><td class="null">NULL</td><td class="null">NULL</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">128.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
     <p>There is no literal to edit, so the <code>query</code> scope reports a <strong>virtual offset</strong>: the
       column plus a constant, sized to the worst shortfall (line L2 orders 25 and has 18). The <code>expanded</code>
       scope reports each conflicting row at its own values, with its position in the query's rows, counting from 0, in
       <code>row</code>:</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">DIAGNOSE</span>
-<span class="tk-k">SELECT</span> line, ship <span class="tk-k">FROM</span> Lines
-<span class="tk-k">DECIDE</span> ship(<span class="tk-k">INT</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> ship &gt;= ordered <span class="tk-k">AND</span> ship &lt;= available
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(ship);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>3 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="num dec">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="num dec">row</th></tr></thead><tbody><tr><td>infeasible</td><td>ship &lt;= 18</td><td class="dec">ship &lt;= 25</td><td class="num dec">7.0</td><td class="null">NULL</td><td class="null">NULL</td><td>expanded_row</td><td class="null">NULL</td><td class="num dec">1</td></tr><tr><td>infeasible</td><td>ship &lt;= 12</td><td class="dec">ship &lt;= 15</td><td class="num dec">3.0</td><td class="null">NULL</td><td class="null">NULL</td><td>expanded_row</td><td class="null">NULL</td><td class="num dec">3</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">110.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null dec">NULL</td></tr></tbody></table></div></div></div>
-    <p>The expanded scope counts each kept row of a clause without a <code>per</code> key as a class of its own. For a
-      data bound that profile is the point. An aggregate with no <code>per</code> key, such as
-      <code>SUM(x * weight) &lt;= 40</code>, repeats its one edit on each kept row.</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DIAGNOSE</span>
+<span class="tk-k">SELECT</span> line, <span class="tk-v">ship</span> <span class="tk-k">FROM</span> Lines
+<span class="tk-d">DECIDE</span> <span class="tk-v">ship</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">ship</span> &gt;= ordered <span class="tk-k">AND</span> <span class="tk-v">ship</span> &lt;= available
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>3 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="num dec">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="num dec">row</th></tr></thead><tbody><tr><td>infeasible</td><td>ship &lt;= 18</td><td class="dec">ship &lt;= 25</td><td class="num dec">7.0</td><td class="null">NULL</td><td class="null">NULL</td><td>expanded_row</td><td class="null">NULL</td><td class="num dec">1</td></tr><tr><td>infeasible</td><td>ship &lt;= 12</td><td class="dec">ship &lt;= 15</td><td class="num dec">3.0</td><td class="null">NULL</td><td class="null">NULL</td><td>expanded_row</td><td class="null">NULL</td><td class="num dec">3</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">110.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null dec">NULL</td></tr></tbody></table></div></div></div>
+    <p>The expanded scope counts each kept row of a clause without a <code><span class="tk-d">per</span></code> key as a class of its own. For a
+      data bound that profile is the point. An aggregate with no <code><span class="tk-d">per</span></code> key, such as
+      <code><span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">40</span></code>, repeats its one edit on each kept row.</p>
 
     <h3 id="achievable"><a class="anchor" href="#achievable">The achievable objective</a></h3>
     <p>The steps above find how much repair is needed, but several repairs often cost the same. In the order lines
@@ -346,7 +346,7 @@ a·x  = b   becomes   a·x - s⁺ + s⁻ = b       s⁺, s⁻ &gt;= 0</code></pr
       and solves again. It reports the edit of that solution together with its objective, so the edit and the number
       agree: the cap, and 128.</p>
     <ul>
-      <li>The value is shown as the query states it. The model always minimizes, so a <code>MAXIMIZE</code> value is
+      <li>The value is shown as the query states it. The model always minimizes, so a <code><span class="tk-d">MAXIMIZE</span></code> value is
         negated back, and the objective's constant term, which no solver receives, is added back.</li>
       <li>If the repaired model is unbounded, the engine keeps the edit and adds an <code>unbounded_after_fix</code>
         finding: the fix works, but the objective can then grow without limit. It does not hand over to the
@@ -363,12 +363,12 @@ a·x  = b   becomes   a·x - s⁺ + s⁻ = b       s⁺, s⁻ &gt;= 0</code></pr
       <tbody>
         <tr><td><code>state</code></td><td><code>infeasible</code></td><td><code>unbounded</code>, or
           <code>infeasible or unbounded</code> when the status stays ambiguous and no decision can be named</td></tr>
-        <tr><td><code>clause</code></td><td>the clause as written, its <code>when</code> and <code>per</code> in front,
-          from the source registry; in the expanded scope, a data row's own bound (<code>ship &lt;= 18</code>)</td>
+        <tr><td><code>clause</code></td><td>the clause as written, its <code><span class="tk-d">when</span></code> and <code><span class="tk-d">per</span></code> in front,
+          from the source registry; in the expanded scope, a data row's own bound (<code>ship &lt;= <span class="tk-n">18</span></code>)</td>
           <td>the runaway decision's name</td></tr>
         <tr><td><code>suggested_change</code></td><td>the clause with its bound moved (<code>MakeLoosenEdit</code>), the
           column plus an offset (<code>MakeVirtualOffsetEdit</code>), <code>remove this clause</code>, or a reason</td>
-          <td><code>x &lt;= &lt;cap&gt;</code> or <code>x &gt;= &lt;floor&gt;</code>, scoped by a <code>when</code>
+          <td><code>x &lt;= &lt;cap&gt;</code> or <code>x &gt;= &lt;floor&gt;</code>, scoped by a <code><span class="tk-d">when</span></code>
           when that is sound</td></tr>
         <tr><td><code>amount</code></td><td>the slack: how far the bound moves; on the
           <code>achievable_objective</code> row, the objective</td><td>how many instances escape</td></tr>
@@ -376,8 +376,8 @@ a·x  = b   becomes   a·x - s⁺ + s⁻ = b       s⁺, s⁻ &gt;= 0</code></pr
         <tr><td><code>scope</code></td><td>NULL</td><td><code>row</code>, or <code>keyed</code> for a keyed decision's
           classes</td></tr>
         <tr><td><code>edit_source</code></td><td colspan="2">the kind of finding (below)</td></tr>
-        <tr><td><code>group</code></td><td>the <code>per</code> key value of an <code>expanded_group</code>
-          finding</td><td>the slice, such as <code>region = 'West'</code></td></tr>
+        <tr><td><code>group</code></td><td>the <code><span class="tk-d">per</span></code> key value of an <code>expanded_group</code>
+          finding</td><td>the slice, such as <code>region = <span class="tk-s">&#x27;West&#x27;</span></code></td></tr>
         <tr><td><code>row</code></td><td>an <code>expanded_row</code> finding's position in the query's rows, from
           0</td><td>NULL</td></tr>
       </tbody>
@@ -387,7 +387,7 @@ a·x  = b   becomes   a·x - s⁺ + s⁻ = b       s⁺, s⁻ &gt;= 0</code></pr
       <dt><code>virtual_offset</code></dt><dd>a bound read from data, offset by a constant (<code>query</code>
         scope).</dd>
       <dt><code>expanded_row</code>, <code>expanded_group</code></dt><dd>one edit per kept row, or per
-        <code>per</code> class (<code>expanded</code> scope).</dd>
+        <code><span class="tk-d">per</span></code> class (<code>expanded</code> scope).</dd>
       <dt><code>remove_only</code></dt><dd>a clause that can only be dropped.</dd>
       <dt><code>achievable_objective</code></dt><dd>the objective after the edit, in <code>amount</code>.</dd>
       <dt><code>unbounded_after_fix</code></dt><dd>the edit works, but the objective then grows without limit.</dd>
@@ -455,29 +455,29 @@ subject to  aⱼ·d  (&lt;=, =, &gt;=) 0    each linear row, its bound replaced 
       a keyed decision (<a href="#provenance">Provenance</a>). <code>DiagnoseUnbounded</code> groups the escaping
       columns by decision. When only some instances escape, it looks for a categorical column that explains which.</p>
     <ul>
-      <li>A <strong>candidate</strong> column has from 2 to <code>max(diagnose_decide_min_categories,
+      <li>A <strong>candidate</strong> column has from 2 to <code><span class="tk-f">max</span>(diagnose_decide_min_categories,
         diagnose_decide_categorical_ratio × rows)</code> distinct values (defaults 20 and 0.1), which keeps out
         continuous and id-like columns on large tables.</li>
       <li>For each value, the share of its instances that escape is its <strong>escape rate</strong>. A value whose
         rate reaches <code>diagnose_decide_escape_rate</code> (default 0.8) becomes a slice finding.</li>
       <li>Slices that pick out exactly the same escaping instances state one fact, so they collapse to one: a column
-        the DECIDE clause reads wins over one that only rides along in the <code>SELECT</code>.</li>
+        the DECIDE clause reads wins over one that only rides along in the <code><span class="tk-k">SELECT</span></code>.</li>
       <li>If whole slices (rate 1) cover every escaping instance, the suggested cap is scoped with a
-        <code>when</code>, so pasting it back does not cap rows that already have a bound. Otherwise the cap stays
+        <code><span class="tk-d">when</span></code>, so pasting it back does not cap rows that already have a bound. Otherwise the cap stays
         global: capping extra rows is only over-restrictive, while missing one runaway would leave the query
         unbounded.</li>
     </ul>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">DIAGNOSE</span>
-<span class="tk-k">SELECT</span> region, ship <span class="tk-k">FROM</span> Routes
-<span class="tk-k">DECIDE</span> ship(<span class="tk-k">REAL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">when</span> region &lt;&gt; <span class="tk-s">&#x27;West&#x27;</span>: ship &lt;= <span class="tk-n">100</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(ship * margin);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>1 row</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="num">amount</th><th scope="col" class="num">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="dec">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td>unbounded</td><td>ship</td><td class="dec">when region = &#x27;West&#x27;: ship &lt;= &lt;cap&gt;</td><td class="num">2.0</td><td class="num">2</td><td>row</td><td>runaway_+inf</td><td class="dec">region = &#x27;West&#x27;</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
-    <p>The cap exempts the West, and both West routes escape: 2 of 2, so the slice <code>region = 'West'</code>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DIAGNOSE</span>
+<span class="tk-k">SELECT</span> region, <span class="tk-v">ship</span> <span class="tk-k">FROM</span> Routes
+<span class="tk-d">DECIDE</span> <span class="tk-v">ship</span>(<span class="tk-t">REAL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-d">when</span> region &lt;&gt; <span class="tk-s">&#x27;West&#x27;</span>: <span class="tk-v">ship</span> &lt;= <span class="tk-n">100</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">ship</span> * margin);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>1 row</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="num">amount</th><th scope="col" class="num">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="dec">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td>unbounded</td><td>ship</td><td class="dec">when region = &#x27;West&#x27;: ship &lt;= &lt;cap&gt;</td><td class="num">2.0</td><td class="num">2</td><td>row</td><td>runaway_+inf</td><td class="dec">region = &#x27;West&#x27;</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
+    <p>The cap exempts the West, and both West routes escape: 2 of 2, so the slice <code>region = <span class="tk-s">&#x27;West&#x27;</span></code>
       covers every runaway and the cap is scoped to it. The objective reads <code>margin</code>, but each margin value
       holds one escaping route out of three, below the threshold, so it explains nothing and is not reported.</p>
     <p>Column names come from the clause's own column references and, for the rest, from the names the binder
       resolved (<code>LogicalDecide::source_columns</code>), so a column reads the same through a table, a
-      <code>VALUES</code> alias list or a CTE. A computed column with no <code>AS</code> name gets none and is never
+      <code><span class="tk-k">VALUES</span></code> alias list or a CTE. A computed column with no <code><span class="tk-k">AS</span></code> name gets none and is never
       used as a slice.</p>
     <div class="note"><strong>A decision, not a clause</strong><p>The ray names a missing bound. It cannot blame a
       clause: a constraint with its sign flipped has the same escaping direction as one never written. So an unbounded
@@ -527,8 +527,8 @@ subject to  aⱼ·d  (&lt;=, =, &gt;=) 0    each linear row, its bound replaced 
       <dt><code>source_clause_id</code></dt><dd>which written clause to quote.</dd>
       <dt><code>repair_group_id</code></dt><dd>which rows share one slack.</dd>
       <dt><code>removal_group_id</code></dt><dd>which rows are dropped together.</dd>
-      <dt><code>group_key</code>, <code>class_set</code>, <code>data_row</code></dt><dd>which <code>by</code> group,
-        <code>per</code> classes or data row the row stands for.</dd>
+      <dt><code>group_key</code>, <code>class_set</code>, <code>data_row</code></dt><dd>which <code><span class="tk-d">by</span></code> group,
+        <code><span class="tk-d">per</span></code> classes or data row the row stands for.</dd>
       <dt><code>kind</code>, <code>shape</code></dt><dd>the row's role, and whether its bound is one literal shared by
         every row (<code>SHARED_SCALAR</code>) or read from data (<code>PER_ROW_DATA</code>).</dd>
     </dl>
@@ -537,28 +537,28 @@ subject to  aⱼ·d  (&lt;=, =, &gt;=) 0    each linear row, its bound replaced 
     <p><strong>A clause is quoted as written.</strong> The canonicalizer rewrites clauses into one shape, decisions on
       the left (<a href="canonical-form.html#canonicalizer">Canonical form</a>). When both sides of a comparison hold
       decisions, the canonical row is a clause the user never typed:</p>
-<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> depot, ship, open <span class="tk-k">FROM</span> Depots
-<span class="tk-k">DECIDE</span> ship(<span class="tk-k">REAL</span>), open(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> ship <span class="tk-k">BETWEEN</span> <span class="tk-n">0</span> <span class="tk-k">AND</span> capacity * open
-      <span class="tk-k">AND</span> ship &gt;= demand
-<span class="tk-k">MINIMIZE</span> <span class="tk-f">SUM</span>(open)</code></pre></div><div class="code" data-lang="text"><div class="code__head"><span class="code__title">EXPLAIN: the DECIDE node</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>DECIDE
-  Variables: ship, open
-  Objective: MINIMIZE SUM(open)
-  Constraints:
-    ship BETWEEN 0 AND capacity * open
-      ≡ ship &gt;= 0
-      ≡ ship - capacity * open &lt;= 0.0
-    ship &gt;= demand</code></pre></div>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> depot, <span class="tk-v">ship</span>, <span class="tk-v">open</span> <span class="tk-k">FROM</span> Depots
+<span class="tk-d">DECIDE</span> <span class="tk-v">ship</span>(<span class="tk-t">REAL</span>), <span class="tk-v">open</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">ship</span> <span class="tk-k">BETWEEN</span> <span class="tk-n">0</span> <span class="tk-k">AND</span> capacity * <span class="tk-v">open</span>
+      <span class="tk-k">AND</span> <span class="tk-v">ship</span> &gt;= demand
+<span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">open</span>)</code></pre></div><div class="code" data-lang="explain"><div class="code__head"><span class="code__title">EXPLAIN: the DECIDE node</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DECIDE</span>
+  <span class="tk-g">Variables:</span> <span class="tk-v">ship</span>, <span class="tk-v">open</span>
+  <span class="tk-g">Objective:</span> <span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">open</span>)
+  <span class="tk-g">Constraints:</span>
+    <span class="tk-v">ship</span> <span class="tk-k">BETWEEN</span> <span class="tk-n">0</span> <span class="tk-k">AND</span> capacity * <span class="tk-v">open</span>
+      <span class="tk-g">≡</span> <span class="tk-v">ship</span> &gt;= <span class="tk-n">0</span>
+      <span class="tk-g">≡</span> <span class="tk-v">ship</span> - capacity * <span class="tk-v">open</span> &lt;= <span class="tk-n">0.0</span>
+    <span class="tk-v">ship</span> &gt;= demand</code></pre></div>
     <p>So the binder records each clause's written text in a source registry (<code>ConstraintSourceInfo</code>)
       before canonicalization runs, and a finding quotes that text, as a compiler underlines the source in an error
       rather than reprinting its syntax tree. An offset added to a bound means the same in either form, so the repair
       reads against the written clause:</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">DIAGNOSE</span>
-<span class="tk-k">SELECT</span> depot, ship, open <span class="tk-k">FROM</span> Depots
-<span class="tk-k">DECIDE</span> ship(<span class="tk-k">REAL</span>), open(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> ship <span class="tk-k">BETWEEN</span> <span class="tk-n">0</span> <span class="tk-k">AND</span> capacity * open
-      <span class="tk-k">AND</span> ship &gt;= demand
-<span class="tk-k">MINIMIZE</span> <span class="tk-f">SUM</span>(open);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>2 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="num dec">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td>infeasible</td><td>ship BETWEEN 0 AND capacity * open</td><td class="dec">ship BETWEEN 0 AND capacity * open + 20</td><td class="num dec">20.0</td><td class="null">NULL</td><td class="null">NULL</td><td>virtual_offset</td><td class="null">NULL</td><td class="null">NULL</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">1.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DIAGNOSE</span>
+<span class="tk-k">SELECT</span> depot, <span class="tk-v">ship</span>, <span class="tk-v">open</span> <span class="tk-k">FROM</span> Depots
+<span class="tk-d">DECIDE</span> <span class="tk-v">ship</span>(<span class="tk-t">REAL</span>), <span class="tk-v">open</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">ship</span> <span class="tk-k">BETWEEN</span> <span class="tk-n">0</span> <span class="tk-k">AND</span> capacity * <span class="tk-v">open</span>
+      <span class="tk-k">AND</span> <span class="tk-v">ship</span> &gt;= demand
+<span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">open</span>);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>2 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="num dec">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td>infeasible</td><td>ship BETWEEN 0 AND capacity * open</td><td class="dec">ship BETWEEN 0 AND capacity * open + 20</td><td class="num dec">20.0</td><td class="null">NULL</td><td class="null">NULL</td><td>virtual_offset</td><td class="null">NULL</td><td class="null">NULL</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">1.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
     <p>The North depot needs 30 and holds 10, so the bound moves by 20.</p>
 
     <h3 id="handoff"><a class="anchor" href="#handoff">The findings relation</a></h3>
@@ -631,7 +631,7 @@ subject to  aⱼ·d  (&lt;=, =, &gt;=) 0    each linear row, its bound replaced 
       <div class="grid">
         <div class="span-4 stack-4">
           <a class="nav__logo" href="../index.html"><img src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
-          <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
+          <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
         <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Get started</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../docs/index.html">Documentation</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="../examples/knapsack.html">Knapsack</a></li><li><a href="../examples/facility-location.html">Depots</a></li><li><a href="../examples/fair-allocation.html">Fair allocation</a></li><li><a href="../examples/diagnose.html">DIAGNOSE</a></li></ul></div>

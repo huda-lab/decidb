@@ -93,14 +93,14 @@
     <article class="prose">
       <section id="idea">
         <h2><a class="anchor" href="#idea">The idea</a></h2>
-        <p class="lead"><code>WHERE</code> filters one row at a time. <code>DECIDE</code> constrains the whole set of
+        <p class="lead"><code><span class="tk-k">WHERE</span></code> filters one row at a time. <code><span class="tk-d">DECIDE</span></code> constrains the whole set of
           decisions at once.</p>
         <p>Package queries asked a database for a <em>set</em> of rows that satisfies constraints over the set: a meal
           plan under a calorie budget, a portfolio within a risk limit. DeciDB generalizes them from choosing rows to
           deciding values of any type (yes or no, whole quantities, continuous amounts), shared per row, per key or for
           the whole query, and from linear rules to quadratic and bilinear ones.</p>
         <p>The DECIDE language follows the language proposal developed with the project: three scope words
-          (<code>per</code>, <code>when</code>, <code>by</code>) that each answer one question about a rule, and a
+          (<code><span class="tk-d">per</span></code>, <code><span class="tk-d">when</span></code>, <code><span class="tk-d">by</span></code>) that each answer one question about a rule, and a
           determination rule that keeps every constraint well defined on the data it runs on.</p>
       </section>
 
@@ -173,7 +173,7 @@
           <dd>Bundled and open source: LP, MILP and convex QP, with no setup.</dd>
           <dt><a href="features.html#rewriting">Query rewriting</a></dt>
           <dd>Rules that recognize nine problem classes with an exact relational answer and rewrite the query to
-            compute it with DuckDB operators, skipping the solver.</dd>
+            compute it with relational operators, skipping the solver.</dd>
           <dt>Testing</dt>
           <dd>More than 7,000 Python cases, each comparing DeciDB's answer with an independent Gurobi model, run with
             each solver and with query rewriting on and off.</dd>
@@ -212,7 +212,7 @@
       <div class="grid">
         <div class="span-4 stack-4">
           <a class="nav__logo" href="index.html"><img src="assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
-          <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
+          <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
         <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="getting-started.html">Get started</a></li><li><a href="guide.html">Guide</a></li><li><a href="docs/index.html">Documentation</a></li><li><a href="features.html">Novel features</a></li><li><a href="examples.html">Examples</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="examples/knapsack.html">Knapsack</a></li><li><a href="examples/facility-location.html">Depots</a></li><li><a href="examples/fair-allocation.html">Fair allocation</a></li><li><a href="examples/diagnose.html">DIAGNOSE</a></li></ul></div>

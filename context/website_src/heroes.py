@@ -243,7 +243,7 @@ STAGES = [
     ("03", "Logical plan", "the LogicalDecide operator"),
     ("04", "Canonicalizer", "one shape for every clause"),
     ("05", "Optimizer", "the formulation"),
-    ("↳", "Query rewriting", "DuckDB operators, no solver"),
+    ("↳", "Query rewriting", "relational operators, no solver"),
     ("06", "Model", "variables, coefficients, bounds"),
     ("07", "Solver", "Gurobi or HiGHS"),
     ("↳", "DIAGNOSE", "what to change when there is no answer"),

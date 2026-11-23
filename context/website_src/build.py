@@ -138,35 +138,57 @@ def error_of(page, setup, query, expect):
 # ---------------------------------------------------------------- highlighting (done here, so pages need no script)
 
 SQL_KEYWORDS = set(
-    """SELECT FROM WHERE DECIDE SUCH THAT AND OR NOT MAXIMIZE MINIMIZE AS JOIN ON USING GROUP BY ORDER LIMIT
-    INSERT INTO VALUES CREATE TABLE WITH IN IS NULL CASE WHEN THEN ELSE END DIAGNOSE EXPLAIN FORMAT DISTINCT
-    LEFT RIGHT INNER OUTER CROSS UNION ALL HAVING SET PRAGMA BETWEEN ASC DESC OVER PARTITION BOOL BOOLEAN INT
-    INTEGER BIGINT REAL DOUBLE DECIMAL VARCHAR DATE TRUE FALSE CAST""".split()
+    """SELECT FROM WHERE AND OR NOT AS JOIN ON USING GROUP BY ORDER LIMIT INSERT INTO VALUES CREATE TABLE WITH IN IS
+    NULL CASE WHEN THEN ELSE END EXPLAIN FORMAT DISTINCT LEFT RIGHT INNER OUTER CROSS UNION ALL HAVING SET PRAGMA
+    BETWEEN ASC DESC OVER PARTITION TRUE FALSE CAST""".split()
 )
+# the words DeciDB adds to SQL: its clauses, and the scope words a clause may start with
+SQL_DECIDE = {"DECIDE", "SUCH", "THAT", "MAXIMIZE", "MINIMIZE", "DIAGNOSE"}
 SQL_SCOPE = {"per", "when", "by"}
+SQL_TYPES = set("BOOL BOOLEAN INT INTEGER BIGINT REAL DOUBLE FLOAT DECIMAL VARCHAR DATE".split())
 SQL_FUNCS = set("""SUM MIN MAX AVG COUNT ABS ROUND POWER NORM LEAST GREATEST COALESCE SQRT LN EXP FLOOR CEIL""".split())
 SQL_TOKEN = re.compile(
     r"(--[^\n]*)|('(?:[^']|'')*')|(\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)|([A-Za-z_][A-Za-z_0-9]*)(?=(\s*\()?)|([\s\S])"
 )
+DECLARED = re.compile(r"\b([A-Za-z_]\w*)\s*\(\s*(?:" + "|".join(sorted(SQL_TYPES)) + r")\s*\)")
 
 
-def hl_sql(code):
+def decision_names(sql):
+    """The decisions a query declares: each name(TYPE) between DECIDE and the clause after it."""
+    names = set()
+    for m in re.finditer(r"\bDECIDE\b(.*?)(?=\bSUCH\s+THAT\b|\bFROM\b|\bMAXIMIZE\b|\bMINIMIZE\b|;|$)", sql or "", re.S):
+        names |= set(DECLARED.findall(m.group(1)))
+    return names
+
+
+def span(cls, text):
+    return f'<span class="{cls}">{esc(text)}</span>'
+
+
+def hl_sql(code, decisions=None):
+    """SQL in the site's colors: SQL's keywords, DeciDB's own words (its clauses and scope words), types, functions,
+    literals, comments, and the query's decisions wherever they appear (from its DECIDE, or from `decisions`)."""
+    names = decision_names(code) if decisions is None else set(decisions)
     out = []
     for m in SQL_TOKEN.finditer(code):
         com, s, num, ident, paren, other = m.groups()
         if com:
-            out.append(f'<span class="tk-c">{esc(com)}</span>')
+            out.append(span("tk-c", com))
         elif s:
-            out.append(f'<span class="tk-s">{esc(s)}</span>')
+            out.append(span("tk-s", s))
         elif num:
-            out.append(f'<span class="tk-n">{num}</span>')
+            out.append(span("tk-n", num))
         elif ident:
-            if ident in SQL_SCOPE:
-                out.append(f'<span class="tk-p">{ident}</span>')
+            if ident in names:
+                out.append(span("tk-v", ident))
+            elif ident in SQL_SCOPE or ident in SQL_DECIDE:
+                out.append(span("tk-d", ident))
+            elif ident in SQL_TYPES:
+                out.append(span("tk-t", ident))
             elif ident.isupper() and ident in SQL_KEYWORDS:
-                out.append(f'<span class="tk-k">{ident}</span>')
+                out.append(span("tk-k", ident))
             elif paren and ident.upper() in SQL_FUNCS:
-                out.append(f'<span class="tk-f">{ident}</span>')
+                out.append(span("tk-f", ident))
             else:
                 out.append(esc(ident))
         else:
@@ -174,21 +196,96 @@ def hl_sql(code):
     return "".join(out)
 
 
-SH_TOKEN = re.compile(r"(#[^\n]*)|(\"[^\"\n]*\"|'[^'\n]*')|([\s\S])")
+def hl_explain(text):
+    """EXPLAIN's DECIDE node or rewrite lines: the labels quiet, the decisions named, each expression in SQL colors."""
+    m = re.search(r"^\s*Variables:\s*(.*)$", text, re.M)
+    names = {n.strip() for n in m.group(1).split(",")} if m else set()
+    out = []
+    for line in text.split("\n"):
+        lead = line[: len(line) - len(line.lstrip())]
+        body = line.strip()
+        label = re.match(r"([A-Z][A-Za-z ]*:)\s*(.*)$", body)
+        mark = re.match(r"([≡↳])\s*(.*)$", body)
+        if body == "DECIDE":
+            out.append(lead + span("tk-d", body))
+        elif label and label.group(1) == "Variables:":
+            vals = ", ".join(span("tk-v", n.strip()) for n in label.group(2).split(","))
+            out.append(f"{lead}{span('tk-g', label.group(1))} {vals}")
+        elif label and label.group(1) == "Direct solve rule:":
+            out.append(f"{lead}{span('tk-g', label.group(1))} {span('tk-d', label.group(2))}")
+        elif label:
+            out.append(f"{lead}{span('tk-g', label.group(1))} {hl_sql(label.group(2), names)}")
+        elif mark:
+            out.append(f"{lead}{span('tk-g', mark.group(1))} {hl_sql(mark.group(2), names)}")
+        else:
+            out.append(lead + hl_sql(body, names))
+    return "\n".join(out)
+
+
+def hl_plan(text):
+    """A plan tree: the branches quiet, each operator in the keyword color, DECIDE and a rewrite rule in DeciDB's."""
+    out = []
+    for line in text.split("\n"):
+        m = re.match(r"^([│├└─\s]*)(\S+(?: x\d+)?)(?:\s{3}(.*))?$", line)
+        if not m:
+            out.append(esc(line))
+            continue
+        tree, op, note = m.group(1), m.group(2), m.group(3) or ""
+        name = span("tk-d" if op == "DECIDE" else "tk-k", op)
+        if note.startswith("decisions: "):
+            note = span("tk-g", "decisions: ") + ", ".join(span("tk-v", n) for n in note[11:].split(", "))
+        elif note.startswith("query rewriting, rule "):
+            note = span("tk-g", "query rewriting, rule ") + span("tk-d", note[22:])
+        else:
+            note = esc(note)
+        out.append(span("tk-g", tree) + name + ("   " + note if note else ""))
+    return "\n".join(out)
+
+
+def hl_model(text):
+    """A model dump: each line's kind and number in the keyword color, the field names quiet."""
+    out = []
+    for line in text.split("\n"):
+        if line.startswith("==="):
+            out.append(span("tk-c", line))
+            continue
+        m = re.match(r"^(\s*)((?:col|row|ind|gen|q) ?[\d,]+:|[a-z_]+:)(.*)$", line)
+        head, rest = (m.group(1) + span("tk-k", m.group(2)), m.group(3)) if m else ("", line)
+        rest = re.sub(r"(\w+)=", lambda x: f'<span class="tk-g">{x.group(1)}=</span>', esc(rest))
+        out.append(head + rest)
+    return "\n".join(out)
+
+
+SH_TOKEN = re.compile(r"((?<=\s)#[^\n]*|^#[^\n]*)|(\"[^\"\n]*\"|'[^'\n]*')|((?<=\s)--?[A-Za-z][\w-]*)|([\s\S])", re.M)
 PY_KEYWORDS = {"import", "from", "as", "def", "return", "for", "in", "if", "else", "with", "None", "True", "False"}
-PY_TOKEN = re.compile(r"(#[^\n]*)|(\"\"\"[\s\S]*?\"\"\"|\"[^\"\n]*\"|'[^'\n]*')|([A-Za-z_][A-Za-z_0-9]*)|([\s\S])")
+PY_TOKEN = re.compile(
+    r"(#[^\n]*)|(\"\"\"[\s\S]*?\"\"\"|\"[^\"\n]*\"|'[^'\n]*')|(\b\d+(?:\.\d+)?\b)|([A-Za-z_][A-Za-z_0-9]*)(?=(\s*\()?)|([\s\S])"
+)
 
 
 def hl_shell(code):
+    """A shell line: the command in the function color, its flags in the keyword color, strings, comments."""
     out = []
-    for m in SH_TOKEN.finditer(code):
-        com, s, other = m.groups()
-        if com and (m.start() == 0 or code[m.start() - 1] in " \n"):
-            out.append(f'<span class="tk-c">{esc(com)}</span>')
-        elif com:
-            out.append(esc(com))
+    for line in code.split("\n"):
+        m = re.match(r"^(\s*)(\$ )?(\S+)(.*)$", line)
+        if not m or m.group(3).startswith("#"):
+            out.append(hl_shell_rest(line))
+            continue
+        prompt = span("tk-g", m.group(2)) if m.group(2) else ""
+        out.append(m.group(1) + prompt + span("tk-f", m.group(3)) + hl_shell_rest(m.group(4)))
+    return "\n".join(out)
+
+
+def hl_shell_rest(text):
+    out = []
+    for m in SH_TOKEN.finditer(text):
+        com, s, flag, other = m.groups()
+        if com:
+            out.append(span("tk-c", com))
         elif s:
-            out.append(f'<span class="tk-s">{esc(s)}</span>')
+            out.append(span("tk-s", s))
+        elif flag:
+            out.append(span("tk-k", flag))
         else:
             out.append(esc(other))
     return "".join(out)
@@ -197,33 +294,61 @@ def hl_shell(code):
 def hl_python(code):
     out = []
     for m in PY_TOKEN.finditer(code):
-        com, s, ident, other = m.groups()
+        com, s, num, ident, paren, other = m.groups()
         if com:
-            out.append(f'<span class="tk-c">{esc(com)}</span>')
+            out.append(span("tk-c", com))
         elif s:
-            out.append(f'<span class="tk-s">{esc(s)}</span>')
+            out.append(span("tk-s", s))
+        elif num:
+            out.append(span("tk-n", num))
         elif ident:
-            out.append(f'<span class="tk-k">{ident}</span>' if ident in PY_KEYWORDS else esc(ident))
+            if ident in PY_KEYWORDS:
+                out.append(span("tk-k", ident))
+            elif paren:
+                out.append(span("tk-f", ident))
+            else:
+                out.append(esc(ident))
         else:
             out.append(esc(other))
     return "".join(out)
 
 
-def highlight(code, lang):
-    return {"sql": hl_sql, "bash": hl_shell, "python": hl_python}.get(lang, esc)(code)
+def highlight(code, lang, context=None):
+    if lang == "sql":
+        return hl_sql(code, decision_names(context) if context else None)
+    return {"bash": hl_shell, "python": hl_python, "explain": hl_explain, "plan": hl_plan, "model": hl_model}.get(
+        lang, esc
+    )(code)
+
+
+def highlight_inline(text):
+    """Every short <code> in running text and tables in the same colors as the code blocks: not inside a code block, a
+    source link, or the head; a file path or a C++ name stays as it is."""
+
+    def one(m):
+        raw = html.unescape(m.group(1))
+        if "::" in raw or (re.fullmatch(r"[\w.\-/*]+", raw) and "/" in raw):
+            return m.group(0)
+        return f"<code>{hl_sql(raw)}</code>"
+
+    parts = re.split(
+        r'(<a class="src-link".*?</a>|<pre\b.*?</pre>|<head>.*?</head>|<script\b.*?</script>)', text, flags=re.S
+    )
+    return "".join(p if i % 2 else re.sub(r"<code>([^<]+)</code>", one, p) for i, p in enumerate(parts))
 
 
 # ---------------------------------------------------------------- code blocks and results
 
 
-def code_block(code, lang="sql", title=None, status=None):
+def code_block(code, lang="sql", title=None, status=None, context=None):
+    """A code block with its title bar. `context` is the whole query a fragment belongs to, for its decisions."""
     code = code.strip("\n")
-    label = title or {"sql": "SQL", "bash": "Shell", "python": "Python", "text": "Output"}.get(lang, lang)
+    label = title or {"sql": "SQL", "bash": "Shell", "python": "Python"}.get(lang, "Output")
     ok = '<span class="code__ok">Runs as shown</span>' if status == "ok" else ""
     return (
         f'<div class="code" data-lang="{lang}"><div class="code__head"><span class="code__title">{esc(label)}</span>{ok}'
         f'<button class="code__copy" type="button" hidden>Copy</button></div>'
-        f"<pre><code>{highlight(code, lang)}</code></pre></div>"
+        f"<pre><code>{highlight(code, lang, context)}</code></pre></div>"
     )
 
 
@@ -300,21 +425,22 @@ def expand_sql(attrs, code, page):
     fx = FX.FIXTURES[fx_name]
     setup = fx["setup"]
     query = fx["template"].replace("{CLAUSES}", code.strip()) if has_flag(attrs, "frag") else code
+    ctx = query if has_flag(attrs, "frag") else None
     sql = setup + "\n" + query.rstrip().rstrip(";") + ";\n"
     ok, out, err = run_sql(sql, env=env_of(attrs))
     if expect is not None:
         msg = err + out
         if ok or expect not in msg:
             FAILURES.append(f"{where(page, code)}\n    expected an error with {expect!r}, got ok={ok}: {msg[:300]}")
-            return code_block(code, "sql", title)
+            return code_block(code, "sql", title, None, ctx)
         if has_flag(attrs, "show"):
             first = msg.strip().splitlines()[0]
             box = error_box(first, attr(attrs, "status", "refused before solving"))
-            return f'<div class="qr">{code_block(code, "sql", title)}{box}</div>'
-        return code_block(code, "sql", title)
+            return f'<div class="qr">{code_block(code, "sql", title, None, ctx)}{box}</div>'
+        return code_block(code, "sql", title, None, ctx)
     if not ok:
         FAILURES.append(f"{where(page, code)}\n    {err[:400] or out[:400]}")
-        return code_block(code, "sql", title)
+        return code_block(code, "sql", title, None, ctx)
     want_rule = attr(attrs, "direct")
     if want_rule:
         got = direct_rule(setup, query)
@@ -324,8 +450,8 @@ def expand_sql(attrs, code, page):
         rows = parse_json_rows(out)
         dec = tuple(x for x in (attr(attrs, "dec", "") or "").split(",") if x)
         table = result_table(rows, dec=dec, on=attr(attrs, "on"), note=attr(attrs, "note"))
-        return f'<div class="qr">{code_block(code, "sql", title, "ok")}{table}</div>'
-    return code_block(code, "sql", title, "ok")
+        return f'<div class="qr">{code_block(code, "sql", title, "ok", ctx)}{table}</div>'
+    return code_block(code, "sql", title, "ok", ctx)
 
 
 MACRO = re.compile(r'<!--(sql|bash|python|text|explain|plan|model)(\s(?:[^>"]|"[^"]*")*)?-->(.*?)<!--/\1-->', re.S)
@@ -400,7 +526,7 @@ def expand_model(attrs, code, page):
     if keep:
         dump = [line for line in dump if any(line.lstrip().startswith(w) for w in keep)]
     env_words = " ".join(f"{k}={v}" for k, v in env.items())
-    shown = code_block("\n".join(dump), "text", attr(attrs, "label", env_words + (", an excerpt" if keep else "")))
+    shown = code_block("\n".join(dump), "model", attr(attrs, "label", env_words + (", an excerpt" if keep else "")))
     if has_flag(attrs, "dump-only"):
         return shown
     return code_block(code, "sql", attr(attrs, "title"), "ok") + shown
@@ -415,7 +541,7 @@ def expand_plan(attrs, code, page):
         FAILURES.append(f"{where(page, code)}\n    EXPLAIN gave no plan")
         return code_block(code, "sql", attr(attrs, "title"))
     return code_block(code, "sql", attr(attrs, "title"), "ok") + code_block(
-        "\n".join(plan_lines(nodes)), "text", attr(attrs, "label", "EXPLAIN: the operators")
+        "\n".join(plan_lines(nodes)), "plan", attr(attrs, "label", "EXPLAIN: the operators")
     )
 
 
@@ -431,7 +557,7 @@ def expand_explain(attrs, code, page):
             return code_block(code, "sql", attr(attrs, "title"))
         lines = [f"{k}: {v}" for k, v in fields.items()]
         return code_block(code, "sql", attr(attrs, "title"), "ok") + code_block(
-            "\n".join(lines), "text", "EXPLAIN: the rewrite"
+            "\n".join(lines), "explain", "EXPLAIN: the rewrite"
         )
     ok, out, err = run_sql(fx["setup"] + "\nEXPLAIN (FORMAT JSON) " + query + ";", json_mode=False)
     node = None
@@ -471,7 +597,7 @@ def expand_explain(attrs, code, page):
         lines.append("  Constraints:")
         lines += ["    " + c for c in cons]
     return code_block(code, "sql", attr(attrs, "title"), "ok") + code_block(
-        "\n".join(lines), "text", "EXPLAIN: the DECIDE node"
+        "\n".join(lines), "explain", "EXPLAIN: the DECIDE node"
     )
 
 
@@ -668,7 +794,7 @@ def footer_links(root):
     return f"""<div class="grid">
         <div class="span-4 stack-4">
           <a class="nav__logo" href="{root}index.html"><img src="{root}assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
-          <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
+          <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
         {col("Learn", [(f"{root}getting-started.html", "Get started"), (f"{root}guide.html", "Guide"), (f"{root}docs/index.html", "Documentation"), (f"{root}features.html", "Novel features"), (f"{root}examples.html", "Examples")])}
         {col("Examples", [(f"{root}examples/knapsack.html", "Knapsack"), (f"{root}examples/facility-location.html", "Depots"), (f"{root}examples/fair-allocation.html", "Fair allocation"), (f"{root}examples/diagnose.html", "DIAGNOSE")])}
@@ -768,8 +894,8 @@ def example_page(ex, prev_ex, next_ex):
     )
     nav += "</nav>"
     solver_line = (
-        f'Answered by <a href="../features.html#rewriting">query rewriting</a>: DuckDB\'s own operators compute the '
-        f"optimum and no solver is called. <code>EXPLAIN</code> names the rule, <code>{esc(rule)}</code>."
+        f'Answered by <a href="../features.html#rewriting">query rewriting</a>: DeciDB computes the '
+        f"optimum with sorting and joins, and no solver is called. <code>EXPLAIN</code> names the rule, <code>{esc(rule)}</code>."
         if rule
         else f"Problem class: {esc(ex['class'])}, solved by Gurobi or HiGHS."
     )
@@ -851,7 +977,7 @@ def examples_index():
 PAGES = [
     (
         "getting-started.html",
-        "Install DeciDB: first DECIDE query in DuckDB",
+        "Install DeciDB: your first DECIDE query",
         "Install DeciDB and write your first DECIDE query: decisions, constraints, objectives and the scope words per, when and by.",
         "getting-started.html",
     ),
@@ -864,7 +990,7 @@ PAGES = [
     (
         "features.html",
         "Novel features: query rewriting and DIAGNOSE in DeciDB",
-        "Two DeciDB features a solver library does not have: query rewriting answers nine problem classes with DuckDB's own operators, and DIAGNOSE explains a query with no answer.",
+        "Two DeciDB features a solver library does not have: query rewriting answers nine problem classes without a solver, and DIAGNOSE explains a query with no answer.",
         "features.html",
     ),
     (
@@ -1047,7 +1173,9 @@ def redirect(to, title):
 
 
 def write_page(path, text):
-    """Write a generated page with no trailing whitespace, so the repository's diff check stays clean."""
+    """Write a generated page with no trailing whitespace, so the repository's diff check stays clean. Its short code
+    in running text takes the code blocks' colors here, once for every page."""
+    text = highlight_inline(text)
     with open(path, "w") as f:
         f.write("\n".join(line.rstrip() for line in text.split("\n")))
 

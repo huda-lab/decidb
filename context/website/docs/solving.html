@@ -73,17 +73,17 @@
 <section class="hero hero--page" data-enter aria-labelledby="page-h">
   <div class="wrap"><div class="hero-text hero-split grid">
     <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a><span aria-hidden="true">/</span><a href="../docs/index.html">Documentation</a><span aria-hidden="true">/</span>Model, solvers and execution</nav><h1 id="page-h">Model, solvers, execution</h1><p class="hero__lead">How the DECIDE operator turns its input rows into a solver model, runs Gurobi or HiGHS on it, and writes each decision's value back into its row.</p></div>
-    <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="25" data-ui-pause-host><div class="ui ui-hw hw hw--page hw--mid" role="img" aria-label="A query with per-row, per-category and query-wide decisions, and the model DeciDB builds for it: 8 columns and 6 rows."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · DECIDB_DUMP_MODEL=1</span></div><div class="hw__page"><div class="hw__split hw__split--model"><div><div class="hw__col">the query</div><pre class="hw__sql"><code><span class="tk-k">SELECT</span> item, x, open, cap
+    <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="25" data-ui-pause-host><div class="ui ui-hw hw hw--page hw--mid" role="img" aria-label="A query with per-row, per-category and query-wide decisions, and the model DeciDB builds for it: 8 columns and 6 rows."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · DECIDB_DUMP_MODEL=1</span></div><div class="hw__page"><div class="hw__split hw__split--model"><div><div class="hw__col">the query</div><pre class="hw__sql"><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span>, <span class="tk-v">open</span>, <span class="tk-v">cap</span>
 <span class="tk-k">FROM</span> Items
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>),
-  <span class="tk-p">per</span> category: open(<span class="tk-k">BOOL</span>),
-  <span class="tk-p">per</span> (): cap(<span class="tk-k">INT</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> x &lt;= open
-  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(x * weight) &lt;= cap
-  <span class="tk-k">AND</span> cap &lt;= <span class="tk-n">40</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value)
-  - <span class="tk-f">SUM</span>(<span class="tk-p">per</span> category: <span class="tk-n">30</span> * open)
-  - cap</code></pre></div><div><div class="hw__col">the model</div><div class="hw__dumps" data-ly-steps="140"><div class="hw__dump" data-step>col 0 bin  0 to 1, obj -100</div><div class="hw__dump" data-step>col 1 bin  0 to 1, obj -60</div><div class="hw__dump" data-step>col 2 bin  0 to 1, obj -120</div><div class="hw__dump" data-step>col 3 bin  0 to 1, obj -40</div><div class="hw__dump" data-step>col 4 bin  0 to 1, obj -75</div><div class="hw__dump" data-step>col 5 bin  0 to 1, obj 30</div><div class="hw__dump" data-step>col 6 bin  0 to 1, obj 30</div><div class="hw__dump" data-step>col 7 int  0 to 40, obj 1</div><div class="hw__dump" data-step>row 0 0:1 6:-1 ≤ 0</div><div class="hw__dump" data-step>row 1 1:1 6:-1 ≤ 0</div><div class="hw__dump" data-step>row 2 2:1 6:-1 ≤ 0</div><div class="hw__dump" data-step>row 3 3:1 5:-1 ≤ 0</div><div class="hw__dump" data-step>row 4 4:1 5:-1 ≤ 0</div><div class="hw__dump" data-step>row 5 0:20 1:10 2:30 3:15 4:12 7:-1 ≤ 0</div></div></div></div></div></div></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>),
+  <span class="tk-d">per</span> category: <span class="tk-v">open</span>(<span class="tk-t">BOOL</span>),
+  <span class="tk-d">per</span> (): <span class="tk-v">cap</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">x</span> &lt;= <span class="tk-v">open</span>
+  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-v">cap</span>
+  <span class="tk-k">AND</span> <span class="tk-v">cap</span> &lt;= <span class="tk-n">40</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value)
+  - <span class="tk-f">SUM</span>(<span class="tk-d">per</span> category: <span class="tk-n">30</span> * <span class="tk-v">open</span>)
+  - <span class="tk-v">cap</span></code></pre></div><div><div class="hw__col">the model</div><div class="hw__dumps" data-ly-steps="140"><div class="hw__dump" data-step>col 0 bin  0 to 1, obj -100</div><div class="hw__dump" data-step>col 1 bin  0 to 1, obj -60</div><div class="hw__dump" data-step>col 2 bin  0 to 1, obj -120</div><div class="hw__dump" data-step>col 3 bin  0 to 1, obj -40</div><div class="hw__dump" data-step>col 4 bin  0 to 1, obj -75</div><div class="hw__dump" data-step>col 5 bin  0 to 1, obj 30</div><div class="hw__dump" data-step>col 6 bin  0 to 1, obj 30</div><div class="hw__dump" data-step>col 7 int  0 to 40, obj 1</div><div class="hw__dump" data-step>row 0 0:1 6:-1 ≤ 0</div><div class="hw__dump" data-step>row 1 1:1 6:-1 ≤ 0</div><div class="hw__dump" data-step>row 2 2:1 6:-1 ≤ 0</div><div class="hw__dump" data-step>row 3 3:1 5:-1 ≤ 0</div><div class="hw__dump" data-step>row 4 4:1 5:-1 ≤ 0</div><div class="hw__dump" data-step>row 5 0:20 1:10 2:30 3:15 4:12 7:-1 ≤ 0</div></div></div></div></div></div></div>
   </div></div>
 </section>
 <div class="container"><div class="doc-layout doc-layout--docs"><nav class="docnav" aria-label="Documentation pages"><div class="toc-title">Documentation</div><p class="docnav__group">Start here</p><ul><li><a href="index.html">Overview</a></li><li><a href="life-of-a-query.html">Life of a query</a></li></ul><p class="docnav__group">The pipeline</p><ul><li><a href="front-end.html">Parser, binder and plan</a></li><li><a href="canonical-form.html">Canonicalizer and optimizer</a></li><li><a href="solving.html" aria-current="page">Model, solvers and execution</a></li></ul><p class="docnav__group">Novel features</p><ul><li><a href="rewriting.html">Query rewriting</a></li><li><a href="rewrite-rules.html">The rewrite rules</a></li><li><a href="diagnose.html">DIAGNOSE</a></li></ul><p class="docnav__group">Quality</p><ul><li><a href="testing.html">Testing</a></li><li><a href="performance.html">Performance</a></li></ul></nav>
@@ -148,22 +148,22 @@
       this item or not. <code>open</code> is keyed by category: a category costs 30 to open, and an item can be packed
       only if its category is open. <code>cap</code> is query-wide: one capacity for the whole bag, bought at 1 per
       unit, at most 40.</p>
-    <div class="code" data-lang="sql"><div class="code__head"><span class="code__title">One decision of each scope</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, category, x, open, cap
+    <div class="code" data-lang="sql"><div class="code__head"><span class="code__title">One decision of each scope</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, category, <span class="tk-v">x</span>, <span class="tk-v">open</span>, <span class="tk-v">cap</span>
 <span class="tk-k">FROM</span> Items
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>), <span class="tk-p">per</span> category: open(<span class="tk-k">BOOL</span>), <span class="tk-p">per</span> (): cap(<span class="tk-k">INT</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> x &lt;= open
-  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(x * weight) &lt;= cap
-  <span class="tk-k">AND</span> cap &lt;= <span class="tk-n">40</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value) - <span class="tk-f">SUM</span>(<span class="tk-p">per</span> category: <span class="tk-n">30</span> * open) - cap</code></pre></div><div class="code" data-lang="text"><div class="code__head"><span class="code__title">EXPLAIN: the DECIDE node</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>DECIDE
-  Variables: x, open, cap
-  Objective: MAXIMIZE SUM(x * value) - SUM(per category: 30 * open) - cap
-    ≡ sum(value * x) - sum(per category: 30 * open) - cap
-  Constraints:
-    x &lt;= open
-      ≡ x - open &lt;= 0.0
-    SUM(x * weight) &lt;= cap
-      ≡ sum(weight * x) - cap &lt;= 0.0
-    cap &lt;= 40</code></pre></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>), <span class="tk-d">per</span> category: <span class="tk-v">open</span>(<span class="tk-t">BOOL</span>), <span class="tk-d">per</span> (): <span class="tk-v">cap</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">x</span> &lt;= <span class="tk-v">open</span>
+  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-v">cap</span>
+  <span class="tk-k">AND</span> <span class="tk-v">cap</span> &lt;= <span class="tk-n">40</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value) - <span class="tk-f">SUM</span>(<span class="tk-d">per</span> category: <span class="tk-n">30</span> * <span class="tk-v">open</span>) - <span class="tk-v">cap</span></code></pre></div><div class="code" data-lang="explain"><div class="code__head"><span class="code__title">EXPLAIN: the DECIDE node</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DECIDE</span>
+  <span class="tk-g">Variables:</span> <span class="tk-v">x</span>, <span class="tk-v">open</span>, <span class="tk-v">cap</span>
+  <span class="tk-g">Objective:</span> <span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value) - <span class="tk-f">SUM</span>(<span class="tk-d">per</span> category: <span class="tk-n">30</span> * <span class="tk-v">open</span>) - <span class="tk-v">cap</span>
+    <span class="tk-g">≡</span> <span class="tk-f">sum</span>(value * <span class="tk-v">x</span>) - <span class="tk-f">sum</span>(<span class="tk-d">per</span> category: <span class="tk-n">30</span> * <span class="tk-v">open</span>) - <span class="tk-v">cap</span>
+  <span class="tk-g">Constraints:</span>
+    <span class="tk-v">x</span> &lt;= <span class="tk-v">open</span>
+      <span class="tk-g">≡</span> <span class="tk-v">x</span> - <span class="tk-v">open</span> &lt;= <span class="tk-n">0.0</span>
+    <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-v">cap</span>
+      <span class="tk-g">≡</span> <span class="tk-f">sum</span>(weight * <span class="tk-v">x</span>) - <span class="tk-v">cap</span> &lt;= <span class="tk-n">0.0</span>
+    <span class="tk-v">cap</span> &lt;= <span class="tk-n">40</span></code></pre></div>
     <p>EXPLAIN prints each clause as written and then, after <code>≡</code>, in the canonical form the model's rows are
       built from (<a href="../guide.html#explain">EXPLAIN in the Guide</a>). The model this query builds is in
       <a href="#example-model">the example as a model</a>, and its result in <a href="#readback">reading the solution
@@ -208,16 +208,16 @@
     <p>One function, <code>VarIndexer::Get(decision, row)</code>, resolves a data row to a column. The objective, every
       row of the model and the readback all go through it. That is why rows share a keyed or query-wide column with no
       special case anywhere: they resolve to the same index, and what they add to it accumulates.</p>
-    <p>A class id is the rank of the class's key value, sorted the way <code>ORDER BY</code> sorts the key. It does not
+    <p>A class id is the rank of the class's key value, sorted the way <code><span class="tk-k">ORDER</span> <span class="tk-k">BY</span></code> sorts the key. It does not
       depend on the order rows arrive in, so the same data in a different order builds the same columns.</p>
 
     <h3 id="bounds"><a class="anchor" href="#bounds">Types and bounds</a></h3>
     <div class="table-wrap"><table>
       <thead><tr><th scope="col">Declared</th><th scope="col">Column</th><th scope="col">Default bounds</th></tr></thead>
       <tbody>
-        <tr><td><code>BOOL</code></td><td>binary</td><td>[0, 1]</td></tr>
-        <tr><td><code>INT</code></td><td>integer</td><td>[0, ∞)</td></tr>
-        <tr><td><code>REAL</code></td><td>continuous</td><td>[0, ∞)</td></tr>
+        <tr><td><code><span class="tk-t">BOOL</span></code></td><td>binary</td><td>[0, 1]</td></tr>
+        <tr><td><code><span class="tk-t">INT</span></code></td><td>integer</td><td>[0, ∞)</td></tr>
+        <tr><td><code><span class="tk-t">REAL</span></code></td><td>continuous</td><td>[0, ∞)</td></tr>
       </tbody>
     </table></div>
     <p>The model writes "no bound" as the number 1e30, and each backend's adapter turns it into that solver's own
@@ -228,13 +228,13 @@
       rows that imply it:</p>
     <ul>
       <li><strong>Singleton-row folding</strong> (stage 05): a literal bound on one decision, such as
-        <code>cap &lt;= 40</code>, becomes the column's upper bound instead of a row
+        <code>cap &lt;= <span class="tk-n">40</span></code>, becomes the column's upper bound instead of a row
         (<a href="canonical-form.html#optimizer">the optimizer</a>).</li>
       <li><strong>The per-row fold</strong> (<code>TryFoldPerRowBound</code>): a bound on one decision that reads data,
         such as <code>x &lt;= S.demand</code>, narrows that row's column. It only narrows. Under DIAGNOSE these stay
         rows, because the elastic model DIAGNOSE solves loosens a clause by giving its rows slack.</li>
       <li><strong>Implied bounds</strong> (<code>DecidePropagateImpliedBounds</code>): a row whose terms are all
-        non-negative, such as <code>SUM(x) &lt;= 5</code> over non-negative <code>x</code>, bounds each term on its own,
+        non-negative, such as <code><span class="tk-f">SUM</span>(x) &lt;= <span class="tk-n">5</span></code> over non-negative <code>x</code>, bounds each term on its own,
         so each <code>x</code> is at most 5. Only bounds the rows prove are applied, so the optimum does not move.</li>
     </ul>
     <p>Bounds matter more than they look. Every Big-M constant (<a href="#linearization">below</a>) is computed from
@@ -242,7 +242,7 @@
       9,600-row box-bounded QP that HiGHS did not finish in 60 s as rows and solved in 0.4 s as bounds.</p>
 
     <h3 id="objective-and-rows"><a class="anchor" href="#objective-and-rows">The objective and the rows</a></h3>
-    <p>The model always minimizes. A <code>MAXIMIZE</code> query arrives as the minimization of its negation: the
+    <p>The model always minimizes. A <code><span class="tk-d">MAXIMIZE</span></code> query arrives as the minimization of its negation: the
       canonicalizer has flipped every term's sign (<a href="canonical-form.html#canonicalizer">the
       canonicalizer</a>). For each objective term, the builder adds the term's coefficient on every row into the
       column that row resolves to. A per-row column receives one row's coefficient. A keyed column receives the sum over
@@ -251,7 +251,7 @@
       constant, which no backend receives. The solver session adds it back to every objective value it reads, so a
       reported objective is the one the query wrote.</p>
     <p>A decision beside the reducers (the aggregates over decisions, such as <code>SUM</code>) counts once. In
-      <code>SUM(x * weight) &lt;= cap</code>, <code>cap</code> stands on every row of the clause, but execution keeps
+      <code><span class="tk-f">SUM</span>(x * weight) &lt;= cap</code>, <code>cap</code> stands on every row of the clause, but execution keeps
       its coefficient on one row and zeroes the rest (<code>CountOnce</code>). The row holds −1 times <code>cap</code>,
       not −5 times. One function owns this rule, and a debug build checks that no such term reaches the builder
       twice.</p>
@@ -259,21 +259,21 @@
     <div class="table-wrap"><table>
       <thead><tr><th scope="col">Clause shape</th><th scope="col">Rows it becomes</th><th scope="col">Example</th></tr></thead>
       <tbody>
-        <tr><td>no reducer (per row)</td><td>one per kept row; one per class under <code>per K:</code></td>
+        <tr><td>no reducer (per row)</td><td>one per kept row; one per class under <code><span class="tk-d">per</span> K:</code></td>
           <td><code>x &lt;= open</code>: 5 rows</td></tr>
-        <tr><td>a reducer, no <code>by</code> and no <code>when</code></td><td>one</td>
-          <td><code>SUM(x * weight) &lt;= cap</code>: 1 row</td></tr>
-        <tr><td>a reducer with <code>by</code> or <code>when</code></td><td>one per group that has rows</td>
-          <td><code>SUM(x) by (category) &lt;= 2</code>: 2 rows</td></tr>
+        <tr><td>a reducer, no <code><span class="tk-d">by</span></code> and no <code><span class="tk-d">when</span></code></td><td>one</td>
+          <td><code><span class="tk-f">SUM</span>(x * weight) &lt;= cap</code>: 1 row</td></tr>
+        <tr><td>a reducer with <code><span class="tk-d">by</span></code> or <code><span class="tk-d">when</span></code></td><td>one per group that has rows</td>
+          <td><code><span class="tk-f">SUM</span>(x) <span class="tk-d">by</span> (category) &lt;= <span class="tk-n">2</span></code>: 2 rows</td></tr>
       </tbody>
     </table></div>
     <p>Terms that hold no decision move to the right-hand side. <code>&lt;=</code>, <code>&gt;=</code> and
       <code>=</code> map directly (<code>ApplyComparisonSense</code>). A strict comparison steps its bound to the next
-      integer: <code>&gt; K</code> becomes <code>&gt;= floor(K) + 1</code>, and <code>&lt; K</code> becomes
-      <code>&lt;= ceil(K) − 1</code>. That step is exact only when the left side takes whole values, and the binder
+      integer: <code>&gt; K</code> becomes <code>&gt;= <span class="tk-f">floor</span>(K) + <span class="tk-n">1</span></code>, and <code>&lt; K</code> becomes
+      <code>&lt;= <span class="tk-f">ceil</span>(K) − <span class="tk-n">1</span></code>. That step is exact only when the left side takes whole values, and the binder
       admits a strict comparison on no other left side (<a href="front-end.html#binder">the binder</a>).</p>
     <p>After folding and cancellation, a row can be left with no coefficient. One that always holds, such as
-      <code>0 &lt;= 3</code>, is dropped. One that never holds, as <code>SUM(0 * x) &lt;= -1</code> writes, is kept with
+      <code><span class="tk-n">0</span> &lt;= <span class="tk-n">3</span></code>, is dropped. One that never holds, as <code><span class="tk-f">SUM</span>(<span class="tk-n">0</span> * x) &lt;= -<span class="tk-n">1</span></code> writes, is kept with
       its source clause. <code>SolverModel::ProvesInfeasible</code> then answers INFEASIBLE without calling a solver, and
       it does the same for a column whose lower bound passes its upper bound and for a row whose infinite bound no value
       reaches. HiGHS refuses to load some of these models, so answering them first also keeps the two solvers in
@@ -283,33 +283,33 @@
       clause is strict. Diagnosis reads it to speak about clauses, not matrix rows.</p>
 
     <h3 id="example-model"><a class="anchor" href="#example-model">The example as a model</a></h3>
-    <p>Set <code>DECIDB_DUMP_MODEL=1</code> and DeciDB prints the model of every solved DECIDE query to stderr;
+    <p>Set <code>DECIDB_DUMP_MODEL=<span class="tk-n">1</span></code> and DeciDB prints the model of every solved DECIDE query to stderr;
       <code>DECIDB_DUMP_MODEL=<var>path</var></code> appends it to a file. Each <code>col</code> line gives a column's
       bounds, whether it is integer and binary, and its objective coefficient. Each <code>row</code> line gives the sense
       (<code>&lt;</code> for at most, <code>&gt;</code> for at least), the right-hand side, and its column:coefficient
       pairs. This is the running example's model:</p>
-    <div class="code" data-lang="text"><div class="code__head"><span class="code__title">DECIDB_DUMP_MODEL=1, the running example</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>=== DECIDB MODEL DUMP ===
-sense: minimize
-num_vars: 8
-num_rows: 6
-num_qrows: 0
-num_genconstrs: 0
-num_indconstrs: 0
-col 0: lb=0 ub=1 int=1 bin=1 obj=-100
-col 1: lb=0 ub=1 int=1 bin=1 obj=-60
-col 2: lb=0 ub=1 int=1 bin=1 obj=-120
-col 3: lb=0 ub=1 int=1 bin=1 obj=-40
-col 4: lb=0 ub=1 int=1 bin=1 obj=-75
-col 5: lb=0 ub=1 int=1 bin=1 obj=30
-col 6: lb=0 ub=1 int=1 bin=1 obj=30
-col 7: lb=0 ub=40 int=1 bin=0 obj=1
-row 0: sense=&lt; rhs=0 nnz=2 | 0:1 6:-1
-row 1: sense=&lt; rhs=0 nnz=2 | 1:1 6:-1
-row 2: sense=&lt; rhs=0 nnz=2 | 2:1 6:-1
-row 3: sense=&lt; rhs=0 nnz=2 | 3:1 5:-1
-row 4: sense=&lt; rhs=0 nnz=2 | 4:1 5:-1
-row 5: sense=&lt; rhs=0 nnz=6 | 0:20 1:10 2:30 3:15 4:12 7:-1
-=== END MODEL DUMP ===</code></pre></div>
+    <div class="code" data-lang="model"><div class="code__head"><span class="code__title">DECIDB_DUMP_MODEL=1, the running example</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-c">=== DECIDB MODEL DUMP ===</span>
+<span class="tk-k">sense:</span> minimize
+<span class="tk-k">num_vars:</span> 8
+<span class="tk-k">num_rows:</span> 6
+<span class="tk-k">num_qrows:</span> 0
+<span class="tk-k">num_genconstrs:</span> 0
+<span class="tk-k">num_indconstrs:</span> 0
+<span class="tk-k">col 0:</span> <span class="tk-g">lb=</span>0 <span class="tk-g">ub=</span>1 <span class="tk-g">int=</span>1 <span class="tk-g">bin=</span>1 <span class="tk-g">obj=</span>-100
+<span class="tk-k">col 1:</span> <span class="tk-g">lb=</span>0 <span class="tk-g">ub=</span>1 <span class="tk-g">int=</span>1 <span class="tk-g">bin=</span>1 <span class="tk-g">obj=</span>-60
+<span class="tk-k">col 2:</span> <span class="tk-g">lb=</span>0 <span class="tk-g">ub=</span>1 <span class="tk-g">int=</span>1 <span class="tk-g">bin=</span>1 <span class="tk-g">obj=</span>-120
+<span class="tk-k">col 3:</span> <span class="tk-g">lb=</span>0 <span class="tk-g">ub=</span>1 <span class="tk-g">int=</span>1 <span class="tk-g">bin=</span>1 <span class="tk-g">obj=</span>-40
+<span class="tk-k">col 4:</span> <span class="tk-g">lb=</span>0 <span class="tk-g">ub=</span>1 <span class="tk-g">int=</span>1 <span class="tk-g">bin=</span>1 <span class="tk-g">obj=</span>-75
+<span class="tk-k">col 5:</span> <span class="tk-g">lb=</span>0 <span class="tk-g">ub=</span>1 <span class="tk-g">int=</span>1 <span class="tk-g">bin=</span>1 <span class="tk-g">obj=</span>30
+<span class="tk-k">col 6:</span> <span class="tk-g">lb=</span>0 <span class="tk-g">ub=</span>1 <span class="tk-g">int=</span>1 <span class="tk-g">bin=</span>1 <span class="tk-g">obj=</span>30
+<span class="tk-k">col 7:</span> <span class="tk-g">lb=</span>0 <span class="tk-g">ub=</span>40 <span class="tk-g">int=</span>1 <span class="tk-g">bin=</span>0 <span class="tk-g">obj=</span>1
+<span class="tk-k">row 0:</span> <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>0 <span class="tk-g">nnz=</span>2 | 0:1 6:-1
+<span class="tk-k">row 1:</span> <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>0 <span class="tk-g">nnz=</span>2 | 1:1 6:-1
+<span class="tk-k">row 2:</span> <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>0 <span class="tk-g">nnz=</span>2 | 2:1 6:-1
+<span class="tk-k">row 3:</span> <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>0 <span class="tk-g">nnz=</span>2 | 3:1 5:-1
+<span class="tk-k">row 4:</span> <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>0 <span class="tk-g">nnz=</span>2 | 4:1 5:-1
+<span class="tk-k">row 5:</span> <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>0 <span class="tk-g">nnz=</span>6 | 0:20 1:10 2:30 3:15 4:12 7:-1
+<span class="tk-c">=== END MODEL DUMP ===</span></code></pre></div>
     <div class="table-wrap"><table>
       <thead><tr><th scope="col">Columns</th><th scope="col">Block</th><th scope="col">Instance</th><th scope="col">Type and bounds</th><th scope="col">Objective</th></tr></thead>
       <tbody>
@@ -327,14 +327,14 @@ row 5: sense=&lt; rhs=0 nnz=6 | 0:20 1:10 2:30 3:15 4:12 7:-1
           column 6, at most 0</td></tr>
         <tr><td>3, 4</td><td><code>x &lt;= open</code> on the gear items</td><td>the item's <code>x</code> minus
           column 5, at most 0</td></tr>
-        <tr><td>5</td><td><code>SUM(x * weight) &lt;= cap</code></td><td>each weight on its <code>x</code>, −1 on
+        <tr><td>5</td><td><code><span class="tk-f">SUM</span>(x * weight) &lt;= cap</code></td><td>each weight on its <code>x</code>, −1 on
           <code>cap</code>, at most 0</td></tr>
-        <tr><td>none</td><td><code>cap &lt;= 40</code></td><td>folded into column 7's upper bound</td></tr>
+        <tr><td>none</td><td><code>cap &lt;= <span class="tk-n">40</span></code></td><td>folded into column 7's upper bound</td></tr>
       </tbody>
     </table></div>
     <p>Three rules from above show in it. The class <code>gear</code> sorts before <code>tech</code>, so it has the
-      lower keyed column. <code>SUM(per category: 30 * open)</code> counts each category once, through the reducer's own
-      <code>per</code>, so each <code>open</code> column holds 30, not 30 times its rows. And <code>cap</code> holds −1
+      lower keyed column. <code><span class="tk-f">SUM</span>(<span class="tk-d">per</span> category: <span class="tk-n">30</span> * open)</code> counts each category once, through the reducer's own
+      <code><span class="tk-d">per</span></code>, so each <code>open</code> column holds 30, not 30 times its rows. And <code>cap</code> holds −1
       in row 5 and 1 in the objective, because a decision beside the reducers counts once.</p>
 
     <h3 id="quadratic"><a class="anchor" href="#quadratic">Quadratic objectives: the Q matrix</a></h3>
@@ -342,7 +342,7 @@ row 5: sense=&lt; rhs=0 nnz=6 | 0:20 1:10 2:30 3:15 4:12 7:-1
       square) or two (a product). Execution evaluates the weight and the forms' coefficients on each row. The builder
       adds each group, row by row, into Q: a sparse matrix kept as a coordinate list (COO, one entry per nonzero with
       its row and column), lower triangle only.</p>
-    <p>An entry of Q is the plain coefficient of its monomial: <code>3·x²</code> stores 3, and <code>4·x·y</code> stores
+    <p>An entry of Q is the plain coefficient of its monomial: <code><span class="tk-n">3</span>·x²</code> stores 3, and <code><span class="tk-n">4</span>·x·y</code> stores
       4. This is not the ½·xᵀQx form some solvers take, and each adapter converts to its solver's form. For a square
       <var>w</var>·(<var>a</var>·x + <var>c</var>)² on one row:</p>
     <ul>
@@ -353,32 +353,32 @@ row 5: sense=&lt; rhs=0 nnz=6 | 0:20 1:10 2:30 3:15 4:12 7:-1
       <li>A product <var>w</var>·(<var>a</var>·x + <var>c</var>)·(<var>b</var>·x + <var>d</var>) adds
         <var>w</var>·aᵢ·bⱼ to the monomial xᵢxⱼ, and handles its constants the same way.</li>
     </ul>
-    <div class="code" data-lang="sql"><div class="code__head"><span class="code__title">A least-squares objective</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> name, score, x
+    <div class="code" data-lang="sql"><div class="code__head"><span class="code__title">A least-squares objective</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> name, score, <span class="tk-v">x</span>
 <span class="tk-k">FROM</span> Signals
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">REAL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x) &lt;= <span class="tk-n">5</span>
-<span class="tk-k">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(x - score, <span class="tk-n">2</span>))</code></pre></div><div class="code" data-lang="text"><div class="code__head"><span class="code__title">DECIDB_DUMP_MODEL=1, an excerpt</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>col 0: lb=0 ub=5 int=0 bin=0 obj=-6
-col 1: lb=0 ub=5 int=0 bin=0 obj=-8
-col 2: lb=0 ub=5 int=0 bin=0 obj=0
-qobj: nonconvex=0
-  q 0,0:1
-  q 1,1:1
-  q 2,2:1
-row 0: sense=&lt; rhs=5 nnz=3 | 0:1 1:1 2:1</code></pre></div>
-    <p>Each <code>POWER(x - score, 2)</code> expands to x² − 2·score·x + score². Q holds 1 on its diagonal, the linear
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">REAL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) &lt;= <span class="tk-n">5</span>
+<span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(<span class="tk-v">x</span> - score, <span class="tk-n">2</span>))</code></pre></div><div class="code" data-lang="model"><div class="code__head"><span class="code__title">DECIDB_DUMP_MODEL=1, an excerpt</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">col 0:</span> <span class="tk-g">lb=</span>0 <span class="tk-g">ub=</span>5 <span class="tk-g">int=</span>0 <span class="tk-g">bin=</span>0 <span class="tk-g">obj=</span>-6
+<span class="tk-k">col 1:</span> <span class="tk-g">lb=</span>0 <span class="tk-g">ub=</span>5 <span class="tk-g">int=</span>0 <span class="tk-g">bin=</span>0 <span class="tk-g">obj=</span>-8
+<span class="tk-k">col 2:</span> <span class="tk-g">lb=</span>0 <span class="tk-g">ub=</span>5 <span class="tk-g">int=</span>0 <span class="tk-g">bin=</span>0 <span class="tk-g">obj=</span>0
+<span class="tk-k">qobj:</span> <span class="tk-g">nonconvex=</span>0
+  <span class="tk-k">q 0,0:</span>1
+  <span class="tk-k">q 1,1:</span>1
+  <span class="tk-k">q 2,2:</span>1
+<span class="tk-k">row 0:</span> <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>5 <span class="tk-g">nnz=</span>3 | 0:1 1:1 2:1</code></pre></div>
+    <p>Each <code><span class="tk-f">POWER</span>(x - score, <span class="tk-n">2</span>)</code> expands to x² − 2·score·x + score². Q holds 1 on its diagonal, the linear
       part holds −2·score (−6, −8 and 0 for scores 3, 4 and 0), and the constant 25 is kept aside. The upper bound 5 on
-      each column is an implied bound from <code>SUM(x) &lt;= 5</code>.</p>
+      each column is an implied bound from <code><span class="tk-f">SUM</span>(x) &lt;= <span class="tk-n">5</span></code>.</p>
     <p>Convexity is judged group by group (<code>IsNonconvexProductGroup</code>). The model minimizes, so a square with
-      a positive weight is convex. A square with a negative weight, which is what a square under <code>MAXIMIZE</code>
+      a positive weight is convex. A square with a negative weight, which is what a square under <code><span class="tk-d">MAXIMIZE</span></code>
       becomes, is not, and neither is a square whose weight is a data column, whose sign only the data knows. A product
       of two different forms is indefinite. A square of a form over two or more decisions is singular: its Q has rank
       one, and its minimizers form a flat valley rather than a point. These facts decide which solver can take the model
-      (<a href="#capabilities">what each backend takes</a>). A square or product in <code>SUCH THAT</code> becomes a
+      (<a href="#capabilities">what each backend takes</a>). A square or product in <code><span class="tk-d">SUCH</span> <span class="tk-d">THAT</span></code> becomes a
       quadratic row through the same loop.</p>
 
     <h3 id="linearization"><a class="anchor" href="#linearization">Linearization: Big-M from the data</a></h3>
     <p>Some constructs are not linear: <code>&lt;&gt;</code>, a <code>MIN</code> or <code>MAX</code> that has to be
-      pinned to one member, <code>ABS</code> under <code>MAXIMIZE</code>, and a product of a <code>BOOL</code> and a
+      pinned to one member, <code>ABS</code> under <code><span class="tk-d">MAXIMIZE</span></code>, and a product of a <code><span class="tk-t">BOOL</span></code> and a
       number. Stage 05 has chosen an encoding for each and tagged the clause. Stage 06 writes the rows, because the
       constants they need come from evaluated data.</p>
     <p>The standard encoding is Big-M: a row that must hold only when a binary switch <var>z</var> is on gets a term
@@ -394,14 +394,14 @@ row 0: sense=&lt; rhs=5 nnz=3 | 0:1 1:1 2:1</code></pre></div>
       <tbody>
         <tr><td><code>e &lt;&gt; K</code></td><td>Two conditional rows on a switch <var>z</var>: <var>z</var> = 0 implies
           e ≤ K − 1, and <var>z</var> = 1 implies e ≥ K + 1. When the range of e lies on one side of K, one plain row and
-          no switch: <code>SUM(x) &lt;&gt; 0</code> over non-negative decisions becomes <code>SUM(x) &gt;= 1</code>.</td></tr>
+          no switch: <code><span class="tk-f">SUM</span>(x) &lt;&gt; <span class="tk-n">0</span></code> over non-negative decisions becomes <code><span class="tk-f">SUM</span>(x) &gt;= <span class="tk-n">1</span></code>.</td></tr>
         <tr><td><code>MIN</code>, <code>MAX</code></td><td>A helper column <var>z</var> linked to its members. The
           envelope side holds <var>z</var> at or above each member (for MAX). The closing side pins <var>z</var> to one
           member: one Big-M row per member and binaries of which one must be on. An objective supplies one of the two
           sides by its own direction. One function, <code>EmitExtremumLink</code>, writes every such link.</td></tr>
-        <tr><td><code>ABS(e)</code> under <code>MAXIMIZE</code></td><td>The helper's two lower rows, plus two Big-M upper
+        <tr><td><code><span class="tk-f">ABS</span>(e)</code> under <code><span class="tk-d">MAXIMIZE</span></code></td><td>The helper's two lower rows, plus two Big-M upper
           rows on a sign binary. Each sign's M comes from its own end of the range of e.</td></tr>
-        <tr><td><code>b * x</code>, <code>b</code> a <code>BOOL</code></td><td>The McCormick envelope: the standard
+        <tr><td><code>b * x</code>, <code>b</code> a <code><span class="tk-t">BOOL</span></code></td><td>The McCormick envelope: the standard
           rows that pin a product <var>w</var> = b·x, exact when b is binary. With x in [L, U] and L ≥ 0, three rows:
           <var>w</var> ≤ U·b, <var>w</var> ≥ x − U·(1 − b), <var>w</var> ≤ x. A negative L turns the last into
           <var>w</var> ≤ x − L·(1 − b) and adds <var>w</var> ≥ L·b. It needs a finite ceiling U.</td></tr>
@@ -414,21 +414,21 @@ row 0: sense=&lt; rhs=5 nnz=3 | 0:1 1:1 2:1</code></pre></div>
       <code>LowerDecideConstructs</code>, reads what the chosen backend declared (recorded on the plan) and, when the
       backend cannot state a condition, rewrites each conditional row as a Big-M row. Here is one <code>&lt;&gt;</code>
       on both backends:</p>
-    <div class="code" data-lang="sql"><div class="code__head"><span class="code__title">A not-equal over binary decisions</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, x
+    <div class="code" data-lang="sql"><div class="code__head"><span class="code__title">A not-equal over binary decisions</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span>
 <span class="tk-k">FROM</span> Items
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">40</span> <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(x) &lt;&gt; <span class="tk-n">2</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value)</code></pre></div><div class="code" data-lang="text"><div class="code__head"><span class="code__title">DECIDB_DUMP_MODEL=1 on Gurobi: two indicator constraints</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>row 0: sense=&lt; rhs=40 nnz=5 | 0:20 1:10 2:30 3:15 4:12
-ind 0: bin=5==0 sense=&lt; rhs=1 | 0:1 1:1 2:1 3:1 4:1
-ind 1: bin=5==1 sense=&gt; rhs=3 | 0:1 1:1 2:1 3:1 4:1</code></pre></div>
-    <div class="code" data-lang="text"><div class="code__head"><span class="code__title">DECIDB_DUMP_MODEL=1 with DECIDB_FORCE_SOLVER=highs: two Big-M rows</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>row 0: sense=&lt; rhs=40 nnz=5 | 0:20 1:10 2:30 3:15 4:12
-row 1: sense=&lt; rhs=1 nnz=6 | 0:1 1:1 2:1 3:1 4:1 5:-5
-row 2: sense=&gt; rhs=-1 nnz=6 | 0:1 1:1 2:1 3:1 4:1 5:-4</code></pre></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">40</span> <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) &lt;&gt; <span class="tk-n">2</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value)</code></pre></div><div class="code" data-lang="model"><div class="code__head"><span class="code__title">DECIDB_DUMP_MODEL=1 on Gurobi: two indicator constraints</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">row 0:</span> <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>40 <span class="tk-g">nnz=</span>5 | 0:20 1:10 2:30 3:15 4:12
+<span class="tk-k">ind 0:</span> <span class="tk-g">bin=</span><span class="tk-g">5=</span>=0 <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>1 | 0:1 1:1 2:1 3:1 4:1
+<span class="tk-k">ind 1:</span> <span class="tk-g">bin=</span><span class="tk-g">5=</span>=1 <span class="tk-g">sense=</span>&gt; <span class="tk-g">rhs=</span>3 | 0:1 1:1 2:1 3:1 4:1</code></pre></div>
+    <div class="code" data-lang="model"><div class="code__head"><span class="code__title">DECIDB_DUMP_MODEL=1 with DECIDB_FORCE_SOLVER=highs: two Big-M rows</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">row 0:</span> <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>40 <span class="tk-g">nnz=</span>5 | 0:20 1:10 2:30 3:15 4:12
+<span class="tk-k">row 1:</span> <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>1 <span class="tk-g">nnz=</span>6 | 0:1 1:1 2:1 3:1 4:1 5:-5
+<span class="tk-k">row 2:</span> <span class="tk-g">sense=</span>&gt; <span class="tk-g">rhs=</span>-1 <span class="tk-g">nnz=</span>6 | 0:1 1:1 2:1 3:1 4:1 5:-4</code></pre></div>
     <p>Both dumps declare the same six columns, left out above: the five <code>x</code> columns and column 5, the
       switch. HiGHS declares no construct, so both halves become rows, and each half gets its own M:
       the distance from its bound to the far end of what its left side reaches, plus one unit. The sum of five binaries
-      reaches up to 5, so the half <code>SUM(x) &lt;= 1</code> takes M = 5 − 1 + 1 = 5. It reaches down to 0, so the half
-      <code>SUM(x) &gt;= 3</code> takes M = 3 − 0 + 1 = 4 and reads SUM(x) − 4·<var>z</var> ≥ 3 − 4. The unit costs
+      reaches up to 5, so the half <code><span class="tk-f">SUM</span>(x) &lt;= <span class="tk-n">1</span></code> takes M = 5 − 1 + 1 = 5. It reaches down to 0, so the half
+      <code><span class="tk-f">SUM</span>(x) &gt;= <span class="tk-n">3</span></code> takes M = 3 − 0 + 1 = 4 and reads SUM(x) − 4·<var>z</var> ≥ 3 − 4. The unit costs
       nothing on a left side that takes whole values, and keeps the relaxed half clear of rounding in the solver.</p>
     <p>MIN, MAX and ABS choose their form where they are written; for MIN and MAX that place is
       <code>EmitExtremumLink</code>. For MIN and MAX the native form is the fallback: Gurobi receives a general
@@ -503,11 +503,11 @@ row 2: sense=&gt; rhs=-1 nnz=6 | 0:1 1:1 2:1 3:1 4:1 5:-4</code></pre></div>
       <thead><tr><th scope="col">Model class</th><th scope="col">A query needs it when</th><th scope="col">Gurobi</th><th scope="col">HiGHS</th></tr></thead>
       <tbody>
         <tr><td>none (LP, ILP, MILP, convex QP)</td><td>its clauses are linear, over any types; or it minimizes a sum of
-          squares, each over one <code>REAL</code> decision</td><td>yes</td><td>yes</td></tr>
+          squares, each over one <code><span class="tk-t">REAL</span></code> decision</td><td>yes</td><td>yes</td></tr>
         <tr><td><code>quadratic_constraints</code></td><td>a square or a product of decisions is in
-          <code>SUCH THAT</code></td><td>yes</td><td>refused</td></tr>
+          <code><span class="tk-d">SUCH</span> <span class="tk-d">THAT</span></code></td><td>yes</td><td>refused</td></tr>
         <tr><td><code>nonconvex_quadratic</code></td><td>it maximizes a sum of squares, weights a square by data, or
-          multiplies two decisions in the objective</td><td>yes, with <code>NonConvex=2</code></td><td>refused</td></tr>
+          multiplies two decisions in the objective</td><td>yes, with <code>NonConvex=<span class="tk-n">2</span></code></td><td>refused</td></tr>
         <tr><td><code>miqp</code></td><td>a quadratic objective sits beside any integer column, a helper binary
           included</td><td>yes</td><td>refused</td></tr>
         <tr><td><code>singular_quadratic</code></td><td>the objective squares an expression over two or more
@@ -541,11 +541,11 @@ row 2: sense=&gt; rhs=-1 nnz=6 | 0:1 1:1 2:1 3:1 4:1 5:-4</code></pre></div>
       from the registry's model-class table, which needs no library, so Gurobi is named even on a machine without it.
       The message never blames the query: the same SQL runs where Gurobi is installed. With
       <code>DECIDB_FORCE_SOLVER=highs</code> on a machine that has Gurobi, a maximized sum of squares reads:</p>
-    <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">A maximized sum of squares on HiGHS</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> name, x
+    <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">A maximized sum of squares on HiGHS</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> name, <span class="tk-v">x</span>
 <span class="tk-k">FROM</span> Signals
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">REAL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x) &lt;= <span class="tk-n">5</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(x, <span class="tk-n">2</span>))</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>refused before solving</span></div><pre>Invalid Input Error: DECIDE: the objective MAXIMIZEs squared decision terms, which needs Gurobi, and DECIDB_FORCE_SOLVER selects HiGHS. Unset DECIDB_FORCE_SOLVER, or MINIMIZE the squared terms instead, or use a linear objective.</pre></div></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">REAL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) &lt;= <span class="tk-n">5</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(<span class="tk-v">x</span>, <span class="tk-n">2</span>))</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>refused before solving</span></div><pre>Invalid Input Error: DECIDE: the objective MAXIMIZEs squared decision terms, which needs Gurobi, and DECIDB_FORCE_SOLVER selects HiGHS. Unset DECIDB_FORCE_SOLVER, or MINIMIZE the squared terms instead, or use a linear objective.</pre></div></div>
     <p>After the build, <code>SolveModel</code> checks the built model's class against the backend again
       (<code>AssertBackendAcceptsBuiltModel</code>). The plan-time prediction errs toward demanding more, so a mismatch
       there is an internal error, never the user's.</p>
@@ -561,7 +561,7 @@ row 2: sense=&gt; rhs=-1 nnz=6 | 0:1 1:1 2:1 3:1 4:1 5:-4</code></pre></div>
         <code>GRBaddconstr</code>, Q goes to <code>GRBaddqpterms</code> untouched (it takes the same plain-coefficient
         convention), quadratic rows go to <code>GRBaddqconstr</code>, and native constructs to Gurobi's general and
         indicator constraint functions.</li>
-      <li><code>NonConvex=2</code> is set when the objective is non-convex.</li>
+      <li><code>NonConvex=<span class="tk-n">2</span></code> is set when the objective is non-convex.</li>
       <li>An open bound becomes Gurobi's own infinity. Left at 1e30, it would be a finite bound to Gurobi, and an
         unbounded integer would come back at its integer limit as if it were the answer.</li>
       <li>The integrality, feasibility and optimality tolerances are set to 1e-6, and <code>MIPGap</code> to the
@@ -617,8 +617,8 @@ row 2: sense=&gt; rhs=-1 nnz=6 | 0:1 1:1 2:1 3:1 4:1 5:-4</code></pre></div>
       <li><strong>Dump.</strong> <code>DECIDB_DUMP_MODEL</code> prints the model here, before any follow-up solve can
         add one of its own.</li>
       <li><strong>Warn.</strong> When a coefficient is 1e6 or more, a bound or right-hand side is about 4.5e9 or more,
-        or a nonzero objective coefficient is 1e-6 or less, stderr gets one line, once per query: <code>DECIDE: a very
-        large or very small number may make this answer inaccurate. Scale its data toward 1.</code> The thresholds follow
+        or a nonzero objective coefficient is 1e-6 or less, stderr gets one line, once per query: <code><span class="tk-d">DECIDE</span>: a very
+        large or very small number may make this answer inaccurate. Scale its data toward <span class="tk-n">1</span>.</code> The thresholds follow
         from DeciDB's solver tolerances of 1e-6. The model and the answer do not change.</li>
       <li><strong>Answer without a solver.</strong> When <code>ProvesInfeasible</code> holds, the result is INFEASIBLE,
         and no backend loads the model.</li>
@@ -630,7 +630,7 @@ row 2: sense=&gt; rhs=-1 nnz=6 | 0:1 1:1 2:1 3:1 4:1 5:-4</code></pre></div>
         integer column near 2e9 and report the capped answer as optimal. An optimum at that cap on a column the query
         left open is reported as UNBOUNDED. A bound the user wrote, however large, is answered against.</li>
     </ol>
-    <p>What a failing status leads to is the operator's decision. Without the <code>DIAGNOSE</code> prefix, the query
+    <p>What a failing status leads to is the operator's decision. Without the <code><span class="tk-d">DIAGNOSE</span></code> prefix, the query
       raises one message that names the state and suggests the prefix. With it, the diagnosis engines run
       (<a href="diagnose.html#router">DIAGNOSE</a>).</p>
 
@@ -700,7 +700,7 @@ row 2: sense=&gt; rhs=-1 nnz=6 | 0:1 1:1 2:1 3:1 4:1 5:-4</code></pre></div>
     </table></div>
 
     <h3 id="scope-checks"><a class="anchor" href="#scope-checks">Scope checks at run time</a></h3>
-    <p>Some rules of the language are about data, not syntax. <code>per K:</code> in front of a clause says that what
+    <p>Some rules of the language are about data, not syntax. <code><span class="tk-d">per</span> K:</code> in front of a clause says that what
       the clause reads once per class is the same on every row of the class, and a bound has to be a number. These are
       scope checks. They run on the data before any coefficient is read, and the first failure stops the query.</p>
     <p>Most of them never reach the operator. The optimizer installs them as a plan under the DECIDE node: each check is
@@ -708,29 +708,29 @@ row 2: sense=&gt; rhs=-1 nnz=6 | 0:1 1:1 2:1 3:1 4:1 5:-4</code></pre></div>
       of them raises the first message. The source's rows reach the operator only once that one-row verdict holds:
       verify, then stream, the way DuckDB plans an uncorrelated scalar subquery. The same code installs the checks for
       query rewriting (<a href="rewriting.html#plan">rewriting plans</a>), so both paths refuse the same data in the same
-      words. The side tables that compute a bound-side reducer, such as <code>max(cap) by (g)</code>, sit in the same
+      words. The side tables that compute a bound-side reducer, such as <code><span class="tk-f">max</span>(cap) <span class="tk-d">by</span> (g)</code>, sit in the same
       plan. EXPLAIN shows all of it as operators under DECIDE.</p>
     <p>One check needs a map the operator builds, so <code>RunScopeChecks</code> makes it: a clause scoped
-      <code>per K:</code> that reads a keyed decision must find one instance of that decision in each class of K. Here the
+      <code><span class="tk-d">per</span> K:</code> that reads a keyed decision must find one instance of that decision in each class of K. Here the
       clause is scoped by shift date, but <code>keep</code> is decided per nurse, and three nurses work on December 1:</p>
-    <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> n.name, s.shift_date, keep
+    <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> n.name, s.shift_date, <span class="tk-v">keep</span>
 <span class="tk-k">FROM</span> nurses n <span class="tk-k">JOIN</span> shifts s <span class="tk-k">ON</span> n.id = s.nurse_id
-<span class="tk-k">DECIDE</span> <span class="tk-p">per</span> n: keep(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">per</span> s.shift_date: keep &lt;= <span class="tk-n">1</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-p">per</span> n: keep * n.skill_score)</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>refused before solving</span></div><pre>Invalid Input Error: DECIDE: per s.shift_date does not determine the decision keep (declared per n). s.shift_date = &#x27;2026-12-01&#x27; covers more than one keep.</pre></div></div>
+<span class="tk-d">DECIDE</span> <span class="tk-d">per</span> n: <span class="tk-v">keep</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-d">per</span> s.shift_date: <span class="tk-v">keep</span> &lt;= <span class="tk-n">1</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-d">per</span> n: <span class="tk-v">keep</span> * n.skill_score)</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>refused before solving</span></div><pre>Invalid Input Error: DECIDE: per s.shift_date does not determine the decision keep (declared per n). s.shift_date = &#x27;2026-12-01&#x27; covers more than one keep.</pre></div></div>
     <p>When several classes fail, the message names the least by key value, so it does not depend on row order.</p>
 
     <h3 id="keyed-mapping"><a class="anchor" href="#keyed-mapping">Keyed decisions: rows to classes</a></h3>
     <p><code>BuildKeyedMappings</code> gives each row its class for every keyed decision. It evaluates the key's
       expressions on the buffered rows and finds each row's group in DuckDB's aggregate hash table, used with no
-      aggregates (<code>GroupedAggregateHashTable::FindOrCreateGroups</code>), as <code>GROUP BY</code> uses it. Each
+      aggregates (<code>GroupedAggregateHashTable::FindOrCreateGroups</code>), as <code><span class="tk-k">GROUP</span> <span class="tk-k">BY</span></code> uses it. Each
       group remembers its first row, and its key values are read back from that row only when a message names the
       group (late materialization). The groups are then numbered by value with DuckDB's order-preserving sort key, as
-      <code>ORDER BY</code> compares rows. The result is a <code>KeyedMapping</code>: a class count and a
+      <code><span class="tk-k">ORDER</span> <span class="tk-k">BY</span></code> compares rows. The result is a <code>KeyedMapping</code>: a class count and a
       <code>row_to_class</code> vector, the map <code>VarIndexer</code> reads.</p>
     <p>A key is computed once per query and cached (<code>PerGroupCache</code>), so every clause, check and objective
       term that groups by it shares one numbering. A key over a collated column groups under its collation, as
-      <code>GROUP BY</code> does.</p>
+      <code><span class="tk-k">GROUP</span> <span class="tk-k">BY</span></code> does.</p>
     <p>A row with NULL in a key column the query wrote is in no class: it has no decision. It maps to one spare class,
       <code>absent_class</code> (the Null Object pattern), so every row still resolves to a column. The model pins that
       column to 0, a reducer skips the row, and the result shows NULL there. The
@@ -740,18 +740,18 @@ row 2: sense=&gt; rhs=-1 nnz=6 | 0:1 1:1 2:1 3:1 4:1 5:-4</code></pre></div>
     <h3 id="coefficients"><a class="anchor" href="#coefficients">Coefficient evaluation</a></h3>
     <p>Each term carries a coefficient expression over the input's columns. Execution constant-folds it once with
       DuckDB's own <code>ConstantFoldingRule</code>, runs it chunk by chunk with an <code>ExpressionExecutor</code>, and
-      casts the result of the whole expression to <code>DOUBLE</code> in one step. One cast at the end keeps SQL's
-      semantics: a <code>DECIMAL</code> or integer expression computes in its own type, as <code>SELECT</code> would
+      casts the result of the whole expression to <code><span class="tk-t">DOUBLE</span></code> in one step. One cast at the end keeps SQL's
+      semantics: a <code><span class="tk-t">DECIMAL</span></code> or integer expression computes in its own type, as <code><span class="tk-k">SELECT</span></code> would
       compute it.</p>
     <p>Each clause is read in this order:</p>
     <ol class="steps">
-      <li><strong>Kept rows.</strong> The clause's <code>when</code> is read first, on every row (<code>KeptRows</code>).
+      <li><strong>Kept rows.</strong> The clause's <code><span class="tk-d">when</span></code> is read first, on every row (<code>KeptRows</code>).
         Nothing else is computed on a row it drops.</li>
-      <li><strong>Groups.</strong> A <code>by</code> key gives each kept row its group, and <code>per K:</code> over a
+      <li><strong>Groups.</strong> A <code><span class="tk-d">by</span></code> key gives each kept row its group, and <code><span class="tk-d">per</span> K:</code> over a
         clause with no reducer keeps one row per class. The result is one vector, <code>row_group_ids</code>, that sends
         each row to the model row it feeds, or to none.</li>
-      <li><strong>Term filters.</strong> A reducer's own <code>when</code> becomes a mask on its own terms. A reducer's
-        own <code>per</code>, and the colon form <code>SUM(D: e)</code>, keep the first row of each class and zero the
+      <li><strong>Term filters.</strong> A reducer's own <code><span class="tk-d">when</span></code> becomes a mask on its own terms. A reducer's
+        own <code><span class="tk-d">per</span></code>, and the colon form <code><span class="tk-f">SUM</span>(D: e)</code>, keep the first row of each class and zero the
         rest (<code>BuildQualifierKeepMask</code>). A scope check has proved every row of the class carries the same
         value, so any row gives the same answer.</li>
       <li><strong>AVG.</strong> The optimizer has rewritten <code>AVG</code> as <code>SUM</code>. Each such term is
@@ -761,7 +761,7 @@ row 2: sense=&gt; rhs=-1 nnz=6 | 0:1 1:1 2:1 3:1 4:1 5:-4</code></pre></div>
     </ol>
     <p>Values are checked as they are read. A NULL coefficient or bound skips the instance it reaches: the row of a
       clause with no reducer, the group of one with a reducer (<a href="../guide.html#nulls">NULLs in the Guide</a>). A
-      NaN or infinite coefficient raises an error that names the expression as written and the <code>when</code> that
+      NaN or infinite coefficient raises an error that names the expression as written and the <code><span class="tk-d">when</span></code> that
       would skip such rows. An infinite bound is allowed,
       because it has a meaning: <code>x &lt;= +inf</code> holds for every value, and <code>x &gt;= +inf</code> for
       none.</p>
@@ -780,16 +780,16 @@ row 2: sense=&gt; rhs=-1 nnz=6 | 0:1 1:1 2:1 3:1 4:1 5:-4</code></pre></div>
       through the same function that built the model. A per-row decision gets a value of its own on each row. A keyed
       decision gets one value per class, repeated on every row of the class. A query-wide decision gets one value,
       repeated on every row.</p>
-    <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">The running example&#x27;s answer</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, category, x, open, cap
+    <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">The running example&#x27;s answer</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, category, <span class="tk-v">x</span>, <span class="tk-v">open</span>, <span class="tk-v">cap</span>
 <span class="tk-k">FROM</span> Items
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>), <span class="tk-p">per</span> category: open(<span class="tk-k">BOOL</span>), <span class="tk-p">per</span> (): cap(<span class="tk-k">INT</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> x &lt;= open
-  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(x * weight) &lt;= cap
-  <span class="tk-k">AND</span> cap &lt;= <span class="tk-n">40</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value) - <span class="tk-f">SUM</span>(<span class="tk-p">per</span> category: <span class="tk-n">30</span> * open) - cap</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>5 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">item</th><th scope="col" class="">category</th><th scope="col" class="num dec">x</th><th scope="col" class="num dec">open</th><th scope="col" class="num dec">cap</th></tr></thead><tbody><tr><td>Laptop</td><td>tech</td><td class="num dec">0</td><td class="num dec">1</td><td class="num dec">40</td></tr><tr class="on"><td>Camera</td><td>tech</td><td class="num dec">1</td><td class="num dec">1</td><td class="num dec">40</td></tr><tr class="on"><td>Drone</td><td>tech</td><td class="num dec">1</td><td class="num dec">1</td><td class="num dec">40</td></tr><tr><td>Tripod</td><td>gear</td><td class="num dec">0</td><td class="num dec">0</td><td class="num dec">40</td></tr><tr><td>Lens</td><td>gear</td><td class="num dec">0</td><td class="num dec">0</td><td class="num dec">40</td></tr></tbody></table></div></div></div>
-    <p>The solver returns doubles, and the output type decides the conversion. <code>BOOL</code> returns an
-      <code>INTEGER</code> 0 or 1: it is a domain on an integer, so it stays usable in arithmetic. <code>INT</code>
-      returns a <code>BIGINT</code> and <code>REAL</code> a <code>DOUBLE</code>. An integer is rounded and range-checked
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>), <span class="tk-d">per</span> category: <span class="tk-v">open</span>(<span class="tk-t">BOOL</span>), <span class="tk-d">per</span> (): <span class="tk-v">cap</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">x</span> &lt;= <span class="tk-v">open</span>
+  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-v">cap</span>
+  <span class="tk-k">AND</span> <span class="tk-v">cap</span> &lt;= <span class="tk-n">40</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value) - <span class="tk-f">SUM</span>(<span class="tk-d">per</span> category: <span class="tk-n">30</span> * <span class="tk-v">open</span>) - <span class="tk-v">cap</span></code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>5 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">item</th><th scope="col" class="">category</th><th scope="col" class="num dec">x</th><th scope="col" class="num dec">open</th><th scope="col" class="num dec">cap</th></tr></thead><tbody><tr><td>Laptop</td><td>tech</td><td class="num dec">0</td><td class="num dec">1</td><td class="num dec">40</td></tr><tr class="on"><td>Camera</td><td>tech</td><td class="num dec">1</td><td class="num dec">1</td><td class="num dec">40</td></tr><tr class="on"><td>Drone</td><td>tech</td><td class="num dec">1</td><td class="num dec">1</td><td class="num dec">40</td></tr><tr><td>Tripod</td><td>gear</td><td class="num dec">0</td><td class="num dec">0</td><td class="num dec">40</td></tr><tr><td>Lens</td><td>gear</td><td class="num dec">0</td><td class="num dec">0</td><td class="num dec">40</td></tr></tbody></table></div></div></div>
+    <p>The solver returns doubles, and the output type decides the conversion. <code><span class="tk-t">BOOL</span></code> returns an
+      <code><span class="tk-t">INTEGER</span></code> 0 or 1: it is a domain on an integer, so it stays usable in arithmetic. <code><span class="tk-t">INT</span></code>
+      returns a <code><span class="tk-t">BIGINT</span></code> and <code><span class="tk-t">REAL</span></code> a <code><span class="tk-t">DOUBLE</span></code>. An integer is rounded and range-checked
       (<code>DecideSolutionToInteger</code>). A value past the column's range, or past 2<sup>53</sup>, where a double
       stops counting whole numbers, raises an error that names the decision. An unchecked cast would saturate and print
       the type's limit as if it were the answer.</p>
@@ -800,7 +800,7 @@ row 2: sense=&gt; rhs=-1 nnz=6 | 0:1 1:1 2:1 3:1 4:1 5:-4</code></pre></div>
     <p>A solve stops early in two ways: the time limit expires, or the user presses Ctrl-C. Either way the backend
       returns <code>TIME_LIMIT</code>, marked when the stop is the user's. <code>Finalize</code> handles it before any
       diagnosis, because a timeout is ordinary execution: it proves neither that the model has a solution nor that it has
-      none. A <code>DIAGNOSE</code> prefix changes nothing about it.</p>
+      none. A <code><span class="tk-d">DIAGNOSE</span></code> prefix changes nothing about it.</p>
     <p>The operator first prints a report to stderr, in one of two shapes:</p>
     <div class="code" data-lang="text"><div class="code__head"><span class="code__title">The report, on stderr</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>DECIDE hit the &lt;limit&gt; time limit with a usable solution (not proven best).
   best objective so far: &lt;value&gt;  (within &lt;gap&gt;% of the best possible)
@@ -808,7 +808,7 @@ row 2: sense=&gt; rhs=-1 nnz=6 | 0:1 1:1 2:1 3:1 4:1 5:-4</code></pre></div>
 
 DECIDE hit the &lt;limit&gt; time limit without finding a solution yet.
   elapsed &lt;time&gt; · peak memory &lt;size&gt;</code></pre></div>
-    <p>After Ctrl-C the first line opens <code>DECIDE stopped at your request</code> instead. The closeness clause
+    <p>After Ctrl-C the first line opens <code><span class="tk-d">DECIDE</span> stopped at your request</code> instead. The closeness clause
       appears only when the solver proved a bound. Elapsed time comes from a timer around the solve. Peak memory is the
       whole process's peak resident size (<code>getrusage</code>): the number that tells whether continuing risks running
       out of memory. What happens next depends on who is there to answer:</p>
@@ -820,7 +820,7 @@ DECIDE hit the &lt;limit&gt; time limit without finding a solution yet.
         <tr><td>the clock ran out; no terminal (a pipe, a test, the C API)</td><td>the report, then an error: nobody can
           answer a prompt</td></tr>
         <tr><td>Ctrl-C, with a solution</td><td>the best rows and a caveat; the query succeeds</td></tr>
-        <tr><td>Ctrl-C, with nothing found</td><td>one error: <code>DECIDE stopped at your request before finding a
+        <tr><td>Ctrl-C, with nothing found</td><td>one error: <code><span class="tk-d">DECIDE</span> stopped at your request before finding a
           solution.</code></td></tr>
       </tbody>
     </table></div>
@@ -866,7 +866,7 @@ DECIDE hit the &lt;limit&gt; time limit without finding a solution yet.
       <div class="grid">
         <div class="span-4 stack-4">
           <a class="nav__logo" href="../index.html"><img src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
-          <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
+          <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
         <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Get started</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../docs/index.html">Documentation</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="../examples/knapsack.html">Knapsack</a></li><li><a href="../examples/facility-location.html">Depots</a></li><li><a href="../examples/fair-allocation.html">Fair allocation</a></li><li><a href="../examples/diagnose.html">DIAGNOSE</a></li></ul></div>

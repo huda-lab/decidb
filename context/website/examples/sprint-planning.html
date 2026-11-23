@@ -74,11 +74,11 @@
 <section class="hero hero--page" data-enter aria-labelledby="page-h">
   <div class="wrap"><div class="hero-text hero-split grid">
     <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a><span aria-hidden="true">/</span><a href="../examples.html">Examples</a><span aria-hidden="true">/</span>Answered by query rewriting</nav><h1 id="page-h">Fit as many tickets as possible into a sprint</h1><p class="hero__lead">With 20 story points of capacity, take the largest number of tickets.</p><div class="page-head__tags"><span class="tag tag--direct">Query rewriting</span><span class="tag">ILP</span></div></div>
-    <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="16" data-ui-pause-host><div class="ui ui-hw hw hw--page " role="img" aria-label="The fit as many tickets as possible into a sprint query and the 8 rows it returns."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · sprint-planning.sql</span></div><div class="hw__page"><pre class="hw__sql"><code><span class="tk-k">SELECT</span> ticket, points, take
+    <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="16" data-ui-pause-host><div class="ui ui-hw hw hw--page " role="img" aria-label="The fit as many tickets as possible into a sprint query and the 8 rows it returns."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · sprint-planning.sql</span></div><div class="hw__page"><pre class="hw__sql"><code><span class="tk-k">SELECT</span> ticket, points, <span class="tk-v">take</span>
 <span class="tk-k">FROM</span> Backlog
-<span class="tk-k">DECIDE</span> take(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(points * take) &lt;= <span class="tk-n">20</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(take)
+<span class="tk-d">DECIDE</span> <span class="tk-v">take</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(points * <span class="tk-v">take</span>) &lt;= <span class="tk-n">20</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">take</span>)
 <span class="tk-k">ORDER</span> <span class="tk-k">BY</span> points;</code></pre><div class="hw__out" data-ly-steps="520"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(2, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">ticket</span><span class="r">points</span><span class="r">take</span></div><div class="sq__tr is-on" data-step><span class="">DB-2</span><span class="r">1</span><span class="r">1</span></div><div class="sq__tr is-on" data-step><span class="">UI-4</span><span class="r">2</span><span class="r">1</span></div><div class="sq__tr is-on" data-step><span class="">API-15</span><span class="r">3</span><span class="r">1</span></div><div class="sq__tr is-on" data-step><span class="">OPS-3</span><span class="r">3</span><span class="r">1</span></div><div class="sq__tr is-on" data-step><span class="">API-12</span><span class="r">5</span><span class="r">1</span></div><div class="sq__tr is-on" data-step><span class="">DB-7</span><span class="r">5</span><span class="r">1</span></div><div class="sq__tr" data-step><span class="">UI-9</span><span class="r">8</span><span class="r">0</span></div><div class="sq__tr" data-step><span class="">OPS-8</span><span class="r">13</span><span class="r">0</span></div></div></div></div></div></div>
   </div></div>
 </section>
@@ -88,20 +88,20 @@
       <h2>The problem</h2>
       <p>When every item is worth the same, a knapsack has an exact greedy answer: take the smallest items first. DeciDB recognizes the shape (a count objective and one weight budget) and sorts instead of searching.</p>
       <h2>The data</h2>
-      <div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Setup</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">CREATE</span> <span class="tk-k">TABLE</span> Backlog (ticket <span class="tk-k">VARCHAR</span>, points <span class="tk-k">INT</span>);
+      <div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Setup</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">CREATE</span> <span class="tk-k">TABLE</span> Backlog (ticket <span class="tk-t">VARCHAR</span>, points <span class="tk-t">INT</span>);
 <span class="tk-k">INSERT</span> <span class="tk-k">INTO</span> Backlog <span class="tk-k">VALUES</span>
     (<span class="tk-s">&#x27;API-12&#x27;</span>, <span class="tk-n">5</span>), (<span class="tk-s">&#x27;API-15&#x27;</span>, <span class="tk-n">3</span>), (<span class="tk-s">&#x27;UI-4&#x27;</span>, <span class="tk-n">2</span>), (<span class="tk-s">&#x27;UI-9&#x27;</span>, <span class="tk-n">8</span>),
     (<span class="tk-s">&#x27;DB-2&#x27;</span>, <span class="tk-n">1</span>), (<span class="tk-s">&#x27;DB-7&#x27;</span>, <span class="tk-n">5</span>), (<span class="tk-s">&#x27;OPS-3&#x27;</span>, <span class="tk-n">3</span>), (<span class="tk-s">&#x27;OPS-8&#x27;</span>, <span class="tk-n">13</span>);</code></pre></div>
       <h2>The query</h2>
-      <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">DECIDE query</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> ticket, points, take
+      <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">DECIDE query</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> ticket, points, <span class="tk-v">take</span>
 <span class="tk-k">FROM</span> Backlog
-<span class="tk-k">DECIDE</span> take(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(points * take) &lt;= <span class="tk-n">20</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(take)
+<span class="tk-d">DECIDE</span> <span class="tk-v">take</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(points * <span class="tk-v">take</span>) &lt;= <span class="tk-n">20</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">take</span>)
 <span class="tk-k">ORDER</span> <span class="tk-k">BY</span> points;</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>8 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">ticket</th><th scope="col" class="num">points</th><th scope="col" class="num dec">take</th></tr></thead><tbody><tr class="on"><td>DB-2</td><td class="num">1</td><td class="num dec">1</td></tr><tr class="on"><td>UI-4</td><td class="num">2</td><td class="num dec">1</td></tr><tr class="on"><td>API-15</td><td class="num">3</td><td class="num dec">1</td></tr><tr class="on"><td>OPS-3</td><td class="num">3</td><td class="num dec">1</td></tr><tr class="on"><td>API-12</td><td class="num">5</td><td class="num dec">1</td></tr><tr class="on"><td>DB-7</td><td class="num">5</td><td class="num dec">1</td></tr><tr><td>UI-9</td><td class="num">8</td><td class="num dec">0</td></tr><tr><td>OPS-8</td><td class="num">13</td><td class="num dec">0</td></tr></tbody></table></div></div></div>
-      <p class="solver-line">Answered by <a href="../features.html#rewriting">query rewriting</a>: DuckDB's own operators compute the optimum and no solver is called. <code>EXPLAIN</code> names the rule, <code>S3_MAX_CARDINALITY_KNAPSACK</code>.</p>
+      <p class="solver-line">Answered by <a href="../features.html#rewriting">query rewriting</a>: DeciDB computes the optimum with sorting and joins, and no solver is called. <code><span class="tk-k">EXPLAIN</span></code> names the rule, <code>S3_MAX_CARDINALITY_KNAPSACK</code>.</p>
       <h2>How it reads</h2>
-      <dl class="reads"><dt><code>SUM(points * take) &lt;= 20</code></dt><dd>One budget.</dd><dt><code>MAXIMIZE SUM(take)</code></dt><dd>Count the tickets: every ticket is worth one.</dd></dl>
+      <dl class="reads"><dt><code><span class="tk-f">SUM</span>(points * take) &lt;= <span class="tk-n">20</span></code></dt><dd>One budget.</dd><dt><code><span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(take)</code></dt><dd>Count the tickets: every ticket is worth one.</dd></dl>
       <h2>The answer</h2>
       <p>Six tickets for 19 points. The eight-point ticket would fit only by dropping two smaller ones.</p>
 
@@ -131,7 +131,7 @@
       <div class="grid">
         <div class="span-4 stack-4">
           <a class="nav__logo" href="../index.html"><img src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
-          <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
+          <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
         <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Get started</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../docs/index.html">Documentation</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="../examples/knapsack.html">Knapsack</a></li><li><a href="../examples/facility-location.html">Depots</a></li><li><a href="../examples/fair-allocation.html">Fair allocation</a></li><li><a href="../examples/diagnose.html">DIAGNOSE</a></li></ul></div>

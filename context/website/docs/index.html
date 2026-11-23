@@ -73,7 +73,7 @@
 <section class="hero hero--page" data-enter aria-labelledby="page-h">
   <div class="wrap"><div class="hero-text hero-split grid">
     <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a><span aria-hidden="true">/</span>Documentation</nav><h1 id="page-h">How DeciDB works</h1><p class="hero__lead">DeciDB is DuckDB with one more path through it. This page shows where that path joins DuckDB, its eight stages, and where to read next.</p></div>
-    <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="23" data-ui-pause-host><div class="ui ui-hw hw hw--page hw--mid" role="img" aria-label="The DECIDE path, from the parser to execution."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · the DECIDE path</span></div><div class="hw__page"><div class="hw__stages" data-ly-steps="260"><div class="hw__stage is-on" data-step><span class="hw__num">01</span><b>Parser</b><span>the grammar and the DECIDE keywords</span></div><div class="hw__stage is-on" data-step><span class="hw__num">02</span><b>Binder</b><span>names, scopes and types</span></div><div class="hw__stage is-on" data-step><span class="hw__num">03</span><b>Logical plan</b><span>the LogicalDecide operator</span></div><div class="hw__stage is-on" data-step><span class="hw__num">04</span><b>Canonicalizer</b><span>one shape for every clause</span></div><div class="hw__stage is-on" data-step><span class="hw__num">05</span><b>Optimizer</b><span>the formulation</span></div><div class="hw__stage hw__stage--exit is-on" data-step><span class="hw__num">↳</span><b>Query rewriting</b><span>DuckDB operators, no solver</span></div><div class="hw__stage is-on" data-step><span class="hw__num">06</span><b>Model</b><span>variables, coefficients, bounds</span></div><div class="hw__stage is-on" data-step><span class="hw__num">07</span><b>Solver</b><span>Gurobi or HiGHS</span></div><div class="hw__stage hw__stage--exit is-on" data-step><span class="hw__num">↳</span><b>DIAGNOSE</b><span>what to change when there is no answer</span></div><div class="hw__stage is-on" data-step><span class="hw__num">08</span><b>Execution</b><span>the decisions, back as columns</span></div></div></div></div></div>
+    <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="23" data-ui-pause-host><div class="ui ui-hw hw hw--page hw--mid" role="img" aria-label="The DECIDE path, from the parser to execution."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · the DECIDE path</span></div><div class="hw__page"><div class="hw__stages" data-ly-steps="260"><div class="hw__stage is-on" data-step><span class="hw__num">01</span><b>Parser</b><span>the grammar and the DECIDE keywords</span></div><div class="hw__stage is-on" data-step><span class="hw__num">02</span><b>Binder</b><span>names, scopes and types</span></div><div class="hw__stage is-on" data-step><span class="hw__num">03</span><b>Logical plan</b><span>the LogicalDecide operator</span></div><div class="hw__stage is-on" data-step><span class="hw__num">04</span><b>Canonicalizer</b><span>one shape for every clause</span></div><div class="hw__stage is-on" data-step><span class="hw__num">05</span><b>Optimizer</b><span>the formulation</span></div><div class="hw__stage hw__stage--exit is-on" data-step><span class="hw__num">↳</span><b>Query rewriting</b><span>relational operators, no solver</span></div><div class="hw__stage is-on" data-step><span class="hw__num">06</span><b>Model</b><span>variables, coefficients, bounds</span></div><div class="hw__stage is-on" data-step><span class="hw__num">07</span><b>Solver</b><span>Gurobi or HiGHS</span></div><div class="hw__stage hw__stage--exit is-on" data-step><span class="hw__num">↳</span><b>DIAGNOSE</b><span>what to change when there is no answer</span></div><div class="hw__stage is-on" data-step><span class="hw__num">08</span><b>Execution</b><span>the decisions, back as columns</span></div></div></div></div></div>
   </div></div>
 </section>
 <div class="container"><div class="doc-layout doc-layout--docs"><nav class="docnav" aria-label="Documentation pages"><div class="toc-title">Documentation</div><p class="docnav__group">Start here</p><ul><li><a href="index.html" aria-current="page">Overview</a></li><li><a href="life-of-a-query.html">Life of a query</a></li></ul><p class="docnav__group">The pipeline</p><ul><li><a href="front-end.html">Parser, binder and plan</a></li><li><a href="canonical-form.html">Canonicalizer and optimizer</a></li><li><a href="solving.html">Model, solvers and execution</a></li></ul><p class="docnav__group">Novel features</p><ul><li><a href="rewriting.html">Query rewriting</a></li><li><a href="rewrite-rules.html">The rewrite rules</a></li><li><a href="diagnose.html">DIAGNOSE</a></li></ul><p class="docnav__group">Quality</p><ul><li><a href="testing.html">Testing</a></li><li><a href="performance.html">Performance</a></li></ul></nav>
@@ -101,20 +101,20 @@
   <!-- ============================================================ ATTACH -->
   <section id="attach">
     <h2><a class="anchor" href="#attach">How DeciDB attaches to DuckDB</a></h2>
-    <p class="lead">DeciDB is built inside DuckDB's source tree. A query with a <code>DECIDE</code> clause gains one
+    <p class="lead">DeciDB is built inside DuckDB's source tree. A query with a <code><span class="tk-d">DECIDE</span></code> clause gains one
       logical operator, one optimizer pass and one physical operator. A query without one takes DuckDB's own path: the
       new pass finds no DECIDE node and changes nothing.</p>
     <p>DuckDB answers a query in four steps. It parses the text, binds names to tables and types, plans and optimizes a
       tree of operators, and executes that tree. DeciDB adds to each step and replaces none. The plan of the smallest
-      decision query shows the result. It is the operator tree DuckDB runs, read from <code>EXPLAIN</code>: one
-      <code>DECIDE</code> operator sits above the table scan.</p>
-<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">The smallest decision query</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, x
+      decision query shows the result. It is the operator tree DuckDB runs, read from <code><span class="tk-k">EXPLAIN</span></code>: one
+      <code><span class="tk-d">DECIDE</span></code> operator sits above the table scan.</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">The smallest decision query</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span>
 <span class="tk-k">FROM</span> Items
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">40</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre></div><div class="code" data-lang="text"><div class="code__head"><span class="code__title">EXPLAIN: the operators</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>PROJECTION
-└─ DECIDE   decisions: x
-   └─ SEQ_SCAN   Items</code></pre></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">40</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre></div><div class="code" data-lang="plan"><div class="code__head"><span class="code__title">EXPLAIN: the operators</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-g"></span><span class="tk-k">PROJECTION</span>
+<span class="tk-g">└─ </span><span class="tk-d">DECIDE</span>   <span class="tk-g">decisions: </span><span class="tk-v">x</span>
+<span class="tk-g">   └─ </span><span class="tk-k">SEQ_SCAN</span>   Items</code></pre></div>
     <p>Everything DeciDB does for this query happens inside that one node. It reads every row the scan produces, builds
       an optimization model over them, solves it, and returns the same rows with a new column <code>x</code>. The
       operators above it see <code>x</code> as an ordinary column.</p>
@@ -122,14 +122,14 @@
     <h3 id="hooks"><a class="anchor" href="#hooks">The hook points</a></h3>
     <p>DeciDB attaches at six points, one for each thing DuckDB has to learn:</p>
     <ol class="steps">
-      <li><strong>Keywords.</strong> <code>DECIDE</code>, <code>SUCH</code> (as in <code>SUCH THAT</code>),
-        <code>MAXIMIZE</code>, <code>MINIMIZE</code> and <code>DIAGNOSE</code> are reserved words. The clause's
-        <code>when</code>, <code>per</code> and <code>by</code> are not: the lexer turns them into DECIDE-only tokens
+      <li><strong>Keywords.</strong> <code><span class="tk-d">DECIDE</span></code>, <code><span class="tk-d">SUCH</span></code> (as in <code><span class="tk-d">SUCH</span> <span class="tk-d">THAT</span></code>),
+        <code><span class="tk-d">MAXIMIZE</span></code>, <code><span class="tk-d">MINIMIZE</span></code> and <code><span class="tk-d">DIAGNOSE</span></code> are reserved words. The clause's
+        <code><span class="tk-d">when</span></code>, <code><span class="tk-d">per</span></code> and <code><span class="tk-d">by</span></code> are not: the lexer turns them into DECIDE-only tokens
         inside the clause (<a href="#gated-tokens">below</a>).</li>
       <li><strong>Grammar.</strong> New productions in DuckDB's Bison grammar read the clause. The parser stores it in
         five new fields of DuckDB's <code>SelectNode</code>: the decisions, the constraints, the sense, the objective,
         and the clause's own text for error messages.</li>
-      <li><strong>Binder.</strong> DuckDB's binder for a <code>SELECT</code> has one DECIDE branch: a call to
+      <li><strong>Binder.</strong> DuckDB's binder for a <code><span class="tk-k">SELECT</span></code> has one DECIDE branch: a call to
         <code>DecideDeclarationsBinder::BindDeclarations</code>, which binds the whole clause with DeciDB's own
         expression binders.</li>
       <li><strong>A logical operator.</strong> <code>LogicalDecide</code>, a new operator type
@@ -149,21 +149,21 @@
       name the node's own output and no input column.</p>
 
     <h3 id="gated-tokens"><a class="anchor" href="#gated-tokens">Gated keywords</a></h3>
-    <p>A scope is written with ordinary English words: <code>when</code>, <code>per</code> and <code>by</code>. SQL
-      already uses all three. <code>CASE ... WHEN</code> is an expression, <code>GROUP BY</code> is a clause, and
-      <code>per</code> is a legal column name. Making them reserved words would break existing queries.</p>
+    <p>A scope is written with ordinary English words: <code><span class="tk-d">when</span></code>, <code><span class="tk-d">per</span></code> and <code><span class="tk-d">by</span></code>. SQL
+      already uses all three. <code><span class="tk-k">CASE</span> ... <span class="tk-k">WHEN</span></code> is an expression, <code><span class="tk-k">GROUP</span> <span class="tk-k">BY</span></code> is a clause, and
+      <code><span class="tk-d">per</span></code> is a legal column name. Making them reserved words would break existing queries.</p>
     <p>DeciDB settles this in the lexer, the step that cuts SQL text into tokens before the grammar sees it. The lexer
-      keeps a flag. The <code>DECIDE</code> or <code>SUCH</code> token sets it, and the grammar clears it when the clause
+      keeps a flag. The <code><span class="tk-d">DECIDE</span></code> or <code><span class="tk-d">SUCH</span></code> token sets it, and the grammar clears it when the clause
       ends. Only while the flag is set does the lexer turn the three words into DECIDE-only tokens:</p>
     <ul>
-      <li><code>WHEN</code> becomes <code>WHEN_DECIDE</code>, or <code>WHEN_DECIDE_OBJECTIVE</code> after
-        <code>MAXIMIZE</code> or <code>MINIMIZE</code>. A <code>CASE</code> inside the clause raises a depth counter, so
-        its own <code>WHEN</code> stays SQL's.</li>
+      <li><code><span class="tk-k">WHEN</span></code> becomes <code>WHEN_DECIDE</code>, or <code>WHEN_DECIDE_OBJECTIVE</code> after
+        <code><span class="tk-d">MAXIMIZE</span></code> or <code><span class="tk-d">MINIMIZE</span></code>. A <code><span class="tk-k">CASE</span></code> inside the clause raises a depth counter, so
+        its own <code><span class="tk-k">WHEN</span></code> stays SQL's.</li>
       <li><code>PER</code> becomes <code>PER_DECIDE_PAREN</code> before <code>(</code>, <code>PER_DECIDE_ROW</code> before
-        <code>ROW</code>, and <code>PER_DECIDE</code> otherwise. One token of lookahead tells <code>per ()</code>,
-        <code>per row</code> and <code>per key</code> apart, which the grammar alone cannot.</li>
-      <li><code>BY</code> becomes <code>BY_DECIDE</code> directly after <code>)</code>, as in <code>SUM(x) by (g)</code>.
-        <code>GROUP BY</code>, <code>ORDER BY</code> and <code>PARTITION BY</code> always follow a keyword, so they stay
+        <code>ROW</code>, and <code>PER_DECIDE</code> otherwise. One token of lookahead tells <code><span class="tk-d">per</span> ()</code>,
+        <code><span class="tk-d">per</span> row</code> and <code><span class="tk-d">per</span> key</code> apart, which the grammar alone cannot.</li>
+      <li><code><span class="tk-k">BY</span></code> becomes <code>BY_DECIDE</code> directly after <code>)</code>, as in <code><span class="tk-f">SUM</span>(x) <span class="tk-d">by</span> (g)</code>.
+        <code><span class="tk-k">GROUP</span> <span class="tk-k">BY</span></code>, <code><span class="tk-k">ORDER</span> <span class="tk-k">BY</span></code> and <code><span class="tk-k">PARTITION</span> <span class="tk-k">BY</span></code> always follow a keyword, so they stay
         SQL's.</li>
     </ul>
     <p>Outside a DECIDE clause the flag is clear and nothing changes. The lexer saves the flag before a nested clause
@@ -171,18 +171,18 @@
       own state.</p>
 
     <h3 id="standard-sql"><a class="anchor" href="#standard-sql">Why standard SQL is unaffected</a></h3>
-    <p>Four choices keep a query without <code>DECIDE</code> on DuckDB's behavior:</p>
+    <p>Four choices keep a query without <code><span class="tk-d">DECIDE</span></code> on DuckDB's behavior:</p>
     <ul>
       <li><strong>The scope words are tokens only inside the clause</strong>, as above.</li>
       <li><strong>Every grammar conflict is local to DECIDE.</strong> Bison expects four shift-reduce conflicts, all from
-        the optional declaration slot of the clause, and both readings build the same node. The <code>WHEN</code>
+        the optional declaration slot of the clause, and both readings build the same node. The <code><span class="tk-k">WHEN</span></code>
         conflicts are settled by precedence on tokens the lexer emits only inside DECIDE.</li>
       <li><strong>A decision's type is read as a name</strong>, not a keyword. DuckDB quotes every keyword when it
-        prints a name, so a keyword <code>BOOL</code> would quote every column named <code>bool</code>.</li>
+        prints a name, so a keyword <code><span class="tk-t">BOOL</span></code> would quote every column named <code>bool</code>.</li>
       <li><strong>A stored query writes the DECIDE fields only when they are set</strong>, so a database file or view
         that DuckDB wrote loads unchanged.</li>
     </ul>
-    <p>The check is DuckDB's own SQL test suite (<code>build/release/test/unittest "test/sql/*"</code>), run on the
+    <p>The check is DuckDB's own SQL test suite (<code>build/release/test/unittest &quot;test/sql/*&quot;</code>), run on the
       DeciDB build.</p>
 
     <h3 id="duckdb-edits"><a class="anchor" href="#duckdb-edits">Edits to DuckDB itself</a></h3>
@@ -198,7 +198,7 @@
       <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/third_party/libpg_query/src_backend_parser_parser.cpp"><code>third_party/libpg_query/src_backend_parser_parser.cpp</code></a>: <code>base_yylex</code>, the gated
         tokens</li>
       <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/third_party/libpg_query/grammar/grammar.y"><code>third_party/libpg_query/grammar/grammar.y</code></a>: the token declarations and the
-        <code>%expect 4</code> conflict budget, with its reasons</li>
+        <code>%expect <span class="tk-n">4</span></code> conflict budget, with its reasons</li>
       <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/third_party/libpg_query/grammar/statements/select.y"><code>third_party/libpg_query/grammar/statements/select.y</code></a>: the DECIDE productions</li>
       <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/planner/binder/query_node/bind_select_node.cpp"><code>src/planner/binder/query_node/bind_select_node.cpp</code></a>: the binder's DECIDE branch</li>
       <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/planner/operator/decide/logical_decide.hpp"><code>src/include/duckdb/planner/operator/decide/logical_decide.hpp</code></a>: <code>LogicalDecide</code></li>
@@ -218,8 +218,8 @@
       <tbody>
         <tr><td>01 Parser</td><td>The grammar, the gated keywords, and the refusal of spellings the language
           removed</td><td><a href="front-end.html#parser">Parser, binder and plan</a></td></tr>
-        <tr><td>02 Binder</td><td>Decisions and their keys, where <code>when</code>, <code>per</code> and
-          <code>by</code> may stand, types, reducers, and the refusals only binding can make</td>
+        <tr><td>02 Binder</td><td>Decisions and their keys, where <code><span class="tk-d">when</span></code>, <code><span class="tk-d">per</span></code> and
+          <code><span class="tk-d">by</span></code> may stand, types, reducers, and the refusals only binding can make</td>
           <td><a href="front-end.html#binder">Parser, binder and plan</a></td></tr>
         <tr><td>03 Logical plan</td><td><code>LogicalDecide</code>, subqueries in a clause, the only two ways to add a
           clause after planning, serialization</td>
@@ -304,37 +304,37 @@
       applies only when it can prove that its algorithm returns the optimum, and at most one rule may apply. When one
       does, its plan of ordinary DuckDB operators replaces the DECIDE node, and no model is built. The engine calls this
       feature direct solve.</p>
-<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">The best item per category: no DECIDE node</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, category, x
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">The best item per category: no DECIDE node</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, category, <span class="tk-v">x</span>
 <span class="tk-k">FROM</span> Items
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">per</span> category: <span class="tk-f">SUM</span>(x) <span class="tk-p">by</span> (category) &lt;= <span class="tk-n">1</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre></div><div class="code" data-lang="text"><div class="code__head"><span class="code__title">EXPLAIN: the operators</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>PROJECTION
-└─ PROJECTION   query rewriting, rule S1_UNIFORM_MATROID
-   └─ HASH_JOIN
-      ├─ SEQ_SCAN   Items
-      └─ PROJECTION x3
-         └─ WINDOW
-            └─ PROJECTION x3
-               └─ WINDOW
-                  └─ SEQ_SCAN   Items</code></pre></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-d">per</span> category: <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) <span class="tk-d">by</span> (category) &lt;= <span class="tk-n">1</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre></div><div class="code" data-lang="plan"><div class="code__head"><span class="code__title">EXPLAIN: the operators</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-g"></span><span class="tk-k">PROJECTION</span>
+<span class="tk-g">└─ </span><span class="tk-k">PROJECTION</span>   <span class="tk-g">query rewriting, rule </span><span class="tk-d">S1_UNIFORM_MATROID</span>
+<span class="tk-g">   └─ </span><span class="tk-k">HASH_JOIN</span>
+<span class="tk-g">      ├─ </span><span class="tk-k">SEQ_SCAN</span>   Items
+<span class="tk-g">      └─ </span><span class="tk-k">PROJECTION x3</span>
+<span class="tk-g">         └─ </span><span class="tk-k">WINDOW</span>
+<span class="tk-g">            └─ </span><span class="tk-k">PROJECTION x3</span>
+<span class="tk-g">               └─ </span><span class="tk-k">WINDOW</span>
+<span class="tk-g">                  └─ </span><span class="tk-k">SEQ_SCAN</span>   Items</code></pre></div>
     <p>Window operators stand where the DECIDE node stood. The projection that names the rule is the result adapter,
       which gives the replacement the DECIDE node's columns. Add a weight limit to the same query and no rule applies:
       it stays on the solver's path, as <a href="life-of-a-query.html#optimizer">Life of a query</a> shows. The setting
       <code>decide_direct_solve</code> takes <code>auto</code> (the default), <code>off</code> or <code>require</code>.
-      A <code>DIAGNOSE</code> query and a forced backend always take the solver's path. How rules are written and
+      A <code><span class="tk-d">DIAGNOSE</span></code> query and a forced backend always take the solver's path. How rules are written and
       proved is on <a href="rewriting.html">Query rewriting</a>; each rule is on <a href="rewrite-rules.html">The
       rewrite rules</a>.</p>
 
     <h3 id="exit-diagnose"><a class="anchor" href="#exit-diagnose">DIAGNOSE</a></h3>
     <p>A solve can fail. The constraints may contradict each other (infeasible), or the objective may grow without
       limit (unbounded). Without help the query stops with an error:</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Four items in 40 kg</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, x
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Four items in 40 kg</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span>
 <span class="tk-k">FROM</span> Items
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">40</span>
-      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(x) &gt;= <span class="tk-n">4</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>the solver found no answer</span></div><pre>Invalid Input Error: DECIDE optimization is infeasible. Prefix the query with DIAGNOSE to see which clause to change.</pre></div></div>
-    <p>With the <code>DIAGNOSE</code> prefix the failed solve does not end the query. A router reads the solver's
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">40</span>
+      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) &gt;= <span class="tk-n">4</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>the solver found no answer</span></div><pre>Invalid Input Error: DECIDE optimization is infeasible. Prefix the query with DIAGNOSE to see which clause to change.</pre></div></div>
+    <p>With the <code><span class="tk-d">DIAGNOSE</span></code> prefix the failed solve does not end the query. A router reads the solver's
       status and sends it to one engine. An infeasible model goes to the elastic engine, which adds a slack to each
       clause and finds the smallest change that makes the model feasible again (the standard elastic model). An
       unbounded one goes to the ray engine, which reads the direction in which the objective keeps improving (a
@@ -371,7 +371,7 @@
         <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/src/parser/decide"><code>src/parser/decide/</code></a></td><td>Predicates over the parsed clause; the refusal of removed
           spellings</td><td>01</td></tr>
         <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/src/planner/expression_binder/decide"><code>src/planner/expression_binder/decide/</code></a></td><td>The DECIDE binders: declarations,
-          <code>SUCH THAT</code>, the objective, reducers and scopes</td><td>02</td></tr>
+          <code><span class="tk-d">SUCH</span> <span class="tk-d">THAT</span></code>, the objective, reducers and scopes</td><td>02</td></tr>
         <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/src/planner/operator/decide"><code>src/planner/operator/decide/</code></a></td><td><code>LogicalDecide</code> and the DIAGNOSE plan
           node</td><td>03</td></tr>
         <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/src/planner/decide"><code>src/planner/decide/</code></a></td><td>The canonicalizer, the product spelling, the shape check, source
@@ -416,22 +416,22 @@
       href="../guide.html">Guide</a> teaches the language itself.</p>
     <dl class="reads">
       <dt>decision</dt>
-      <dd>A column whose values DeciDB chooses, declared in <code>DECIDE</code>. Each instance of a decision is one
+      <dd>A column whose values DeciDB chooses, declared in <code><span class="tk-d">DECIDE</span></code>. Each instance of a decision is one
         solver variable.</dd>
       <dt>keyed decision</dt>
-      <dd>A decision with one value per class of a key, <code>per K: x(TYPE)</code>, shared by every row of the class.
-        <code>per (): x(TYPE)</code> is one value for the whole query.</dd>
+      <dd>A decision with one value per class of a key, <code><span class="tk-d">per</span> K: x(TYPE)</code>, shared by every row of the class.
+        <code><span class="tk-d">per</span> (): x(TYPE)</code> is one value for the whole query.</dd>
       <dt>reducer</dt>
       <dd>An aggregate (<code>SUM</code>, <code>AVG</code>, <code>MIN</code>, <code>MAX</code>, <code>COUNT</code>) over
         decisions. DeciDB's own word for it, so it is never confused with a SQL aggregate over data.</dd>
       <dt>scope</dt>
-      <dd>The <code>when</code>, <code>per</code> and <code>by</code> that decide which rows a clause reads and how many
+      <dd>The <code><span class="tk-d">when</span></code>, <code><span class="tk-d">per</span></code> and <code><span class="tk-d">by</span></code> that decide which rows a clause reads and how many
         copies of it the query generates.</dd>
       <dt>canonical form</dt>
       <dd>The one shape stage 04 writes every clause in, so later stages read one spelling per meaning.</dd>
       <dt>shape</dt>
       <dd>How a canonical comparison becomes model rows: per row (one row per kept row or class), aggregate (one row
-        per <code>by</code> group) or value (a helper decision per group first).</dd>
+        per <code><span class="tk-d">by</span></code> group) or value (a helper decision per group first).</dd>
       <dt>formulation</dt>
       <dd>The way a construct is written as solver rows. Choosing one is stage 05's work.</dd>
       <dt>linearization</dt>
@@ -444,7 +444,7 @@
       <dd>The linear rows that state a product <code>x * y</code> exactly when one factor is binary and the other is
         bounded.</dd>
       <dt>auxiliary variable</dt>
-      <dd>A solver variable a rewrite adds, not one the user declared. <code>EXPLAIN</code> prints it as the expression
+      <dd>A solver variable a rewrite adds, not one the user declared. <code><span class="tk-k">EXPLAIN</span></code> prints it as the expression
         it stands for.</dd>
       <dt>native construct</dt>
       <dd>A construct the backend states itself, such as Gurobi's indicator constraint, in place of a Big-M
@@ -536,7 +536,7 @@
       <div class="grid">
         <div class="span-4 stack-4">
           <a class="nav__logo" href="../index.html"><img src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
-          <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
+          <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
         <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Get started</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../docs/index.html">Documentation</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="../examples/knapsack.html">Knapsack</a></li><li><a href="../examples/facility-location.html">Depots</a></li><li><a href="../examples/fair-allocation.html">Fair allocation</a></li><li><a href="../examples/diagnose.html">DIAGNOSE</a></li></ul></div>

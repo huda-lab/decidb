@@ -17,8 +17,8 @@ GROUPS = [
     ),
     (
         "Answered by query rewriting",
-        "These problems have an exact answer that DuckDB computes with sorting, ranking "
-        "and aggregation. DeciDB recognizes them and rewrites the query to compute it, with no solver and no "
+        "These problems have an exact answer that sorting, ranking "
+        "and aggregation can compute. DeciDB recognizes them and rewrites the query to compute it, with no solver and no "
         "change to the SQL you write.",
     ),
     ("When there is no answer", "A query whose constraints cannot all hold tells you which clause to change."),
@@ -651,7 +651,7 @@ MINIMIZE SUM(POWER(w - target, 2));""",
         "summary_plain": "Top-k per group, answered by DeciDB's query rewriting.",
         "snippet": "DECIDE pick(BOOL)\nSUCH THAT per genre: SUM(pick) by (genre) <= 2\nMAXIMIZE SUM(rating * pick)",
         "story": "<p>Choosing rows by score under a count limit has an exact answer: sort by score and take the top "
-        "<em>k</em> in each group. DeciDB proves the query has that shape and computes it with DuckDB's own window "
+        "<em>k</em> in each group. DeciDB proves the query has that shape and computes it with window "
         "operators.</p>",
         "setup": """CREATE TABLE Films (title VARCHAR, genre VARCHAR, rating DOUBLE);
 INSERT INTO Films VALUES
@@ -780,7 +780,7 @@ MAXIMIZE MIN(alloc / need);""",
             ("MAXIMIZE MIN(alloc / need)", "Make the smallest share of need as large as possible."),
         ],
         "answer": "<p>Every program receives 83.3% of its need. Shelter's share is also its cap, 25 units. On the solver "
-        "path this is a linear program; the rewritten query computes the level with DuckDB's own operators."
+        "path this is a linear program; the rewritten query computes the level directly."
         "</p>",
     },
     {

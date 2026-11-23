@@ -88,8 +88,8 @@ def hero(b, ex_by_slug):
   <section class="hero hero--centred" data-enter aria-labelledby="hero-h">
     <div class="wrap"><div class="hero-text">
       <div class="hero__c">
-        <h1 id="hero-h">Optimization in DuckDB</h1>
-        <p class="hero__lead">Add DECIDE to a SQL query and get the best values back as rows.</p>
+        <h1 id="hero-h">Optimization in SQL</h1>
+        <p class="hero__lead">Add DECIDE to a query and get the best values back as rows.</p>
         <div class="btn-row"><a class="btn btn--primary" href="getting-started.html#install">Install DeciDB</a><a class="btn btn--secondary" href="guide.html">Read the guide</a></div>
       </div>
       <div class="hero__window" data-fx="grain-gradient" data-fx-seed="7" data-ui-pause-host>
@@ -204,7 +204,7 @@ def why(b, ex_by_slug):
         31,
         SKY,
         STILL,
-        "Thirteen lines of Python: read the items from DuckDB, build a PuLP model with one binary variable per item, "
+        "Thirteen lines of Python: read the items from the database, build a PuLP model with one binary variable per item, "
         "solve it, and insert the answer into a new table.",
         f'<div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code>{b.highlight(WITHOUT, "python")}</code></pre></div>',
         fit=520,
@@ -260,7 +260,7 @@ def novel(b, ex_by_slug):
     b.rows_of("index.html novel", ex["setup"], FAIR)
     rewrite = card(
         "Query rewriting",
-        "A query with an exact answer, such as a fair split of a budget, runs as sorting and aggregation in DuckDB, "
+        "A query with an exact answer, such as a fair split of a budget, runs as sorting and aggregation inside DeciDB, "
         "with no solver: 0.026 s at 800,000 decisions, where Gurobi took 2,158 s.",
         41,
         PAINT,
@@ -308,7 +308,7 @@ def statement(b):
     <div class="wrap">
       <div data-moment="liquid-type" class="section-head statement">
         <h2 id="statement-h" class="mo-lt__type">The query is the model</h2>
-        <p>Three clauses added to a SELECT. The rows stay in DuckDB from the scan to the answer.</p>
+        <p>Three clauses added to a SELECT. The rows never leave the database, from the scan to the answer.</p>
       </div>
       <div class="grid parts">{cols}</div>
       <p class="group__end"><a class="link" href="guide.html">Read the guide, clause by clause{b.ARROW}</a></p>
@@ -336,10 +336,10 @@ def solvers(b):
     <div class="wrap grid grid--top">
       <div class="span-5 split-col">
         <h2 id="solvers-h">Built on DuckDB, solved by Gurobi or HiGHS</h2>
-        <p class="t-lead">DeciDB is DuckDB with the DECIDE clause added, so it reads the same tables and files. HiGHS ships in every build; Gurobi is used when its license is present.</p>
+        <p class="t-lead">DeciDB reads tables, Parquet and CSV files where they are. HiGHS ships in every build; Gurobi is used when its license is present.</p>
         <ul class="facts">
-          <li>The data never leaves DuckDB: the model is built from the query's own rows</li>
-          <li>Python: <code>pip install decidb</code>, with DuckDB's API</li>
+          <li>The data never leaves the database: the model is built from the query's own rows</li>
+          <li>Python: <code>pip install decidb</code>, then <code>decidb.connect()</code></li>
           <li>A command-line shell for macOS, Linux and Windows</li>
           <li>You state the rules and the goal; DeciDB writes the model the solver reads</li>
         </ul>
@@ -352,7 +352,7 @@ def solvers(b):
   </section>"""
 
 
-PLAN = """<!-- type: software (a developer tool: DuckDB with a DECIDE clause)
+PLAN = """<!-- type: software (a developer tool: SQL with a DECIDE clause)
      deal: hero centred, palette white-link-blue (a white sheet and a biro blue, the blue of DeciDB's own
      logo, for a tool whose answers are tables of numbers), type geist, radius sharp, nav mega (nav-cards
      dealt first; it needs two to four products and DeciDB is one), close word, footer statement, rhythm
@@ -368,8 +368,8 @@ PLAN = """<!-- type: software (a developer tool: DuckDB with a DECIDE clause)
 def render(b):
     ex_by_slug = {ex["slug"]: ex for ex in b.EX.EXAMPLES}
     head = b.head(
-        "DeciDB: optimization queries in DuckDB",
-        "DeciDB adds a DECIDE clause to DuckDB: state decisions, constraints and a goal in SQL and get the best "
+        "DeciDB: optimization queries in SQL",
+        "DeciDB adds a DECIDE clause to SQL: state decisions, constraints and a goal in SQL and get the best "
         "values back as rows. Query rewriting answers nine problem classes without a solver; the rest go to Gurobi or "
         "HiGHS.",
         "",

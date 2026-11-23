@@ -33,8 +33,8 @@
 <!--bash title="Linux / macOS"-->unzip decidb_cli-osx-universal.zip     # or the Linux archive
 chmod +x decidb
 ./decidb --version<!--/bash-->
-<!--text title="Windows (PowerShell)"-->Expand-Archive decidb_cli-windows-amd64.zip -DestinationPath .
-.\decidb.exe --version<!--/text-->
+<!--bash title="Windows (PowerShell)"-->Expand-Archive decidb_cli-windows-amd64.zip -DestinationPath .
+.\decidb.exe --version<!--/bash-->
         <div class="note"><strong>Unsigned binaries</strong>
           <p>On macOS, right-click the binary, choose Open and confirm. On Windows, choose "More info" and then "Run
             anyway" in SmartScreen.</p></div>
@@ -44,7 +44,7 @@ chmod +x decidb
             table</a> lists each change.</p></div>
         <h3 id="install-python">Python</h3>
         <p>Wheels are published for Python 3.11, 3.12 and 3.13 on macOS (Apple Silicon), Linux (x86-64) and Windows
-          (x86-64). The API is DuckDB's.</p>
+          (x86-64).</p>
 <!--bash-->pip install decidb<!--/bash-->
 <!--python-->import decidb
 decidb.connect().sql("SELECT 42").fetchall()<!--/python-->
@@ -55,8 +55,8 @@ cd decidb
 make release
 ./build/release/decidb --version<!--/bash-->
         <p>On Windows, with Visual Studio 2019+ and Ninja:</p>
-<!--text title="Windows (PowerShell)"-->cmake -G Ninja -B build/release -DCMAKE_BUILD_TYPE=Release -DDISABLE_UNITY=1
-ninja -C build/release<!--/text-->
+<!--bash title="Windows (PowerShell)"-->cmake -G Ninja -B build/release -DCMAKE_BUILD_TYPE=Release -DDISABLE_UNITY=1
+ninja -C build/release<!--/bash-->
       </section>
 
       <section id="first-query">
@@ -159,8 +159,8 @@ MAXIMIZE SUM(x * value);<!--/sql-->
 
       <section id="python">
         <h2>From Python</h2>
-        <p>The <code>decidb</code> package has DuckDB's API, so a DECIDE query runs like any other and returns a relation
-          you can turn into a DataFrame:</p>
+        <p>In Python, a DECIDE query runs like any other query and returns a relation you can turn into a
+          DataFrame:</p>
 <!--python-->import decidb
 
 con = decidb.connect()
@@ -179,7 +179,7 @@ answer = con.sql("""
           models. When the Gurobi library and a license are present, DeciDB uses Gurobi: it is faster on these workloads
           and also takes non-convex and mixed-integer quadratic models and quadratic constraints. A model that only
           Gurobi can solve is refused, with a message, when Gurobi is not available. Some problems need neither:
-          <a href="features.html#rewriting">query rewriting</a> answers them with DuckDB's own operators. The
+          <a href="features.html#rewriting">query rewriting</a> answers them with sorting, ranking and aggregation instead. The
           <a href="guide.html#solvers">guide</a> lists which solver takes which kind of query.</p>
       </section>
 

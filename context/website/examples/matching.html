@@ -75,13 +75,13 @@
   <div class="wrap"><div class="hero-text hero-split grid">
     <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a><span aria-hidden="true">/</span><a href="../examples.html">Examples</a><span aria-hidden="true">/</span>Answered by query rewriting</nav><h1 id="page-h">Match drivers to pickups</h1><p class="hero__lead">Pair four drivers with four pickups along a road so the total distance driven is as small as possible.</p><div class="page-head__tags"><span class="tag tag--direct">Query rewriting</span><span class="tag">ILP</span></div></div>
     <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="16" data-ui-pause-host><div class="ui ui-hw hw hw--page " role="img" aria-label="The match drivers to pickups query and the 4 rows it returns."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · matching.sql</span></div><div class="hw__page"><pre class="hw__sql"><code><span class="tk-k">SELECT</span> driver, pickup, driver_km, pickup_km <span class="tk-k">FROM</span> (
-    <span class="tk-k">SELECT</span> d.driver, p.pickup, d.km <span class="tk-k">AS</span> driver_km, p.km <span class="tk-k">AS</span> pickup_km, x
+    <span class="tk-k">SELECT</span> d.driver, p.pickup, d.km <span class="tk-k">AS</span> driver_km, p.km <span class="tk-k">AS</span> pickup_km, <span class="tk-v">x</span>
     <span class="tk-k">FROM</span> Drivers d <span class="tk-k">CROSS</span> <span class="tk-k">JOIN</span> Pickups p
-    <span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-    <span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">per</span> d: <span class="tk-f">SUM</span>(x) <span class="tk-p">by</span> (d) = <span class="tk-n">1</span>
-          <span class="tk-k">AND</span> <span class="tk-p">per</span> p: <span class="tk-f">SUM</span>(x) <span class="tk-p">by</span> (p) = <span class="tk-n">1</span>
-    <span class="tk-k">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">ABS</span>(d.km - p.km) * x)
-) <span class="tk-k">WHERE</span> x = <span class="tk-n">1</span>
+    <span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+    <span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-d">per</span> d: <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) <span class="tk-d">by</span> (d) = <span class="tk-n">1</span>
+          <span class="tk-k">AND</span> <span class="tk-d">per</span> p: <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) <span class="tk-d">by</span> (p) = <span class="tk-n">1</span>
+    <span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">ABS</span>(d.km - p.km) * <span class="tk-v">x</span>)
+) <span class="tk-k">WHERE</span> <span class="tk-v">x</span> = <span class="tk-n">1</span>
 <span class="tk-k">ORDER</span> <span class="tk-k">BY</span> driver;</code></pre><div class="hw__out" data-ly-steps="520"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">driver</span><span class="">pickup</span><span class="r">driver_km</span><span class="r">pickup_km</span></div><div class="sq__tr" data-step><span class="">Ana</span><span class="">P1</span><span class="r">1</span><span class="r">2</span></div><div class="sq__tr" data-step><span class="">Ben</span><span class="">P2</span><span class="r">4.5</span><span class="r">3</span></div><div class="sq__tr" data-step><span class="">Cai</span><span class="">P3</span><span class="r">7</span><span class="r">9.5</span></div><div class="sq__tr" data-step><span class="">Dee</span><span class="">P4</span><span class="r">12</span><span class="r">11</span></div></div></div></div></div></div>
   </div></div>
 </section>
@@ -91,24 +91,24 @@
       <h2>The problem</h2>
       <p>When both sides sit on a line and the cost is the distance between them, the best one-to-one matching pairs them in sorted order. DeciDB recognizes the pattern, ranks both sides and joins on rank.</p>
       <h2>The data</h2>
-      <div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Setup</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">CREATE</span> <span class="tk-k">TABLE</span> Drivers (driver <span class="tk-k">VARCHAR</span>, km <span class="tk-k">DOUBLE</span> <span class="tk-k">NOT</span> <span class="tk-k">NULL</span>);
+      <div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Setup</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">CREATE</span> <span class="tk-k">TABLE</span> Drivers (driver <span class="tk-t">VARCHAR</span>, km <span class="tk-t">DOUBLE</span> <span class="tk-k">NOT</span> <span class="tk-k">NULL</span>);
 <span class="tk-k">INSERT</span> <span class="tk-k">INTO</span> Drivers <span class="tk-k">VALUES</span> (<span class="tk-s">&#x27;Ana&#x27;</span>, <span class="tk-n">1.0</span>), (<span class="tk-s">&#x27;Ben&#x27;</span>, <span class="tk-n">4.5</span>), (<span class="tk-s">&#x27;Cai&#x27;</span>, <span class="tk-n">7.0</span>), (<span class="tk-s">&#x27;Dee&#x27;</span>, <span class="tk-n">12.0</span>);
 
-<span class="tk-k">CREATE</span> <span class="tk-k">TABLE</span> Pickups (pickup <span class="tk-k">VARCHAR</span>, km <span class="tk-k">DOUBLE</span> <span class="tk-k">NOT</span> <span class="tk-k">NULL</span>);
+<span class="tk-k">CREATE</span> <span class="tk-k">TABLE</span> Pickups (pickup <span class="tk-t">VARCHAR</span>, km <span class="tk-t">DOUBLE</span> <span class="tk-k">NOT</span> <span class="tk-k">NULL</span>);
 <span class="tk-k">INSERT</span> <span class="tk-k">INTO</span> Pickups <span class="tk-k">VALUES</span> (<span class="tk-s">&#x27;P1&#x27;</span>, <span class="tk-n">2.0</span>), (<span class="tk-s">&#x27;P2&#x27;</span>, <span class="tk-n">3.0</span>), (<span class="tk-s">&#x27;P3&#x27;</span>, <span class="tk-n">9.5</span>), (<span class="tk-s">&#x27;P4&#x27;</span>, <span class="tk-n">11.0</span>);</code></pre></div>
       <h2>The query</h2>
       <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">DECIDE query</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> driver, pickup, driver_km, pickup_km <span class="tk-k">FROM</span> (
-    <span class="tk-k">SELECT</span> d.driver, p.pickup, d.km <span class="tk-k">AS</span> driver_km, p.km <span class="tk-k">AS</span> pickup_km, x
+    <span class="tk-k">SELECT</span> d.driver, p.pickup, d.km <span class="tk-k">AS</span> driver_km, p.km <span class="tk-k">AS</span> pickup_km, <span class="tk-v">x</span>
     <span class="tk-k">FROM</span> Drivers d <span class="tk-k">CROSS</span> <span class="tk-k">JOIN</span> Pickups p
-    <span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-    <span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">per</span> d: <span class="tk-f">SUM</span>(x) <span class="tk-p">by</span> (d) = <span class="tk-n">1</span>
-          <span class="tk-k">AND</span> <span class="tk-p">per</span> p: <span class="tk-f">SUM</span>(x) <span class="tk-p">by</span> (p) = <span class="tk-n">1</span>
-    <span class="tk-k">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">ABS</span>(d.km - p.km) * x)
-) <span class="tk-k">WHERE</span> x = <span class="tk-n">1</span>
+    <span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+    <span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-d">per</span> d: <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) <span class="tk-d">by</span> (d) = <span class="tk-n">1</span>
+          <span class="tk-k">AND</span> <span class="tk-d">per</span> p: <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) <span class="tk-d">by</span> (p) = <span class="tk-n">1</span>
+    <span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">ABS</span>(d.km - p.km) * <span class="tk-v">x</span>)
+) <span class="tk-k">WHERE</span> <span class="tk-v">x</span> = <span class="tk-n">1</span>
 <span class="tk-k">ORDER</span> <span class="tk-k">BY</span> driver;</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>4 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">driver</th><th scope="col" class="">pickup</th><th scope="col" class="num">driver_km</th><th scope="col" class="num">pickup_km</th></tr></thead><tbody><tr><td>Ana</td><td>P1</td><td class="num">1.0</td><td class="num">2.0</td></tr><tr><td>Ben</td><td>P2</td><td class="num">4.5</td><td class="num">3.0</td></tr><tr><td>Cai</td><td>P3</td><td class="num">7.0</td><td class="num">9.5</td></tr><tr><td>Dee</td><td>P4</td><td class="num">12.0</td><td class="num">11.0</td></tr></tbody></table></div></div></div>
-      <p class="solver-line">Answered by <a href="../features.html#rewriting">query rewriting</a>: DuckDB's own operators compute the optimum and no solver is called. <code>EXPLAIN</code> names the rule, <code>O1_MONGE_ASSIGNMENT</code>.</p>
+      <p class="solver-line">Answered by <a href="../features.html#rewriting">query rewriting</a>: DeciDB computes the optimum with sorting and joins, and no solver is called. <code><span class="tk-k">EXPLAIN</span></code> names the rule, <code>O1_MONGE_ASSIGNMENT</code>.</p>
       <h2>How it reads</h2>
-      <dl class="reads"><dt><code>CROSS JOIN</code></dt><dd>Every driver–pickup pair is a candidate row.</dd><dt><code>per d: ... = 1 AND per p: ... = 1</code></dt><dd>Each driver gets exactly one pickup and each pickup exactly one driver.</dd><dt><code>SUM(ABS(d.km - p.km) * x)</code></dt><dd>Total distance. <code>ABS</code> of data is just a per-row number.</dd></dl>
+      <dl class="reads"><dt><code><span class="tk-k">CROSS</span> <span class="tk-k">JOIN</span></code></dt><dd>Every driver–pickup pair is a candidate row.</dd><dt><code><span class="tk-d">per</span> d: ... = <span class="tk-n">1</span> <span class="tk-k">AND</span> <span class="tk-d">per</span> p: ... = <span class="tk-n">1</span></code></dt><dd>Each driver gets exactly one pickup and each pickup exactly one driver.</dd><dt><code><span class="tk-f">SUM</span>(<span class="tk-f">ABS</span>(d.km - p.km) * x)</code></dt><dd>Total distance. <code>ABS</code> of data is just a per-row number.</dd></dl>
       <h2>The answer</h2>
       <p>The first driver takes the first pickup, and so on down the road: 6 km in total.</p>
 
@@ -138,7 +138,7 @@
       <div class="grid">
         <div class="span-4 stack-4">
           <a class="nav__logo" href="../index.html"><img src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
-          <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
+          <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
         <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Get started</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../docs/index.html">Documentation</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="../examples/knapsack.html">Knapsack</a></li><li><a href="../examples/facility-location.html">Depots</a></li><li><a href="../examples/fair-allocation.html">Fair allocation</a></li><li><a href="../examples/diagnose.html">DIAGNOSE</a></li></ul></div>

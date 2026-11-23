@@ -98,10 +98,10 @@
   <section id="overview">
     <h2><a class="anchor" href="#overview">The nine rules</a></h2>
     <p class="lead">Each rule answers one class of problem with a known exact algorithm. The rule id (S1, A1, and so
-      on) and the rule name are what <code>EXPLAIN</code> prints.</p>
+      on) and the rule name are what <code><span class="tk-k">EXPLAIN</span></code> prints.</p>
     <p>How a rule recognizes its class, builds its plan and hands back DECIDE's columns is on
       <a href="rewriting.html#recognize">Query rewriting</a>. This page covers what each rule answers. Every section
-      ends with a runnable query; the site's build runs it and checks that <code>EXPLAIN</code> names the rule.</p>
+      ends with a runnable query; the site's build runs it and checks that <code><span class="tk-k">EXPLAIN</span></code> names the rule.</p>
     <div class="table-wrap"><table>
       <thead><tr><th scope="col">Rule</th><th scope="col">EXPLAIN name</th><th scope="col">Answers</th><th scope="col">Plan shape</th></tr></thead>
       <tbody>
@@ -149,22 +149,22 @@
 
   <section id="s1">
     <h2><a class="anchor" href="#s1">S1: choose rows by score</a></h2>
-    <p class="lead">S1 answers "choose rows by score, with limits on how many": one <code>BOOL</code> per row, a count
+    <p class="lead">S1 answers "choose rows by score, with limits on how many": one <code><span class="tk-t">BOOL</span></code> per row, a count
       limit per group or over all rows, and a linear score.</p>
     <p>Its class is the <strong>uniform matroid</strong>: the family of every set of at most <em>k</em> items. On a
       matroid, choosing items greedily by weight gives an optimum.</p>
     <p><strong>The shape.</strong> A query is S1 when it has:</p>
     <ul>
-      <li>one decision, a <code>BOOL</code> per row;</li>
-      <li>count limits on <code>SUM(x)</code> (<code>&lt;=</code>, <code>&lt;</code>, <code>&gt;=</code>,
-        <code>&gt;</code>, <code>=</code>, or several forming one interval), all with the same <code>by</code> key and
-        the same <code>when</code>. The body's constant coefficients must add up to exactly 1 or -1, so
-        <code>SUM(2*x - x)</code> and <code>SUM(-x)</code> are counts;</li>
+      <li>one decision, a <code><span class="tk-t">BOOL</span></code> per row;</li>
+      <li>count limits on <code><span class="tk-f">SUM</span>(x)</code> (<code>&lt;=</code>, <code>&lt;</code>, <code>&gt;=</code>,
+        <code>&gt;</code>, <code>=</code>, or several forming one interval), all with the same <code><span class="tk-d">by</span></code> key and
+        the same <code><span class="tk-d">when</span></code>. The body's constant coefficients must add up to exactly 1 or -1, so
+        <code><span class="tk-f">SUM</span>(<span class="tk-n">2</span>*x - x)</code> and <code><span class="tk-f">SUM</span>(-x)</code> are counts;</li>
       <li>limits that are constants below 1e20 in magnitude, values of the row, or aggregates of the group, such as
-        <code>SUM(x) &lt;= 0.1 * COUNT(*)</code> for the best tenth of the rows;</li>
-      <li>a linear objective <code>SUM(score * x)</code>, maximized or minimized, or none;</li>
-      <li>other clauses only to fix single rows: <code>x = 1</code>, <code>x &lt;= flag</code>, under a
-        <code>when</code> or not.</li>
+        <code><span class="tk-f">SUM</span>(x) &lt;= <span class="tk-n">0.1</span> * <span class="tk-f">COUNT</span>(*)</code> for the best tenth of the rows;</li>
+      <li>a linear objective <code><span class="tk-f">SUM</span>(score * x)</code>, maximized or minimized, or none;</li>
+      <li>other clauses only to fix single rows: <code>x = <span class="tk-n">1</span></code>, <code>x &lt;= flag</code>, under a
+        <code><span class="tk-d">when</span></code> or not.</li>
     </ul>
     <p><strong>The algorithm.</strong> For each group, with lower limit <em>L</em> and upper limit <em>U</em>:</p>
     <ol class="steps">
@@ -173,8 +173,8 @@
       <li><strong>Rank.</strong> Number the rows by score, best first, with <code>ROW_NUMBER</code> over the
         group.</li>
       <li><strong>Size.</strong> With <em>p</em> rows of positive score, take <em>k</em> =
-        <code>LEAST(U, GREATEST(L, p))</code> rows, less the rows fixed to 1.</li>
-      <li><strong>Choose.</strong> Set <code>x = 1</code> on the rows ranked within <em>k</em>.</li>
+        <code><span class="tk-f">LEAST</span>(U, <span class="tk-f">GREATEST</span>(L, p))</code> rows, less the rows fixed to 1.</li>
+      <li><strong>Choose.</strong> Set <code>x = <span class="tk-n">1</span></code> on the rows ranked within <em>k</em>.</li>
     </ol>
     <p><strong>Why it is exact.</strong> For any fixed count <em>m</em>, the <em>m</em> best scores are optimal:
       swapping a chosen row for an unchosen one with a higher score cannot lower the total. The total grows while the
@@ -187,12 +187,12 @@
       from the data, such as the best tenth of all rows, adds a held-rows stage that checks every group before the
       first row leaves: 1.72 times the hand plan's CPU, and 14.5 times faster than Gurobi.</p>
     <p>In this example each genre gets one or two films, and only films rated above 8 improve the objective:</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">One or two films per genre, preferring those rated above 8</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> title, genre, rating, pick
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">One or two films per genre, preferring those rated above 8</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> title, genre, rating, <span class="tk-v">pick</span>
 <span class="tk-k">FROM</span> Films
-<span class="tk-k">DECIDE</span> pick(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(pick) <span class="tk-p">by</span> (genre) &gt;= <span class="tk-n">1</span>
-      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(pick) <span class="tk-p">by</span> (genre) &lt;= <span class="tk-n">2</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>((rating - <span class="tk-n">8</span>) * pick)
+<span class="tk-d">DECIDE</span> <span class="tk-v">pick</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">pick</span>) <span class="tk-d">by</span> (genre) &gt;= <span class="tk-n">1</span>
+      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">pick</span>) <span class="tk-d">by</span> (genre) &lt;= <span class="tk-n">2</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>((rating - <span class="tk-n">8</span>) * <span class="tk-v">pick</span>)
 <span class="tk-k">ORDER</span> <span class="tk-k">BY</span> genre, rating <span class="tk-k">DESC</span>;</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>10 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">title</th><th scope="col" class="">genre</th><th scope="col" class="num">rating</th><th scope="col" class="num dec">pick</th></tr></thead><tbody><tr class="on"><td>Second Helping</td><td>Comedy</td><td class="num">8.0</td><td class="num dec">1</td></tr><tr><td>Laugh Track</td><td>Comedy</td><td class="num">7.4</td><td class="num dec">0</td></tr><tr><td>Odd Couples</td><td>Comedy</td><td class="num">6.9</td><td class="num dec">0</td></tr><tr class="on"><td>Northern Lights</td><td>Drama</td><td class="num">8.6</td><td class="num dec">1</td></tr><tr class="on"><td>The Long Field</td><td>Drama</td><td class="num">8.1</td><td class="num dec">1</td></tr><tr><td>Paper Boats</td><td>Drama</td><td class="num">7.9</td><td class="num dec">0</td></tr><tr><td>Quiet Harbor</td><td>Drama</td><td class="num">7.2</td><td class="num dec">0</td></tr><tr class="on"><td>Deep Orbit</td><td>Sci-fi</td><td class="num">8.8</td><td class="num dec">1</td></tr><tr class="on"><td>Signal</td><td>Sci-fi</td><td class="num">8.3</td><td class="num dec">1</td></tr><tr><td>Red Dust</td><td>Sci-fi</td><td class="num">7.7</td><td class="num dec">0</td></tr></tbody></table></div></div></div>
     <p>Drama and Sci-fi each have two films rated above 8, so <em>p</em> = 2 and both are chosen. Comedy has none, so
       <em>p</em> = 0 and the lower limit sets <em>k</em> = 1: its best film, Second Helping at exactly 8, is chosen at
@@ -215,16 +215,16 @@
       exact if it runs level by level, finest first.</p>
     <p><strong>The shape.</strong> A query is S2 when it has:</p>
     <ul>
-      <li>one <code>BOOL</code> per row and a linear score, as S1 reads them;</li>
-      <li>two or more upper count limits (<code>SUM(x) &lt;= k</code> or <code>&lt; k</code>) on different scopes,
-        where a scope is a clause's <code>by</code> key, <code>when</code> and <code>per</code>. Clauses with the same
+      <li>one <code><span class="tk-t">BOOL</span></code> per row and a linear score, as S1 reads them;</li>
+      <li>two or more upper count limits (<code><span class="tk-f">SUM</span>(x) &lt;= k</code> or <code>&lt; k</code>) on different scopes,
+        where a scope is a clause's <code><span class="tk-d">by</span></code> key, <code><span class="tk-d">when</span></code> and <code><span class="tk-d">per</span></code>. Clauses with the same
         scope form one level, whose cap is the least of theirs;</li>
-      <li>levels that form a chain: each coarser level's <code>by</code> key is a subset of the finer one's, compared
-        as sets, with no <code>when</code> or the same one;</li>
+      <li>levels that form a chain: each coarser level's <code><span class="tk-d">by</span></code> key is a subset of the finer one's, compared
+        as sets, with no <code><span class="tk-d">when</span></code> or the same one;</li>
       <li>caps that are constants below 1e20, values of the row, or aggregates of the group.</li>
     </ul>
-    <p>The nesting is proved from the query's text; the data is never consulted. <code>by (department)</code> beside
-      <code>by (division)</code> declines even when every department lies in one division, because the rule is chosen
+    <p>The nesting is proved from the query's text; the data is never consulted. <code><span class="tk-d">by</span> (department)</code> beside
+      <code><span class="tk-d">by</span> (division)</code> declines even when every department lies in one division, because the rule is chosen
       once, when the plan is built, and the IR holds no functional dependencies.</p>
     <p><strong>The algorithm.</strong></p>
     <ol class="steps">
@@ -247,13 +247,13 @@
       CPU of a hand-written chain of <code>ROW_NUMBER</code> stages, and 0.052 s against Gurobi's 0.425 s. The linear
       relaxation of laminar quotas is integral, so Gurobi solves at its root node; its cost is building the model,
       which grows with the rows.</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">At most one hire per team, two per division, four in all</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> name, division, team, score, hire
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">At most one hire per team, two per division, four in all</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> name, division, team, score, <span class="tk-v">hire</span>
 <span class="tk-k">FROM</span> Candidates
-<span class="tk-k">DECIDE</span> hire(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(hire) <span class="tk-p">by</span> (division, team) &lt;= <span class="tk-n">1</span>
-      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(hire) <span class="tk-p">by</span> (division) &lt;= <span class="tk-n">2</span>
-      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(hire) &lt;= <span class="tk-n">4</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(score * hire);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>9 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">name</th><th scope="col" class="">division</th><th scope="col" class="">team</th><th scope="col" class="num">score</th><th scope="col" class="num dec">hire</th></tr></thead><tbody><tr class="on"><td>Ada</td><td>Product</td><td>Design</td><td class="num">9.1</td><td class="num dec">1</td></tr><tr><td>Bo</td><td>Product</td><td>Design</td><td class="num">8.7</td><td class="num dec">0</td></tr><tr><td>Cy</td><td>Product</td><td>Mobile</td><td class="num">8.9</td><td class="num dec">0</td></tr><tr class="on"><td>Jo</td><td>Product</td><td>Web</td><td class="num">9.05</td><td class="num dec">1</td></tr><tr class="on"><td>Ed</td><td>Platform</td><td>Data</td><td class="num">9.4</td><td class="num dec">1</td></tr><tr><td>Fa</td><td>Platform</td><td>Data</td><td class="num">9.3</td><td class="num dec">0</td></tr><tr><td>Gu</td><td>Platform</td><td>Infra</td><td class="num">6.5</td><td class="num dec">0</td></tr><tr class="on"><td>Hu</td><td>Research</td><td>ML</td><td class="num">9.0</td><td class="num dec">1</td></tr><tr><td>Io</td><td>Research</td><td>ML</td><td class="num">8.0</td><td class="num dec">0</td></tr></tbody></table></div></div></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">hire</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">hire</span>) <span class="tk-d">by</span> (division, team) &lt;= <span class="tk-n">1</span>
+      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">hire</span>) <span class="tk-d">by</span> (division) &lt;= <span class="tk-n">2</span>
+      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">hire</span>) &lt;= <span class="tk-n">4</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(score * <span class="tk-v">hire</span>);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>9 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">name</th><th scope="col" class="">division</th><th scope="col" class="">team</th><th scope="col" class="num">score</th><th scope="col" class="num dec">hire</th></tr></thead><tbody><tr class="on"><td>Ada</td><td>Product</td><td>Design</td><td class="num">9.1</td><td class="num dec">1</td></tr><tr><td>Bo</td><td>Product</td><td>Design</td><td class="num">8.7</td><td class="num dec">0</td></tr><tr><td>Cy</td><td>Product</td><td>Mobile</td><td class="num">8.9</td><td class="num dec">0</td></tr><tr class="on"><td>Jo</td><td>Product</td><td>Web</td><td class="num">9.05</td><td class="num dec">1</td></tr><tr class="on"><td>Ed</td><td>Platform</td><td>Data</td><td class="num">9.4</td><td class="num dec">1</td></tr><tr><td>Fa</td><td>Platform</td><td>Data</td><td class="num">9.3</td><td class="num dec">0</td></tr><tr><td>Gu</td><td>Platform</td><td>Infra</td><td class="num">6.5</td><td class="num dec">0</td></tr><tr class="on"><td>Hu</td><td>Research</td><td>ML</td><td class="num">9.0</td><td class="num dec">1</td></tr><tr><td>Io</td><td>Research</td><td>ML</td><td class="num">8.0</td><td class="num dec">0</td></tr></tbody></table></div></div></div>
     <p>The team level drops Bo, Fa and Io, the second candidates of their teams. The division level keeps Ada and Jo
       in Product, above Cy. The company level keeps the four best survivors, Ed, Ada, Jo and Hu, and drops Gu.</p>
     <div class="src"><strong>In the source</strong><ul>
@@ -274,9 +274,9 @@
       the general 0-1 knapsack, which has no greedy answer and stays on the solver.</p>
     <p><strong>The shape.</strong> A query is S3 when it has:</p>
     <ul>
-      <li>one <code>BOOL</code> per row;</li>
-      <li>exactly one aggregate clause, <code>SUM(w*x) &lt;= B</code> with a maximized count, or
-        <code>SUM(w*x) &gt;= B</code> with a minimized count, per <code>by</code> group or over all rows;</li>
+      <li>one <code><span class="tk-t">BOOL</span></code> per row;</li>
+      <li>exactly one aggregate clause, <code><span class="tk-f">SUM</span>(w*x) &lt;= B</code> with a maximized count, or
+        <code><span class="tk-f">SUM</span>(w*x) &gt;= B</code> with a minimized count, per <code><span class="tk-d">by</span></code> group or over all rows;</li>
       <li>weights of any sign, zero included. Constant weights that add up to exactly 1 or -1 make the body a count,
         which is S1's, so S3 declines it and the two rules stay disjoint;</li>
       <li>a limit that is a constant below 1e20, a value of the row (the group's tightest), or an aggregate of the
@@ -292,7 +292,7 @@
       <li><strong>Size.</strong> A second window finds <em>k</em>: the largest rank whose total, plus the total of the
         rows fixed to 1, fits <em>B</em> (for a minimum, the smallest rank that reaches it). The empty prefix
         counts.</li>
-      <li><strong>Choose.</strong> Set <code>x = 1</code> on the rows ranked within <em>k</em>.</li>
+      <li><strong>Choose.</strong> Set <code>x = <span class="tk-n">1</span></code> on the rows ranked within <em>k</em>.</li>
     </ol>
     <p><strong>Why it is exact.</strong> Among all sets of <em>k</em> rows, the <em>k</em> lightest have the smallest
       total, so some <em>k</em> rows fit exactly when the <em>k</em> lightest do. The longest prefix that fits is
@@ -304,11 +304,11 @@
       fitting rank, which negative weights need. Against Gurobi at 800,000 rows: 0.094 s against 4.770 s (50.5 times)
       with a budget per supplier, and 0.207 s against 22.978 s (110.8 times) with one budget over all rows, in a fourth
       to a sixth of Gurobi's peak memory.</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Fit as many tickets as possible into 20 story points</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> ticket, points, take
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Fit as many tickets as possible into 20 story points</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> ticket, points, <span class="tk-v">take</span>
 <span class="tk-k">FROM</span> Backlog
-<span class="tk-k">DECIDE</span> take(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(points * take) &lt;= <span class="tk-n">20</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(take)
+<span class="tk-d">DECIDE</span> <span class="tk-v">take</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(points * <span class="tk-v">take</span>) &lt;= <span class="tk-n">20</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">take</span>)
 <span class="tk-k">ORDER</span> <span class="tk-k">BY</span> points;</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>8 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">ticket</th><th scope="col" class="num">points</th><th scope="col" class="num dec">take</th></tr></thead><tbody><tr class="on"><td>DB-2</td><td class="num">1</td><td class="num dec">1</td></tr><tr class="on"><td>UI-4</td><td class="num">2</td><td class="num dec">1</td></tr><tr class="on"><td>API-15</td><td class="num">3</td><td class="num dec">1</td></tr><tr class="on"><td>OPS-3</td><td class="num">3</td><td class="num dec">1</td></tr><tr class="on"><td>API-12</td><td class="num">5</td><td class="num dec">1</td></tr><tr class="on"><td>DB-7</td><td class="num">5</td><td class="num dec">1</td></tr><tr><td>UI-9</td><td class="num">8</td><td class="num dec">0</td></tr><tr><td>OPS-8</td><td class="num">13</td><td class="num dec">0</td></tr></tbody></table></div></div></div>
     <p>The running totals of the sorted points are 1, 3, 6, 9, 14 and 19. The next ticket brings the total to 27, so
       the six smallest tickets are the answer.</p>
@@ -329,21 +329,21 @@
       bound.</p>
     <p><strong>The shape.</strong> A query is A1 when it has:</p>
     <ul>
-      <li>one or more <code>BOOL</code>, <code>INT</code> or <code>REAL</code> decisions per row;</li>
+      <li>one or more <code><span class="tk-t">BOOL</span></code>, <code><span class="tk-t">INT</span></code> or <code><span class="tk-t">REAL</span></code> decisions per row;</li>
       <li>only per-row bounds: a decision compared with a constant, a column or a deterministic expression of the row,
-        with a coefficient, an offset and a <code>when</code> allowed (<code>2*x + 1 &lt;= cap</code>). No aggregate
+        with a coefficient, an offset and a <code><span class="tk-d">when</span></code> allowed (<code><span class="tk-n">2</span>*x + <span class="tk-n">1</span> &lt;= cap</code>). No aggregate
         clause;</li>
-      <li>an objective of linear terms and at most one square <code>k*(w*x + t)^2</code> per decision, with
+      <li>an objective of linear terms and at most one square <code>k*(w*x + t)^<span class="tk-n">2</span></code> per decision, with
         <code>k</code> a nonzero constant, or no objective.</li>
     </ul>
     <p><strong>The algorithm.</strong> A chain of projections, with no sort, window or join:</p>
     <ol class="steps">
       <li><strong>Read.</strong> Each bound clause becomes a lower and an upper end on its row, and the objective
-        becomes <code>a*x^2 + b*x</code> per decision.</li>
+        becomes <code>a*x^<span class="tk-n">2</span> + b*x</code> per decision.</li>
       <li><strong>Box.</strong> The row's box is the <code>GREATEST</code> of the lower ends and the
-        <code>LEAST</code> of the upper ends, within the decision's own box: [0, 1] for <code>BOOL</code>, and [0, ∞)
-        for <code>INT</code> and <code>REAL</code> unless a constant lower bound replaces the 0. An <code>INT</code> or
-        <code>BOOL</code> box is rounded inward.</li>
+        <code>LEAST</code> of the upper ends, within the decision's own box: [0, 1] for <code><span class="tk-t">BOOL</span></code>, and [0, ∞)
+        for <code><span class="tk-t">INT</span></code> and <code><span class="tk-t">REAL</span></code> unless a constant lower bound replaces the 0. An <code><span class="tk-t">INT</span></code> or
+        <code><span class="tk-t">BOOL</span></code> box is rounded inward.</li>
       <li><strong>Answer.</strong> Where the objective, as a minimization, is convex, the turning point
         <code>-b / (2a)</code> clamped into the box; otherwise the better end. For a whole number, the first integer
         whose next step no longer improves.</li>
@@ -358,12 +358,12 @@
     <p><strong>Cost.</strong> Two reads and no held rows. Shipping each of 800,000 offers as close to 5,000 units as its
       stock allows (measured 2026-11-09) takes 1.14 times the CPU of a hand-written plan that also reads the table
       twice, and 0.028 s against Gurobi's 0.353 s, 12.5 times faster, in a sixteenth of its peak memory.</p>
-    <p>Here each order's profit is <code>margin * qty - 0.125 * qty^2</code>, which peaks at 4 times the margin:</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Each order picks its most profitable quantity in its range</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> sku, margin, min_qty, max_qty, qty
+    <p>Here each order's profit is <code>margin * qty - <span class="tk-n">0.125</span> * qty^<span class="tk-n">2</span></code>, which peaks at 4 times the margin:</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Each order picks its most profitable quantity in its range</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> sku, margin, min_qty, max_qty, <span class="tk-v">qty</span>
 <span class="tk-k">FROM</span> Orders
-<span class="tk-k">DECIDE</span> qty(<span class="tk-k">INT</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> qty <span class="tk-k">BETWEEN</span> min_qty <span class="tk-k">AND</span> max_qty
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(margin * qty - <span class="tk-n">0.125</span> * <span class="tk-f">POWER</span>(qty, <span class="tk-n">2</span>));</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>4 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">sku</th><th scope="col" class="num">margin</th><th scope="col" class="num">min_qty</th><th scope="col" class="num">max_qty</th><th scope="col" class="num dec">qty</th></tr></thead><tbody><tr><td>A-100</td><td class="num">4.0</td><td class="num">10</td><td class="num">50</td><td class="num dec">16</td></tr><tr><td>B-200</td><td class="num">-1.5</td><td class="num">5</td><td class="num">20</td><td class="num dec">5</td></tr><tr><td>C-300</td><td class="num">2.5</td><td class="num">0</td><td class="num">30</td><td class="num dec">10</td></tr><tr><td>D-400</td><td class="num">-0.5</td><td class="num">3</td><td class="num">8</td><td class="num dec">3</td></tr></tbody></table></div></div></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">qty</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">qty</span> <span class="tk-k">BETWEEN</span> min_qty <span class="tk-k">AND</span> max_qty
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(margin * <span class="tk-v">qty</span> - <span class="tk-n">0.125</span> * <span class="tk-f">POWER</span>(<span class="tk-v">qty</span>, <span class="tk-n">2</span>));</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>4 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">sku</th><th scope="col" class="num">margin</th><th scope="col" class="num">min_qty</th><th scope="col" class="num">max_qty</th><th scope="col" class="num dec">qty</th></tr></thead><tbody><tr><td>A-100</td><td class="num">4.0</td><td class="num">10</td><td class="num">50</td><td class="num dec">16</td></tr><tr><td>B-200</td><td class="num">-1.5</td><td class="num">5</td><td class="num">20</td><td class="num dec">5</td></tr><tr><td>C-300</td><td class="num">2.5</td><td class="num">0</td><td class="num">30</td><td class="num dec">10</td></tr><tr><td>D-400</td><td class="num">-0.5</td><td class="num">3</td><td class="num">8</td><td class="num dec">3</td></tr></tbody></table></div></div></div>
     <p>A-100 peaks at 16 and C-300 at 10, both inside their ranges. B-200 and D-400 have negative margins, so their
       peaks lie below their ranges and each takes its lower end.</p>
     <div class="src"><strong>In the source</strong><ul>
@@ -379,19 +379,19 @@
 
   <section id="a2">
     <h2><a class="anchor" href="#a2">A2: one shared value closest to every row</a></h2>
-    <p class="lead">A2 answers problems where many rows share one <code>REAL</code> decision, for the whole query or
+    <p class="lead">A2 answers problems where many rows share one <code><span class="tk-t">REAL</span></code> decision, for the whole query or
       per key, and the objective measures its distance to a value on each row.</p>
     <p>The class is <strong>single-facility location in one dimension</strong>: place one point to be as close as
       possible to many points on a line.</p>
     <p><strong>The shape.</strong> A query is A2 when it has:</p>
     <ul>
-      <li>one <code>REAL</code> decision, query-wide (<code>per ():</code>) or keyed (<code>per K:</code>; see
+      <li>one <code><span class="tk-t">REAL</span></code> decision, query-wide (<code><span class="tk-d">per</span> ():</code>) or keyed (<code><span class="tk-d">per</span> K:</code>; see
         <a href="../guide.html#how-many">the Guide</a>);</li>
       <li>bounds that reduce to one interval per class: the largest lower end and the smallest upper end over the
         class's rows;</li>
       <li>one minimized loss of <code>w*c + t</code>, where the slope <code>w</code> is a nonzero constant: squared
-        (<code>SUM(k * POWER(...))</code>, any weight <code>k</code>), absolute (<code>SUM(k * ABS(...))</code>,
-        <code>k</code> a positive constant) or maximum absolute (<code>MAX(k * ABS(...))</code>).</li>
+        (<code><span class="tk-f">SUM</span>(k * <span class="tk-f">POWER</span>(...))</code>, any weight <code>k</code>), absolute (<code><span class="tk-f">SUM</span>(k * <span class="tk-f">ABS</span>(...))</code>,
+        <code>k</code> a positive constant) or maximum absolute (<code><span class="tk-f">MAX</span>(k * <span class="tk-f">ABS</span>(...))</code>).</li>
     </ul>
     <p><strong>The algorithm.</strong> Group then join: one hash aggregate per class computes the loss's statistics,
       and the class's answer, on one row, joins back to its rows on the class key.</p>
@@ -419,11 +419,11 @@
       against Gurobi's 0.077 s. The absolute loss is where the gap opens: the solver path adds a helper decision per row
       for each <code>ABS</code>, and keyed it takes 12.322 s against 0.039 s rewritten, 313 times faster, in a fortieth
       of Gurobi's peak memory.</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">One depot per highway, closest in squared distance</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> highway, store, mile, depot
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">One depot per highway, closest in squared distance</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> highway, store, mile, <span class="tk-v">depot</span>
 <span class="tk-k">FROM</span> Stores
-<span class="tk-k">DECIDE</span> <span class="tk-p">per</span> highway: depot(<span class="tk-k">REAL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> depot &lt;= <span class="tk-n">100</span>
-<span class="tk-k">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(depot - mile, <span class="tk-n">2</span>));</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>7 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">highway</th><th scope="col" class="">store</th><th scope="col" class="num">mile</th><th scope="col" class="num dec">depot</th></tr></thead><tbody><tr><td>I-10</td><td>S1</td><td class="num">3.0</td><td class="num dec">10.0</td></tr><tr><td>I-10</td><td>S2</td><td class="num">8.0</td><td class="num dec">10.0</td></tr><tr><td>I-10</td><td>S3</td><td class="num">9.0</td><td class="num dec">10.0</td></tr><tr><td>I-10</td><td>S4</td><td class="num">20.0</td><td class="num dec">10.0</td></tr><tr><td>I-95</td><td>S5</td><td class="num">2.0</td><td class="num dec">16.0</td></tr><tr><td>I-95</td><td>S6</td><td class="num">6.0</td><td class="num dec">16.0</td></tr><tr><td>I-95</td><td>S7</td><td class="num">40.0</td><td class="num dec">16.0</td></tr></tbody></table></div></div></div>
+<span class="tk-d">DECIDE</span> <span class="tk-d">per</span> highway: <span class="tk-v">depot</span>(<span class="tk-t">REAL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">depot</span> &lt;= <span class="tk-n">100</span>
+<span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(<span class="tk-v">depot</span> - mile, <span class="tk-n">2</span>));</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>7 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">highway</th><th scope="col" class="">store</th><th scope="col" class="num">mile</th><th scope="col" class="num dec">depot</th></tr></thead><tbody><tr><td>I-10</td><td>S1</td><td class="num">3.0</td><td class="num dec">10.0</td></tr><tr><td>I-10</td><td>S2</td><td class="num">8.0</td><td class="num dec">10.0</td></tr><tr><td>I-10</td><td>S3</td><td class="num">9.0</td><td class="num dec">10.0</td></tr><tr><td>I-10</td><td>S4</td><td class="num">20.0</td><td class="num dec">10.0</td></tr><tr><td>I-95</td><td>S5</td><td class="num">2.0</td><td class="num dec">16.0</td></tr><tr><td>I-95</td><td>S6</td><td class="num">6.0</td><td class="num dec">16.0</td></tr><tr><td>I-95</td><td>S7</td><td class="num">40.0</td><td class="num dec">16.0</td></tr></tbody></table></div></div></div>
     <p>Each depot sits at its highway's mean mile: (3 + 8 + 9 + 20) / 4 = 10 on I-10, and (2 + 6 + 40) / 3 = 16 on
       I-95. The store at mile 40 pulls the I-95 depot to 16. With the absolute distance of the
       <a href="../examples/depot-placement.html">depot example</a>, the depot moves to the median, mile 6.</p>
@@ -439,16 +439,16 @@
 
   <section id="r1">
     <h2><a class="anchor" href="#r1">R1: fill a budget by value per unit</a></h2>
-    <p class="lead">R1 answers problems where <code>REAL</code> amounts, each with its own range, share one budget. The
+    <p class="lead">R1 answers problems where <code><span class="tk-t">REAL</span></code> amounts, each with its own range, share one budget. The
       best plan fills the budget in order of value per unit of budget.</p>
     <p>The class is the <strong>continuous (fractional) knapsack</strong>: a knapsack whose items can be taken in
       part.</p>
     <p><strong>The shape.</strong> A query is R1 when it has:</p>
     <ul>
-      <li>one or more <code>REAL</code> decisions per row, with any per-row bounds; a bound of magnitude 1e20 or more is
+      <li>one or more <code><span class="tk-t">REAL</span></code> decisions per row, with any per-row bounds; a bound of magnitude 1e20 or more is
         no bound, as on the solver;</li>
-      <li>one budget, <code>L &lt;= SUM(w*x) &lt;= U</code>, written with <code>&lt;=</code>, <code>&gt;=</code>,
-        <code>=</code> or <code>BETWEEN</code>, per <code>by</code> group or over all rows. The weight <code>w</code> is
+      <li>one budget, <code>L &lt;= <span class="tk-f">SUM</span>(w*x) &lt;= U</code>, written with <code>&lt;=</code>, <code>&gt;=</code>,
+        <code>=</code> or <code><span class="tk-k">BETWEEN</span></code>, per <code><span class="tk-d">by</span></code> group or over all rows. The weight <code>w</code> is
         read per row and may have any sign or be zero. The limits may be constants, columns or aggregates;</li>
       <li>a linear objective, or none.</li>
     </ul>
@@ -477,14 +477,14 @@
     <p><strong>Cost.</strong> One sort of the narrow items, several hash aggregates and joins. With one budget over
       800,000 rows (measured 2026-11-09), the plan takes 0.96 times the CPU of a hand-written plan. With a budget per
       part it takes 1.93 times, because each group's checks must raise before any row is released, even under
-      <code>LIMIT</code>, so the plan aggregates every row of each group and joins the verdict back. Against Gurobi it
+      <code><span class="tk-k">LIMIT</span></code>, so the plan aggregates every row of each group and joins the verdict back. Against Gurobi it
       at 800,000 rows: 0.092 s against 1.132 s with one budget, and 0.120 s against 1.386 s with a budget per
       part, 11.5 to 12.3 times faster.</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Fill a 1,000 kg truck by value per kg</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> good, value_per_kg, available_kg, <span class="tk-f">ROUND</span>(kg, <span class="tk-n">1</span>) <span class="tk-k">AS</span> kg
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Fill a 1,000 kg truck by value per kg</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> good, value_per_kg, available_kg, <span class="tk-f">ROUND</span>(<span class="tk-v">kg</span>, <span class="tk-n">1</span>) <span class="tk-k">AS</span> <span class="tk-v">kg</span>
 <span class="tk-k">FROM</span> Cargo
-<span class="tk-k">DECIDE</span> kg(<span class="tk-k">REAL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> kg &lt;= available_kg <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(kg) &lt;= <span class="tk-n">1000</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(value_per_kg * kg);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>5 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">good</th><th scope="col" class="num">value_per_kg</th><th scope="col" class="num">available_kg</th><th scope="col" class="num dec">kg</th></tr></thead><tbody><tr><td>Saffron</td><td class="num">90.0</td><td class="num">2.0</td><td class="num dec">2.0</td></tr><tr><td>Coffee</td><td class="num">12.0</td><td class="num">300.0</td><td class="num dec">300.0</td></tr><tr><td>Tea</td><td class="num">9.0</td><td class="num">200.0</td><td class="num dec">200.0</td></tr><tr><td>Rice</td><td class="num">1.5</td><td class="num">900.0</td><td class="num dec">498.0</td></tr><tr><td>Sugar</td><td class="num">1.1</td><td class="num">800.0</td><td class="num dec">0.0</td></tr></tbody></table></div></div></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">kg</span>(<span class="tk-t">REAL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">kg</span> &lt;= available_kg <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">kg</span>) &lt;= <span class="tk-n">1000</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value_per_kg * <span class="tk-v">kg</span>);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>5 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">good</th><th scope="col" class="num">value_per_kg</th><th scope="col" class="num">available_kg</th><th scope="col" class="num dec">kg</th></tr></thead><tbody><tr><td>Saffron</td><td class="num">90.0</td><td class="num">2.0</td><td class="num dec">2.0</td></tr><tr><td>Coffee</td><td class="num">12.0</td><td class="num">300.0</td><td class="num dec">300.0</td></tr><tr><td>Tea</td><td class="num">9.0</td><td class="num">200.0</td><td class="num dec">200.0</td></tr><tr><td>Rice</td><td class="num">1.5</td><td class="num">900.0</td><td class="num dec">498.0</td></tr><tr><td>Sugar</td><td class="num">1.1</td><td class="num">800.0</td><td class="num dec">0.0</td></tr></tbody></table></div></div></div>
     <p>Saffron, coffee and tea come first by value per kg and are taken whole, 502 kg. Rice is the item at the price:
       it fills the remaining 498 kg. Sugar, below the price, stays at 0.</p>
     <div class="src"><strong>In the source</strong><ul>
@@ -498,17 +498,17 @@
 
   <section id="r4">
     <h2><a class="anchor" href="#r4">R4: a fair split of one budget</a></h2>
-    <p class="lead">R4 answers <code>MAXIMIZE MIN(c * x)</code> under one budget and a cap per row: raise the smallest
+    <p class="lead">R4 answers <code><span class="tk-d">MAXIMIZE</span> <span class="tk-f">MIN</span>(c * x)</code> under one budget and a cap per row: raise the smallest
       normalized share as high as the budget and the caps allow.</p>
-    <p>The class is <strong>weighted max-min fair allocation</strong>. In <code>MIN(x / need)</code> the coefficient
-      <code>c</code> is <code>1 / need</code>, so the objective is the smallest share of need served.</p>
+    <p>The class is <strong>weighted max-min fair allocation</strong>. In <code><span class="tk-f">MIN</span>(x / need)</code> the coefficient
+      <code>c</code> is <code><span class="tk-n">1</span> / need</code>, so the objective is the smallest share of need served.</p>
     <p><strong>The shape.</strong> A query is R4 when it has:</p>
     <ul>
-      <li>one <code>REAL</code> decision, per row or per key;</li>
-      <li>the objective <code>MAXIMIZE MIN(c * x)</code>: one plain <code>MIN</code> over one term whose coefficient
+      <li>one <code><span class="tk-t">REAL</span></code> decision, per row or per key;</li>
+      <li>the objective <code><span class="tk-d">MAXIMIZE</span> <span class="tk-f">MIN</span>(c * x)</code>: one plain <code>MIN</code> over one term whose coefficient
         is read from the row (see <a href="../guide.html#worst-case">the worst case</a> in the Guide);</li>
-      <li>one budget, <code>SUM(w*x) &lt;= B</code>, the only aggregate clause, with a weight of any sign, per
-        <code>by</code> group or over all rows;</li>
+      <li>one budget, <code><span class="tk-f">SUM</span>(w*x) &lt;= B</code>, the only aggregate clause, with a weight of any sign, per
+        <code><span class="tk-d">by</span></code> group or over all rows;</li>
       <li>a box from 0 to a cap: the lower bound is 0, and every other clause is an upper bound on the row.</li>
     </ul>
     <p><strong>The algorithm.</strong> Every row the <code>MIN</code> reads must reach a common level <em>s</em>, so
@@ -526,11 +526,11 @@
       and answers in 0.026 s. Gurobi takes 2,158 s on the same query: it is fast while a cap sets the level and slow once
       the budget binds, because the max-min objective becomes one helper variable bounded by every row.</p>
 <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Split 100 units so the worst-served program gets the most</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> program, need, max_alloc,
-       <span class="tk-f">ROUND</span>(alloc, <span class="tk-n">2</span>) <span class="tk-k">AS</span> alloc, <span class="tk-f">ROUND</span>(alloc / need, <span class="tk-n">3</span>) <span class="tk-k">AS</span> share
+       <span class="tk-f">ROUND</span>(<span class="tk-v">alloc</span>, <span class="tk-n">2</span>) <span class="tk-k">AS</span> <span class="tk-v">alloc</span>, <span class="tk-f">ROUND</span>(<span class="tk-v">alloc</span> / need, <span class="tk-n">3</span>) <span class="tk-k">AS</span> share
 <span class="tk-k">FROM</span> Programs
-<span class="tk-k">DECIDE</span> alloc(<span class="tk-k">REAL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> alloc &lt;= max_alloc <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(alloc) &lt;= <span class="tk-n">100</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">MIN</span>(alloc / need);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>4 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">program</th><th scope="col" class="num">need</th><th scope="col" class="num">max_alloc</th><th scope="col" class="num dec">alloc</th><th scope="col" class="num dec">share</th></tr></thead><tbody><tr><td>Clinic</td><td class="num">20.0</td><td class="num">40.0</td><td class="num dec">16.67</td><td class="num dec">0.833</td></tr><tr><td>Shelter</td><td class="num">30.0</td><td class="num">25.0</td><td class="num dec">25.0</td><td class="num dec">0.833</td></tr><tr><td>School</td><td class="num">50.0</td><td class="num">60.0</td><td class="num dec">41.67</td><td class="num dec">0.833</td></tr><tr><td>Pantry</td><td class="num">10.0</td><td class="num">30.0</td><td class="num dec">8.33</td><td class="num dec">0.833</td></tr></tbody></table></div></div></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">alloc</span>(<span class="tk-t">REAL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">alloc</span> &lt;= max_alloc <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">alloc</span>) &lt;= <span class="tk-n">100</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">MIN</span>(<span class="tk-v">alloc</span> / need);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>4 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">program</th><th scope="col" class="num">need</th><th scope="col" class="num">max_alloc</th><th scope="col" class="num dec">alloc</th><th scope="col" class="num dec">share</th></tr></thead><tbody><tr><td>Clinic</td><td class="num">20.0</td><td class="num">40.0</td><td class="num dec">16.67</td><td class="num dec">0.833</td></tr><tr><td>Shelter</td><td class="num">30.0</td><td class="num">25.0</td><td class="num dec">25.0</td><td class="num dec">0.833</td></tr><tr><td>School</td><td class="num">50.0</td><td class="num">60.0</td><td class="num dec">41.67</td><td class="num dec">0.833</td></tr><tr><td>Pantry</td><td class="num">10.0</td><td class="num">30.0</td><td class="num dec">8.33</td><td class="num dec">0.833</td></tr></tbody></table></div></div></div>
     <p>The needs add up to 110, so the budget alone would allow a level of 100 / 110 = 0.909. Shelter's cap allows only
       25 / 30 = 0.833, which is smaller, so every program gets 83.3% of its need and 8.33 units stay unspent.</p>
     <div class="src"><strong>In the source</strong><ul>
@@ -542,16 +542,16 @@
 
   <section id="n1">
     <h2><a class="anchor" href="#n1">N1: stay inside one sum of squares</a></h2>
-    <p class="lead">N1 answers problems with one limit <code>SUM(POWER(x, 2)) &lt;= B</code> on <code>REAL</code>
+    <p class="lead">N1 answers problems with one limit <code><span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(x, <span class="tk-n">2</span>)) &lt;= B</code> on <code><span class="tk-t">REAL</span></code>
       decisions: the feasible set is a ball around zero, or an ellipsoid when each row weighs its square.</p>
     <p>The class is <strong>Euclidean-ball projection</strong> (the nearest point of a ball to a target) and the
       <strong>support function</strong> of an ellipsoid (the best point of it for a linear objective).</p>
     <p><strong>The shape.</strong> A query is N1 when it has:</p>
     <ul>
-      <li>one <code>REAL</code> decision per row;</li>
-      <li>exactly one aggregate clause, <code>SUM(c * POWER(s * x, 2)) &lt;= B</code>, with <code>c</code> a positive
-        constant and <code>s</code> a constant or a value of the row. <code>POWER(x, 2)</code>, <code>x * x</code> and
-        <code>norm(x, 2)</code> all read this way;</li>
+      <li>one <code><span class="tk-t">REAL</span></code> decision per row;</li>
+      <li>exactly one aggregate clause, <code><span class="tk-f">SUM</span>(c * <span class="tk-f">POWER</span>(s * x, <span class="tk-n">2</span>)) &lt;= B</code>, with <code>c</code> a positive
+        constant and <code>s</code> a constant or a value of the row. <code><span class="tk-f">POWER</span>(x, <span class="tk-n">2</span>)</code>, <code>x * x</code> and
+        <code><span class="tk-f">norm</span>(x, <span class="tk-n">2</span>)</code> all read this way;</li>
       <li>a box of exactly [0, ∞) or (−∞, ∞). Any other bound declines, even one that would not bind, because the
         answer is then the projection onto a clipped ball, which one scale does not give;</li>
       <li>a linear objective, one convex square per row with its linear terms (a squared distance to a target), or no
@@ -565,18 +565,18 @@
     <p><strong>Why it is exact.</strong> The nearest point of a ball to an outside target lies on the segment from the
       center to the target, so projecting is scaling. For a linear objective, <em>d·x</em> ≤ ‖<em>d</em>‖·‖<em>x</em>‖ ≤
       ‖<em>d</em>‖·√<em>B</em> by the Cauchy–Schwarz inequality, with equality when <em>x</em> points along <em>d</em>
-      and reaches the surface. A weight per row becomes a ball again after substituting <code>z = sqrt(q) * x</code>.
+      and reaches the surface. A weight per row becomes a ball again after substituting <code>z = <span class="tk-f">sqrt</span>(q) * x</code>.
       On [0, ∞), setting a coordinate with a negative target to 0 keeps the point feasible and brings it no farther from
       the target.</p>
     <p><strong>Cost.</strong> One hash aggregate and one join. Over 800,000 rows (measured 2026-11-09), the plan takes
       0.032 s and 40 MiB at its peak against Gurobi's 3.295 s and 727 MiB, 102 times faster; against a hand-written
       plan it takes 1.29 times the CPU. N1 also answers on a machine without a Gurobi license, where the
       solver path refuses a quadratic limit.</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">The point nearest the scores inside a ball of radius 2</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> name, score, <span class="tk-f">ROUND</span>(x, <span class="tk-n">3</span>) <span class="tk-k">AS</span> x
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">The point nearest the scores inside a ball of radius 2</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> name, score, <span class="tk-f">ROUND</span>(<span class="tk-v">x</span>, <span class="tk-n">3</span>) <span class="tk-k">AS</span> <span class="tk-v">x</span>
 <span class="tk-k">FROM</span> Signals
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">REAL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(x, <span class="tk-n">2</span>)) &lt;= <span class="tk-n">4</span>
-<span class="tk-k">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(x - score, <span class="tk-n">2</span>));</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>3 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">name</th><th scope="col" class="num">score</th><th scope="col" class="num dec">x</th></tr></thead><tbody><tr><td>alpha</td><td class="num">3.0</td><td class="num dec">1.2</td></tr><tr><td>beta</td><td class="num">4.0</td><td class="num dec">1.6</td></tr><tr><td>gamma</td><td class="num">0.0</td><td class="num dec">0.0</td></tr></tbody></table></div></div></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">REAL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(<span class="tk-v">x</span>, <span class="tk-n">2</span>)) &lt;= <span class="tk-n">4</span>
+<span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(<span class="tk-v">x</span> - score, <span class="tk-n">2</span>));</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>3 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">name</th><th scope="col" class="num">score</th><th scope="col" class="num dec">x</th></tr></thead><tbody><tr><td>alpha</td><td class="num">3.0</td><td class="num dec">1.2</td></tr><tr><td>beta</td><td class="num">4.0</td><td class="num dec">1.6</td></tr><tr><td>gamma</td><td class="num">0.0</td><td class="num dec">0.0</td></tr></tbody></table></div></div></div>
     <p>The target (3, 4, 0) has length 5, outside the ball of radius 2, so it is scaled by 2 / 5 to (1.2, 1.6, 0).</p>
     <div class="src"><strong>In the source</strong><ul>
       <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/n1_euclidean_ball_rule.cpp"><code>src/optimizer/decide/direct/n1_euclidean_ball_rule.cpp</code></a>: the rule</li>
@@ -588,20 +588,20 @@
 
   <section id="o1">
     <h2><a class="anchor" href="#o1">O1: match two tables by position</a></h2>
-    <p class="lead">O1 answers one-to-one matchings: a <code>BOOL</code> for every pair of a cross product, each row of
+    <p class="lead">O1 answers one-to-one matchings: a <code><span class="tk-t">BOOL</span></code> for every pair of a cross product, each row of
       each side matched exactly once, and a cost that is a distance between positions or a product.</p>
     <p>The class is the <strong>Monge assignment</strong>. A cost is Monge when uncrossing two pairs never raises it;
       for such a cost the matching in sorted order is optimal, with no search.</p>
     <p><strong>The shape.</strong> A query is O1 when it has:</p>
     <ul>
-      <li>a source that is a cross product of two tables; a <code>WHERE</code> on one side is allowed, since filter
+      <li>a source that is a cross product of two tables; a <code><span class="tk-k">WHERE</span></code> on one side is allowed, since filter
         pushdown places it inside that side;</li>
-      <li>one <code>BOOL</code> per pair, and exactly two clauses, <code>per K: SUM(x) by (K) = 1</code>, one per
-        side, with no <code>when</code> (see <a href="../guide.html#per">per</a> in the Guide);</li>
-      <li>one cost: <code>ABS(a - b)</code> or <code>POWER(a - b, 2)</code>, minimized; or <code>a * b</code>,
+      <li>one <code><span class="tk-t">BOOL</span></code> per pair, and exactly two clauses, <code><span class="tk-d">per</span> K: <span class="tk-f">SUM</span>(x) <span class="tk-d">by</span> (K) = <span class="tk-n">1</span></code>, one per
+        side, with no <code><span class="tk-d">when</span></code> (see <a href="../guide.html#per">per</a> in the Guide);</li>
+      <li>one cost: <code><span class="tk-f">ABS</span>(a - b)</code> or <code><span class="tk-f">POWER</span>(a - b, <span class="tk-n">2</span>)</code>, minimized; or <code>a * b</code>,
         maximized or minimized;</li>
-      <li>positions declared <code>NOT NULL</code> on their tables, and a key that determines the position: the whole
-        row (<code>per d</code>) or a key column of its table.</li>
+      <li>positions declared <code><span class="tk-k">NOT</span> <span class="tk-k">NULL</span></code> on their tables, and a key that determines the position: the whole
+        row (<code><span class="tk-d">per</span> d</code>) or a key column of its table.</li>
     </ul>
     <p><strong>The algorithm.</strong></p>
     <ol class="steps">
@@ -609,7 +609,7 @@
       <li><strong>Rank.</strong> Rank each side by position, with a window on that side's own rows, below the cross
         product. This is eager aggregation (Yan and Larson) applied to windows: a step whose keys come from one side
         runs on that side's n rows, not on the pairs.</li>
-      <li><strong>Pair.</strong> Over the cross product, set <code>x = 1</code> where the two ranks are equal (opposite,
+      <li><strong>Pair.</strong> Over the cross product, set <code>x = <span class="tk-n">1</span></code> where the two ranks are equal (opposite,
         for a minimized product), and raise the solver's infeasible error when the two sides, both nonempty, hold different
         numbers of classes.</li>
     </ol>
@@ -617,7 +617,7 @@
       in order costs no more than crossing the pairs, for both the absolute and the squared distance. Any crossed
       matching can be uncrossed one pair at a time without getting worse, which ends at the sorted matching. For a
       product, the rearrangement inequality gives equal ranks for a maximum and opposite ranks for a minimum. The
-      positions must be declared <code>NOT NULL</code>: <code>SUM</code> drops a NULL term, so a NULL position would
+      positions must be declared <code><span class="tk-k">NOT</span> <span class="tk-k">NULL</span></code>: <code>SUM</code> drops a NULL term, so a NULL position would
       make its row free, and ranking would no longer place it. A declared constraint holds for every row; statistics
       would not prove it.</p>
     <p><strong>Cost.</strong> One sort of each side's n rows, while the solver builds one binary per pair, n² in all.
@@ -626,13 +626,13 @@
       times the CPU, for the check of every pair's coefficient and the class ranks the rule needs for duplicate
       rows.</p>
 <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Match four drivers to four pickups along a road</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> driver, pickup, driver_km, pickup_km <span class="tk-k">FROM</span> (
-    <span class="tk-k">SELECT</span> d.driver, p.pickup, d.km <span class="tk-k">AS</span> driver_km, p.km <span class="tk-k">AS</span> pickup_km, x
+    <span class="tk-k">SELECT</span> d.driver, p.pickup, d.km <span class="tk-k">AS</span> driver_km, p.km <span class="tk-k">AS</span> pickup_km, <span class="tk-v">x</span>
     <span class="tk-k">FROM</span> Drivers d <span class="tk-k">CROSS</span> <span class="tk-k">JOIN</span> Pickups p
-    <span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-    <span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">per</span> d: <span class="tk-f">SUM</span>(x) <span class="tk-p">by</span> (d) = <span class="tk-n">1</span>
-          <span class="tk-k">AND</span> <span class="tk-p">per</span> p: <span class="tk-f">SUM</span>(x) <span class="tk-p">by</span> (p) = <span class="tk-n">1</span>
-    <span class="tk-k">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">ABS</span>(d.km - p.km) * x)
-) <span class="tk-k">WHERE</span> x = <span class="tk-n">1</span>
+    <span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+    <span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-d">per</span> d: <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) <span class="tk-d">by</span> (d) = <span class="tk-n">1</span>
+          <span class="tk-k">AND</span> <span class="tk-d">per</span> p: <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) <span class="tk-d">by</span> (p) = <span class="tk-n">1</span>
+    <span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">ABS</span>(d.km - p.km) * <span class="tk-v">x</span>)
+) <span class="tk-k">WHERE</span> <span class="tk-v">x</span> = <span class="tk-n">1</span>
 <span class="tk-k">ORDER</span> <span class="tk-k">BY</span> driver;</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>4 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">driver</th><th scope="col" class="">pickup</th><th scope="col" class="num">driver_km</th><th scope="col" class="num">pickup_km</th></tr></thead><tbody><tr><td>Ana</td><td>P1</td><td class="num">1.0</td><td class="num">2.0</td></tr><tr><td>Ben</td><td>P2</td><td class="num">4.5</td><td class="num">3.0</td></tr><tr><td>Cai</td><td>P3</td><td class="num">7.0</td><td class="num">9.5</td></tr><tr><td>Dee</td><td>P4</td><td class="num">12.0</td><td class="num">11.0</td></tr></tbody></table></div></div></div>
     <p>Both sides sorted by kilometer and paired by rank: 1 + 1.5 + 2.5 + 1 = 6 km in total.</p>
     <div class="src"><strong>In the source</strong><ul>
@@ -658,9 +658,9 @@
         squared error</dd>
       <dt>S4</dt><dd>cardinality-constrained bottleneck knapsack: exactly <em>k</em> rows within one budget, scored by
         the best reward chosen</dd>
-      <dt>R2</dt><dd>discrete separable convex resource allocation: whole units among bounded <code>INT</code>
+      <dt>R2</dt><dd>discrete separable convex resource allocation: whole units among bounded <code><span class="tk-t">INT</span></code>
         decisions</dd>
-      <dt>R3</dt><dd>continuous quadratic knapsack: one resource among <code>REAL</code> decisions with convex quadratic
+      <dt>R3</dt><dd>continuous quadratic knapsack: one resource among <code><span class="tk-t">REAL</span></code> decisions with convex quadratic
         penalties</dd>
       <dt>O2</dt><dd>Monge transportation: divisible amounts between ordered sources and destinations with equal
         totals</dd>
@@ -689,7 +689,7 @@
       <div class="grid">
         <div class="span-4 stack-4">
           <a class="nav__logo" href="../index.html"><img src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
-          <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
+          <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
         <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Get started</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../docs/index.html">Documentation</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="../examples/knapsack.html">Knapsack</a></li><li><a href="../examples/facility-location.html">Depots</a></li><li><a href="../examples/fair-allocation.html">Fair allocation</a></li><li><a href="../examples/diagnose.html">DIAGNOSE</a></li></ul></div>

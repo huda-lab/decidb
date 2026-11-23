@@ -30,8 +30,9 @@
   --pane-shadow: 0 0 0 1px var(--win-edge), 0 1px 2px rgb(17 17 17 / .05), 0 20px 40px -24px rgb(24 34 24 / .4);
   --code-lit: #86300c; --ok-ink: #2f7a45; --err-ink: #8a1c1c; --err-bg: #fbf1f0;
   /* SQL as the guide sets it, each 5.5:1 or more on the code sheet (#f4f4f4) and the panes (#fff) */
-  --code-kw: #1a4be0;      /* keywords and types */
-  --code-scope: #7a2db0;   /* DeciDB's own scope words: per, when, by */
+  --code-kw: #1a4be0;      /* SQL's keywords; types in the same blue, unweighted */
+  --code-scope: #7a2db0;   /* the words DeciDB adds: DECIDE, SUCH THAT, MAXIMIZE, MINIMIZE, DIAGNOSE, per, when, by */
+  --code-var: #b0136e;     /* the query's decisions, wherever they appear */
   --code-fn: #0d6b58;      /* functions and reducers */
   --code-note: #5c5f66;    /* comments, set in italic */
   --lede: #3b3b3b;         /* the line under a page's title: read text, 10:1 */
@@ -45,7 +46,7 @@
   --win-shadow: 0 0 0 1px var(--win-edge), 0 1px 2px rgb(0 0 0 / .3), 0 28px 56px -28px rgb(0 0 0 / .6);
   --pane-shadow: 0 0 0 1px var(--win-edge), 0 1px 2px rgb(0 0 0 / .3), 0 20px 40px -24px rgb(0 0 0 / .55);
   --code-lit: #f2a678; --ok-ink: #7fd49a; --err-ink: #ffb3a8; --err-bg: #3a1f1c;
-  --code-kw: #8fb0ff; --code-scope: #d3a6ff; --code-fn: #6fd3bd;
+  --code-kw: #8fb0ff; --code-scope: #d3a6ff; --code-var: #ff8fcf; --code-fn: #6fd3bd;
   --code-note: #a9adb3; --lede: #d2d2cf;
 }
 /* inside a drawn window its own colours rule, whatever ground the window stands on */
@@ -61,10 +62,14 @@ code, pre, .output table, .facts, .sq { font-variant-numeric: tabular-nums; }
 pre { margin: 0; font: 400 var(--t-code)/1.55 var(--font-mono); tab-size: 2; }
 pre code { font: inherit; }
 
-/* SQL as the guide sets it: keywords blue, DeciDB's scope words violet, functions green, numbers and text brown,
-   comments grey; names stay ink */
+/* code on every page: SQL's keywords blue; the words DeciDB adds violet and heavier; the query's decisions pink;
+   types blue and light; functions green; numbers and text brown; comments grey; labels and tree lines quiet; other
+   names stay ink */
 .tk-k { color: var(--code-kw); font-weight: 500; }
-.tk-p { color: var(--code-scope); font-weight: 500; }
+.tk-t { color: var(--code-kw); }
+.tk-d { color: var(--code-scope); font-weight: 600; }
+.tk-v { color: var(--code-var); font-weight: 500; }
+.tk-g { color: var(--code-note); }
 .tk-f { color: var(--code-fn); }
 .tk-n, .tk-s { color: var(--code-lit); }
 .tk-c { color: var(--code-note); font-style: italic; }

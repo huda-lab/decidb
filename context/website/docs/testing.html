@@ -119,31 +119,31 @@
       <li><strong>Compare.</strong> <code>compare_solutions</code> checks the objective and the decision vector.</li>
     </ol>
     <p>A knapsack over TPC-H's <code>lineitem</code> table shows the shape. The query is ordinary DECIDE SQL:</p>
-<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">test_var_boolean.py: the query</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">test_var_boolean.py: the query</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> l_orderkey, l_linenumber, l_extendedprice, l_quantity, <span class="tk-v">x</span>
 <span class="tk-k">FROM</span> lineitem
 <span class="tk-k">WHERE</span> l_orderkey &lt; <span class="tk-n">100</span>
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * l_quantity) &lt;= <span class="tk-n">100</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * l_extendedprice)</code></pre></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * l_quantity) &lt;= <span class="tk-n">100</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * l_extendedprice)</code></pre></div>
     <p>The oracle states the same problem as numbers, with no DECIDE clause, no DeciDB code, and none of DeciDB's
       choices about how to write a clause:</p>
-<div class="code" data-lang="python"><div class="code__head"><span class="code__title">test_var_boolean.py: the oracle</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>    oracle_solver.create_model(<span class="tk-s">&quot;q01_knapsack&quot;</span>)
-    vnames = [f<span class="tk-s">&quot;x_{i}&quot;</span> <span class="tk-k">for</span> i <span class="tk-k">in</span> range(len(data))]
+<div class="code" data-lang="python"><div class="code__head"><span class="code__title">test_var_boolean.py: the oracle</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>    oracle_solver.<span class="tk-f">create_model</span>(<span class="tk-s">&quot;q01_knapsack&quot;</span>)
+    vnames = [f<span class="tk-s">&quot;x_{i}&quot;</span> <span class="tk-k">for</span> i <span class="tk-k">in</span> <span class="tk-f">range</span>(<span class="tk-f">len</span>(data))]
     <span class="tk-k">for</span> vn <span class="tk-k">in</span> vnames:
-        oracle_solver.add_variable(vn, VarType.BINARY)
+        oracle_solver.<span class="tk-f">add_variable</span>(vn, VarType.BINARY)
 
-    oracle_solver.add_constraint(
-        {vnames[i]: data[i][3] <span class="tk-k">for</span> i <span class="tk-k">in</span> range(len(data))},
+    oracle_solver.<span class="tk-f">add_constraint</span>(
+        {vnames[i]: data[i][<span class="tk-n">3</span>] <span class="tk-k">for</span> i <span class="tk-k">in</span> <span class="tk-f">range</span>(<span class="tk-f">len</span>(data))},
         <span class="tk-s">&quot;&lt;=&quot;</span>,
-        100.0,
+        <span class="tk-n">100.0</span>,
         name=<span class="tk-s">&quot;capacity&quot;</span>,
     )
-    oracle_solver.set_objective(
-        {vnames[i]: data[i][2] <span class="tk-k">for</span> i <span class="tk-k">in</span> range(len(data))},
+    oracle_solver.<span class="tk-f">set_objective</span>(
+        {vnames[i]: data[i][<span class="tk-n">2</span>] <span class="tk-k">for</span> i <span class="tk-k">in</span> <span class="tk-f">range</span>(<span class="tk-f">len</span>(data))},
         ObjSense.MAXIMIZE,
     )
-    build_time = time.perf_counter() - t_build
-    result = oracle_solver.solve()</code></pre></div>
+    build_time = time.<span class="tk-f">perf_counter</span>() - t_build
+    result = oracle_solver.<span class="tk-f">solve</span>()</code></pre></div>
 
     <h3 id="agreement"><a class="anchor" href="#agreement">What agreement means</a></h3>
     <p><code>compare_solutions</code> makes two checks:</p>
@@ -173,8 +173,8 @@
         mirror matches.</li>
       <li><strong>No worked answers.</strong> A hand-computed expected answer checks only the instance its author
         thought through. An encoding bug that happens to give the same number passes. The suite forbids them.</li>
-      <li><strong>Each clause as the query writes it.</strong> The oracle states <code>x + 3 &lt;= 10</code> as a
-        constraint row, <code>x &lt;= 10 - 3</code>, never as the bound <code>x &lt;= 7</code> on the variable itself.
+      <li><strong>Each clause as the query writes it.</strong> The oracle states <code>x + <span class="tk-n">3</span> &lt;= <span class="tk-n">10</span></code> as a
+        constraint row, <code>x &lt;= <span class="tk-n">10</span> - <span class="tk-n">3</span></code>, never as the bound <code>x &lt;= <span class="tk-n">7</span></code> on the variable itself.
         Moving a row into a bound is a simplification DeciDB makes, and the oracle must not repeat it.</li>
     </ul>
     <p>The oracle's solver is Gurobi only. HiGHS is never an oracle fallback, since HiGHS is one of the two backends
@@ -205,18 +205,18 @@
   <!-- ============================================================ SCOPE SUITE -->
   <section id="scope-suite">
     <h2><a class="anchor" href="#scope-suite">The scope suite</a></h2>
-    <p class="lead">The scope language (<code>when</code>, <code>per</code>, <code>by</code>) has its own oracle, which
+    <p class="lead">The scope language (<code><span class="tk-d">when</span></code>, <code><span class="tk-d">per</span></code>, <code><span class="tk-d">by</span></code>) has its own oracle, which
       reads no SQL at all. It builds the model the language defines from a plain description of the clauses.</p>
     <p>A scope test describes its query to <code>ScopedModel</code> as Python data: the result rows, the decisions with
       their keys, and each clause with its scope. The oracle then follows the language's definition step by step. It
-      keeps the rows a <code>when</code> keeps, splits them into the classes of the <code>per</code> key, generates the
-      clause once per class, and evaluates each reducer over its <code>by</code> group. It solves the result with Gurobi
+      keeps the rows a <code><span class="tk-d">when</span></code> keeps, splits them into the classes of the <code><span class="tk-d">per</span></code> key, generates the
+      clause once per class, and evaluates each reducer over its <code><span class="tk-d">by</span></code> group. It solves the result with Gurobi
       through the same interface as the main oracle.</p>
     <p>The SQL string and the oracle's statement sit side by side. In the combination grid, each body is a pair of
       functions: one writes the SQL, the other states the same clause to the oracle.</p>
 <div class="code" data-lang="python"><div class="code__head"><span class="code__title">test_scope_combinations.py: one clause, two statements</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>    <span class="tk-s">&quot;one-reducer&quot;</span>: (
         lambda agg, inner: f<span class="tk-s">&quot;{agg}({inner}x) by (t.g) &lt;= t.cap&quot;</span>,
-        lambda agg, inner: ((_reduce(agg, inner, (<span class="tk-s">&quot;g&quot;</span>,)),), <span class="tk-s">&quot;&lt;=&quot;</span>, (CAP,)),
+        lambda agg, inner: ((<span class="tk-f">_reduce</span>(agg, inner, (<span class="tk-s">&quot;g&quot;</span>,)),), <span class="tk-s">&quot;&lt;=&quot;</span>, (CAP,)),
     ),</code></pre></div>
     <p><code>judge_scoped</code> then checks DeciDB's answer against the same clauses: every row of a decision's class
       shows one value, a whole-numbered decision is whole and within its bounds, every generated clause holds, and the
@@ -230,16 +230,16 @@
 
     <h3 id="grid"><a class="anchor" href="#grid">The combination grid</a></h3>
     <p><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_scope_combinations.py"><code>test_scope_combinations.py</code></a> crosses every part of the scope language with every other. A decision is
-      per row or keyed. The scope in front of the clause is one of eight spellings: no <code>per</code>,
-      <code>per row</code>, <code>per ()</code> or a key, each with or without a <code>when</code>. The clause body is a per-row bound alone, one reducer, a decision beside a reducer, or two reducers
-      with different <code>by</code> keys. The reducer is <code>SUM</code>, <code>AVG</code>, <code>MIN</code> or
+      per row or keyed. The scope in front of the clause is one of eight spellings: no <code><span class="tk-d">per</span></code>,
+      <code><span class="tk-d">per</span> row</code>, <code><span class="tk-d">per</span> ()</code> or a key, each with or without a <code><span class="tk-d">when</span></code>. The clause body is a per-row bound alone, one reducer, a decision beside a reducer, or two reducers
+      with different <code><span class="tk-d">by</span></code> keys. The reducer is <code>SUM</code>, <code>AVG</code>, <code>MIN</code> or
       <code>MAX</code>, with one of four scopes of its own. That makes 2 × 8 × (1 + 3 × 4 × 4) = 784 cells.</p>
     <p>Each cell has two allowed outcomes: the oracle's optimum, or the error the language defines for that data, with
       the same phrase in its message. Never a message that the shape is not supported, never a wrong answer, never an
       internal error. The grid exists to find bugs that only a combination shows. It is kept whole under one rule: no
       two cells reach the same set of branches in the DECIDE code.</p>
     <p>The other scope suites each cover one part of the language: declarations (<a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_scope_declare.py"><code>test_scope_declare.py</code></a>),
-      clause generation, reducers with a <code>by</code> and with their own scope, the objective, the rule that a key
+      clause generation, reducers with a <code><span class="tk-d">by</span></code> and with their own scope, the objective, the rule that a key
       must determine what its clause reads (<a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_scope_determination.py"><code>test_scope_determination.py</code></a>), the value rewrite, bare clauses,
       the language specification's eight worked examples as written and in fully explicit form, the EXPLAIN and DIAGNOSE
       text, and every removed spelling's message (<a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_scope_removed_syntax.py"><code>test_scope_removed_syntax.py</code></a>).</p>
@@ -261,7 +261,7 @@
     <div class="table-wrap"><table>
       <thead><tr><th scope="col">Suite</th><th scope="col">Where</th><th scope="col">How it judges</th></tr></thead>
       <tbody>
-        <tr><td>Features: variable types, constraint operators, <code>when</code>, <code>per</code>, MIN and MAX, AVG,
+        <tr><td>Features: variable types, constraint operators, <code><span class="tk-d">when</span></code>, <code><span class="tk-d">per</span></code>, MIN and MAX, AVG,
           ABS, bilinear and quadratic terms, subqueries, joins, edge cases</td>
           <td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/decide/tests"><code>test/decide/tests/test_*.py</code></a>, one file or more per area</td><td>The solver oracle</td></tr>
         <tr><td>The scope language</td><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/decide/tests"><code>test_scope_*.py</code></a></td><td>The scope oracle, brute force, model
@@ -278,7 +278,7 @@
           model (<a href="#models">below</a>)</td></tr>
         <tr><td>Internal pieces: the canonical verifier, plan serialization, the DIAGNOSE router, the backend registry,
           the IR and the rule driver</td><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/common"><code>test/common/test_decidb_*.cpp</code></a>, run as
-          <code>unittest "[decidb]"</code></td><td>C++ assertions</td></tr>
+          <code>unittest &quot;[decidb]&quot;</code></td><td>C++ assertions</td></tr>
         <tr><td>Every spelling parses and binds; parse errors are exact</td><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/decidb"><code>test/decidb/*.test</code></a></td>
           <td>SQL logic tests</td></tr>
         <tr><td>Standard SQL is unchanged, and the edits to DuckDB hold</td><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/sql"><code>test/sql/</code></a>,
@@ -288,7 +288,7 @@
     <p>The DIAGNOSE suites need their own judge, because a diagnosis can go wrong while its numbers stay right: the
       solve still fails and a diagnosis still appears, but it blames text the user never wrote. Two invariants are
       checked mechanically. Every identifier and number in a reported edit comes from the user's query, not from an
-      internal constant such as a Big-M. And an infeasible query under <code>DIAGNOSE</code> comes back with a repair
+      internal constant such as a Big-M. And an infeasible query under <code><span class="tk-d">DIAGNOSE</span></code> comes back with a repair
       that, applied to the query, makes it solve, or with a statement that it could not be analyzed; a sweep across
       scales and clause shapes checks this.</p>
 
@@ -304,7 +304,7 @@
       them lowered to linear rows. The Gurobi baseline holds 112 models and the HiGHS baseline 109; the other three
       queries are refused on HiGHS, and that refusal is recorded too.</p>
     <p><code>make decide-test</code> runs <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/golden/check.sh"><code>check.sh</code></a> before any Python test and fails on any difference. When
-      a difference is intended, <code>capture.sh --solver gurobi</code> and <code>--solver highs</code> regenerate the
+      a difference is intended, <code>capture.sh <span class="tk-c">--solver gurobi</span></code> and <code><span class="tk-c">--solver highs</span></code> regenerate the
       baselines, and they are committed with the change that caused them. A missing baseline fails; it does not
       skip.</p>
 
@@ -319,8 +319,8 @@
         error table where both paths must fail.</li>
       <li><strong>The conformance suite</strong> (<a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_rule_conformance.py"><code>test_direct_rule_conformance.py</code></a>). It checks what every
         rule owes the user whatever its algorithm: the result's columns and rows, prepared statements, serialization,
-        <code>EXPLAIN</code>, the error under <code>require</code>, the solver path under <code>off</code>, a forced
-        backend and <code>DIAGNOSE</code>. A rule joins it by adding one fixture. Each fixture also lists near misses,
+        <code><span class="tk-k">EXPLAIN</span></code>, the error under <code>require</code>, the solver path under <code>off</code>, a forced
+        backend and <code><span class="tk-d">DIAGNOSE</span></code>. A rule joins it by adding one fixture. Each fixture also lists near misses,
         queries one step outside the rule's shape, which must decline and still answer as the solver does.</li>
       <li><strong>C++ cases</strong> for each branch where the rule's condition declines
         (<a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/common/test_decidb_direct_decline.cpp"><code>test_decidb_direct_decline.cpp</code></a>), and a test that runs every rule against every other rule's
@@ -370,9 +370,9 @@
           build has</td></tr>
         <tr><td><code>DECIDB_TEST_DIRECT_SOLVE=off make decide-test</code></td><td>Every query on the solver's path,
           with query rewriting off</td></tr>
-        <tr><td><code>DECIDB_VERIFY_SERIALIZER=1 make decide-test</code></td><td>Every plan survives DuckDB's
+        <tr><td><code>DECIDB_VERIFY_SERIALIZER=<span class="tk-n">1</span> make decide-test</code></td><td>Every plan survives DuckDB's
           serialization round trip</td></tr>
-        <tr><td><code>build/release/test/unittest "[decidb]"</code></td><td>The C++ tests</td></tr>
+        <tr><td><code>build/release/test/unittest &quot;[decidb]&quot;</code></td><td>The C++ tests</td></tr>
         <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/run_direct_matrix.sh"><code>test/decide/run_direct_matrix.sh</code></a></td><td>The five checks from <code>make decide-test</code>
           down, with one summary line each</td></tr>
       </tbody>
@@ -410,7 +410,7 @@
       </tbody>
     </table></div>
     <p>Open gaps are ranked by risk. The highest is an optimizer rewrite meeting another feature, such as a Big-M under
-      a <code>per</code> scope or a quadratic matrix with <code>per</code>, since two features that each pass alone can
+      a <code><span class="tk-d">per</span></code> scope or a quadratic matrix with <code><span class="tk-d">per</span></code>, since two features that each pass alone can
       still fail together.</p>
 
     <h3 id="branch-coverage"><a class="anchor" href="#branch-coverage">Branch coverage</a></h3>
@@ -420,7 +420,7 @@
       profile.</p>
     <p>The unit it counts is the arm: one outcome of one branch condition, the true side or the false side of an
       <code>if</code>, a <code>&amp;&amp;</code> or a loop test. <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/coverage_report.py"><code>coverage_report.py</code></a> reports, for each
-      test, the arms it reaches and the arms only it reaches. With <code>--unreached</code> it also lists every arm no
+      test, the arms it reaches and the arms only it reaches. With <code><span class="tk-c">--unreached</span></code> it also lists every arm no
       test reaches. <code>coverage_report.py compare OLD NEW</code> lists the arms an older run reached and a newer run
       does not, matching arms by their condition text so that code that moved still matches.</p>
     <p>The measurements back four rules for tests:</p>
@@ -461,7 +461,7 @@
       <div class="grid">
         <div class="span-4 stack-4">
           <a class="nav__logo" href="../index.html"><img src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
-          <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
+          <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
         <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Get started</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../docs/index.html">Documentation</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="../examples/knapsack.html">Knapsack</a></li><li><a href="../examples/facility-location.html">Depots</a></li><li><a href="../examples/fair-allocation.html">Fair allocation</a></li><li><a href="../examples/diagnose.html">DIAGNOSE</a></li></ul></div>

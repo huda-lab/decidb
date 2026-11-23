@@ -5,11 +5,11 @@
 <script>(function(){var r=document.documentElement,t;try{t=localStorage.getItem('decidb-theme')}catch(e){}if(!r.dataset.theme)r.dataset.theme=t==='dark'?'dark':'light'})()</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <script>document.documentElement.classList.add('m-enter');setTimeout(()=>document.documentElement.classList.add('m-enter-done'),700)</script>
-<title>DeciDB: optimization queries in DuckDB</title>
-<meta name="description" content="DeciDB adds a DECIDE clause to DuckDB: state decisions, constraints and a goal in SQL and get the best values back as rows. Query rewriting answers nine problem classes without a solver; the rest go to Gurobi or HiGHS.">
+<title>DeciDB: optimization queries in SQL</title>
+<meta name="description" content="DeciDB adds a DECIDE clause to SQL: state decisions, constraints and a goal in SQL and get the best values back as rows. Query rewriting answers nine problem classes without a solver; the rest go to Gurobi or HiGHS.">
 <meta property="og:type" content="website">
-<meta property="og:title" content="DeciDB: optimization queries in DuckDB">
-<meta property="og:description" content="DeciDB adds a DECIDE clause to DuckDB: state decisions, constraints and a goal in SQL and get the best values back as rows. Query rewriting answers nine problem classes without a solver; the rest go to Gurobi or HiGHS.">
+<meta property="og:title" content="DeciDB: optimization queries in SQL">
+<meta property="og:description" content="DeciDB adds a DECIDE clause to SQL: state decisions, constraints and a goal in SQL and get the best values back as rows. Query rewriting answers nine problem classes without a solver; the rest go to Gurobi or HiGHS.">
 <meta property="og:image" content="assets/images/share.jpg">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="assets/images/mark.svg" type="image/svg+xml">
@@ -58,7 +58,7 @@
 <link rel="stylesheet" href="assets/diagrams/diagram.css">
 </head>
 <body class="home">
-<!-- type: software (a developer tool: DuckDB with a DECIDE clause)
+<!-- type: software (a developer tool: SQL with a DECIDE clause)
      deal: hero centred, palette white-link-blue (a white sheet and a biro blue, the blue of DeciDB's own
      logo, for a tool whose answers are tables of numbers), type geist, radius sharp, nav mega (nav-cards
      dealt first; it needs two to four products and DeciDB is one), close word, footer statement, rhythm
@@ -90,8 +90,8 @@
   <section class="hero hero--centred" data-enter aria-labelledby="hero-h">
     <div class="wrap"><div class="hero-text">
       <div class="hero__c">
-        <h1 id="hero-h">Optimization in DuckDB</h1>
-        <p class="hero__lead">Add DECIDE to a SQL query and get the best values back as rows.</p>
+        <h1 id="hero-h">Optimization in SQL</h1>
+        <p class="hero__lead">Add DECIDE to a query and get the best values back as rows.</p>
         <div class="btn-row"><a class="btn btn--primary" href="getting-started.html#install">Install DeciDB</a><a class="btn btn--secondary" href="guide.html">Read the guide</a></div>
       </div>
       <div class="hero__window" data-fx="grain-gradient" data-fx-seed="7" data-ui-pause-host>
@@ -100,11 +100,11 @@
           <div class="hw__body">
             <div class="hw__list"><div class="hw__q">Examples</div><div class="hw__row is-on"><b>Knapsack</b><span>ILP</span></div><div class="hw__row"><b>Production plan</b><span>ILP</span></div><div class="hw__row"><b>Depots</b><span>MILP</span></div><div class="hw__row"><b>Fair allocation</b><span>rewritten</span></div><div class="hw__row"><b>Matching</b><span>rewritten</span></div></div>
             <div class="hw__main">
-              <pre class="hw__sql"><code><span class="tk-k">SELECT</span> item, value, weight, x <span class="tk-k">AS</span> take
+              <pre class="hw__sql"><code><span class="tk-k">SELECT</span> item, value, weight, <span class="tk-v">x</span> <span class="tk-k">AS</span> take
 <span class="tk-k">FROM</span> Items
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">50</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre>
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">50</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre>
               <div class="hw__out" data-ly-steps="520"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">item</span><span class="r">value</span><span class="r">weight</span><span class="r">take</span></div><div class="sq__tr is-on" data-step><span class="">Laptop</span><span class="r">100</span><span class="r">20</span><span class="r">1</span></div><div class="sq__tr is-on" data-step><span class="">Camera</span><span class="r">60</span><span class="r">10</span><span class="r">1</span></div><div class="sq__tr" data-step><span class="">Drone</span><span class="r">120</span><span class="r">30</span><span class="r">0</span></div><div class="sq__tr" data-step><span class="">Tripod</span><span class="r">40</span><span class="r">15</span><span class="r">0</span></div><div class="sq__tr is-on" data-step><span class="">Lens</span><span class="r">75</span><span class="r">12</span><span class="r">1</span></div></div><div class="hw__status" data-step><i aria-hidden="true"></i>3 of 5 items · value 235 · 42 of 50 kg</div></div>
             </div>
           </div>
@@ -120,20 +120,20 @@
             <h3>Without DeciDB</h3>
             <p>Read the rows out, rebuild the problem in a solver library, solve it, and load the answer back in.</p>
             <div class="panel" data-fx="painterly-landscape" data-fx-seed="31" data-fx-palette='{"bg":"#c6d3df","surface":"#d6e0e9","ink":"#25303a","accent":"#7f9fbd"}' data-fx-params='{"drift":0,"speed":0}' style="background-color: #c6d3df">
-              <div class="stage" role="img" aria-label="Thirteen lines of Python: read the items from DuckDB, build a PuLP model with one binary variable per item, solve it, and insert the answer into a new table."><div class="at-rise fit" style="--fit-max:520px;--ax:max(24px, 50% - 260px);--ay:32px;--ay-sm:20px">
+              <div class="stage" role="img" aria-label="Thirteen lines of Python: read the items from the database, build a PuLP model with one binary variable per item, solve it, and insert the answer into a new table."><div class="at-rise fit" style="--fit-max:520px;--ax:max(24px, 50% - 260px);--ay:32px;--ay-sm:20px">
                 <div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">import</span> duckdb, pulp
 
-rows = duckdb.sql(<span class="tk-s">&quot;SELECT * FROM Items&quot;</span>).fetchall()
+rows = duckdb.<span class="tk-f">sql</span>(<span class="tk-s">&quot;SELECT * FROM Items&quot;</span>).<span class="tk-f">fetchall</span>()
 
-bag = pulp.LpProblem(<span class="tk-s">&quot;bag&quot;</span>, pulp.LpMaximize)
-take = {i: pulp.LpVariable(i, cat=<span class="tk-s">&quot;Binary&quot;</span>) <span class="tk-k">for</span> i, _, _ <span class="tk-k">in</span> rows}
-bag += pulp.lpSum(v * take[i] <span class="tk-k">for</span> i, v, _ <span class="tk-k">in</span> rows)
-bag += pulp.lpSum(w * take[i] <span class="tk-k">for</span> i, _, w <span class="tk-k">in</span> rows) &lt;= 50
-bag.solve()
+bag = pulp.<span class="tk-f">LpProblem</span>(<span class="tk-s">&quot;bag&quot;</span>, pulp.LpMaximize)
+take = {i: pulp.<span class="tk-f">LpVariable</span>(i, cat=<span class="tk-s">&quot;Binary&quot;</span>) <span class="tk-k">for</span> i, _, _ <span class="tk-k">in</span> rows}
+bag += pulp.<span class="tk-f">lpSum</span>(v * take[i] <span class="tk-k">for</span> i, v, _ <span class="tk-k">in</span> rows)
+bag += pulp.<span class="tk-f">lpSum</span>(w * take[i] <span class="tk-k">for</span> i, _, w <span class="tk-k">in</span> rows) &lt;= <span class="tk-n">50</span>
+bag.<span class="tk-f">solve</span>()
 
-answer = [(i, round(take[i].value())) <span class="tk-k">for</span> i, _, _ <span class="tk-k">in</span> rows]
-duckdb.sql(<span class="tk-s">&quot;CREATE TABLE Answer (item VARCHAR, take INT)&quot;</span>)
-duckdb.executemany(<span class="tk-s">&quot;INSERT INTO Answer VALUES (?, ?)&quot;</span>, answer)</code></pre></div>
+answer = [(i, <span class="tk-f">round</span>(take[i].<span class="tk-f">value</span>())) <span class="tk-k">for</span> i, _, _ <span class="tk-k">in</span> rows]
+duckdb.<span class="tk-f">sql</span>(<span class="tk-s">&quot;CREATE TABLE Answer (item VARCHAR, take INT)&quot;</span>)
+duckdb.<span class="tk-f">executemany</span>(<span class="tk-s">&quot;INSERT INTO Answer VALUES (?, ?)&quot;</span>, answer)</code></pre></div>
               </div></div>
             </div>
           </article>
@@ -144,11 +144,11 @@ duckdb.executemany(<span class="tk-s">&quot;INSERT INTO Answer VALUES (?, ?)&quo
             <p>One query over the table. The answer comes back as rows, ready to join with the rest of your data.</p>
             <div class="panel" data-fx="painterly-landscape" data-fx-seed="32" data-fx-palette='{"bg":"#cdd6c6","surface":"#dce3d6","ink":"#262d24","accent":"#6c8e63"}' data-fx-params='{"drift":0,"speed":0}' style="background-color: #cdd6c6">
               <div class="stage" role="img" aria-label="One DECIDE query over the same table; it returns every item with take set to 1 for the Laptop, Camera, Lens."><div class="at-rise fit" style="--fit-max:520px;--ax:max(24px, 50% - 260px);--ay:32px;--ay-sm:20px">
-                <div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">SELECT</span> item, value, weight, x <span class="tk-k">AS</span> take
+                <div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">SELECT</span> item, value, weight, <span class="tk-v">x</span> <span class="tk-k">AS</span> take
 <span class="tk-k">FROM</span> Items
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">50</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">item</span><span class="r">value</span><span class="r">weight</span><span class="r">take</span></div><div class="sq__tr is-on"><span class="">Laptop</span><span class="r">100</span><span class="r">20</span><span class="r">1</span></div><div class="sq__tr is-on"><span class="">Camera</span><span class="r">60</span><span class="r">10</span><span class="r">1</span></div><div class="sq__tr"><span class="">Drone</span><span class="r">120</span><span class="r">30</span><span class="r">0</span></div><div class="sq__tr"><span class="">Tripod</span><span class="r">40</span><span class="r">15</span><span class="r">0</span></div><div class="sq__tr is-on"><span class="">Lens</span><span class="r">75</span><span class="r">12</span><span class="r">1</span></div></div></div></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">50</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">item</span><span class="r">value</span><span class="r">weight</span><span class="r">take</span></div><div class="sq__tr is-on"><span class="">Laptop</span><span class="r">100</span><span class="r">20</span><span class="r">1</span></div><div class="sq__tr is-on"><span class="">Camera</span><span class="r">60</span><span class="r">10</span><span class="r">1</span></div><div class="sq__tr"><span class="">Drone</span><span class="r">120</span><span class="r">30</span><span class="r">0</span></div><div class="sq__tr"><span class="">Tripod</span><span class="r">40</span><span class="r">15</span><span class="r">0</span></div><div class="sq__tr is-on"><span class="">Lens</span><span class="r">75</span><span class="r">12</span><span class="r">1</span></div></div></div></div>
               </div></div>
             </div>
           </article>
@@ -159,9 +159,9 @@ duckdb.executemany(<span class="tk-s">&quot;INSERT INTO Answer VALUES (?, ?)&quo
     <div class="wrap">
       <div data-moment="liquid-type" class="section-head statement">
         <h2 id="statement-h" class="mo-lt__type">The query is the model</h2>
-        <p>Three clauses added to a SELECT. The rows stay in DuckDB from the scan to the answer.</p>
+        <p>Three clauses added to a SELECT. The rows never leave the database, from the scan to the answer.</p>
       </div>
-      <div class="grid parts"><div class="span-4 part"><code><span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)</code><p>The decisions: what DeciDB chooses, one per row, per key or per query.</p></div><div class="span-4 part"><code><span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> ...</code><p>The constraints: the rules every answer follows, on each row or on totals.</p></div><div class="span-4 part"><code><span class="tk-k">MAXIMIZE</span> ...</code><p>The objective: what makes an answer best. Leave it out to ask for any answer that fits.</p></div></div>
+      <div class="grid parts"><div class="span-4 part"><code><span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)</code><p>The decisions: what DeciDB chooses, one per row, per key or per query.</p></div><div class="span-4 part"><code><span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> ...</code><p>The constraints: the rules every answer follows, on each row or on totals.</p></div><div class="span-4 part"><code><span class="tk-d">MAXIMIZE</span> ...</code><p>The objective: what makes an answer best. Leave it out to ask for any answer that fits.</p></div></div>
       <p class="group__end"><a class="link" href="guide.html">Read the guide, clause by clause<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a></p>
     </div>
   </section>
@@ -170,19 +170,19 @@ duckdb.executemany(<span class="tk-s">&quot;INSERT INTO Answer VALUES (?, ?)&quo
       <div class="section-head">
         <h2 id="problems-h">Problems DeciDB solves. <span class="muted">Choosing and allocating over rows.</span></h2>
       </div>
-      <div class="grid probs fill"><a class="prob span-3" href="examples/knapsack.html"><h3>Budget constraints</h3><p>Pick rows under a weight or cost limit.</p><div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">50</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value)</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">item</span><span class="r">take</span></div><div class="sq__tr is-on"><span class="">Laptop</span><span class="r">1</span></div><div class="sq__tr is-on"><span class="">Camera</span><span class="r">1</span></div><div class="sq__tr"><span class="">Drone</span><span class="r">0</span></div><div class="sq__tr"><span class="">Tripod</span><span class="r">0</span></div><div class="sq__tr is-on"><span class="">Lens</span><span class="r">1</span></div></div></div></div></a><a class="prob span-3" href="examples/production.html"><h3>Production plans</h3><p>How much each plant makes.</p><div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">DECIDE</span> units(<span class="tk-k">INT</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> units &lt;= capacity
-  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(units) &gt;= <span class="tk-n">500</span>
-<span class="tk-k">MINIMIZE</span> <span class="tk-f">SUM</span>(units * unit_cost)</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">plant</span><span class="r">units</span></div><div class="sq__tr"><span class="">Austin</span><span class="r">0</span></div><div class="sq__tr is-on"><span class="">Boston</span><span class="r">200</span></div><div class="sq__tr is-on"><span class="">Chicago</span><span class="r">150</span></div><div class="sq__tr is-on"><span class="">Denver</span><span class="r">150</span></div></div></div></div></a><a class="prob span-3" href="examples/assignment.html"><h3>Assignment decisions</h3><p>One person for every task.</p><div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">DECIDE</span> assign(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">per</span> task:
-  <span class="tk-f">SUM</span>(assign) <span class="tk-p">by</span> (task) = <span class="tk-n">1</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(assign * score)</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">task</span><span class="">worker</span></div><div class="sq__tr"><span class="">Backend</span><span class="">Ana</span></div><div class="sq__tr"><span class="">Data</span><span class="">Cleo</span></div><div class="sq__tr"><span class="">Frontend</span><span class="">Ben</span></div></div></div></div></a><a class="prob span-3" href="examples/facility-location.html"><h3>Depot decisions</h3><p>Which depots open, and what ships.</p><div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">DECIDE</span> <span class="tk-p">per</span> D: open(<span class="tk-k">BOOL</span>), ...
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-p">per</span> D: <span class="tk-f">SUM</span>(ship)
-  <span class="tk-p">by</span> (D) &lt;= D.capacity * open
-<span class="tk-k">MINIMIZE</span> ... +
-  <span class="tk-f">SUM</span>(D: D.opening_cost * open)</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">depotID</span><span class="r">open</span></div><div class="sq__tr"><span class="">D1</span><span class="r">0</span></div><div class="sq__tr is-on"><span class="">D2</span><span class="r">1</span></div><div class="sq__tr is-on"><span class="">D3</span><span class="r">1</span></div></div></div></div></a></div>
+      <div class="grid probs fill"><a class="prob span-3" href="examples/knapsack.html"><h3>Budget constraints</h3><p>Pick rows under a weight or cost limit.</p><div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">50</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value)</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">item</span><span class="r">take</span></div><div class="sq__tr is-on"><span class="">Laptop</span><span class="r">1</span></div><div class="sq__tr is-on"><span class="">Camera</span><span class="r">1</span></div><div class="sq__tr"><span class="">Drone</span><span class="r">0</span></div><div class="sq__tr"><span class="">Tripod</span><span class="r">0</span></div><div class="sq__tr is-on"><span class="">Lens</span><span class="r">1</span></div></div></div></div></a><a class="prob span-3" href="examples/production.html"><h3>Production plans</h3><p>How much each plant makes.</p><div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-d">DECIDE</span> <span class="tk-v">units</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">units</span> &lt;= capacity
+  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">units</span>) &gt;= <span class="tk-n">500</span>
+<span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">units</span> * unit_cost)</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">plant</span><span class="r">units</span></div><div class="sq__tr"><span class="">Austin</span><span class="r">0</span></div><div class="sq__tr is-on"><span class="">Boston</span><span class="r">200</span></div><div class="sq__tr is-on"><span class="">Chicago</span><span class="r">150</span></div><div class="sq__tr is-on"><span class="">Denver</span><span class="r">150</span></div></div></div></div></a><a class="prob span-3" href="examples/assignment.html"><h3>Assignment decisions</h3><p>One person for every task.</p><div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-d">DECIDE</span> <span class="tk-v">assign</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-d">per</span> task:
+  <span class="tk-f">SUM</span>(<span class="tk-v">assign</span>) <span class="tk-d">by</span> (task) = <span class="tk-n">1</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">assign</span> * score)</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">task</span><span class="">worker</span></div><div class="sq__tr"><span class="">Backend</span><span class="">Ana</span></div><div class="sq__tr"><span class="">Data</span><span class="">Cleo</span></div><div class="sq__tr"><span class="">Frontend</span><span class="">Ben</span></div></div></div></div></a><a class="prob span-3" href="examples/facility-location.html"><h3>Depot decisions</h3><p>Which depots open, and what ships.</p><div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-d">DECIDE</span> <span class="tk-d">per</span> D: <span class="tk-v">open</span>(<span class="tk-t">BOOL</span>), ...
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-d">per</span> D: <span class="tk-f">SUM</span>(ship)
+  <span class="tk-d">by</span> (D) &lt;= D.capacity * <span class="tk-v">open</span>
+<span class="tk-d">MINIMIZE</span> ... +
+  <span class="tk-f">SUM</span>(D: D.opening_cost * <span class="tk-v">open</span>)</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">depotID</span><span class="r">open</span></div><div class="sq__tr"><span class="">D1</span><span class="r">0</span></div><div class="sq__tr is-on"><span class="">D2</span><span class="r">1</span></div><div class="sq__tr is-on"><span class="">D3</span><span class="r">1</span></div></div></div></div></a></div>
       <p class="group__end"><a class="link" href="examples.html">See all 20 examples<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a></p>
     </div>
   </section>
@@ -192,15 +192,15 @@ duckdb.executemany(<span class="tk-s">&quot;INSERT INTO Answer VALUES (?, ?)&quo
         <div class="section-head"><h2 id="novel-h">Novel features. <span class="muted">Two things a solver library does not do.</span></h2></div>
           <article class="card card--row card--open span-6 m-nolift">
             <h3>Query rewriting</h3>
-            <p>A query with an exact answer, such as a fair split of a budget, runs as sorting and aggregation in DuckDB, with no solver: 0.026 s at 800,000 decisions, where Gurobi took 2,158 s.</p>
+            <p>A query with an exact answer, such as a fair split of a budget, runs as sorting and aggregation inside DeciDB, with no solver: 0.026 s at 800,000 decisions, where Gurobi took 2,158 s.</p>
             <div class="panel" data-fx="painterly-landscape" data-fx-seed="41" data-fx-palette='{"bg":"#a3b0b6","accent":"#c49a6c"}' data-fx-params='{"blur":1,"brush":0.35,"slope":0,"hillY":0.3,"horizon":0.62,"drift":0,"speed":0}' style="background-color: #a3b0b6">
               <div class="stage" role="img" aria-label="A fair-allocation query, and the line EXPLAIN prints for it: Direct solve rule R4_MAX_MIN_FAIRNESS."><div class="at-rise fit" style="--fit-max:420px;--ax:max(24px, 50% - 210px);--ay:32px;--ay-sm:20px">
-                <div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">SELECT</span> program, alloc
+                <div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">SELECT</span> program, <span class="tk-v">alloc</span>
 <span class="tk-k">FROM</span> Programs
-<span class="tk-k">DECIDE</span> alloc(<span class="tk-k">REAL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> alloc &lt;= max_alloc
-  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(alloc) &lt;= <span class="tk-n">100</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">MIN</span>(alloc / need);</code></pre><div class="sq__explain"><div class="sq__kv"><span>EXPLAIN</span><b>Direct solve rule: R4_MAX_MIN_FAIRNESS</b></div></div></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">alloc</span>(<span class="tk-t">REAL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">alloc</span> &lt;= max_alloc
+  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">alloc</span>) &lt;= <span class="tk-n">100</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">MIN</span>(<span class="tk-v">alloc</span> / need);</code></pre><div class="sq__explain"><div class="sq__kv"><span>EXPLAIN</span><b>Direct solve rule: R4_MAX_MIN_FAIRNESS</b></div></div></div>
               </div></div>
             </div>
           </article>
@@ -211,12 +211,12 @@ duckdb.executemany(<span class="tk-s">&quot;INSERT INTO Answer VALUES (?, ?)&quo
             <p>Put it in front of the query and it returns the clause to change and by how much: here, a weight limit of 57 instead of 40.</p>
             <div class="panel" data-fx="painterly-landscape" data-fx-seed="42" data-fx-palette='{"bg":"#cdd6c6","surface":"#dce3d6","ink":"#262d24","accent":"#6c8e63"}' data-fx-params='{"drift":0,"speed":0}' style="background-color: #cdd6c6">
               <div class="stage" role="img" aria-label="DIAGNOSE suggests changing SUM(x * weight) &lt;= 40 to SUM(x * weight) &lt;= 57, which reaches an objective of 275."><div class="at-rise fit" style="--fit-max:420px;--ax:max(24px, 50% - 210px);--ay:32px;--ay-sm:20px">
-                <div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-k">DIAGNOSE</span>
-<span class="tk-k">SELECT</span> item, x <span class="tk-k">FROM</span> Items
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">40</span>
-  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(x) &gt;= <span class="tk-n">4</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 3fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">suggested_change</span><span class="r">amount</span></div><div class="sq__tr"><span class="">SUM(x * weight) &lt;= 57</span><span class="r">17</span></div></div></div></div>
+                <div class="ui ui-sq sq" aria-hidden="true"><pre class="sq__code"><code><span class="tk-d">DIAGNOSE</span>
+<span class="tk-k">SELECT</span> item, <span class="tk-v">x</span> <span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">40</span>
+  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) &gt;= <span class="tk-n">4</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre><div class="sq__out"><div class="sq__grid " style="--tpl: minmax(0, 3fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">suggested_change</span><span class="r">amount</span></div><div class="sq__tr"><span class="">SUM(x * weight) &lt;= 57</span><span class="r">17</span></div></div></div></div>
               </div></div>
             </div>
           </article>
@@ -228,10 +228,10 @@ duckdb.executemany(<span class="tk-s">&quot;INSERT INTO Answer VALUES (?, ?)&quo
     <div class="wrap grid grid--top">
       <div class="span-5 split-col">
         <h2 id="solvers-h">Built on DuckDB, solved by Gurobi or HiGHS</h2>
-        <p class="t-lead">DeciDB is DuckDB with the DECIDE clause added, so it reads the same tables and files. HiGHS ships in every build; Gurobi is used when its license is present.</p>
+        <p class="t-lead">DeciDB reads tables, Parquet and CSV files where they are. HiGHS ships in every build; Gurobi is used when its license is present.</p>
         <ul class="facts">
-          <li>The data never leaves DuckDB: the model is built from the query's own rows</li>
-          <li>Python: <code>pip install decidb</code>, with DuckDB's API</li>
+          <li>The data never leaves the database: the model is built from the query's own rows</li>
+          <li>Python: <code>pip install decidb</code>, then <code>decidb.connect()</code></li>
           <li>A command-line shell for macOS, Linux and Windows</li>
           <li>You state the rules and the goal; DeciDB writes the model the solver reads</li>
         </ul>
@@ -256,7 +256,7 @@ duckdb.executemany(<span class="tk-s">&quot;INSERT INTO Answer VALUES (?, ?)&quo
       <div class="grid">
         <div class="span-4 stack-4">
           <a class="nav__logo" href="index.html"><img src="assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
-          <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
+          <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
         <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="getting-started.html">Get started</a></li><li><a href="guide.html">Guide</a></li><li><a href="docs/index.html">Documentation</a></li><li><a href="features.html">Novel features</a></li><li><a href="examples.html">Examples</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="examples/knapsack.html">Knapsack</a></li><li><a href="examples/facility-location.html">Depots</a></li><li><a href="examples/fair-allocation.html">Fair allocation</a></li><li><a href="examples/diagnose.html">DIAGNOSE</a></li></ul></div>

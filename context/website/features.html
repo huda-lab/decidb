@@ -6,10 +6,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <script>document.documentElement.classList.add('m-enter');setTimeout(()=>document.documentElement.classList.add('m-enter-done'),700)</script>
 <title>Novel features: query rewriting and DIAGNOSE in DeciDB</title>
-<meta name="description" content="Two DeciDB features a solver library does not have: query rewriting answers nine problem classes with DuckDB&#x27;s own operators, and DIAGNOSE explains a query with no answer.">
+<meta name="description" content="Two DeciDB features a solver library does not have: query rewriting answers nine problem classes without a solver, and DIAGNOSE explains a query with no answer.">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Novel features: query rewriting and DIAGNOSE in DeciDB">
-<meta property="og:description" content="Two DeciDB features a solver library does not have: query rewriting answers nine problem classes with DuckDB&#x27;s own operators, and DIAGNOSE explains a query with no answer.">
+<meta property="og:description" content="Two DeciDB features a solver library does not have: query rewriting answers nine problem classes without a solver, and DIAGNOSE explains a query with no answer.">
 <meta property="og:image" content="assets/images/share.jpg">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="assets/images/mark.svg" type="image/svg+xml">
@@ -73,17 +73,17 @@
 <section class="hero hero--page" data-enter aria-labelledby="page-h">
   <div class="wrap"><div class="hero-text hero-split grid">
     <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">Home</a><span aria-hidden="true">/</span>Novel features</nav><h1 id="page-h">Novel features</h1><p class="hero__lead">Two things DeciDB does that a solver library does not. It rewrites a query that has an exact answer into ordinary SQL operations, and it explains a query that has no answer.</p><div class="btn-row"><a class="btn btn--primary" href="#rewriting">Query rewriting</a><a class="btn btn--secondary" href="#diagnose">DIAGNOSE</a></div></div>
-    <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="13" data-ui-pause-host><div class="ui ui-hw hw hw--page hw--a" role="img" aria-label="EXPLAIN on a fair-allocation query prints the rewrite rule R4_MAX_MIN_FAIRNESS."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · fair.sql</span></div><div class="hw__page"><pre class="hw__sql"><code><span class="tk-k">EXPLAIN</span> <span class="tk-k">SELECT</span> program, alloc
+    <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="13" data-ui-pause-host><div class="ui ui-hw hw hw--page hw--a" role="img" aria-label="EXPLAIN on a fair-allocation query prints the rewrite rule R4_MAX_MIN_FAIRNESS."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · fair.sql</span></div><div class="hw__page"><pre class="hw__sql"><code><span class="tk-k">EXPLAIN</span> <span class="tk-k">SELECT</span> program, <span class="tk-v">alloc</span>
 <span class="tk-k">FROM</span> Programs
-<span class="tk-k">DECIDE</span> alloc(<span class="tk-k">REAL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> alloc &lt;= max_alloc
-  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(alloc) &lt;= <span class="tk-n">100</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">MIN</span>(alloc / need);</code></pre><div class="sq__kv"><span>Direct solve rule</span><b>R4_MAX_MIN_FAIRNESS</b></div></div></div><div class="ui ui-hw hw hw--page hw--b" role="img" aria-label="DIAGNOSE on a query with no answer suggests SUM(x * weight) &lt;= 57."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · bag.sql</span></div><div class="hw__page"><pre class="hw__sql"><code><span class="tk-k">DIAGNOSE</span>
-<span class="tk-k">SELECT</span> item, x <span class="tk-k">FROM</span> Items
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">40</span>
-  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(x) &gt;= <span class="tk-n">4</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre><div class="hw__out" data-ly-steps="520"><div class="sq__grid " style="--tpl: minmax(0, 3fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">suggested_change</span><span class="r">amount</span></div><div class="sq__tr" data-step><span class="">SUM(x * weight) &lt;= 57</span><span class="r">17</span></div></div></div></div></div></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">alloc</span>(<span class="tk-t">REAL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">alloc</span> &lt;= max_alloc
+  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">alloc</span>) &lt;= <span class="tk-n">100</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">MIN</span>(<span class="tk-v">alloc</span> / need);</code></pre><div class="sq__kv"><span>Direct solve rule</span><b>R4_MAX_MIN_FAIRNESS</b></div></div></div><div class="ui ui-hw hw hw--page hw--b" role="img" aria-label="DIAGNOSE on a query with no answer suggests SUM(x * weight) &lt;= 57."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · bag.sql</span></div><div class="hw__page"><pre class="hw__sql"><code><span class="tk-d">DIAGNOSE</span>
+<span class="tk-k">SELECT</span> item, <span class="tk-v">x</span> <span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">40</span>
+  <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) &gt;= <span class="tk-n">4</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre><div class="hw__out" data-ly-steps="520"><div class="sq__grid " style="--tpl: minmax(0, 3fr) repeat(1, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">suggested_change</span><span class="r">amount</span></div><div class="sq__tr" data-step><span class="">SUM(x * weight) &lt;= 57</span><span class="r">17</span></div></div></div></div></div></div>
   </div></div>
 </section>
 
@@ -108,7 +108,7 @@
       <section id="rewriting">
         <h2><a class="anchor" href="#rewriting">Query rewriting</a></h2>
         <p class="lead">Some optimization problems have an exact answer that sorting, ranking and running totals can
-          compute. When DeciDB recognizes one, it rewrites the query into those operations, runs them in DuckDB, and never
+          compute. When DeciDB recognizes one, it rewrites the query into those operations and never
           starts a solver. You write the same SQL; it returns sooner.</p>
         <div class="note note--direct"><strong>Faster, exact, and no license needed</strong>
           <p>A fair allocation over 800,000 decisions takes 0.026 s rewritten, against 2,158 s in Gurobi. Every rewritten
@@ -118,50 +118,50 @@
           what a query means.</p>
 
         <h3 id="see-it"><a class="anchor" href="#see-it">How to tell</a></h3>
-        <p>Nothing in the query marks it. <code>EXPLAIN</code> shows whether it was rewritten and by which rule (the
+        <p>Nothing in the query marks it. <code><span class="tk-k">EXPLAIN</span></code> shows whether it was rewritten and by which rule (the
           engine's name for the feature is "direct solve"):</p>
-<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Split a budget fairly</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> program, alloc
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Split a budget fairly</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> program, <span class="tk-v">alloc</span>
 <span class="tk-k">FROM</span> Programs
-<span class="tk-k">DECIDE</span> alloc(<span class="tk-k">REAL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> alloc &lt;= max_alloc <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(alloc) &lt;= <span class="tk-n">100</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">MIN</span>(alloc / need);</code></pre></div><div class="code" data-lang="text"><div class="code__head"><span class="code__title">EXPLAIN: the rewrite</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>Direct solve mode: auto
-Direct solve rule: R4_MAX_MIN_FAIRNESS
-Direct solve condition: max MIN(c*x), 0 &lt;= x &lt;= cap, SUM(w*x) &lt;= B</code></pre></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">alloc</span>(<span class="tk-t">REAL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">alloc</span> &lt;= max_alloc <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">alloc</span>) &lt;= <span class="tk-n">100</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">MIN</span>(<span class="tk-v">alloc</span> / need);</code></pre></div><div class="code" data-lang="explain"><div class="code__head"><span class="code__title">EXPLAIN: the rewrite</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-g">Direct solve mode:</span> auto
+<span class="tk-g">Direct solve rule:</span> <span class="tk-d">R4_MAX_MIN_FAIRNESS</span>
+<span class="tk-g">Direct solve condition:</span> max <span class="tk-f">MIN</span>(c*x), <span class="tk-n">0</span> &lt;= x &lt;= cap, <span class="tk-f">SUM</span>(w*x) &lt;= B</code></pre></div>
 
         <h3 id="which"><a class="anchor" href="#which">Which queries are rewritten</a></h3>
-        <p>Nine shapes today. The rule is the name <code>EXPLAIN</code> prints.</p>
+        <p>Nine shapes today. The rule is the name <code><span class="tk-k">EXPLAIN</span></code> prints.</p>
         <div class="table-wrap"><table>
           <thead><tr><th scope="col">Problem</th><th scope="col">The query has</th><th scope="col">Rule</th></tr></thead>
           <tbody>
-            <tr><td><a href="examples/shortlist.html">Pick the best rows by score</a></td><td>one <code>BOOL</code> per row, limits on how many, a score to maximize; per group too</td><td><code>S1</code></td></tr>
+            <tr><td><a href="examples/shortlist.html">Pick the best rows by score</a></td><td>one <code><span class="tk-t">BOOL</span></code> per row, limits on how many, a score to maximize; per group too</td><td><code>S1</code></td></tr>
             <tr><td><a href="examples/nested-quotas.html">The best rows under nested quotas</a></td><td>count limits whose groups nest: teams inside divisions inside a total</td><td><code>S2</code></td></tr>
-            <tr><td><a href="examples/sprint-planning.html">As many rows as fit a budget</a></td><td><code>MAXIMIZE SUM(x)</code> under one <code>SUM(w * x) &lt;= B</code></td><td><code>S3</code></td></tr>
+            <tr><td><a href="examples/sprint-planning.html">As many rows as fit a budget</a></td><td><code><span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(x)</code> under one <code><span class="tk-f">SUM</span>(w * x) &lt;= B</code></td><td><code>S3</code></td></tr>
             <tr><td><a href="#a1">Each row on its own</a></td><td>a range for each row and nothing linking rows</td><td><code>A1</code></td></tr>
-            <tr><td><a href="examples/depot-placement.html">One value closest to every row</a></td><td>one shared <code>REAL</code> and a squared or absolute distance</td><td><code>A2</code></td></tr>
-            <tr><td><a href="#r1">Fill a budget by value per unit</a></td><td><code>REAL</code> amounts with caps and one budget</td><td><code>R1</code></td></tr>
-            <tr><td><a href="examples/fair-allocation.html">A fair split of a budget</a></td><td><code>MAXIMIZE MIN(c * x)</code>, caps and one budget</td><td><code>R4</code></td></tr>
-            <tr><td><a href="#n1">Stay inside one sum of squares</a></td><td>one <code>SUM(POWER(x, 2)) &lt;= B</code></td><td><code>N1</code></td></tr>
-            <tr><td><a href="examples/matching.html">Match two tables one to one</a></td><td>a <code>BOOL</code> per pair, one pair per row on each side, a distance cost</td><td><code>O1</code></td></tr>
+            <tr><td><a href="examples/depot-placement.html">One value closest to every row</a></td><td>one shared <code><span class="tk-t">REAL</span></code> and a squared or absolute distance</td><td><code>A2</code></td></tr>
+            <tr><td><a href="#r1">Fill a budget by value per unit</a></td><td><code><span class="tk-t">REAL</span></code> amounts with caps and one budget</td><td><code>R1</code></td></tr>
+            <tr><td><a href="examples/fair-allocation.html">A fair split of a budget</a></td><td><code><span class="tk-d">MAXIMIZE</span> <span class="tk-f">MIN</span>(c * x)</code>, caps and one budget</td><td><code>R4</code></td></tr>
+            <tr><td><a href="#n1">Stay inside one sum of squares</a></td><td>one <code><span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(x, <span class="tk-n">2</span>)) &lt;= B</code></td><td><code>N1</code></td></tr>
+            <tr><td><a href="examples/matching.html">Match two tables one to one</a></td><td>a <code><span class="tk-t">BOOL</span></code> per pair, one pair per row on each side, a distance cost</td><td><code>O1</code></td></tr>
           </tbody>
         </table></div>
         <p>Three of them in full:</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Fill a truck by value per kg</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> good, value_per_kg, available_kg, <span class="tk-f">ROUND</span>(kg, <span class="tk-n">1</span>) <span class="tk-k">AS</span> kg
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Fill a truck by value per kg</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> good, value_per_kg, available_kg, <span class="tk-f">ROUND</span>(<span class="tk-v">kg</span>, <span class="tk-n">1</span>) <span class="tk-k">AS</span> <span class="tk-v">kg</span>
 <span class="tk-k">FROM</span> Cargo
-<span class="tk-k">DECIDE</span> kg(<span class="tk-k">REAL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> kg &lt;= available_kg <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(kg) &lt;= <span class="tk-n">1000</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(value_per_kg * kg);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>5 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">good</th><th scope="col" class="num">value_per_kg</th><th scope="col" class="num">available_kg</th><th scope="col" class="num dec">kg</th></tr></thead><tbody><tr><td>Saffron</td><td class="num">90.0</td><td class="num">2.0</td><td class="num dec">2.0</td></tr><tr><td>Coffee</td><td class="num">12.0</td><td class="num">300.0</td><td class="num dec">300.0</td></tr><tr><td>Tea</td><td class="num">9.0</td><td class="num">200.0</td><td class="num dec">200.0</td></tr><tr><td>Rice</td><td class="num">1.5</td><td class="num">900.0</td><td class="num dec">498.0</td></tr><tr><td>Sugar</td><td class="num">1.1</td><td class="num">800.0</td><td class="num dec">0.0</td></tr></tbody></table></div></div></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">kg</span>(<span class="tk-t">REAL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">kg</span> &lt;= available_kg <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">kg</span>) &lt;= <span class="tk-n">1000</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value_per_kg * <span class="tk-v">kg</span>);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>5 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">good</th><th scope="col" class="num">value_per_kg</th><th scope="col" class="num">available_kg</th><th scope="col" class="num dec">kg</th></tr></thead><tbody><tr><td>Saffron</td><td class="num">90.0</td><td class="num">2.0</td><td class="num dec">2.0</td></tr><tr><td>Coffee</td><td class="num">12.0</td><td class="num">300.0</td><td class="num dec">300.0</td></tr><tr><td>Tea</td><td class="num">9.0</td><td class="num">200.0</td><td class="num dec">200.0</td></tr><tr><td>Rice</td><td class="num">1.5</td><td class="num">900.0</td><td class="num dec">498.0</td></tr><tr><td>Sugar</td><td class="num">1.1</td><td class="num">800.0</td><td class="num dec">0.0</td></tr></tbody></table></div></div></div>
         <p id="r1">The truck takes the most valuable goods per kilogram first, until it is full.</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Each order picks its best quantity in its own range</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> sku, margin, min_qty, max_qty, qty
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Each order picks its best quantity in its own range</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> sku, margin, min_qty, max_qty, <span class="tk-v">qty</span>
 <span class="tk-k">FROM</span> Orders
-<span class="tk-k">DECIDE</span> qty(<span class="tk-k">INT</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> qty <span class="tk-k">BETWEEN</span> min_qty <span class="tk-k">AND</span> max_qty
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(margin * qty);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>4 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">sku</th><th scope="col" class="num">margin</th><th scope="col" class="num">min_qty</th><th scope="col" class="num">max_qty</th><th scope="col" class="num dec">qty</th></tr></thead><tbody><tr><td>A-100</td><td class="num">4.0</td><td class="num">10</td><td class="num">50</td><td class="num dec">50</td></tr><tr><td>B-200</td><td class="num">-1.5</td><td class="num">5</td><td class="num">20</td><td class="num dec">5</td></tr><tr><td>C-300</td><td class="num">2.5</td><td class="num">0</td><td class="num">30</td><td class="num dec">30</td></tr><tr><td>D-400</td><td class="num">-0.5</td><td class="num">3</td><td class="num">8</td><td class="num dec">3</td></tr></tbody></table></div></div></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">qty</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">qty</span> <span class="tk-k">BETWEEN</span> min_qty <span class="tk-k">AND</span> max_qty
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(margin * <span class="tk-v">qty</span>);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>4 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">sku</th><th scope="col" class="num">margin</th><th scope="col" class="num">min_qty</th><th scope="col" class="num">max_qty</th><th scope="col" class="num dec">qty</th></tr></thead><tbody><tr><td>A-100</td><td class="num">4.0</td><td class="num">10</td><td class="num">50</td><td class="num dec">50</td></tr><tr><td>B-200</td><td class="num">-1.5</td><td class="num">5</td><td class="num">20</td><td class="num dec">5</td></tr><tr><td>C-300</td><td class="num">2.5</td><td class="num">0</td><td class="num">30</td><td class="num dec">30</td></tr><tr><td>D-400</td><td class="num">-0.5</td><td class="num">3</td><td class="num">8</td><td class="num dec">3</td></tr></tbody></table></div></div></div>
         <p id="a1">Each quantity goes to whichever end of its range its margin favors.</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">The best direction within a sum of squares</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> name, score, <span class="tk-f">ROUND</span>(x, <span class="tk-n">3</span>) <span class="tk-k">AS</span> x
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">The best direction within a sum of squares</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> name, score, <span class="tk-f">ROUND</span>(<span class="tk-v">x</span>, <span class="tk-n">3</span>) <span class="tk-k">AS</span> <span class="tk-v">x</span>
 <span class="tk-k">FROM</span> Signals
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">REAL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(x, <span class="tk-n">2</span>)) &lt;= <span class="tk-n">25</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(score * x);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>3 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">name</th><th scope="col" class="num">score</th><th scope="col" class="num dec">x</th></tr></thead><tbody><tr><td>alpha</td><td class="num">3.0</td><td class="num dec">3.0</td></tr><tr><td>beta</td><td class="num">4.0</td><td class="num dec">4.0</td></tr><tr><td>gamma</td><td class="num">0.0</td><td class="num dec">0.0</td></tr></tbody></table></div></div></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">REAL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(<span class="tk-v">x</span>, <span class="tk-n">2</span>)) &lt;= <span class="tk-n">25</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(score * <span class="tk-v">x</span>);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>3 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">name</th><th scope="col" class="num">score</th><th scope="col" class="num dec">x</th></tr></thead><tbody><tr><td>alpha</td><td class="num">3.0</td><td class="num dec">3.0</td></tr><tr><td>beta</td><td class="num">4.0</td><td class="num dec">4.0</td></tr><tr><td>gamma</td><td class="num">0.0</td><td class="num dec">0.0</td></tr></tbody></table></div></div></div>
         <p id="n1"><code>x</code> points along the scores, scaled to the limit: with scores 3, 4 and 0 and a limit of 25,
           it answers 3, 4 and 0.</p>
 
@@ -169,9 +169,9 @@ Direct solve condition: max MIN(c*x), 0 &lt;= x &lt;= cap, SUM(w*x) &lt;= B</cod
         <div class="table-wrap"><table>
           <thead><tr><th scope="col">Setting</th><th scope="col">Effect</th></tr></thead>
           <tbody>
-            <tr><td><code>SET decide_direct_solve = 'auto'</code></td><td>the default: rewrite when DeciDB can prove the shape</td></tr>
-            <tr><td><code>SET decide_direct_solve = 'off'</code></td><td>always use the solver</td></tr>
-            <tr><td><code>SET decide_direct_solve = 'require'</code></td><td>stop with an error when no rule applies</td></tr>
+            <tr><td><code><span class="tk-k">SET</span> decide_direct_solve = <span class="tk-s">&#x27;auto&#x27;</span></code></td><td>the default: rewrite when DeciDB can prove the shape</td></tr>
+            <tr><td><code><span class="tk-k">SET</span> decide_direct_solve = <span class="tk-s">&#x27;off&#x27;</span></code></td><td>always use the solver</td></tr>
+            <tr><td><code><span class="tk-k">SET</span> decide_direct_solve = <span class="tk-s">&#x27;require&#x27;</span></code></td><td>stop with an error when no rule applies</td></tr>
           </tbody>
         </table></div>
         <p>When several answers are equally good, the rewritten query may return a different one than the solver would;
@@ -183,19 +183,19 @@ Direct solve condition: max MIN(c*x), 0 &lt;= x &lt;= cap, SUM(w*x) &lt;= B</cod
       <!-- ============================================================ DIAGNOSE -->
       <section id="diagnose">
         <h2><a class="anchor" href="#diagnose">DIAGNOSE</a></h2>
-        <p class="lead">A query with no answer usually has one rule that is too tight. Put <code>DIAGNOSE</code> in front
+        <p class="lead">A query with no answer usually has one rule that is too tight. Put <code><span class="tk-d">DIAGNOSE</span></code> in front
           of it and DeciDB tells you which clause to change and by how much.</p>
         <p>This bag must weigh 40 kg or less and hold at least four items, and no four items are that light:</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, x <span class="tk-k">FROM</span> Items
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">40</span> <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(x) &gt;= <span class="tk-n">4</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>the solver found no answer</span></div><pre>Invalid Input Error: DECIDE optimization is infeasible. Prefix the query with DIAGNOSE to see which clause to change.</pre></div></div>
-        <p>The same query with <code>DIAGNOSE</code> in front returns what to change instead of the rows:</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">DIAGNOSE</span>
-<span class="tk-k">SELECT</span> item, x <span class="tk-k">FROM</span> Items
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">40</span> <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(x) &gt;= <span class="tk-n">4</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>2 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="num dec">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td>infeasible</td><td>SUM(x * weight) &lt;= 40</td><td class="dec">SUM(x * weight) &lt;= 57</td><td class="num dec">17.0</td><td class="null">NULL</td><td class="null">NULL</td><td>source_literal</td><td class="null">NULL</td><td class="null">NULL</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">275.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span> <span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">40</span> <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) &gt;= <span class="tk-n">4</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>the solver found no answer</span></div><pre>Invalid Input Error: DECIDE optimization is infeasible. Prefix the query with DIAGNOSE to see which clause to change.</pre></div></div>
+        <p>The same query with <code><span class="tk-d">DIAGNOSE</span></code> in front returns what to change instead of the rows:</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DIAGNOSE</span>
+<span class="tk-k">SELECT</span> item, <span class="tk-v">x</span> <span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">40</span> <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) &gt;= <span class="tk-n">4</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>2 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">state</th><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="num dec">amount</th><th scope="col" class="">total</th><th scope="col" class="">scope</th><th scope="col" class="">edit_source</th><th scope="col" class="">group</th><th scope="col" class="">row</th></tr></thead><tbody><tr><td>infeasible</td><td>SUM(x * weight) &lt;= 40</td><td class="dec">SUM(x * weight) &lt;= 57</td><td class="num dec">17.0</td><td class="null">NULL</td><td class="null">NULL</td><td>source_literal</td><td class="null">NULL</td><td class="null">NULL</td></tr><tr><td>infeasible</td><td class="null">NULL</td><td class="null dec">NULL</td><td class="num dec">275.0</td><td class="null">NULL</td><td class="null">NULL</td><td>achievable_objective</td><td class="null">NULL</td><td class="null">NULL</td></tr></tbody></table></div></div></div>
 
         <h3 id="reading"><a class="anchor" href="#reading">Reading the answer</a></h3>
         <p>Each row is one finding. Raise the weight limit from 40 to 57 and the query has an answer; the row marked
@@ -210,12 +210,12 @@ Direct solve condition: max MIN(c*x), 0 &lt;= x &lt;= cap, SUM(w*x) &lt;= B</cod
             <tr><td><code>edit_source</code></td><td>the kind of finding, such as <code>achievable_objective</code></td></tr>
           </tbody>
         </table></div>
-        <p>A query that already has an answer returns one row with <code>state = 'feasible'</code>. To get one suggestion
-          per row or group instead of per clause, <code>SET diagnose_decide_infeasible_slack_scope = 'expanded'</code>.
-          <code>DIAGNOSE</code> costs nothing until you write it, and it always uses a solver.</p>
+        <p>A query that already has an answer returns one row with <code>state = <span class="tk-s">&#x27;feasible&#x27;</span></code>. To get one suggestion
+          per row or group instead of per clause, <code><span class="tk-k">SET</span> diagnose_decide_infeasible_slack_scope = <span class="tk-s">&#x27;expanded&#x27;</span></code>.
+          <code><span class="tk-d">DIAGNOSE</span></code> costs nothing until you write it, and it always uses a solver.</p>
 
         <h3 id="unbounded"><a class="anchor" href="#unbounded">No limit on the objective</a></h3>
-        <p>When nothing stops the objective from growing forever, the query stops and <code>DIAGNOSE</code> names the
+        <p>When nothing stops the objective from growing forever, the query stops and <code><span class="tk-d">DIAGNOSE</span></code> names the
           decision that needs a limit, with how many of its values escape. The
           <a href="examples/diagnose.html">DIAGNOSE example</a> shows the full answer for the bag above.</p>
         <p>How DeciDB finds the smallest change is in the documentation: <a href="docs/diagnose.html">inside DIAGNOSE</a>.</p>
@@ -238,7 +238,7 @@ Direct solve condition: max MIN(c*x), 0 &lt;= x &lt;= cap, SUM(w*x) &lt;= B</cod
       <div class="grid">
         <div class="span-4 stack-4">
           <a class="nav__logo" href="index.html"><img src="assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
-          <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
+          <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
         <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="getting-started.html">Get started</a></li><li><a href="guide.html">Guide</a></li><li><a href="docs/index.html">Documentation</a></li><li><a href="features.html">Novel features</a></li><li><a href="examples.html">Examples</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="examples/knapsack.html">Knapsack</a></li><li><a href="examples/facility-location.html">Depots</a></li><li><a href="examples/fair-allocation.html">Fair allocation</a></li><li><a href="examples/diagnose.html">DIAGNOSE</a></li></ul></div>

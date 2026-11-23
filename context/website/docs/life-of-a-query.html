@@ -73,7 +73,7 @@
 <section class="hero hero--page" data-enter aria-labelledby="page-h">
   <div class="wrap"><div class="hero-text hero-split grid">
     <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a><span aria-hidden="true">/</span><a href="../docs/index.html">Documentation</a><span aria-hidden="true">/</span>Life of a query</nav><h1 id="page-h">Life of a query</h1><p class="hero__lead">One small query, followed through all eight stages from SQL text to rows. Every output on this page comes from running it.</p></div>
-    <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="26" data-ui-pause-host><div class="ui ui-hw hw hw--page hw--mid" role="img" aria-label="The DECIDE path, from the parser to execution."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · the DECIDE path</span></div><div class="hw__page"><div class="hw__stages" data-ly-steps="260"><div class="hw__stage is-on" data-step><span class="hw__num">01</span><b>Parser</b><span>the grammar and the DECIDE keywords</span></div><div class="hw__stage is-on" data-step><span class="hw__num">02</span><b>Binder</b><span>names, scopes and types</span></div><div class="hw__stage is-on" data-step><span class="hw__num">03</span><b>Logical plan</b><span>the LogicalDecide operator</span></div><div class="hw__stage is-on" data-step><span class="hw__num">04</span><b>Canonicalizer</b><span>one shape for every clause</span></div><div class="hw__stage is-on" data-step><span class="hw__num">05</span><b>Optimizer</b><span>the formulation</span></div><div class="hw__stage hw__stage--exit" data-step><span class="hw__num">↳</span><b>Query rewriting</b><span>DuckDB operators, no solver</span></div><div class="hw__stage is-on" data-step><span class="hw__num">06</span><b>Model</b><span>variables, coefficients, bounds</span></div><div class="hw__stage is-on" data-step><span class="hw__num">07</span><b>Solver</b><span>Gurobi or HiGHS</span></div><div class="hw__stage hw__stage--exit" data-step><span class="hw__num">↳</span><b>DIAGNOSE</b><span>what to change when there is no answer</span></div><div class="hw__stage is-on" data-step><span class="hw__num">08</span><b>Execution</b><span>the decisions, back as columns</span></div></div></div></div></div>
+    <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="26" data-ui-pause-host><div class="ui ui-hw hw hw--page hw--mid" role="img" aria-label="The DECIDE path, from the parser to execution."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · the DECIDE path</span></div><div class="hw__page"><div class="hw__stages" data-ly-steps="260"><div class="hw__stage is-on" data-step><span class="hw__num">01</span><b>Parser</b><span>the grammar and the DECIDE keywords</span></div><div class="hw__stage is-on" data-step><span class="hw__num">02</span><b>Binder</b><span>names, scopes and types</span></div><div class="hw__stage is-on" data-step><span class="hw__num">03</span><b>Logical plan</b><span>the LogicalDecide operator</span></div><div class="hw__stage is-on" data-step><span class="hw__num">04</span><b>Canonicalizer</b><span>one shape for every clause</span></div><div class="hw__stage is-on" data-step><span class="hw__num">05</span><b>Optimizer</b><span>the formulation</span></div><div class="hw__stage hw__stage--exit" data-step><span class="hw__num">↳</span><b>Query rewriting</b><span>relational operators, no solver</span></div><div class="hw__stage is-on" data-step><span class="hw__num">06</span><b>Model</b><span>variables, coefficients, bounds</span></div><div class="hw__stage is-on" data-step><span class="hw__num">07</span><b>Solver</b><span>Gurobi or HiGHS</span></div><div class="hw__stage hw__stage--exit" data-step><span class="hw__num">↳</span><b>DIAGNOSE</b><span>what to change when there is no answer</span></div><div class="hw__stage is-on" data-step><span class="hw__num">08</span><b>Execution</b><span>the decisions, back as columns</span></div></div></div></div></div>
   </div></div>
 </section>
 <div class="container"><div class="doc-layout doc-layout--docs"><nav class="docnav" aria-label="Documentation pages"><div class="toc-title">Documentation</div><p class="docnav__group">Start here</p><ul><li><a href="index.html">Overview</a></li><li><a href="life-of-a-query.html" aria-current="page">Life of a query</a></li></ul><p class="docnav__group">The pipeline</p><ul><li><a href="front-end.html">Parser, binder and plan</a></li><li><a href="canonical-form.html">Canonicalizer and optimizer</a></li><li><a href="solving.html">Model, solvers and execution</a></li></ul><p class="docnav__group">Novel features</p><ul><li><a href="rewriting.html">Query rewriting</a></li><li><a href="rewrite-rules.html">The rewrite rules</a></li><li><a href="diagnose.html">DIAGNOSE</a></li></ul><p class="docnav__group">Quality</p><ul><li><a href="testing.html">Testing</a></li><li><a href="performance.html">Performance</a></li></ul></nav>
@@ -103,18 +103,18 @@
       most value?</p>
     <p>The table is the Guide's five items: three <code>tech</code> items and two <code>gear</code> items, each with a
       value and a weight.</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">The query this page follows</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, category, x
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">The query this page follows</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, category, <span class="tk-v">x</span>
 <span class="tk-k">FROM</span> Items
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">40</span>
-      <span class="tk-k">AND</span> <span class="tk-p">per</span> category: <span class="tk-f">SUM</span>(x) <span class="tk-p">by</span> (category) &lt;= <span class="tk-n">1</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * x);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>5 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">item</th><th scope="col" class="">category</th><th scope="col" class="num dec">x</th></tr></thead><tbody><tr class="on"><td>Laptop</td><td>tech</td><td class="num dec">1</td></tr><tr><td>Camera</td><td>tech</td><td class="num dec">0</td></tr><tr><td>Drone</td><td>tech</td><td class="num dec">0</td></tr><tr><td>Tripod</td><td>gear</td><td class="num dec">0</td></tr><tr class="on"><td>Lens</td><td>gear</td><td class="num dec">1</td></tr></tbody></table></div></div></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">40</span>
+      <span class="tk-k">AND</span> <span class="tk-d">per</span> category: <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) <span class="tk-d">by</span> (category) &lt;= <span class="tk-n">1</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>5 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">item</th><th scope="col" class="">category</th><th scope="col" class="num dec">x</th></tr></thead><tbody><tr class="on"><td>Laptop</td><td>tech</td><td class="num dec">1</td></tr><tr><td>Camera</td><td>tech</td><td class="num dec">0</td></tr><tr><td>Drone</td><td>tech</td><td class="num dec">0</td></tr><tr><td>Tripod</td><td>gear</td><td class="num dec">0</td></tr><tr class="on"><td>Lens</td><td>gear</td><td class="num dec">1</td></tr></tbody></table></div></div></div>
     <p>The answer is the Laptop and the Lens: 32 kg and a value of 175. Each clause pulls against another. Without the
       category limit the best bag is the Camera and the Drone, worth 180, but both are <code>tech</code>. Without the
       weight limit it is the Drone and the Lens, worth 195, but they weigh 42 kg.</p>
     <p>The query is small enough to follow by hand, with 5 rows, 5 solver variables and 3 constraints, and it reaches
       every stage. It has a product of data and a decision (<code>x * weight</code>), a scope in front of a clause
-      (<code>per category:</code>), a reducer with its own group (<code>SUM(x) by (category)</code>), and an objective
+      (<code><span class="tk-d">per</span> category:</code>), a reducer with its own group (<code><span class="tk-f">SUM</span>(x) <span class="tk-d">by</span> (category)</code>), and an objective
       to maximize.</p>
     <div class="note"><strong>The order of this page</strong>
       <p>Stages 01 to 05 run while DuckDB prepares the statement. Stage 08 runs when it executes, and stages 06 and 07
@@ -126,30 +126,30 @@
   <section id="parser">
     <h2><a class="anchor" href="#parser">01 Parser</a></h2>
     <p class="lead">The parser cuts the text into tokens, matches them against the grammar, and moves the clause onto
-      DuckDB's parsed <code>SELECT</code>. It decides no shape and refuses nothing here.</p>
-    <p>The lexer reads <code>DECIDE</code> and sets its DECIDE flag. From that point it reads three words of this query
+      DuckDB's parsed <code><span class="tk-k">SELECT</span></code>. It decides no shape and refuses nothing here.</p>
+    <p>The lexer reads <code><span class="tk-d">DECIDE</span></code> and sets its DECIDE flag. From that point it reads three words of this query
       as follows:</p>
     <div class="table-wrap"><table>
       <thead><tr><th scope="col">Word</th><th scope="col">Token</th><th scope="col">Why</th></tr></thead>
       <tbody>
-        <tr><td><code>per</code></td><td><code>PER_DECIDE</code></td><td>The flag is set, and the next token,
+        <tr><td><code><span class="tk-d">per</span></code></td><td><code>PER_DECIDE</code></td><td>The flag is set, and the next token,
           <code>category</code>, is neither <code>(</code> nor <code>ROW</code></td></tr>
-        <tr><td><code>by</code></td><td><code>BY_DECIDE</code></td><td>It follows the <code>)</code> of
-          <code>SUM(x)</code></td></tr>
-        <tr><td><code>BOOL</code></td><td>an ordinary name</td><td>A decision's type is a name the grammar reads as
-          <code>INT</code>, <code>REAL</code> or <code>BOOL</code>, not a keyword</td></tr>
+        <tr><td><code><span class="tk-d">by</span></code></td><td><code>BY_DECIDE</code></td><td>It follows the <code>)</code> of
+          <code><span class="tk-f">SUM</span>(x)</code></td></tr>
+        <tr><td><code><span class="tk-t">BOOL</span></code></td><td>an ordinary name</td><td>A decision's type is a name the grammar reads as
+          <code><span class="tk-t">INT</span></code>, <code><span class="tk-t">REAL</span></code> or <code><span class="tk-t">BOOL</span></code>, not a keyword</td></tr>
       </tbody>
     </table></div>
-    <p>The grammar then matches the clause. <code>x(BOOL)</code> is a typed declaration: one decision per result row.
-      The two constraints are separated by the top-level <code>AND</code>, and <code>per category:</code> scopes only
-      the second, because the colon ends the scope and a constraint body binds more tightly than <code>AND</code>. The
-      scope is folded into a scope node around its constraint, and <code>by (category)</code> into a node around its
+    <p>The grammar then matches the clause. <code>x(<span class="tk-t">BOOL</span>)</code> is a typed declaration: one decision per result row.
+      The two constraints are separated by the top-level <code><span class="tk-k">AND</span></code>, and <code><span class="tk-d">per</span> category:</code> scopes only
+      the second, because the colon ends the scope and a constraint body binds more tightly than <code><span class="tk-k">AND</span></code>. The
+      scope is folded into a scope node around its constraint, and <code><span class="tk-d">by</span> (category)</code> into a node around its
       reducer.</p>
     <p>The transformer moves the result onto five fields of DuckDB's <code>SelectNode</code>:
       <code>decide_variables</code> (the one declaration), <code>decide_constraints</code> (the two constraints under
-      one <code>AND</code>), <code>decide_sense</code> (<code>MAXIMIZE</code>), <code>decide_objective</code>, and
+      one <code><span class="tk-k">AND</span></code>), <code>decide_sense</code> (<code><span class="tk-d">MAXIMIZE</span></code>), <code>decide_objective</code>, and
       <code>decide_text</code>, the clause as typed with one span per expression. That text is what every later message
-      and the <code>EXPLAIN</code> output quote. The scope and the <code>by</code> become tagged function nodes, the
+      and the <code><span class="tk-k">EXPLAIN</span></code> output quote. The scope and the <code><span class="tk-d">by</span></code> become tagged function nodes, the
       form DuckDB's parsed expressions already have. A last pass looks for spellings the language removed and finds
       none.</p>
     <div class="src"><strong>In the source</strong><ul>
@@ -170,23 +170,23 @@
     <h2><a class="anchor" href="#binder">02 Binder</a></h2>
     <p class="lead">The binder resolves every name to a column, a decision or a key, and records what each decision
       is.</p>
-    <p>DuckDB binds <code>FROM Items</code> as it binds any table. Its <code>SELECT</code> binder then makes its one
+    <p>DuckDB binds <code><span class="tk-k">FROM</span> Items</code> as it binds any table. Its <code><span class="tk-k">SELECT</span></code> binder then makes its one
       DECIDE call, <code>DecideDeclarationsBinder::BindDeclarations</code>, which binds the clause in three steps:</p>
     <ol class="steps">
       <li><strong>The declaration.</strong> <code>x</code> is not a column of <code>Items</code> and is declared once,
-        so it is registered as decision 0. It has no <code>per</code>, so its scope is one value per row. Its type is
-        <code>INTEGER</code>, and a flag marks it as boolean. No <code>x &gt;= 0</code> or <code>x &lt;= 1</code>
+        so it is registered as decision 0. It has no <code><span class="tk-d">per</span></code>, so its scope is one value per row. Its type is
+        <code><span class="tk-t">INTEGER</span></code>, and a flag marks it as boolean. No <code>x &gt;= <span class="tk-n">0</span></code> or <code>x &lt;= <span class="tk-n">1</span></code>
         constraint is ever written for that: the 0 to 1 range travels as the flag, and the model builder sets it as the
         variable's bounds.</li>
       <li><strong>The constraints.</strong> In <code>x * weight</code>, <code>x</code> binds to the decision and
-        <code>weight</code> to the column. The <code>per category:</code> scope becomes a wrapper node over its
-        constraint, and <code>SUM(x) by (category)</code> becomes an aggregate tagged with its group key. Both keys
+        <code>weight</code> to the column. The <code><span class="tk-d">per</span> category:</code> scope becomes a wrapper node over its
+        constraint, and <code><span class="tk-f">SUM</span>(x) <span class="tk-d">by</span> (category)</code> becomes an aggregate tagged with its group key. Both keys
         list the same column, so they share one entry of the query's key table: one key, written twice.</li>
       <li><strong>The objective.</strong> It has no scope written, so it is produced once for the whole query, the
-        default <code>per ()</code>.</li>
+        default <code><span class="tk-d">per</span> ()</code>.</li>
     </ol>
     <p>Each bound node keeps the location of the text it came from, so a message about it can quote the user's words.
-      Nothing is refused: no decision appears in <code>WHERE</code>, a key or a <code>by</code>, and no reducer sits
+      Nothing is refused: no decision appears in <code><span class="tk-k">WHERE</span></code>, a key or a <code><span class="tk-d">by</span></code>, and no reducer sits
       inside another. The algebra of each clause, such as its degree, is not judged here. That waits for stage 04, after
       the clause has one spelling.</p>
     <div class="src"><strong>In the source</strong><ul>
@@ -205,24 +205,24 @@
   <section id="logical-plan">
     <h2><a class="anchor" href="#logical-plan">03 Logical plan</a></h2>
     <p class="lead">The planner builds <code>LogicalDecide</code> above the scan, so only rows that survive
-      <code>FROM</code> and <code>WHERE</code> become decisions.</p>
-    <p><code>Binder::CreatePlan</code> plans a <code>SELECT</code> bottom up: the scan, then any <code>WHERE</code>
-      filter, then the DECIDE node, then grouping, <code>HAVING</code>, windows and the final projection. That order is
-      the language's meaning in operator form. <code>WHERE</code> runs first and cannot read a decision; everything
+      <code><span class="tk-k">FROM</span></code> and <code><span class="tk-k">WHERE</span></code> become decisions.</p>
+    <p><code>Binder::CreatePlan</code> plans a <code><span class="tk-k">SELECT</span></code> bottom up: the scan, then any <code><span class="tk-k">WHERE</span></code>
+      filter, then the DECIDE node, then grouping, <code><span class="tk-k">HAVING</span></code>, windows and the final projection. That order is
+      the language's meaning in operator form. <code><span class="tk-k">WHERE</span></code> runs first and cannot read a decision; everything
       after the DECIDE node reads the decisions as columns.</p>
     <p>This query has no subquery in its clauses, so the first job of this step, flattening each subquery into a join
       and recording whether it is correlated, finds nothing. Before it builds the node, the same function hands both
       clauses to stage 04. The node it builds holds the canonical clauses. The plan DuckDB runs has the same shape:</p>
-<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, category, x
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, category, <span class="tk-v">x</span>
 <span class="tk-k">FROM</span> Items
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">40</span>
-      <span class="tk-k">AND</span> <span class="tk-p">per</span> category: <span class="tk-f">SUM</span>(x) <span class="tk-p">by</span> (category) &lt;= <span class="tk-n">1</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * x);</code></pre></div><div class="code" data-lang="text"><div class="code__head"><span class="code__title">EXPLAIN: the operators</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>PROJECTION
-└─ DECIDE   decisions: x
-   └─ SEQ_SCAN   Items</code></pre></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">40</span>
+      <span class="tk-k">AND</span> <span class="tk-d">per</span> category: <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) <span class="tk-d">by</span> (category) &lt;= <span class="tk-n">1</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>);</code></pre></div><div class="code" data-lang="plan"><div class="code__head"><span class="code__title">EXPLAIN: the operators</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-g"></span><span class="tk-k">PROJECTION</span>
+<span class="tk-g">└─ </span><span class="tk-d">DECIDE</span>   <span class="tk-g">decisions: </span><span class="tk-v">x</span>
+<span class="tk-g">   └─ </span><span class="tk-k">SEQ_SCAN</span>   Items</code></pre></div>
     <p>The projection on top keeps the three columns the query selects. Had a rewrite added auxiliary variables, the
-      same projection would drop their columns. With a <code>WHERE</code> clause, DuckDB pushes the filter into the scan,
+      same projection would drop their columns. With a <code><span class="tk-k">WHERE</span></code> clause, DuckDB pushes the filter into the scan,
       still below the DECIDE node.</p>
     <p>After planning, a clause can enter <code>LogicalDecide</code> only through <code>AddConstraint</code> or
       <code>SetObjective</code>. Both canonicalize what they receive, so no later stage can add a clause in a shape
@@ -240,44 +240,44 @@
     <h2><a class="anchor" href="#canonicalizer">04 Canonicalizer</a></h2>
     <p class="lead">The canonicalizer writes each clause in one shape: decisions on the left, the bound on the right,
       each product with its coefficient first. Then it names how each clause becomes model rows.</p>
-    <p><code>EXPLAIN</code> prints the result. Each clause appears as written; a line marked <code>≡</code> follows
+    <p><code><span class="tk-k">EXPLAIN</span></code> prints the result. Each clause appears as written; a line marked <code>≡</code> follows
       when the canonical spelling differs.</p>
-<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, category, x
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, category, <span class="tk-v">x</span>
 <span class="tk-k">FROM</span> Items
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">40</span>
-      <span class="tk-k">AND</span> <span class="tk-p">per</span> category: <span class="tk-f">SUM</span>(x) <span class="tk-p">by</span> (category) &lt;= <span class="tk-n">1</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * x);</code></pre></div><div class="code" data-lang="text"><div class="code__head"><span class="code__title">EXPLAIN: the DECIDE node</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>DECIDE
-  Variables: x
-  Objective: MAXIMIZE SUM(value * x)
-  Constraints:
-    SUM(x * weight) &lt;= 40
-      ≡ sum(weight * x) &lt;= 40
-    per category: SUM(x) by (category) &lt;= 1</code></pre></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">40</span>
+      <span class="tk-k">AND</span> <span class="tk-d">per</span> category: <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) <span class="tk-d">by</span> (category) &lt;= <span class="tk-n">1</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>);</code></pre></div><div class="code" data-lang="explain"><div class="code__head"><span class="code__title">EXPLAIN: the DECIDE node</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DECIDE</span>
+  <span class="tk-g">Variables:</span> <span class="tk-v">x</span>
+  <span class="tk-g">Objective:</span> <span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>)
+  <span class="tk-g">Constraints:</span>
+    <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">40</span>
+      <span class="tk-g">≡</span> <span class="tk-f">sum</span>(weight * <span class="tk-v">x</span>) &lt;= <span class="tk-n">40</span>
+    <span class="tk-d">per</span> category: <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) <span class="tk-d">by</span> (category) &lt;= <span class="tk-n">1</span></code></pre></div>
     <p>Clause by clause:</p>
     <ul>
-      <li><strong><code>SUM(x * weight) &lt;= 40</code></strong> becomes <code>sum(weight * x) &lt;= 40</code>. Every
+      <li><strong><code><span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">40</span></code></strong> becomes <code><span class="tk-f">sum</span>(weight * x) &lt;= <span class="tk-n">40</span></code>. Every
         product is written as its coefficient times its decisions, so the later stages read one spelling. The decision
         side already sits on the left and the bound on the right, so nothing moves.</li>
-      <li><strong><code>per category: SUM(x) by (category) &lt;= 1</code></strong> is already canonical, so it has no
+      <li><strong><code><span class="tk-d">per</span> category: <span class="tk-f">SUM</span>(x) <span class="tk-d">by</span> (category) &lt;= <span class="tk-n">1</span></code></strong> is already canonical, so it has no
         <code>≡</code> line.</li>
       <li><strong>The objective</strong> is written coefficient first, so it has no <code>≡</code> line either. Inside,
         it changes: every stage after this one reads a minimization, so as its last step the canonicalizer negates each
-        term's sign, making <code>MAXIMIZE sum(value * x)</code> into <code>MINIMIZE -sum(value * x)</code>. The node
-        keeps the sense the user wrote for messages and for <code>EXPLAIN</code>, which prints the objective in that
+        term's sign, making <code><span class="tk-d">MAXIMIZE</span> <span class="tk-f">sum</span>(value * x)</code> into <code><span class="tk-d">MINIMIZE</span> -<span class="tk-f">sum</span>(value * x)</code>. The node
+        keeps the sense the user wrote for messages and for <code><span class="tk-k">EXPLAIN</span></code>, which prints the objective in that
         sense.</li>
     </ul>
     <p>Then the canonicalizer names each comparison's shape, the rule for how many model rows it makes. Both
       constraints have the aggregate shape: the decision side is a reducer, so the clause makes one row per
-      <code>by</code> group of the rows it keeps. The weight limit has no <code>by</code>, which means
-      <code>by ()</code>: one group, one row. The category limit groups by <code>category</code>: two groups, two rows.
-      Its <code>per category:</code> wrapper adds no row of its own. One row per <code>by</code> group already stands for
+      <code><span class="tk-d">by</span></code> group of the rows it keeps. The weight limit has no <code><span class="tk-d">by</span></code>, which means
+      <code><span class="tk-d">by</span> ()</code>: one group, one row. The category limit groups by <code>category</code>: two groups, two rows.
+      Its <code><span class="tk-d">per</span> category:</code> wrapper adds no row of its own. One row per <code><span class="tk-d">by</span></code> group already stands for
       every class, so the wrapper only names the classes each row stands for, which DIAGNOSE reads to report one class
       at a time.</p>
     <p>Two more checks run here and pass:</p>
     <ul>
-      <li><strong>Scope checks.</strong> A <code>per</code> key must determine each value its clause reads outside a
-        reducer, such as the bound and the <code>by</code> key: one value per class. The bound <code>1</code> is a
+      <li><strong>Scope checks.</strong> A <code><span class="tk-d">per</span></code> key must determine each value its clause reads outside a
+        reducer, such as the bound and the <code><span class="tk-d">by</span></code> key: one value per class. The bound <code><span class="tk-n">1</span></code> is a
         literal, and <code>category</code> is the key's own column, so there is nothing to check at run time.</li>
       <li><strong>The shape check.</strong> It judges the algebra of each clause on the canonical spelling: every
         function over a decision must be one the model can state, and every term must have degree 2 or less. Here
@@ -289,7 +289,7 @@
       <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/planner/decide/decide_product_form.cpp"><code>src/planner/decide/decide_product_form.cpp</code></a>: <code>NormalizeProducts</code>, the one spelling of a
         product</li>
       <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/planner/decide/decide_shape_check.cpp"><code>src/planner/decide/decide_shape_check.cpp</code></a>: <code>DecideShapeCheck</code></li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/planner/decide/decide_source_provenance.cpp"><code>src/planner/decide/decide_source_provenance.cpp</code></a>: the <code>EXPLAIN</code> layers</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/planner/decide/decide_source_provenance.cpp"><code>src/planner/decide/decide_source_provenance.cpp</code></a>: the <code><span class="tk-k">EXPLAIN</span></code> layers</li>
     </ul></div>
   </section>
 
@@ -301,8 +301,8 @@
     <p>DuckDB runs its own passes first, among them the expression rewriter and filter pushdown. Then
       <code>DecideOptimizer</code> visits each <code>LogicalDecide</code>:</p>
     <ol class="steps">
-      <li><strong>Data bounds.</strong> A reducer over data on a bound's side, as in <code>SUM(x) &lt;=
-        SUM(cap)</code>, becomes a column the plan computes once. Both bounds here are literals.</li>
+      <li><strong>Data bounds.</strong> A reducer over data on a bound's side, as in <code><span class="tk-f">SUM</span>(x) &lt;=
+        <span class="tk-f">SUM</span>(cap)</code>, becomes a column the plan computes once. Both bounds here are literals.</li>
       <li><strong>The answer.</strong> The node is read into the IR and offered to every rewrite rule. None applies:
         the weight limit makes this a knapsack with group limits, a problem no built rule proves. So the query stays on
         the solver's path.</li>
@@ -310,21 +310,21 @@
         present, otherwise HiGHS. The choice and what that backend can state natively are recorded on the node, and
         every later stage reads them instead of asking again.</li>
       <li><strong>The formulation passes.</strong> They always run in the same order: the tightest data bound of each
-        group, <code>norm</code>, <code>IN</code>, <code>ABS</code>, the scope checks that become plan operators,
+        group, <code>norm</code>, <code><span class="tk-k">IN</span></code>, <code>ABS</code>, the scope checks that become plan operators,
         bilinear products, non-linear reducer bodies, the value rewrite, composed and single <code>MIN</code> and
         <code>MAX</code>, <code>&lt;&gt;</code>, <code>AVG</code>, and last the folding of a literal bound on one
         variable into that variable's bounds. Each finds nothing to do here, so the node leaves the optimizer as it
         entered.</li>
     </ol>
-    <p>Asking for a rewrite shows the second step's answer. The setting <code>decide_direct_solve='require'</code> makes
+    <p>Asking for a rewrite shows the second step's answer. The setting <code>decide_direct_solve=<span class="tk-s">&#x27;require&#x27;</span></code> makes
       a query fail when no rule applies:</p>
 <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SET</span> decide_direct_solve = <span class="tk-s">&#x27;require&#x27;</span>;
-<span class="tk-k">SELECT</span> item, category, x
+<span class="tk-k">SELECT</span> item, category, <span class="tk-v">x</span>
 <span class="tk-k">FROM</span> Items
-<span class="tk-k">DECIDE</span> x(<span class="tk-k">BOOL</span>)
-<span class="tk-k">SUCH</span> <span class="tk-k">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">40</span>
-      <span class="tk-k">AND</span> <span class="tk-p">per</span> category: <span class="tk-f">SUM</span>(x) <span class="tk-p">by</span> (category) &lt;= <span class="tk-n">1</span>
-<span class="tk-k">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * x);</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>refused before solving</span></div><pre>Invalid Input Error: decide_direct_solve=require: direct solve did not apply; the solver is required</pre></div></div>
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">40</span>
+      <span class="tk-k">AND</span> <span class="tk-d">per</span> category: <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) <span class="tk-d">by</span> (category) &lt;= <span class="tk-n">1</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>);</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>refused before solving</span></div><pre>Invalid Input Error: decide_direct_solve=require: direct solve did not apply; the solver is required</pre></div></div>
     <p>Remove the weight limit and rule S1 applies: the best item per category is a ranking, and the overview shows <a
       href="index.html#exit-rewriting">that plan</a>.</p>
 
@@ -384,7 +384,7 @@
         There is none here.</li>
       <li><strong>Coefficients.</strong> Each coefficient expression runs once over the whole buffer, as a column, with
         DuckDB's expression executor. The weight limit reads <code>weight</code>: 20, 10, 30, 15, 12. The category limit
-        assigns each row its <code>by</code> group: two groups. The objective reads <code>value</code> with the sign
+        assigns each row its <code><span class="tk-d">by</span></code> group: two groups. The objective reads <code>value</code> with the sign
         applied: -100, -60, -120, -40, -75. Every value is finite, so no row is refused.</li>
       <li><strong>Assembly.</strong> The evaluated clauses become a <code>SolverInput</code>, and a
         <code>VarIndexer</code> lays out the solver's columns. It has four blocks: decisions per row, keyed decisions,
@@ -413,25 +413,25 @@
       here names a decision that is one per row, so no two data rows share a solver column, and each coefficient is
       copied into its row as it is. A keyed decision would put many data rows on one column, and their coefficients
       would be summed first.</p>
-    <p>Each column's bounds come from the decision's type. <code>BOOL</code> gives 0 to 1 and marks the column binary.
+    <p>Each column's bounds come from the decision's type. <code><span class="tk-t">BOOL</span></code> gives 0 to 1 and marks the column binary.
       The environment variable <code>DECIDB_DUMP_MODEL</code> prints the model exactly as it is handed to the
       backend:</p>
-<div class="code" data-lang="text"><div class="code__head"><span class="code__title">DECIDB_DUMP_MODEL output for this query</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>=== DECIDB MODEL DUMP ===
-sense: minimize
-num_vars: 5
-num_rows: 3
-num_qrows: 0
-num_genconstrs: 0
-num_indconstrs: 0
-col 0: lb=0 ub=1 int=1 bin=1 obj=-100
-col 1: lb=0 ub=1 int=1 bin=1 obj=-60
-col 2: lb=0 ub=1 int=1 bin=1 obj=-120
-col 3: lb=0 ub=1 int=1 bin=1 obj=-40
-col 4: lb=0 ub=1 int=1 bin=1 obj=-75
-row 0: sense=&lt; rhs=40 nnz=5 | 0:20 1:10 2:30 3:15 4:12
-row 1: sense=&lt; rhs=1 nnz=2 | 3:1 4:1
-row 2: sense=&lt; rhs=1 nnz=3 | 0:1 1:1 2:1
-=== END MODEL DUMP ===</code></pre></div>
+<div class="code" data-lang="model"><div class="code__head"><span class="code__title">DECIDB_DUMP_MODEL output for this query</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-c">=== DECIDB MODEL DUMP ===</span>
+<span class="tk-k">sense:</span> minimize
+<span class="tk-k">num_vars:</span> 5
+<span class="tk-k">num_rows:</span> 3
+<span class="tk-k">num_qrows:</span> 0
+<span class="tk-k">num_genconstrs:</span> 0
+<span class="tk-k">num_indconstrs:</span> 0
+<span class="tk-k">col 0:</span> <span class="tk-g">lb=</span>0 <span class="tk-g">ub=</span>1 <span class="tk-g">int=</span>1 <span class="tk-g">bin=</span>1 <span class="tk-g">obj=</span>-100
+<span class="tk-k">col 1:</span> <span class="tk-g">lb=</span>0 <span class="tk-g">ub=</span>1 <span class="tk-g">int=</span>1 <span class="tk-g">bin=</span>1 <span class="tk-g">obj=</span>-60
+<span class="tk-k">col 2:</span> <span class="tk-g">lb=</span>0 <span class="tk-g">ub=</span>1 <span class="tk-g">int=</span>1 <span class="tk-g">bin=</span>1 <span class="tk-g">obj=</span>-120
+<span class="tk-k">col 3:</span> <span class="tk-g">lb=</span>0 <span class="tk-g">ub=</span>1 <span class="tk-g">int=</span>1 <span class="tk-g">bin=</span>1 <span class="tk-g">obj=</span>-40
+<span class="tk-k">col 4:</span> <span class="tk-g">lb=</span>0 <span class="tk-g">ub=</span>1 <span class="tk-g">int=</span>1 <span class="tk-g">bin=</span>1 <span class="tk-g">obj=</span>-75
+<span class="tk-k">row 0:</span> <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>40 <span class="tk-g">nnz=</span>5 | 0:20 1:10 2:30 3:15 4:12
+<span class="tk-k">row 1:</span> <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>1 <span class="tk-g">nnz=</span>2 | 3:1 4:1
+<span class="tk-k">row 2:</span> <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>1 <span class="tk-g">nnz=</span>3 | 0:1 1:1 2:1
+<span class="tk-c">=== END MODEL DUMP ===</span></code></pre></div>
     <p>Read it against the buffer. Columns 0 to 4 are the rows Laptop to Lens. The objective is a minimization of the
       negated values. Row 0 is the weight limit. Row 1 is the <code>gear</code> group (Tripod and Lens) and row 2 the
       <code>tech</code> group. There are no quadratic rows (<code>num_qrows</code>), no general constraints such as a
@@ -463,7 +463,7 @@ row 2: sense=&lt; rhs=1 nnz=3 | 0:1 1:1 2:1
       20 + 12 = 32 kg, within 40, and take one item from each category. No other bag within both limits is worth as
       much.</p>
     <p>Had the status been infeasible or unbounded, a plain query would stop here with an error naming the state. Under
-      <code>DIAGNOSE</code>, the router would send it to an engine instead (<a href="diagnose.html">DIAGNOSE</a>).</p>
+      <code><span class="tk-d">DIAGNOSE</span></code>, the router would send it to an engine instead (<a href="diagnose.html">DIAGNOSE</a>).</p>
     <div class="src"><strong>In the source</strong><ul>
       <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/solver/ilp_solver.cpp"><code>src/decidb/solver/ilp_solver.cpp</code></a>: <code>SolveModel</code></li>
       <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/solver/solver_registry.cpp"><code>src/decidb/solver/solver_registry.cpp</code></a>: <code>REGISTERED_BACKENDS</code>, the one table naming
@@ -481,7 +481,7 @@ row 2: sense=&lt; rhs=1 nnz=3 | 0:1 1:1 2:1
     <p><code>GetData</code> reads the buffered rows chunk by chunk. For each row and each decision, the
       <code>VarIndexer</code> names the solver column that holds its value: here column <code>i</code> for row
       <code>i</code>. For a keyed decision, every row of a class reads the same column, so they show one value.</p>
-    <p>A <code>BOOL</code> decision's result type is <code>INTEGER</code>, so each value is rounded to a whole number
+    <p>A <code><span class="tk-t">BOOL</span></code> decision's result type is <code><span class="tk-t">INTEGER</span></code>, so each value is rounded to a whole number
       and checked against the type's range before it is written. A solver returns 0.9999999 as readily as 1; the
       rounding makes the column exact. The projection above the node then keeps <code>item</code>,
       <code>category</code> and <code>x</code>, and the rows at the <a href="#the-query">top of this page</a> are the
@@ -500,10 +500,10 @@ row 2: sense=&lt; rhs=1 nnz=3 | 0:1 1:1 2:1
     <div class="table-wrap"><table>
       <thead><tr><th scope="col">Not reached</th><th scope="col">Where it is explained</th></tr></thead>
       <tbody>
-        <tr><td>A keyed decision (<code>per K: x</code>): the class mapping, and coefficients summed onto one
+        <tr><td>A keyed decision (<code><span class="tk-d">per</span> K: x</code>): the class mapping, and coefficients summed onto one
           column</td><td><a href="solving.html#execution">Execution</a>, and the <a
           href="../examples/facility-location.html">facility location</a> example</td></tr>
-        <tr><td>A <code>when</code> scope, and bounds read from data that need a run-time scope check</td><td><a
+        <tr><td>A <code><span class="tk-d">when</span></code> scope, and bounds read from data that need a run-time scope check</td><td><a
           href="front-end.html#binder">The binder</a>, <a href="canonical-form.html#canonicalizer">the
           canonicalizer</a></td></tr>
         <tr><td>Moving terms across a comparison, and factors on a reducer</td><td><a
@@ -536,7 +536,7 @@ row 2: sense=&lt; rhs=1 nnz=3 | 0:1 1:1 2:1
       <div class="grid">
         <div class="span-4 stack-4">
           <a class="nav__logo" href="../index.html"><img src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
-          <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
+          <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
         <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Get started</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../docs/index.html">Documentation</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="../examples/knapsack.html">Knapsack</a></li><li><a href="../examples/facility-location.html">Depots</a></li><li><a href="../examples/fair-allocation.html">Fair allocation</a></li><li><a href="../examples/diagnose.html">DIAGNOSE</a></li></ul></div>

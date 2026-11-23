@@ -109,7 +109,7 @@
           and on HiGHS?</td><td><code>python3 benchmark/decide/profile_pipeline.py</code></td></tr>
         <tr><td>Direct-solve benchmark</td><td>How much faster is query rewriting than the solver on the same query,
           as the data grows?</td><td><code>python3 benchmark/decide/direct_solve/run.py</code></td></tr>
-        <tr><td>DIAGNOSE examples</td><td>What does a user read, with and without <code>DIAGNOSE</code>, for each
+        <tr><td>DIAGNOSE examples</td><td>What does a user read, with and without <code><span class="tk-d">DIAGNOSE</span></code>, for each
           example query on each backend?</td><td><code>python3 benchmark/decide/diagnose_examples/run.py</code></td></tr>
         <tr><td>Archived profilers</td><td>One question about one rewrite rule each, such as result delivery through
           the C++ API</td><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/benchmark/decide/direct_solve/archive"><code>benchmark/decide/direct_solve/archive/</code></a>, each with <code>-h</code></td></tr>
@@ -125,10 +125,10 @@
 
     <h3 id="tpch-suite"><a class="anchor" href="#tpch-suite">The TPC-H suite</a></h3>
     <p><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/benchmark/decide/run_benchmarks.py"><code>run_benchmarks.py</code></a> runs eleven DECIDE queries, Q1 to Q11, on two generated TPC-H databases. It sets
-      <code>decide_direct_solve = 'off'</code>, so every query takes the solver path. Together the queries cover the
+      <code>decide_direct_solve = <span class="tk-s">&#x27;off&#x27;</span></code>, so every query takes the solver path. Together the queries cover the
       language with as few queries as possible: each bundles several features (decision types, problem classes,
-      constraint and objective forms, <code>when</code>, <code>per</code> and <code>by</code>) and lists them in a
-      <code>-- TAGS:</code> header.</p>
+      constraint and objective forms, <code><span class="tk-d">when</span></code>, <code><span class="tk-d">per</span></code> and <code><span class="tk-d">by</span></code>) and lists them in a
+      <code><span class="tk-c">-- TAGS:</span></code> header.</p>
     <ul>
       <li><strong>Data.</strong> <code>make decide-bench-setup</code> builds <code>medium.db</code> (TPC-H scale 0.085)
         and <code>large.db</code> (scale 0.17) with DuckDB's <code>dbgen</code>, then pins <code>lineitem</code> to
@@ -141,16 +141,16 @@
         read-only, under <code>/usr/bin/time</code>. Wall time therefore includes process start, opening the database
         and printing the result. The runner keeps every run and reports the median wall time, its standard deviation
         and the median peak memory.</li>
-      <li><strong>Stage timers.</strong> With <code>DECIDB_BENCH=1</code> the engine prints
+      <li><strong>Stage timers.</strong> With <code>DECIDB_BENCH=<span class="tk-n">1</span></code> the engine prints
         <code>optimizer_ms</code>, <code>model_construction_ms</code>, <code>solver_ms</code> and the model's size:
         variables, clauses handed to the builder (<code>total_constraint_specs</code>) and matrix rows
-        (<code>total_constraint_rows</code>). A clause with <code>per</code> becomes one row per class, so the two
+        (<code>total_constraint_rows</code>). A clause with <code><span class="tk-d">per</span></code> becomes one row per class, so the two
         counts are different units and are never added.</li>
-      <li><strong>Comparing commits.</strong> Results are stored per commit; <code>--compare</code> prints each query's
+      <li><strong>Comparing commits.</strong> Results are stored per commit; <code><span class="tk-c">--compare</span></code> prints each query's
         change in median time and peak memory against an earlier commit's file.</li>
     </ul>
     <p>A full run, three iterations at both sizes, takes about 17 minutes, mostly Q10, Q6 and Q4.
-      <code>--sizes medium --queries Q1,Q5</code> narrows it while working on one change.</p>
+      <code><span class="tk-c">--sizes medium --queries Q1,Q5</span></code> narrows it while working on one change.</p>
 
     <h3 id="profiler"><a class="anchor" href="#profiler">The pipeline profiler</a></h3>
     <p><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/benchmark/decide/profile_pipeline.py"><code>profile_pipeline.py</code></a> runs Q1 to Q11 and four more shapes, P1 to P4, once per backend, three times
@@ -158,9 +158,9 @@
       fall back to the other solver. The P queries isolate one effect of model size each over <code>lineitem</code>:
       a bounded LP (P1), a separable convex QP (P2), the same QP with one budget that couples every decision (P3),
       and a Boolean problem with one row per <code>l_orderkey</code> (P4).</p>
-    <p>The run sets <code>DECIDB_PROFILE=1</code>, and the engine prints one JSON line per span: a named, nested
+    <p>The run sets <code>DECIDB_PROFILE=<span class="tk-n">1</span></code>, and the engine prints one JSON line per span: a named, nested
       interval of work such as <code>execution.evaluate_constraints</code>. Markers around the measured statement keep
-      setup out. The query runs as <code>CREATE TEMP TABLE result AS ...</code>, which produces every output row
+      setup out. The query runs as <code><span class="tk-k">CREATE</span> TEMP <span class="tk-k">TABLE</span> result <span class="tk-k">AS</span> ...</code>, which produces every output row
       without formatting millions of them for a terminal. The script sums the spans into one column per stage:</p>
     <div class="table-wrap"><table>
       <thead><tr><th scope="col">Column</th><th scope="col">What it covers</th></tr></thead>
@@ -183,7 +183,7 @@
     <p><strong>A correctness signal.</strong> Speed means nothing if the answer is wrong. After a sweep, the profiler
       compares the optimum of every successful run of a query, across both backends and all repeats. Two proven optima
       of the same model may differ only by the feasibility tolerance, so a spread above
-      <code>1e-6 × max(1, |objective|)</code> is flagged. A run stopped at its time limit reports a best-so-far answer,
+      <code><span class="tk-n">1e-6</span> × <span class="tk-f">max</span>(<span class="tk-n">1</span>, |objective|)</code> is flagged. A run stopped at its time limit reports a best-so-far answer,
       not an optimum, and is skipped.</p>
 
     <h3 id="direct-bench"><a class="anchor" href="#direct-bench">The direct-solve benchmark</a></h3>
@@ -193,16 +193,16 @@
       and not other operators. The O1 query pairs <code>supplier</code> with itself, and S2 reads
       <code>customer</code>.</p>
     <ul>
-      <li><strong>Modes.</strong> <code>direct</code> sets <code>decide_direct_solve = 'require'</code>, so a query the
+      <li><strong>Modes.</strong> <code>direct</code> sets <code>decide_direct_solve = <span class="tk-s">&#x27;require&#x27;</span></code>, so a query the
         rule does not take fails instead of falling back to the solver, and a speedup can never be the solver timed
-        against itself. <code>gurobi</code> sets <code>'off'</code> and forces Gurobi. Both run DuckDB on 32 threads,
+        against itself. <code>gurobi</code> sets <code><span class="tk-s">&#x27;off&#x27;</span></code> and forces Gurobi. Both run DuckDB on 32 threads,
         the most Gurobi uses by default.</li>
       <li><strong>Agreement.</strong> At every size, every finished run's objective must match direct solve's within
         1e-6, relative. A mismatch stops the sweep, so no wrong answer is timed further.</li>
       <li><strong>Sizes.</strong> Scale factors double from 0.125 (100,000 <code>partsupp</code> rows) to 512
         (409,600,000 rows), smallest first. A solver runs the next size only if its median at the previous size stayed
         within a budget (7,200 seconds by default). The databases up to scale 512 take about 270 GB of disk.</li>
-      <li><strong>Against a hand-written plan.</strong> <code>--compare</code> runs each rule's plan beside a query an
+      <li><strong>Against a hand-written plan.</strong> <code><span class="tk-c">--compare</span></code> runs each rule's plan beside a query an
         expert would write in SQL for the same answer, carrying the same checks, in one process. Its measure is
         <strong>summed operator CPU</strong>, the time of every operator added up, which compares the work of two plans
         independent of how well each one uses threads. A test, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_comparators.py"><code>test_direct_comparators.py</code></a>, checks that
@@ -256,7 +256,7 @@
     <p>Each process and each statement pays a few costs before any data is read. Measured in fresh processes at a load
       of 2.2 to 2.6:</p>
     <ul>
-      <li>An empty process that opens <code>large.db</code> and runs <code>SELECT 1</code>: 18 ms.</li>
+      <li>An empty process that opens <code>large.db</code> and runs <code><span class="tk-k">SELECT</span> <span class="tk-n">1</span></code>: 18 ms.</li>
       <li>Parsing, binding and canonicalizing a DECIDE statement: 0.1 to 0.3 ms.</li>
       <li>The DECIDE optimizer: 5.1 to 5.3 ms on a process's first statement when Gurobi can be chosen, then 0.15 to
         0.25 ms. The difference is a one-time check that the Gurobi library and its license are present, 4.8 to 5.1
@@ -281,8 +281,8 @@
       30 October 2026.</p>
     <ol class="steps">
       <li><strong>Extraction</strong> turns clauses into coefficients. Its cost follows grouping: on P4, whose
-        <code>per l_orderkey</code> clause has 250,000 classes, 114 of its 121 ms of constraint evaluation go to the
-        <code>when</code>, <code>per</code> and <code>by</code> grouping (load 2.2 to 3.0).</li>
+        <code><span class="tk-d">per</span> l_orderkey</code> clause has 250,000 classes, 114 of its 121 ms of constraint evaluation go to the
+        <code><span class="tk-d">when</span></code>, <code><span class="tk-d">per</span></code> and <code><span class="tk-d">by</span></code> grouping (load 2.2 to 3.0).</li>
       <li><strong>Formulation</strong> lowers constructs such as <code>ABS</code> and <code>MIN</code>/<code>MAX</code>
         into rows. By cost: <code>ABS</code>, then composed <code>MIN</code>/<code>MAX</code>, then products of
         decisions, then <code>&lt;&gt;</code>, then a <code>MIN</code>/<code>MAX</code> objective. Q10, the heaviest
@@ -331,7 +331,7 @@
         <tr><td>Composed <code>MIN</code>/<code>MAX</code> coefficients read a chunk at a time, like every other
           clause</td><td>one value at a time, with a cast per value</td><td>Q4, 489 ms against 21 ms</td></tr>
         <tr><td>Row buffers that grow geometrically</td><td>reserving exactly the needed size at each flush, which
-          copies the whole buffer each time</td><td>a 1,000,000-row join with a <code>per l_orderkey</code> clause,
+          copies the whole buffer each time</td><td>a 1,000,000-row join with a <code><span class="tk-d">per</span> l_orderkey</code> clause,
           6.2 s against 0.98 s</td></tr>
         <tr><td>A determination check as a grouped aggregate on its own read of the source</td><td>three window
           operators over the DECIDE source, each holding every row and column</td><td>the same join, passing: 0.98 s
@@ -344,7 +344,7 @@
     <p>One idea measured to save nothing: folding constant subexpressions in a rewritten plan. DuckDB evaluates a
       constant subtree once per chunk of rows, not once per row, so on 1,000,000 <code>lineitem</code> rows (medians of
       9) the A1 plan took 0.119 s without the fold and 0.118 s with it, and S1 0.044 s both ways. What does cost per
-      row is the operation a constant decides, such as a multiplication by <code>1.0</code>, and DuckDB's own
+      row is the operation a constant decides, such as a multiplication by <code><span class="tk-n">1.0</span></code>, and DuckDB's own
       expression rewriter removes those.</p>
 
     <h3 id="rewriting-saves"><a class="anchor" href="#rewriting-saves">What query rewriting saves</a></h3>
@@ -434,7 +434,7 @@
       <div class="grid">
         <div class="span-4 stack-4">
           <a class="nav__logo" href="../index.html"><img src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
-          <p class="footer__lede">Constrained optimization in SQL, built on DuckDB.</p>
+          <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
         <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Get started</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../docs/index.html">Documentation</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="../examples/knapsack.html">Knapsack</a></li><li><a href="../examples/facility-location.html">Depots</a></li><li><a href="../examples/fair-allocation.html">Fair allocation</a></li><li><a href="../examples/diagnose.html">DIAGNOSE</a></li></ul></div>

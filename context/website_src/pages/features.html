@@ -21,7 +21,7 @@
       <section id="rewriting">
         <h2><a class="anchor" href="#rewriting">Query rewriting</a></h2>
         <p class="lead">Some optimization problems have an exact answer that sorting, ranking and running totals can
-          compute. When DeciDB recognizes one, it rewrites the query into those operations, runs them in DuckDB, and never
+          compute. When DeciDB recognizes one, it rewrites the query into those operations and never
           starts a solver. You write the same SQL; it returns sooner.</p>
         <div class="note note--direct"><strong>Faster, exact, and no license needed</strong>
           <p>A fair allocation over 800,000 decisions takes 0.026 s rewritten, against 2,158 s in Gurobi. Every rewritten
