@@ -22,21 +22,6 @@ order, one at a time. Rules for every one of them:
   `ExpressionIterator::EnumerateChildren`, a case in `LogicalOperatorVisitor::VisitExpression`, `IsFoldable()`
   false, and copy, equality, hash and generated serialization.
 
-## TREE-6 — Function nodes and one table of helper definitions
-
-- **Problem.** An ABS, a Boolean product, an L0 count and a nonlinear body are each a tag on the kept call that
-  carries an index into its own table (`abs_functions`, `bilinear_function_groups`, `l0_indicator_functions`,
-  `definition_functions`), and a lifted reducer is a record in `reducer_value_links`. Five tables are listed by
-  hand in `EnumerateExpressions` (`logical_decide.cpp:302`) and registered one by one when the tree is built
-  (`decide_tree.cpp:182`).
-- **Change.** `BoundDecideFunctionExpression`: kind and the index of its definition. One table of helper
-  definitions on `LogicalDecide` owns each helper's body (R25): kind, the helper decision, the body or reducer
-  node, and the facts joined over its readers (`push` as one `ExtremumPush`, whether an ABS is exact, the
-  innermost-first order). A reader and a copy of a clause hold the index. After this step a clause's shape has one
-  writer.
-- **Done when.** Goldens identical; `EXPLAIN` and DIAGNOSE tests pass; the 9 tags design.md § 3.5 lists for TREE-6
-  are named nowhere; one loop enumerates the definitions.
-
 ## TREE-7 — One lowering walk; `DecideNode` by kind
 
 - **Problem.** Physical planning lowers each clause twice (`DecideTreeConstruction`, `LowerDecideTree`,
@@ -48,7 +33,6 @@ order, one at a time. Rules for every one of them:
   terms together; the solver gate and `CompileDecideTree` follow as today. The term splitter, like-term
   collection, the frame-column registry and the order of rows stay. `DecideNode` loses its copies and unread
   fields, then is split by kind. The three execution files change field access only.
-- **Needs.** TREE-6.
 - **Done when.** Goldens and model dumps identical on both solvers; the debug build reports nothing;
   `context/opa_rewrite/tools/ab_bench.py` against the build before the phase, no workload beyond about 10%;
   `DecideTreeSources` and `retained_function_links` are named nowhere; the tests that reached only a deleted

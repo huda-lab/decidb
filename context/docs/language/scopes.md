@@ -71,7 +71,7 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
 
 - **VALUE.** The clause's record holds the shape (`BoundDecideClause::shape`). `DecideOptimizer::RewriteScopedReducers`
   (`decide_rewrite_scoped.cpp`) replaces each decision reducer with a helper decision (`__value_<n>__`, reused for a
-  repeated occurrence in the same clause) and records it in `LogicalDecide::reducer_value_links`. The helper is
+  repeated occurrence in the same clause) and records it in `LogicalDecide::helper_definitions` (kind `REDUCER_VALUE`). The helper is
   `INTEGER` when the reducer's value is whole (`DecideValueIsWholeNumbered`, the same test stage 04's integer step
   uses), query-wide for `by ()`, otherwise keyed on its own `by` groups among the clause's kept rows. A
   `MIN`/`MAX` helper gets the envelope side its rows push it toward, the closing side otherwise, both for `=`, `<>` or

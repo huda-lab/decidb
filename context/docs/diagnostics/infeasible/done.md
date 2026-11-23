@@ -598,7 +598,7 @@ leaves unnamed — so a dropped aggregate `<>` would have an empty subject.
 `SolverInput::global_variable_labels` (parallel to `global_variable_types`) carries the user
 source text of a labeled global: the clause text `SUM(x) <> K` for an aggregate-`<>` binary
 (looked up from `aux_var_expressions` at that site), and the reducer text `MAX(x)` for the binaries and member columns
-of an extremum link (`ExtremumLinkSpec::label`, the helper's `ReducerValueLink::label`). A helper's own column is a
+of an extremum link (`ExtremumLinkSpec::label`, the helper's `DecideHelperDefinition::label`). A helper's own column is a
 decision, named from `var_labels`, so a clause that reads it renders `SUM(x) + MAX(x) <= -1`, never an internal `colN`.
 Other global aux (McCormick) stay unlabeled, which is an empty entry rather than a missing one.
 

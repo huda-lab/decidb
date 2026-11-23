@@ -588,8 +588,9 @@ elements, so the same link takes a helper per group and one row per variant. Exe
 08). The shape is a fact of the written clause, decided with its scope: `CanonicalizeClauses` calls `ClassifyClause`
 once for a clause and stores the result (`BoundDecideClause::shape`), and a clause that goes through the
 canonicalizer again keeps it. The rewrites replace reducers by helpers, so classifying the comparison again after
-them gives another answer; the one pass that does replace a clause's reducers (`RewriteScopedReducers`, stage 05)
-calls `ClassifyClause` for the clause it leaves. Every reader reads the field.
+them gives another answer; the one pass that does replace a clause's reducers (`RewriteScopedReducers`, stage 05),
+which discharges the VALUE shape by putting helpers where the reducers were, calls `ClassifyClause` for the clause it
+leaves. The shape has these two writers and no other. Every reader reads the field.
 
 An aggregate-shape clause stores the `by` key its decision reducers share (`BoundDecideClause::group_key`), the
 one grouping carrier after this stage, since later rewrites rebuild the reducers. Its `per K:` stays, as on

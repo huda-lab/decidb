@@ -75,6 +75,53 @@ objective's texts, `source_columns`, `optimized`, the solver choice and the tabl
 **A value read whole is a table entry.** `computed_values` holds each flattened scalar subquery and each reducer over
 data the objective reads as one value (§2), and a read is told by equality with its entry.
 
+**What a rewrite keeps is an entry of one table.** `LogicalDecide::helper_definitions` is the symbol table of the
+constructs the rewrites kept and gave a helper decision (`DecideHelperDefinition`), in the order they were made:
+innermost first, so a definition reads only helpers of definitions before it. Every entry has one head (`kind`,
+`helper`, `body`, `when`, `origin`, `label`) and its kind's own fields.
+
+| Kind | The construct | `helper` | `body` | Its own fields |
+|---|---|---|---|---|
+| `ABS` | `abs(e)` over a decision, kept where it is written | the decision that stands for `abs(e)` | the operand | `exact`, `scope` |
+| `PRODUCT` | a written product of two forms over decisions, kept where it is written | none | its expansion: the product distributed over its factors' terms, each product with a Boolean factor read as that `BOOLEAN_PRODUCT`'s helper | — |
+| `BOOLEAN_PRODUCT` | a product of two decisions, one of them Boolean | the decision that stands for the product | none | `first_factor`, `second_factor` |
+| `L0_INDICATOR` | one counted row of `norm(e, 0)` | the indicator | none | `links` (its three rows, clause records), `m`, `auto_m` |
+| `DEFINITION` | a reducer's nonlinear body, kept where it is written | the decision the reducer reads in its place | the body | `relation` |
+| `REDUCER_VALUE` | a decision reducer the value rewrite or a range frame replaced by a helper | the decision that holds its value | the reducer node (`Reducer()`), held once | `agg_name`, `path_key`, `class_key`, `push` |
+
+- **A kept call names its definition by a typed reference.** `BoundFunctionExpression::definition`
+  (`DecideHelperRef`: the entry's kind and its index) is a symbol reference, as Clang's `DeclRefExpr` is to its
+  `Decl`. `LogicalDecide::NameDefinition` is its one writer and `DecideDefinitionOf` its reader. `Copy` carries it;
+  `Equals` and `Hash` leave it out, as they do an alias; `DecideFactsEqual` compares it; `DecideStripTags` unsets it on
+  the copy `ExpressionBuilder::Of` takes. A call that is first a `PRODUCT` and then a reducer's body names the `DEFINITION`.
+  A `REDUCER_VALUE` has no kept call: the reader holds the helper's column.
+- **What a row is to the helper it defines is a clause field.** `BoundDecideClause::helper_row` (`DecideHelperRow`:
+  `ABS_ENVELOPE`, `ABS_NEGATED_ENVELOPE`, `L0_BOUND`, `L0_TOLERANCE`, `DEFINITION`) beside `defines`, the helper;
+  the tree's facts and `DecideConstraint` copy the field.
+- **One loop reads the table.** `LogicalDecide::EnumerateExpressions` (every expression execution evaluates),
+  `EnumerateBodies` (every body a rewrite reads, with its owner's push and rows: `DecideOwnedBody`, whose `Owner` is
+  `CLAUSE`, `OBJECTIVE` or `HELPER` with the entry's index) and the tree's registration each visit the entries in
+  table order and switch on the kind. A `REDUCER_VALUE`'s reducer is handed out as its parts (its argument and its
+  `filter`), so no walk reads the held node as a reducer still to be rewritten.
+- **A fact joined over a helper's readers is a field of the entry.** A `REDUCER_VALUE`'s `push` (`ExtremumPush`) is
+  the way its readers push the helper; a reader that shares the helper widens it with `JoinExtremumPush`, and
+  `NeedsEnvelope()` and `NeedsClosing()` read the sides off it. An ABS's `exact` is the same kind of fact.
+- **None of it is serialized**: only a plan the DECIDE optimizer has not run on is (§5).
+
+**Where the rewrites' structure departs from `context/opa_rewrite/design.md` § 3.2.3.**
+
+1. *There is no `BoundDecideFunctionExpression`.* The kept call stays a `BoundFunctionExpression` and holds a typed
+   reference into the table (the symbol-reference pattern above). A wrapper node would hide the call from every
+   reader that matches it by shape (the term splitter, the product form, the canonicalizer's operator rebuild), and
+   two readers hold a call and no table (`DecideDegreeOf`, the canonicalizer's `HoldsReducer`), which is why the
+   reference carries the kind beside the index.
+2. *The six row marks are one clause field*, `helper_row`, an enumeration on the record (the design's rule that a
+   fact of a row is a field of its record), not facts of a function node: the rows are clause records the tree reads
+   one at a time, and a row is one thing to one helper.
+3. *A product is two kinds.* `PRODUCT` is the kept call's entry, whose body is the expansion and which has no helper;
+   `BOOLEAN_PRODUCT` is one entry per Boolean product the expansion reads, each one helper. One group record would be
+   an entry with any number of helpers, where every other entry has at most one.
+
 **Where the bound structure departs from `context/opa_rewrite/design.md` § 3.2.2 and § 3.5.**
 
 1. *A member NULL test is its own node, not a field of the reducer.* `BoundDecideNullTestExpression` is a Decorator
@@ -255,18 +302,15 @@ and the checks, so binding resolution and column pruning see their columns.
 
 **From the optimizer** — `num_auxiliary_vars` (the decisions it appends after the declared
 ones), `solver_backend_name`, `use_native_constructs`,
-`force_native_constructs`, `bilinear_function_groups`,
-`abs_functions`, `aux_var_expressions`, `rewrite_accounts` (one fact per construct a rewrite
+`force_native_constructs`, `helper_definitions` (the one table of the constructs the rewrites kept, above),
+`aux_var_expressions`, `rewrite_accounts` (one fact per construct a rewrite
 replaced -- the construct as a plan prints it and what it became, `RewriteAccount::Kind`
 -- under the clause it came from, INVALID_INDEX for the objective; worded by the renderer;
-never serialized),
-`reducer_value_links` (the value rewrite's helper
-decisions, one per reducer over one set of rows, shared by every clause that reads it:
-each `ReducerValueLink` holds the reducer a helper replaced — kind, body, its own `when`
-and `per`, its path key (its `by` key under every enclosing one), its SQL as a label —
-the rows its path keeps, and the sides any reader needs; innermost first, and
-its body's terms are lowered into its node's `DecideBody::members` (`LowerDecideTree`); every MIN or MAX over
-decisions is one), and the folded variable box.
+never serialized), and the folded variable box. A `REDUCER_VALUE` entry of `helper_definitions` is the value
+rewrite's helper decision, one per reducer over one set of rows, shared by every clause that reads it: it holds the
+reducer the helper replaced (the node, with its own `when` and `per`), its path key (its `by` key under every enclosing
+one), its SQL as a label, the rows its path keeps, and the way its readers push it; its body's terms are lowered into
+its node's `DecideBody::members` (`LowerDecideTree`); every MIN or MAX over decisions is one.
 
 `optimized` marks the boundary between the first two groups and the third. It is
 set before the optimizer's first rewrite and is what takes this plan off the wire —
@@ -318,12 +362,13 @@ expression-holding fields **explicitly** rather than calling
 `VisitOperatorExpressions`, because DECIDE variables must be shielded from
 resolution via `ignored_bindings`; it visits every field through
 `LogicalDecide::EnumerateExpressions`, the one list of them: `bound` (`variables`, `constraints`, `objective`, `keys`,
-`frames` with order key, fallback and rows, `signatures` with rows and fields' values), `reducer_value_links` (body,
-own `when`, clause `when`) and `value_checks`.
+`frames` with order key, fallback and rows, `signatures` with rows and fields' values), `helper_definitions` (each
+entry's body or, for a `REDUCER_VALUE`, its reducer's argument and filter; its `when`; an L0 indicator's links) and
+`value_checks`.
 
 **Any new field holding expressions that execution will evaluate must be added to
 `EnumerateExpressions`.** An optimizer rewrite that moves subexpressions out of
-`bound.objective` into a side vector (`reducer_value_links` is one)
+`bound.objective` into a side vector (`helper_definitions` is one)
 otherwise silently opts them out, and the operator then reads a logical index as a
 chunk position. A single-table source hides the bug entirely, because the two
 indexings coincide there; it surfaces only once a join reorders columns.
@@ -462,16 +507,16 @@ solver's construction) is printed under its clause before the rows it left; the 
 (`origin.objective`, returned by `CollectDecideClauseLayers` in `objective_rows`), print
 under the objective. A MIN or MAX prints as written in a clause and in the objective, its account under it; an AVG
 objective prints its sum under its account; an
-L0 link's constants print by the names the user writes or sets them with: an automatic bound
-(`L0_AUTO_BOUND_TAG`) as `M`, a written one (`L0_WRITTEN_BOUND_TAG`) as the number in `norm(e, 0, M)`, and the
-tolerance (`L0_TOLERANCE_TAG`) as `decide_l0_tolerance`. A rewrite's row prints its clause's scope as written
+L0 link's constants print by the names the user writes or sets them with: the bound of an `L0_BOUND` row
+(`BoundDecideClause::helper_row`) as `M` when automatic (`DecideHelperDefinition::auto_m`) and as the number in
+`norm(e, 0, M)` when written, and the tolerance of an `L0_TOLERANCE` row as `decide_l0_tolerance`. A rewrite's row prints its clause's scope as written
 (`per region:`, and no `when true:` the query did not write; `DecideObjectiveQualifier` for the objective's
 rows), drops a zero the rewrite wrote (`IsRewriteZero`: a numeric constant with no query location, so `0 + v`
 prints `v`), and prints a DOUBLE constant the rewrite wrote as a plain number (`RewriteNumberText`: `>= 0`).
 An `IN` under
 a scope keeps its clause's qualifier in its source info, so a suggested edit pastes back with its scope; an infinity norm
 echoes its order quoted (`norm(e, 'inf')`). The diagnosis label of a MIN/MAX helper
-(`ReducerValueLink::label`) is spelled as the plan prints the clause (`max(ship)`), and a `<>`'s binary is labelled by
+(`DecideHelperDefinition::label`) is spelled as the plan prints the clause (`max(ship)`), and a `<>`'s binary is labelled by
 its clause as written (`QuoteWrittenClause`). A quoted span is parenthesized by how
 tightly its own text binds (`DecideBinding`, recorded with the span), not by the bound node. In a reprinted node,
 parentheses follow DuckDB's precedence: a cast with no location passes its precedence to the child it hides, the right

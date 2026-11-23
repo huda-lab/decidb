@@ -131,8 +131,9 @@ A rewrite changes a node or a record; it leaves no tag.
 
 | Today | After |
 |---|---|
-| ABS, Boolean product, L0, definition: a tag on the kept call carrying an index into `abs_functions`, `bilinear_function_groups`, `l0_indicator_functions`, `definition_functions` | `BoundDecideFunctionExpression` (the F node) over the kept call: kind and the index of its definition |
-| A reducer replaced by a helper's column, its definition in `reducer_value_links` | Unchanged in shape: the reader holds the helper's column, the definition holds the reducer node once |
+| ABS, Boolean product, L0, definition: a tag on the kept call carrying an index into `abs_functions`, `bilinear_function_groups`, `l0_indicator_functions`, `definition_functions` | The kept call, a `BoundFunctionExpression`, holds a typed reference (`definition`: kind and index) into the one table `LogicalDecide::helper_definitions`; there is no wrapper node, since the kept call is still matched by shape (`context/docs/pipeline/03_logical_plan/done.md`). A product is two kinds: the kept call's expansion (`PRODUCT`) and each Boolean product's helper (`BOOLEAN_PRODUCT`) |
+| A reducer replaced by a helper's column, its definition in `reducer_value_links` | Unchanged in shape: the reader holds the helper's column, the `REDUCER_VALUE` definition holds the reducer node once |
+| What a row is to the helper it defines (an ABS envelope, an L0 bound or tolerance row, a body definition): a tag on the row | The clause field `helper_row`, beside `defines` |
 | Rows a rewrite adds: appended by wrapping the whole tree in a new AND; role in `__decide_structural_constraint__`, `__defines_<i>__`, `__objective_row__` | A `BoundDecideClause` appended to the vector, its origin saying what it is |
 | Shape, easy MIN/MAX, folded bound, tightest frame bound: tags on the comparison | Fields of the clause |
 
@@ -149,7 +150,7 @@ A rewrite changes a node or a record; it leaves no tag.
 three steps, where column bindings are final (`plan_decide.cpp:224`):
 
 1. **One lowering walk** over the clauses and the helper definitions. A clause makes its root E; a reducer node makes
-   a G and its operand E; a frame index makes its O once; a function node makes its F and the rows it owns. Terms
+   a G and its operand E; a frame index makes its O once; a helper definition makes its F and the rows it owns. Terms
    are split in the same walk, so a term names its G directly.
 2. **The solver gate** (`RequireDecideSolverSupport`), as today.
 3. **`CompileDecideTree`**, today's program compiler, unchanged.
@@ -206,13 +207,13 @@ three steps, where column bindings are final (`plan_decide.cpp:224`):
 3. **Copy, equality, serialization.** Parsed classes: as `DecideFrameExpression`. Bound classes and records:
    generated from `expression.json` and `nodes.json`. [read] Only a plan the DECIDE optimizer has not run on is
    serialized (`SupportSerialization` returns `!optimized`), so what the binder and the canonicalizer build is
-   serialized, and what the rewrites add (function nodes, helper definitions) is not, as
+   serialized, and what the rewrites add (a kept call's reference, helper definitions) is not, as
    `BoundSubqueryExpression` is not. A prepared statement keeps its physical plan and so its executor tree.
 4. **What each rewrite invalidates.** Three kinds of fact, each with one rule.
 
    | Kind | Facts | Rule |
    |---|---|---|
-   | A fact of the written clause | shape (value or aggregate), its grouping key, its variant signature | set once by the canonicalizer, stored on the clause, never recomputed. [read] The rewrites replace reducers by helpers, so recomputing after them gives a different answer (`decide_canonicalizer.cpp:1668`, `decide_tree.cpp:784`) |
+   | A fact of the written clause | shape (value or aggregate), its grouping key, its variant signature | set once by the canonicalizer, stored on the clause, never recomputed. [read] The rewrites replace reducers by helpers, so recomputing after them gives a different answer (`decide_canonicalizer.cpp:1668`, `decide_tree.cpp:784`). The shape has a second writer: the scoped-reducer pass, which discharges the VALUE shape by putting helpers where the reducers were, classifies the clause it leaves (`ClassifyClause`), since the tree reads that clause as per-row or aggregate |
    | A fact joined over a helper's readers | the sides a MIN or MAX helper needs (`push`), whether an ABS is exact, the innermost-first order of definitions | stored on the definition; a rewrite that adds a reader widens it |
    | Computed when asked | degree | never stored, as today |
 
@@ -239,7 +240,7 @@ The steps run in order, one at a time: each touches files the next one touches.
 | TREE-3 | Clause records | 02–05, planning, 08's readers, direct front end, EXPLAIN, DIAGNOSE | the AND tree, its wrappers, `constraint_sources`, 14 tags |
 | TREE-4 | Reducer node and value node | 02–05, DuckDB's statistics pass, planning, 08's readers, direct front end | 15 tags; `norm` as a patched SUM |
 | TREE-5 | Frame field | 02–05, planning | 3 tags |
-| TREE-6 | Function nodes and one table of helper definitions (§ 3.2.3) | 05, planning | 9 tags; four of the five definition tables |
+| TREE-6 | A typed reference on the kept call and one table of helper definitions (§ 3.2.3) | 05, planning | 9 tags; the five definition tables |
 | TREE-7 | One lowering walk; `DecideNode` by kind (§ 3.2.4) | planning, 08 (field access only) | the second lowering, the address join |
 | TREE-8 | Direct rules read `BoundDecide` (R17) | direct solve | `DirectIR` and its front end, the last tag |
 | TREE-9 | The tag machinery goes (R20) | all | the tag section of `enums/decide.hpp`, `DECIDE_TAGS`, the refusal of a name that holds a tag (BIND-3), tag stripping at renders; docs |
@@ -282,7 +283,7 @@ goes with the later one.
 | TREE-4 | `WRITTEN_NAME_` | on a reducer: a field. On a scalar call (`@`, `**`): a display field `written_name` on `BoundFunctionExpression`, beside `is_operator` |
 | TREE-5 | `FRAME_`, `FRAME_TIGHTEST_BOUND` | the reducer's `frame` field; the clause field `tightest_frame_bound` |
 | TREE-5 | `FRAME_AGGREGATE_` | the data reducer's `frame_aggregate` field, naming its `frame_aggregates` record; the lowered column holds it as `DecideFrameColumn::aggregate` |
-| TREE-6 | `ABS_FUNCTION_`, `ABS_FUNCTION_NEG_`, `BILINEAR_FUNCTION_GROUP_`, `L0_INDICATOR_FUNCTION_`, `DEFINITION_FUNCTION_`, `BODY_DEFINITION`, `L0_AUTO_BOUND`, `L0_WRITTEN_BOUND`, `L0_TOLERANCE` | the function node and its definition |
+| TREE-6 | `ABS_FUNCTION_`, `ABS_FUNCTION_NEG_`, `BILINEAR_FUNCTION_GROUP_`, `L0_INDICATOR_FUNCTION_`, `DEFINITION_FUNCTION_`, `BODY_DEFINITION`, `L0_AUTO_BOUND`, `L0_WRITTEN_BOUND`, `L0_TOLERANCE` | on a kept call: `BoundFunctionExpression::definition`, a typed reference to its entry of `helper_definitions`. On a row: the clause field `helper_row`; an L0 bound is automatic or written by its definition's `auto_m` |
 | TREE-7 | `FRAME_COLUMN` | the lowering walk, which owns the frame-column registry and makes the references † . The reference is a `BoundReferenceExpression` DuckDB's executor reads, with no field and no frame node to hold an index; its index range is shared with the tree's child reads, and DuckDB's resolver names ordinary references by the bare column name, so a name is not display text |
 | TREE-8 | `NULL_GUARD` | a term's fact, applied when its program is compiled; the direct front end is its second writer † |
 | TREE-9 | the seven helper name prefixes (`ABS_AUX_NAME_`, `VALUE_LINK_NAME_`, …) | none: [read] no code reads a helper's origin from its name. They stay as display names and leave the tag list with the name refusal |

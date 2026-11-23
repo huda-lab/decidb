@@ -645,7 +645,8 @@ supplies is a property of the *site*, not of the construct:
   member and a `SUM(y) >= 1` that makes one bind. An objective that minimizes it
   supplies this for free.
 
-A helper needs the side its readers push it against, and stage 05 records which (`need_envelope`, `need_closing`;
+A helper needs the side its readers push it against, and stage 05 records which (`DecideHelperDefinition::push`, which the tree reads into the link's `need_envelope` and
+`need_closing`;
 `../05_optimizer/done.md`, "MIN/MAX"): a MAX read pushed down needs the envelope alone, read pushed up the closing side
 alone, and read both ways (`=`, `<>`, a factor whose sign is known only when the query runs) both. A clause that reads
 `MAX(e) >= K` needs `z <= MAX(e)`, the closing side: a `z` inflated past every member would satisfy a bound nothing else
@@ -707,7 +708,7 @@ clause is an ordinary row over it, `z <op> K` with the clause's SUM and AVG term
 so an infeasible MIN/MAX is diagnosed identically whatever backend the host has, and the bound is never spread across a
 per-row Big-M family (`e_r - M*y_r >= K - M`), which would hide `K` inside every row. The cost is one column and one row
 per group; the link's rows carry `z` in place of the bound. The extremum column is labelled with the reducer as the plan
-prints it (`ReducerValueLink::label`), so a repair names `max(x * c)` rather than an internal column.
+prints it (`DecideHelperDefinition::label`), so a repair names `max(x * c)` rather than an internal column.
 
 **No indicator is allocated before the rows that read it.** Stage 05 allocates none: a MIN/MAX is a helper column there.
 The binaries a Big-M pinning needs are global-block columns `EmitExtremumLink` creates for the members it actually
@@ -992,7 +993,7 @@ is refused where `e` has no finite bound.
 
 ### ABS
 
-Stage 05 records each ABS (`LogicalDecide::abs_functions`) and emits no row. The tree builds its two envelope rows,
+Stage 05 records each ABS (an `ABS` entry of `LogicalDecide::helper_definitions`) and emits no row. The tree builds its two envelope rows,
 `aux >= inner` and `aux >= -inner`, beneath the ABS's F node, as it does for a definition, and the emitter evaluates
 both into `SolverInput::abs_links` (`AbsLinkSpec`: the auxiliary, whether the ABS is exact, the ABS as written and as a
 plan prints it, the two rows). Every row of an ABS is emitted in this stage. The ABS is a pseudo-operation, as in LLVM's

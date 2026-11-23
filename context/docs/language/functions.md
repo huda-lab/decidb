@@ -160,7 +160,7 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
     inferred.
   - A factor of exactly zero reads as positive, like any other number. `ABS` over data is plain SQL.
   - Code: `FindExactAbs` and `RewriteAbs` (`decide_rewrite_abs.cpp`) record each ABS in
-    `LogicalDecide::abs_functions`; `EmitAbsConstraints` (`linearization_bilinear_abs.cpp`) emits Path B, objective
+    `LogicalDecide::helper_definitions`; `EmitAbsConstraints` (`linearization_bilinear_abs.cpp`) emits Path B, objective
     and constraint alike. Tests: `test_abs_linearization.py`.
 - **Other functions and operators over a decision** are refused by the shape check (`decide_shape_check.cpp`), once,
   after canonicalization and before any rewrite, in every position (per row, inside a reducer, inside `ABS`). It allows

@@ -163,7 +163,7 @@ report once the rows are in, and it must never predict less. Where it cannot be 
 it over-reports. `MayHaveIntegralColumn` reads every helper this stage adds by its own type, as a declared decision
 is read, and the three lowerings that add a binary during execution off what this stage leaves: a `<>` is admitted
 over whole-numbered decisions only, a MIN/MAX held by indicator rows leaves a value link, and an exact ABS leaves its
-record (`LogicalDecide::abs_functions`). An exact ABS is lowered only where the backend states no ABS natively, which
+record (an `ABS` entry of `LogicalDecide::helper_definitions`). An exact ABS is lowered only where the backend states no ABS natively, which
 stage 06 decides, so on a backend that does the check over-reports. An ABS that is not exact adds only its envelope, so
 `SUM(ABS(...))` beside `SUM(POWER(...))` under `MINIMIZE` leaves the QP continuous, and HiGHS takes it.
 A square of a form over two decisions counts as coupled whatever its coefficients turn out to be, and a product counts
@@ -244,30 +244,33 @@ term splitter use them:
 | 2 | `RewriteFrameRanges` | Each range frame over decisions becomes a helper decision per window before later rewrites copy clauses, so they read an ordinary keyed decision. |
 | 3 | `RewriteNorm` | Lowers the NORM marker, including L0 indicator metadata, and clears the written order (`norm`) of desugared L1/L2/infinity norms. |
 | 4 | `RewriteInDomain` | Lowers bound DECIDE-variable IN markers to indicator metadata. |
-| 5 | `RewriteBilinear` | The one bilinear pass: retains Boolean products and records their expansions and product F-node specs. A product a later pass exposes is tagged where it appears (8, 11), through the same entry. |
+| 5 | `RewriteBilinear` | The one bilinear pass: retains Boolean products and records their expansions and product F-node specs. A product a later pass exposes is kept where it appears (8, 11), through the same entry. |
 | 6 | `RewriteMinMax` | Tags the easy identity of a MIN or MAX (`max(e) <= K`) and splits an equality on one, before any pass reads the clause's direction. |
 | 7 | `DecideTreeConstruction::PrepareDefinitionFunctions` | Registers definition F-node specs and reserves scoped helper columns before the value rewrite consumes their reads. |
 | 8 | `RewriteScopedReducers` | The value rewrite: a VALUE-shape comparison's reducers, and every other MIN or MAX the easy identity left, become helper decisions. |
 | 9 | `RewriteNotEqual` | Creates `<>` indicators. |
 | 10 | `RewriteAvgToSum` | Scales AVG values into SUM terms after the value rewrite. |
-| 11 | `RewriteAbs` | Decides which ABS is exact from its body's owner, once the rewrites that join a helper's readers (2, 7, 8) have run. Allocates the ABS helpers, records each ABS in `abs_functions` for the tree and stage 06, and adds the check of each ABS argument's data. It emits no row and no indicator. Hands each body whose ABS got a helper back to the bilinear entry. |
+| 11 | `RewriteAbs` | Decides which ABS is exact from its body's owner, once the rewrites that join a helper's readers (2, 7, 8) have run. Allocates the ABS helpers, records each ABS in `helper_definitions` for the tree and stage 06, and adds the check of each ABS argument's data. It emits no row and no indicator. Hands each body whose ABS got a helper back to the bilinear entry. |
 | 12 | `FoldSingletonRows` | Must be last of all — see below. |
 
 The `optimizer.decide` span of `DECIDB_PROFILE=1` times the whole block.
 
 **Every pass that reads bodies reaches them through one enumerator** (`LogicalDecide::EnumerateBodies`, the Visitor
-pattern, as DuckDB's `LogicalOperatorVisitor::EnumerateExpressions` enumerates a node's expressions). It has one fixed
-case per container, in the order objective, clauses, definitions, value links, L0 links, and hands the callback a body
+pattern, as DuckDB's `LogicalOperatorVisitor::EnumerateExpressions` enumerates a node's expressions). It visits
+the objective, the clauses, then the helper definitions (`LogicalDecide::helper_definitions`) in table order, which is
+the order the helpers were made, with one case per kind: a `DEFINITION`'s body, a `REDUCER_VALUE`'s argument, an
+`L0_INDICATOR`'s three links; an ABS's operand and a product's expansion are copies of what a body holds, and no body.
+It hands the callback a body
 (`DecideOwnedBody`) with its expression, its owner, the push its owner gives it, the rows it is read on and, for a
 clause, an L0 link or the objective, its record (`BoundDecideClause`), which holds its origin and scope. A pass filters by owner in its callback and loops over no container. A new
-container of bodies is added in the enumerator and nowhere else. The order is the order the columns a pass adds stand
+kind of helper is a case in the enumerator and nowhere else. The order is the order the columns a pass adds stand
 in, which the model dumps pin. Four walks stay outside it, each for its own reason: `FindBoxedHelpers` walks the helper
 graph by binding, not by body; folding looks a link up by its helper; the tree-side loops of the linear form and the
 solver gate read the tree, not the containers; and `RewriteInDomain`, `RewriteMinMax` and folding loop over the clause records, because they read or write a
 record's fields and not only its body.
 
 A later stage-05 lowering, `LowerDecideTree`, belongs to this stage but is
-**triggered during physical planning** — see §1a. It lowers each `ReducerValueLink`'s body
+**triggered during physical planning** — see §1a. It lowers each `REDUCER_VALUE` definition's body
 into its helper's G or O.
 
 ---
@@ -456,18 +459,19 @@ inlining relies on. Where a helper is written in is stage 06's alone, decided fr
 ### ABS linearization — `RewriteAbs`
 
 Detects `BoundFunctionExpression` for `ABS` over decision variables and allocates an auxiliary for each (INTEGER when
-the operand is integral, else DOUBLE). The ABS node stays in its clause as a tagged function that term extraction reads
-as the auxiliary. Each ABS is recorded in `LogicalDecide::abs_functions`: the auxiliary, the operand, whether it is
+the operand is integral, else DOUBLE). The ABS node stays in its clause as a kept call that names its definition
+(`BoundFunctionExpression::definition`), which term extraction reads
+as the auxiliary. Each ABS is recorded in `LogicalDecide::helper_definitions` (kind `ABS`): the auxiliary, the operand, whether it is
 exact, the rows it is read on, its scope, the clause it was written in, and its text as written. Stage 05 emits no row,
 allocates no sign indicator and reads no `use_native_constructs`. An ABS is a pseudo-operation, as in LLVM's
 legalization: stage 06 either states it natively or expands it (`../06_model_formulation/done.md`, "ABS"). The tree
 gives each ABS an F node and builds its two envelope rows, `aux >= inner` and `aux >= -inner`, beneath it
-(`PrepareAbsFunctions`, `MakeAbsRow`), as it does for a definition; EXPLAIN prints both.
+(`RegisterHelperDefinitions`, `MakeAbsRow`), as it does for a definition; EXPLAIN prints both.
 
 **The operand is recorded once the bodies are final.** `RewriteAbs` ends with `RecordAbsOperands`, run over every body
-after the bilinear worklist drains, and it is the only place `AbsFunction::operand` is set. A copy taken when the
-helper is allocated would miss the tags the bilinear entry puts on a product: a product with a `BOOL` factor is linear
-once the entry tags it, and a product with an `ABS` factor is tagged only by the worklist described in the bilinear
+after the bilinear worklist drains, and it is the only place an ABS definition's `body` is set. A copy taken when the
+helper is allocated would miss the definitions the bilinear entry makes the products name: a product with a `BOOL`
+factor is linear once the entry keeps it, and a product with an `ABS` factor is kept only by the worklist described in the bilinear
 section. An operand that still holds a square or a product of decisions is refused at the ABS with a
 `NotImplementedException`, *"ABS over a product or a power of decisions is not supported"*. The test is
 `RequireLinearOperand`, which asks `DecideTermSplitter::IsLinear` and which `RewriteNotEqual` calls too. The refusal
@@ -517,7 +521,7 @@ check is a value check (`LogicalDecide::value_checks`), which the tree evaluates
 Whether an ABS needs its exact (Big-M) encoding is an inherited attribute, in the sense of an attribute grammar: the
 push of the body that holds it, read from the body's owner and handed down to the ABS. `FindExactAbs`, which
 `RewriteAbs` calls first, walks every owner once and collects, into an `AbsExactSet`, the ABS nodes their owner's push
-does not pin; `FindAbsAndAllocateAux` reads the set. `AbsFunction::exact` records the answer for one ABS: whether the
+does not pin; `FindAbsAndAllocateAux` reads the set. `DecideHelperDefinition::exact` records the answer for one ABS: whether the
 auxiliary needs its upper side pinned. It is false when the owner's push holds `aux` at `|inner|` by solver pressure or
 by the clause's shape: an objective term the minimization pushes down, or a constraint shape that upper-bounds `aux`.
 When true, stage 06 pins the auxiliary from above, with the backend's absolute value or a sign indicator and its Big-M
@@ -671,8 +675,8 @@ hands the product back (`FindAndReplaceBilinear`). A frame's marker is no reduce
 row (deck pp. 43, 71), so this pass takes `x * at(previous: x) over (t.id)` as a product. A body its definition F node
 owns is not such a reducer: the splitter reads it as its helper decision.
 
-**The pass runs once; a product that appears later is tagged where it appears**, through the same entry,
-`FindAndReplaceBilinear`, which leaves a product it has tagged as it is. The value rewrite hands over each VALUE-shape
+**The pass runs once; a product that appears later is kept where it appears**, through the same entry,
+`FindAndReplaceBilinear`, which leaves a product that names its definition as it is. The value rewrite hands over each VALUE-shape
 clause and the objective once their reducers are helpers. `RewriteAbs` queues each body in which it allocated an ABS
 helper, since a product with an ABS factor is affine in the decisions only once the helper exists, and hands the queue
 over after every ABS has its helper: a worklist, as LLVM's InstCombine revisits the users of a value it changed. The
@@ -756,9 +760,9 @@ gate, as a reducer nested in one does. The refusal names the reducer and not a c
 
 EXPLAIN says how the helper holds the body: `power(x, 2) becomes a helper decision per row,
 at least its value` (`BODY_AT_LEAST`; `at most`, `equal to` for `BODY_AT_MOST`,
-`BODY_EQUAL`). The defining row itself is left out (`BODY_DEFINITION_TAG` on the row): it
+`BODY_EQUAL`). The defining row itself is left out (`DecideHelperRow::DEFINITION` in the row's `helper_row`): it
 restates the body the reducer already prints. The row carries the source clause of the
-first clause that reads the helper (`DefinitionFunction::source_clause_id`), so a refusal can quote it, and
+first clause that reads the helper (`DecideHelperDefinition::origin`), so a refusal can quote it, and
 no removal group (§ The value rewrite).
 
 **Exit contract.** `VerifyExtremumBodiesLinear` runs after the value rewrite and raises an
@@ -778,7 +782,8 @@ Only a reducer over decisions counts (`ContainsDecisionReducer`): a reducer over
 Stage 04 decides the shape once
 (`CanonicalConstraintClass::VALUE` in `BoundDecideClause::shape`, stage 04 §3.10); this pass reads
 it and turns the clause into an ordinary per-row one, whose shape it writes (`ClassifyClause`), so stage 06 needs no new
-constraint path. It runs after the bilinear rewrite, whose auxiliaries may stand in a reducer's body, and after
+constraint path. A clause's shape has these two writers and no other: the canonicalizer sets it once, and this pass,
+which discharges the VALUE shape by putting helpers where the reducers were, classifies the clause it leaves. It runs after the bilinear rewrite, whose auxiliaries may stand in a reducer's body, and after
 `RewriteMinMax`, which leaves the clauses of the easy identity with their reducer. A clause in any other shape takes
 the same pass for its MIN and MAX only (§ MIN/MAX).
 
@@ -793,13 +798,13 @@ side (`CollectReducerSites`; a data-only reducer is a number and stays) the pass
    the rows its path keeps, built by stage 08: a path key `by ()` throughout is one class,
    or none when no row holds a member, so a read of it skips its instance (D68). Its label
    is the reducer's SQL, `by` included
-   (`aux_var_expressions`, `ReducerValueLink::label`), so EXPLAIN and DIAGNOSE name it by
+   (`aux_var_expressions`, `DecideHelperDefinition::label`), so EXPLAIN and DIAGNOSE name it by
    what it holds;
-2. records a `LogicalDecide::ReducerValueLink`: the reducer kind, its body, its own `when`
-   and `per`, its path key and the rows its path keeps;
+2. records a `REDUCER_VALUE` entry of `LogicalDecide::helper_definitions`: the reducer node (its function, its
+   body, its own `when` and `per`), its path key and the rows its path keeps;
 3. replaces the reducer node by a reference to the helper, in place, as `RewriteAbs` does.
 
-The comparison then holds no decision reducer and the tag is removed: it is one row per
+The comparison then holds no decision reducer and leaves the VALUE shape: it is one row per
 kept row, or per class under `per K:`, and instances that read the same values are one row (a clause with no `per` that
 reads no per-row decision has one instance per distinct signature, `per K` classes that agree on everything the clause
 reads share one; `../08_execution/done.md` §4a). Stage 06 states each helper's definition per group,
@@ -855,7 +860,8 @@ it, which is harmless, since an equality on a helper nothing else reads always h
 DIAGNOSE reads it as part of the fixed model like every untagged structural row. Each
 clause that reads the helper still accounts for it in its own plan, once.
 
-A helper records which side pins it (`need_envelope` / `need_closing`), the epigraph form, from the
+A helper records the way its readers push it (`DecideHelperDefinition::push`), which says which side pins it
+(`NeedsEnvelope()`, `NeedsClosing()`), the epigraph form, from the
 sign its term carries once the side is read as a sum — through `+`, `-`, binder casts and
 the factors on it (`ScaleSignAtPlanTime`; 0 for a data factor of unknown sign or an
 enclosing expression; a `BOOL` decision reads +1 and `-b` -1, since it is never negative,
@@ -927,8 +933,9 @@ shape takes a route of its own.
 **The helper's definition is one-sided**, the epigraph auxiliary of the Plaisted–Greenbaum encoding: the side its
 readers push it against. Which way a clause pushes a term — down under `<=` for a positive term, up for a negative one,
 the mirror under `>=`, nowhere under `=`, `<>` or an unknown sign — is read once, in `ExtremumPushOf`
-(`decide_cast_policy.hpp`), by the easy identity and the value rewrite alike, and `DecideHelperSides` turns it into the
-sides. A MAX pushed down and a MIN pushed up are the cheap directions: the envelope alone holds (`helper >= member` for
+(`decide_cast_policy.hpp`), by the easy identity and the value rewrite alike. The helper's definition stores it (`push`), a reader that
+shares the helper widens it (`JoinExtremumPush`: the push where the readers agree, none where they do not), and
+`NeedsEnvelope()` and `NeedsClosing()` read the sides off it. A MAX pushed down and a MIN pushed up are the cheap directions: the envelope alone holds (`helper >= member` for
 a MAX, every member bounds it). Pushed the other way a MIN or MAX needs the closing side (some member reaches the
 helper), which stage 06 states with indicators or natively; with no push it needs both. The objective is a minimization,
 so its push is down times the term's sign: `MINIMIZE max(x)` takes the envelope, `MAXIMIZE max(x)` the closing side. A
@@ -1026,9 +1033,8 @@ A range over decisions, `agg(from F1 to F2 ...: e) over (...)` (`../../language/
 whose groups are the frame's **windows** -- the range several anchors share: one per timeline when neither end depends
 on the anchor, one per position (peer) otherwise. `decide_rewrite_frames.cpp` replaces each by a helper decision with
 one instance per window (a keyed scope of its own, `KeyedScopeInfo::value_link`, its key the frame's timeline key for a
-plan to name it by; stage 08 numbers the windows from the frame map) and a `ReducerValueLink` naming the frame, one per
-frame however many copies the clause holds. It goes through the value rewrite's door (`AddValueHelper`,
-`DecideHelperSides`): the helper's sides are read off the way its comparison pushes it, through `+`, `-`, data factors
+plan to name it by; stage 08 numbers the windows from the frame map) and a `REDUCER_VALUE` definition whose reducer is the frame's marker, one per
+frame however many copies the clause holds. It goes through the value rewrite's door (`AddValueHelper`): the helper's push is read off the way its comparison pushes it, through `+`, `-`, data factors
 and enclosing SUM, AVG, MIN and MAX (`WalkPolarity`, `CollectRangeSigns`), both sides under a norm (D79). It runs first among the
 rewrites, so ABS, `norm`, `<>`, MIN/MAX and the value rewrite each read the helper as a keyed decision and the canonical
 shape stands. A reducer's own `when` keeps the copy of the range its NULL test holds (stage 04), which the linear form

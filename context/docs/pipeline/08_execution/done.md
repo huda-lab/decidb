@@ -360,10 +360,15 @@ unfiltered outer SUM whose clause has the same key, and whose bound is one value
 included: kept, the sum makes the clause one row per group, and a bound that reads the rows needs a row for each value
 it takes, which the value-link path writes; compatible outer SUM clauses also retain nested G readers when their own
 rows need quadratic terms. Filtered or deeper linear nests keep the value-link path so their bounds and scope semantics
-remain available. A nonlinear reducer body stays at its written site with a tagged read of its definition F node; tree
-lowering wires that read to the child F value, and term splitting uses the reserved helper column where
+remain available. A nonlinear reducer body stays at its written site as a kept call that names its definition
+(`BoundFunctionExpression::definition`); tree lowering wires that read to the definition's F value, and term splitting uses the reserved helper column where
 optimizer-owned MIN/MAX forms need it. Tree construction owns the definition E row. Its early preparation reserves
-plan-time indices and registers F-node specs before later optimizer consumers need them.
+plan-time indices and registers F-node specs before later optimizer consumers need them. The tree gives the helper
+definitions their F nodes in one loop over `LogicalDecide::helper_definitions`, in the order they were made and before
+any body is lowered (`RegisterHelperDefinitions`; declare, then define): an ABS, a Boolean product, an L0 indicator
+and a definition each get one, found by the entry's index (`definition_nodes`). A `PRODUCT` is read where it is kept,
+as its expansion, and a `REDUCER_VALUE` gets its G or O where it is first read (`Link`). The rows the definitions own
+(an L0 indicator's links, an ABS's envelope rows) are rooted after the written clauses in the same order.
 **What the emitter reads.** A node's body is its compiled term records (`DecideBody`, `DecideTerm`,
 `DecideTermSite`); the tree holds no second form of a clause. The E emitter takes a clause's comparison from the
 clause, its right-hand side from the body's RHS program, and each term's variable and coefficient program from the
@@ -596,7 +601,7 @@ coefficient evaluation:
    NULL in a written key column is in no class; a relation's columns compare NULL as a
    value. A key with no columns (a reducer's `per ()`) is one class, every row in it.
 2. A helper decision's scope (`KeyedScopeInfo::value_link`, the value rewrite) reads its
-   link's path key on the rows its path keeps only (`ReducerValueLink::when`: the clause's
+   link's path key on the rows its path keeps only (`DecideHelperDefinition::when`: the clause's
    `when` and every enclosing reducer's own), so the key is never
    evaluated where the clause never reads: one class per group that holds a member,
    numbered as its definition numbers them. A group with no member has no helper (its
