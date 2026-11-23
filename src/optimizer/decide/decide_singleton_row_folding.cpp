@@ -146,9 +146,9 @@ static void AdmittedInterval(const ExpressionBuilder &calc, ExpressionType compa
 	lower = calc.If(skipped, negative_infinity, lower);
 }
 
-//! A frame inside a tagged F body determines that helper's value, not the row on which the surrounding bound is
-//! read. After the function value is replaced by its helper, the bound can still be folded into that helper's box.
-//! Other frame reads remain row-dependent and keep the conservative refusal below.
+//! A frame inside the body of a kept call (a DEFINITION's or an ABS's) determines that helper's value, not the row on
+//! which the surrounding bound is read. After the function value is replaced by its helper, the bound can still be
+//! folded into that helper's box. Other frame reads remain row-dependent and keep the conservative refusal below.
 static bool ContainsFrameOutsideKeptCall(const Expression &expression) {
 	const auto definition = DecideDefinitionOf(expression);
 	if (definition.Is(DecideHelperKind::DEFINITION) || definition.Is(DecideHelperKind::ABS)) {
@@ -266,8 +266,8 @@ bool DecideReadSingletonRow(ClientContext &context, const LogicalDecide &decide,
 	    type != ExpressionType::COMPARE_EQUAL) {
 		return false;
 	}
-	// A frame selector reads another row, or nothing, which no admitted interval over the row says. A tagged ABS
-	// helper is its own decision, so a frame inside that F node's operand does not make a bound on its value vary.
+	// A frame selector reads another row, or nothing, which no admitted interval over the row says. A kept ABS
+	// call is its helper's decision, so a frame inside that F node's operand does not make a bound on its value vary.
 	if (ContainsFrameOutsideKeptCall(comparison)) {
 		return false;
 	}

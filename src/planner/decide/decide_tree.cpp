@@ -662,8 +662,8 @@ private:
 		// ABS envelopes are built from the optimizer's record rather than written by the user. They are in their
 		// natural form (`aux >= inner` / `aux >= -inner`), which can leave decisions on both sides of the comparison.
 		// Bring these internal rows through the same canonical boundary as ordinary clauses before term extraction.
-		// PrepareAbsFunctions has already read the uncanonicalized operand from the record, so this rewrite only
-		// changes the row's linear form, not the F node's definition.
+		// The F node reads the uncanonicalized operand from the record (DecideHelperDefinition::body), so this
+		// rewrite only changes the row's linear form, not the F node's definition.
 		const bool is_abs_envelope = IsDecideAbsEnvelope(clause.helper_row);
 		const bool is_l0_link =
 		    clause.helper_row == DecideHelperRow::L0_BOUND || clause.helper_row == DecideHelperRow::L0_TOLERANCE;

@@ -50,7 +50,7 @@ void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {
 			return;
 		}
 		// The two rows a `<>` becomes hold a linear left side only. A product with a BOOL decision is linear through
-		// its F helper (RewriteBilinear tags it before this pass); a product or a power of decisions still here has no
+		// its F helper (RewriteBilinear keeps it before this pass); a product or a power of decisions still here has no
 		// formulation, and dropping its terms would change the answer.
 		RequireLinearOperand(splitter, *comp.left, comp, "<>");
 		// No indicator variable. Whether a `<>` even HAS a disjunction to switch is a

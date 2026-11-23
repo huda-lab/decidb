@@ -260,9 +260,9 @@ static void AddAbsValueCheck(ClientContext &context, LogicalDecide &decide, cons
 }
 
 //! Records the operand of each ABS in `expr` (DecideHelperDefinition::body) as the bodies stand once the
-//! bilinear entry has run over them, so the record holds the products it tagged, and refuses an operand that still
+//! bilinear entry has run over them, so the record holds the products it kept, and refuses an operand that still
 //! holds a product or a power of decisions, at the ABS. This is the only place that records an operand: a copy taken
-//! when the ABS got its helper would lack the tags of a product with an ABS factor.
+//! when the ABS got its helper would lack the definition a product with an ABS factor names.
 static void RecordAbsOperands(const Expression &expr, LogicalDecide &decide, const DecideTermSplitter &splitter) {
 	const auto kept = DecideDefinitionOf(expr);
 	if (kept.Is(DecideHelperKind::ABS)) {
@@ -280,7 +280,7 @@ static void RecordAbsOperands(const Expression &expr, LogicalDecide &decide, con
 
 void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	// Find ABS(expr) nodes over decide vars and allocate their helper variables. Keep the function expressions in the
-	// user's clauses; the tree owns their value through an F node, and term extraction resolves the tagged function to
+	// user's clauses; the tree owns their value through an F node, and term extraction resolves the kept call to
 	// the already allocated helper column. Each ABS is recorded (LogicalDecide::helper_definitions) with its operand
 	// (RecordAbsOperands), the clause it was written in (or the objective, DecideRowOrigin::objective) and whether it
 	// needs the exact encoding.
@@ -331,7 +331,7 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 		FindAndReplaceBilinear(*revisit.slot, decide, revisit.origin);
 	}
 	// The rows of an ABS state its operand as a linear form (EmitAbsEnvelopes, EmitAbsConstraints). A product with a
-	// BOOL factor is linear once the bilinear entry has tagged it, which for a product with an ABS factor happens just
+	// BOOL factor is linear once the bilinear entry has kept it, which for a product with an ABS factor happens just
 	// above, so the operand's record and the refusal wait for the worklist.
 	DecideTermSplitter splitter(optimizer.context, decide);
 	decide.EnumerateBodies([&](DecideOwnedBody &body) { RecordAbsOperands(*body.expr, decide, splitter); });
@@ -392,17 +392,17 @@ void DecideOptimizer::FindAbsAndAllocateAux(unique_ptr<Expression> &expr, Logica
 		// strict-inequality rewrites (`SUM(|...|) < K → <= K-1`) stay sound.
 		// Without this, all ABS auxes are DOUBLE and the LHS-integer check
 		// in ilp_model_builder would reject valid integer-valued strict cases.
-		// Nested ABS functions will be tagged as helpers, but this function node remains in the source tree.
+		// Nested ABS calls will name their helpers, but this function node remains in the source tree.
 		const LogicalType inner_type = func.children[0]->return_type;
 		bool inner_is_integer = inner_type.IsIntegral();
 		LogicalType aux_type = inner_is_integer ? LogicalType::INTEGER : LogicalType::DOUBLE;
 
 		// F6: a diagnosis and a plan name the helper by the user's ABS(inner), under the name it was written with
-		// (`abs` or `@`), rendered before nested ABS nodes receive their helper tags.
+		// (`abs` or `@`), rendered before nested ABS calls name their helpers.
 		string label = DecideWrittenName(func) + "(" + RenderForPlan(*func.children[0], decide) + ")";
 
 		// Innermost first: an ABS inside this one gets its helper first. The copied
-		// operand retains that tagged function, which term extraction resolves to the
+		// operand retains that kept call, which term extraction resolves to the
 		// inner helper before building this function's envelope rows.
 		FindAbsAndAllocateAux(func.children[0], decide, canonicalizer, exact, origin, rows);
 

@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import re
 
-#: Tags are ``__name__`` with no internal ``__``; payload tags carry digits
-#: (``__abs_function_0__``), so the character class has to allow them.
+#: Tags are ``__name__`` with no internal ``__``; a helper's name carries digits
+#: (``__value_0__``), so the character class has to allow them.
 INTERNAL_TAG_RE = re.compile(r"__[A-Za-z0-9_]+__")
 
 #: Markers that mean the user was shown an internal failure instead of an error.

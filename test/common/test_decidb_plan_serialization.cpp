@@ -4,6 +4,7 @@
 #include "duckdb/common/serializer/binary_deserializer.hpp"
 #include "duckdb/common/serializer/binary_serializer.hpp"
 #include "duckdb/common/serializer/memory_stream.hpp"
+#include "duckdb/optimizer/decide/decide_expression_builder.hpp"
 #include "duckdb/parser/expression/comparison_expression.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
@@ -13,6 +14,7 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_decide_null_test_expression.hpp"
 #include "duckdb/planner/expression/bound_decide_reducer_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -1156,4 +1158,37 @@ TEST_CASE("A DECIDE member NULL test copies and compares as itself, not as the t
 	auto written = is_not_null(0);
 	REQUIRE(!member.Equals(*written));
 	REQUIRE(!written->Equals(member));
+}
+
+TEST_CASE("A kept call carries the helper definition it names beside what it computes", "[decidb]") {
+	LogicalDecide decide;
+	decide.helper_definitions.push_back(make_uniq<DecideHelperDefinition>(DecideHelperKind::ABS));
+	decide.helper_definitions.push_back(make_uniq<DecideHelperDefinition>(DecideHelperKind::DEFINITION));
+	ScalarFunction function("f", {}, LogicalType::INTEGER, nullptr);
+	BoundFunctionExpression plain(LogicalType::INTEGER, function, {}, nullptr);
+	REQUIRE(!DecideDefinitionOf(plain).IsSet());
+
+	// The one writer gives the call its definition's index and kind.
+	BoundFunctionExpression kept(LogicalType::INTEGER, function, {}, nullptr);
+	decide.NameDefinition(kept, 1);
+	REQUIRE(DecideDefinitionOf(kept).index == 1);
+	REQUIRE(DecideDefinitionOf(kept).Is(DecideHelperKind::DEFINITION));
+	BoundConstantExpression constant(Value::INTEGER(1));
+	REQUIRE_THROWS_AS(decide.NameDefinition(constant, 1), InternalException);
+
+	// A copy names the same definition.
+	auto copy = kept.Copy();
+	REQUIRE(DecideDefinitionOf(*copy) == DecideDefinitionOf(kept));
+	// The reference is no part of what the call computes, and is a fact of the node.
+	REQUIRE(kept.Equals(plain));
+	REQUIRE(kept.Hash() == plain.Hash());
+	REQUIRE(DecideFactsEqual(kept, *copy));
+	REQUIRE(!DecideFactsEqual(kept, plain));
+	BoundFunctionExpression other(LogicalType::INTEGER, function, {}, nullptr);
+	decide.NameDefinition(other, 0);
+	REQUIRE(!DecideFactsEqual(kept, other));
+
+	// A stripped copy names none.
+	DecideStripTags(*copy);
+	REQUIRE(DecideFactsEqual(*copy, plain));
 }

@@ -146,7 +146,7 @@ idx_t SourceClauseOf(const BoundDecideClause &clause, const LogicalDecide &decid
 
 //! Refuses `operand`, which `construct` (`<>`, ABS) reads as a linear form, when it holds a product or a power of
 //! decisions. The refusal is the construct's: `at` is the expression the caret points at. It runs after the bilinear
-//! rewrite has tagged the products with a BOOL factor, which are linear through their helper and stay accepted; a
+//! rewrite has kept the products with a BOOL factor, which are linear through their helper and stay accepted; a
 //! product it leaves has no formulation, and dropping its terms would change the answer.
 void RequireLinearOperand(const DecideTermSplitter &splitter, const Expression &operand, const Expression &at,
                           const string &construct);

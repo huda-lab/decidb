@@ -54,7 +54,7 @@ bool decide_rewrite::BilinearReadsBody(const LogicalDecide &decide, const Decide
 
 void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {
 	// The one pass over the bodies as they stand when the McCormick rows are decided. A product that appears later is
-	// tagged where it appears, through FindAndReplaceBilinear: the value rewrite hands over the products its helpers
+	// kept where it appears, through FindAndReplaceBilinear: the value rewrite hands over the products its helpers
 	// expose (RewriteScopedReducers), and RewriteAbs those that read an ABS helper (AbsProductWorklist).
 	//
 	// The bodies that stand outside the written clauses have the same bilinear semantics as any other row: L0's three
@@ -108,11 +108,11 @@ unique_ptr<Expression> AddCoefficients(Optimizer &optimizer, unique_ptr<Expressi
 	return optimizer.BindScalarFunction("+", std::move(a), std::move(b));
 }
 
-//! The terms of one side of a product, as an affine expression. False for an ABS over decisions that is not tagged yet:
-//! the one side of a degree-2 product that is not affine, which the pass after RewriteAbs reads. Anything else the
+//! The terms of one side of a product, as an affine expression. False for an ABS over decisions that names no helper
+//! yet: the one side of a degree-2 product that is not affine, which the pass after RewriteAbs reads. Anything else the
 //! splitter does not read as a constant or a linear term is a broken promise of the stages before: the shape check
 //! refuses a degree above two, the binder refuses a decision in a divisor, and a function the optimizer gave a helper
-//! decision (a definition, an ABS once RewriteAbs tagged it) reads as that decision. `side` is the expression the terms
+//! decision (a definition, an ABS once RewriteAbs kept it) reads as that decision. `side` is the expression the terms
 //! were read from.
 bool AffineFromTerms(Optimizer &optimizer, vector<DecideSplitTerm> &terms, const Expression &side, Affine &out) {
 	for (auto &term : terms) {
