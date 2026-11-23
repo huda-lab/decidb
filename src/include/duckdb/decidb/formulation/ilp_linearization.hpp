@@ -99,7 +99,7 @@ void SyncFrameReadBoxes(SolverInput &input);
 //!
 //! Reads `input.constraints` and tightens `input.upper_bounds`. A merged coefficient past a DOUBLE raises the error
 //! that names its clause here, before the model builder, as no bound can be read from it.
-void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer, idx_t num_rows);
+void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer);
 
 //! Whether a construct is stated natively or lowered, and the rule that decides.
 //!

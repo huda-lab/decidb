@@ -646,7 +646,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	if (!solver_input.reducer_value_links.empty()) {
 		DeriveReducerValueBounds(solver_input, out_var_indexer);
 	}
-	DecidePropagateImpliedBounds(solver_input, out_var_indexer, num_rows);
+	DecidePropagateImpliedBounds(solver_input, out_var_indexer);
 	SyncFrameReadBoxes(solver_input);
 	phase.Next("assembly.objective_and_avg");
 	// Objective (linear part)

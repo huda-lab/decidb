@@ -61,18 +61,6 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   within a tenth of the 40 plain clauses'; `./test/decide/run_tests.sh -k "anr or frame or scope or per"`; model
   goldens identical.
 
-## MODEL-16 — Stage 06's bound passes walk instances, and absence is looked up once per decision
-
-- **Problem.** `DecidePropagateImpliedBounds` loops over every input row for each decision of each `<=` or `=`
-  clause (`linearization_bigm.cpp:253`): clauses times rows in stage 06. `DecideAbsence::At` walks every helper
-  definition on each call (`decide_absence.cpp:41-47`) and is called per row per term
-  (`decide_model_emitter.cpp:766`, `1107`, `1143`, `1440`, `1622`).
-- **Change.** The bound pass walks the instances a clause's rows name. What makes a decision absent at a row is
-  resolved once per decision before its terms are read.
-- **Done when.** `./test/decide/run_tests.sh -k "bound or absent or null or bigm"`; model goldens identical;
-  `repro/clauses_times_rows.sql` under `DECIDB_PROFILE=1`: `assembly.implied_bounds` and `execution.tree_model` no
-  higher than `08_execution/done.md` § A clause is read over the rows it keeps.
-
 ## MODEL-17 — The emitter reads a term in one place
 
 - **Problem.** "Read a term's program at its site, project it onto the reader's rows, mark NULLs and absence" is

@@ -13,6 +13,7 @@
 
 namespace duckdb {
 
+struct DecideBooleanProductDefinition;
 struct DecideFrameMap;
 struct DecideTree;
 struct KeyedMapping;
@@ -67,6 +68,8 @@ public:
 
 private:
 	const DecideTree &tree;
+	//! Per decision, the product it is the auxiliary of, or null.
+	vector<const DecideBooleanProductDefinition *> products;
 	const vector<KeyedMapping> *classes = nullptr;
 	const vector<vector<bool>> *auxiliaries = nullptr;
 	const vector<DecideFrameMap> *frames = nullptr;

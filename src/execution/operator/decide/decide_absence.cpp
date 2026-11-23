@@ -17,7 +17,13 @@
 
 namespace duckdb {
 
-DecideAbsence::DecideAbsence(const DecideTree &tree) : tree(tree) {
+DecideAbsence::DecideAbsence(const DecideTree &tree) : tree(tree), products(tree.variable_scopes.size(), nullptr) {
+	for (auto &definition : tree.definitions) {
+		auto product = definition->TryCast<DecideBooleanProductDefinition>();
+		if (product) {
+			products[product->helper] = product.get();
+		}
+	}
 }
 
 void DecideAbsence::ReadClasses(const vector<KeyedMapping> &classes_p, const vector<vector<bool>> &auxiliaries_p) {
@@ -38,12 +44,9 @@ bool DecideAbsence::At(idx_t variable, idx_t row) const {
 		return true;
 	}
 	// A product's auxiliary has none where either factor has none.
-	for (auto &definition : tree.definitions) {
-		auto product = definition->TryCast<DecideBooleanProductDefinition>();
-		if (product && product->helper == variable &&
-		    (At(product->bool_factor, row) || At(product->other_factor, row))) {
-			return true;
-		}
+	auto product = products[variable];
+	if (product && (At(product->bool_factor, row) || At(product->other_factor, row))) {
+		return true;
 	}
 	auto &scope = tree.variable_scopes[variable];
 	return scope.IsKeyed() && (*classes)[scope.keyed_scope_idx].IsAbsent(row);
@@ -64,11 +67,9 @@ bool DecideAbsence::MayBe(idx_t variable) const {
 	if (auxiliaries && !(*auxiliaries)[variable].empty()) {
 		return true;
 	}
-	for (auto &definition : tree.definitions) {
-		auto product = definition->TryCast<DecideBooleanProductDefinition>();
-		if (product && product->helper == variable && (MayBe(product->bool_factor) || MayBe(product->other_factor))) {
-			return true;
-		}
+	auto product = products[variable];
+	if (product && (MayBe(product->bool_factor) || MayBe(product->other_factor))) {
+		return true;
 	}
 	// A keyed decision whose classes cover every row has no row with none. Before the classes are read, any may.
 	auto &scope = tree.variable_scopes[variable];

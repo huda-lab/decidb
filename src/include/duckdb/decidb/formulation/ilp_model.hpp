@@ -98,6 +98,16 @@ struct VarIndexer {
 		ResolveRead(var_idx, row);
 		return HasColumn(var_idx, InstanceOf(var_idx, row)) ? Get(var_idx, row) : DConstants::INVALID_INDEX;
 	}
+	//! The column of instance `inst` of `var_idx` as a term names it (InstanceColumn), or INVALID_INDEX where it has
+	//! none.
+	inline idx_t InstanceColumnOrNone(idx_t var_idx, idx_t inst) const {
+		ResolveInstance(var_idx, inst);
+		return HasColumn(var_idx, inst) ? InstanceColumn(var_idx, inst) : DConstants::INVALID_INDEX;
+	}
+	//! How many instances of `var_idx` a term may name: NumInstances, and a frame read's rows.
+	inline idx_t TermInstances(idx_t var_idx) const {
+		return var_scope[var_idx] == DecideVarScope::FRAME_READ ? num_rows : NumInstances(var_idx);
+	}
 	//! Whether instance `inst` of `var_idx` has a column (instance_slot).
 	inline bool HasColumn(idx_t var_idx, idx_t inst) const {
 		switch (var_scope[var_idx]) {

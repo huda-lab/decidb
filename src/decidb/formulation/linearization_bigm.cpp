@@ -160,7 +160,7 @@ double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox
 	return M + 1.0;
 }
 
-void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer, idx_t num_rows) {
+void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer) {
 	const auto &constraints = input.constraints;
 	const auto &lower_bounds = input.lower_bounds;
 	auto &upper_bounds = input.upper_bounds;
@@ -234,7 +234,7 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
 		}
 		// The shared bound ub_x applies to EVERY instance of x, so the clause bounds x only when one of its rows
 		// bounds each instance, and then by the loosest of their bounds: an instance a row the clause excludes reads
-		// (a `when` keeps it out) and no kept row bounds leaves x unbounded. With no data rows the loop never runs and
+		// (a `when` keeps it out) and no kept row bounds leaves x unbounded. With no instance the loop never runs and
 		// the bound stays at its start: harmless, there is no instance of x to bind.
 		for (idx_t t = 0; nonneg && t < ec.variable_indices.size(); t++) {
 			idx_t v = ec.variable_indices[t];
@@ -250,9 +250,10 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
 			}
 			double bound = single_variable ? -std::numeric_limits<double>::infinity() : 0.0;
 			bool every_instance_bounded = true;
-			for (idx_t r = 0; r < num_rows && every_instance_bounded; r++) {
-				// A row in no class reads no instance, and has none to bound.
-				const idx_t column = indexer.ColumnOrNone(v, r);
+			const idx_t instances = indexer.TermInstances(v);
+			for (idx_t inst = 0; inst < instances && every_instance_bounded; inst++) {
+				// An instance with no column has none to bound.
+				const idx_t column = indexer.InstanceColumnOrNone(v, inst);
 				if (column == DConstants::INVALID_INDEX) {
 					continue;
 				}
