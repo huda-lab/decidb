@@ -834,21 +834,6 @@ void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx
 	}
 }
 
-void DecideCountValueLinks(const vector<ReducerValueLinkSpec> &links) {
-	if (DecideProfileScope::Enabled() && !links.empty()) {
-		idx_t groups = 0, members = 0, terms = 0;
-		for (auto &spec : links) {
-			groups += spec.members.GroupCount();
-			members += spec.members.constants.size();
-			terms += spec.members.variables.size();
-		}
-		DecideProfileScope::Counter("anr.helpers", static_cast<double>(links.size()));
-		DecideProfileScope::Counter("anr.helper_instances", static_cast<double>(groups));
-		DecideProfileScope::Counter("anr.members", static_cast<double>(members));
-		DecideProfileScope::Counter("anr.member_terms", static_cast<double>(terms));
-	}
-}
-
 void DecideValueRange::Add(const Value &value) {
 	auto before = [](const Value &left, const Value &right) {
 		return !left.IsNull() && (right.IsNull() || left < right);

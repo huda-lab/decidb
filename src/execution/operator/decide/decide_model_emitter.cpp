@@ -830,6 +830,7 @@ EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
 			result.sets.begin.push_back(result.sets.rows.size());
 		}
 	}
+	WriteMembersIn(evaluated);
 	Unplace(result.rows);
 	return result;
 }
@@ -1327,6 +1328,7 @@ EmittedClause DecideModelEmitter::Groups(idx_t root, bool counted) {
 	// The clause's rows, from its columns: one per group that holds a row.
 	result.sets = DecideClauseRowSets(evaluated, kept);
 	DecideWriteClauseRecords(evaluated, result.sets, result.rows, Written(clause));
+	WriteMembersIn(evaluated);
 	Unplace(result.rows);
 	return result;
 }
@@ -1709,10 +1711,9 @@ void DecideModelEmitter::ValueLinks(const vector<KeyedMapping> &mappings) {
 		spec.label = definition.label;
 		spec.source_clause_id = definition.origin.source_clause_id;
 		spec.frame = tree_node.kind == DecideNodeKind::FRAME;
-		spec.form = definition.form;
 		if (spec.frame) {
 			FrameMembers(node, spec.members);
-			gstate.evaluated_value_links.push_back(std::move(spec));
+			HandLink(std::move(spec), definition.form, mappings);
 			continue;
 		}
 		const auto site = tree.OperandOf(node);
@@ -1808,9 +1809,179 @@ void DecideModelEmitter::ValueLinks(const vector<KeyedMapping> &mappings) {
 				}
 			}
 		}
-		gstate.evaluated_value_links.push_back(std::move(spec));
+		HandLink(std::move(spec), definition.form, mappings);
 	}
-	DecideCountValueLinks(gstate.evaluated_value_links);
+	// The helpers' sizes, which DECIDB_PROFILE reports.
+	if (helper_counts.helpers > 0) {
+		DecideProfileScope::Counter("anr.helpers", static_cast<double>(helper_counts.helpers));
+		DecideProfileScope::Counter("anr.helper_instances", static_cast<double>(helper_counts.instances));
+		DecideProfileScope::Counter("anr.members", static_cast<double>(helper_counts.members));
+		DecideProfileScope::Counter("anr.member_terms", static_cast<double>(helper_counts.terms));
+		DecideProfileScope::Counter("anr.inlined_helpers", static_cast<double>(helper_counts.written_in));
+	}
+}
+
+void DecideModelEmitter::HandLink(ReducerValueLinkSpec &&spec, DecideHelperForm form,
+                                  const vector<KeyedMapping> &mappings) {
+	auto &members = spec.members;
+	// A helper listed before it that the plan writes in is its members here too.
+	WriteMembersIn(members.member_begin, members.variables, members.rows, members.coefficients, members.constants,
+	               false);
+	helper_counts.helpers++;
+	helper_counts.instances += members.GroupCount();
+	helper_counts.members += members.constants.size();
+	helper_counts.terms += members.variables.size();
+	if (form == DecideHelperForm::VARIABLE) {
+		gstate.evaluated_value_links.push_back(std::move(spec));
+		return;
+	}
+	auto &scope = tree.variable_scopes[spec.value_var];
+	WrittenHelper helper;
+	helper.mapping = scope.IsGlobal() ? nullptr : &mappings[scope.keyed_scope_idx];
+	helper.whole = !IsDecideExtremum(spec.reducer);
+	helper.label = spec.label;
+	helper.group_of_instance.assign(helper.mapping ? helper.mapping->num_classes : 1, DConstants::INVALID_INDEX);
+	// A SUM or AVG is its members; a MIN or MAX group of one member is that member (deck p. 112, R44), the one fact
+	// of the data read here. The other groups keep their columns and their links.
+	ReducerValueMembers linked;
+	for (idx_t g = 0; g < members.GroupCount(); g++) {
+		const idx_t first = members.group_begin[g], last = members.group_begin[g + 1];
+		if (helper.whole || last - first == 1) {
+			const idx_t row = members.group_rows[g];
+			helper.group_of_instance[helper.mapping ? helper.mapping->row_to_class[row] : 0] = g;
+			continue;
+		}
+		linked.AddGroup(members.group_rows[g]);
+		for (idx_t m = first; m < last; m++) {
+			linked.AddMember(members.constants[m]);
+			for (idx_t t = members.member_begin[m]; t < members.member_begin[m + 1]; t++) {
+				linked.AddTerm(members.variables[t], members.rows[t], members.coefficients[t]);
+			}
+		}
+	}
+	// The instances with no column, which the column layout reads (SolverInput::written_in).
+	gstate.written_in.resize(tree.variable_scopes.size());
+	auto &written = gstate.written_in[spec.value_var];
+	for (auto group : helper.group_of_instance) {
+		written.push_back(helper.whole || group != DConstants::INVALID_INDEX);
+	}
+	helper.members = std::move(members);
+	written_helper_of.resize(tree.variable_scopes.size(), DConstants::INVALID_INDEX);
+	written_helper_of[spec.value_var] = written_helpers.size();
+	written_helpers.push_back(std::move(helper));
+	if (linked.GroupCount() > 0) {
+		spec.members = std::move(linked);
+		gstate.evaluated_value_links.push_back(std::move(spec));
+	} else {
+		helper_counts.written_in++;
+	}
+}
+
+bool DecideModelEmitter::WriteMembersIn(vector<idx_t> &begin, vector<idx_t> &variables, vector<idx_t> &rows,
+                                        vector<double> &coefficients, vector<double> &constants,
+                                        bool absent_reads_nothing) const {
+	auto helper_of = [&](idx_t variable) {
+		return variable < written_helper_of.size() ? written_helper_of[variable] : DConstants::INVALID_INDEX;
+	};
+	if (std::none_of(variables.begin(), variables.end(),
+	                 [&](idx_t variable) { return helper_of(variable) != DConstants::INVALID_INDEX; })) {
+		return false;
+	}
+	vector<idx_t> out_begin {0}, out_variables, out_rows;
+	vector<double> out_coefficients;
+	auto add = [&](idx_t variable, idx_t row, double coefficient) {
+		out_variables.push_back(variable);
+		out_rows.push_back(row);
+		out_coefficients.push_back(coefficient);
+	};
+	for (idx_t e = 0; e + 1 < begin.size(); e++) {
+		for (idx_t t = begin[e]; t < begin[e + 1]; t++) {
+			const auto entry = helper_of(variables[t]);
+			if (entry == DConstants::INVALID_INDEX) {
+				add(variables[t], rows[t], coefficients[t]);
+				continue;
+			}
+			auto &helper = written_helpers[entry];
+			const idx_t instance = helper.mapping ? helper.mapping->row_to_class[rows[t]] : 0;
+			const idx_t group = helper.group_of_instance[instance];
+			const double coefficient = coefficients[t];
+			if (group == DConstants::INVALID_INDEX && !helper.whole) {
+				add(variables[t], rows[t], coefficient);
+				continue;
+			}
+			if (coefficient == 0.0) {
+				continue;
+			}
+			if (group == DConstants::INVALID_INDEX) {
+				if (absent_reads_nothing) {
+					continue;
+				}
+				throw InternalException("DECIDE: a row reads %s where it is absent", helper.label);
+			}
+			auto &members = helper.members;
+			for (idx_t m = members.group_begin[group]; m < members.group_begin[group + 1]; m++) {
+				constants[e] += coefficient * members.constants[m];
+				for (idx_t u = members.member_begin[m]; u < members.member_begin[m + 1]; u++) {
+					add(members.variables[u], members.rows[u], coefficient * members.coefficients[u]);
+				}
+			}
+		}
+		out_begin.push_back(out_variables.size());
+	}
+	begin = std::move(out_begin);
+	variables = std::move(out_variables);
+	rows = std::move(out_rows);
+	coefficients = std::move(out_coefficients);
+	return true;
+}
+
+void DecideModelEmitter::WriteMembersIn(EvaluatedConstraint &clause) const {
+	auto &records = clause.records;
+	if (!WriteMembersIn(records.term_begin, records.variables, records.rows, records.coefficients, records.constants,
+	                    false)) {
+		return;
+	}
+	// Its decisions are those its rows name: a helper written in gives way to its members'.
+	clause.members_written_in = true;
+	vector<bool> named(tree.variable_scopes.size() + gstate.frame_reads.size(), false);
+	std::vector<bool> &seen = named;
+	clause.variable_indices.clear();
+	for (auto variable : records.variables) {
+		if (!seen[variable]) {
+			seen[variable] = true;
+			clause.variable_indices.push_back(variable);
+		}
+	}
+}
+
+void DecideModelEmitter::ObjectiveMembers() {
+	auto &term_variables = gstate.objective_variable_indices;
+	auto &term_columns = gstate.evaluated_objective_coefficients;
+	auto &out = gstate.objective_members;
+	vector<idx_t> kept_variables;
+	vector<CoefficientColumn> kept_columns;
+	for (idx_t t = 0; t < term_variables.size(); t++) {
+		const idx_t variable = term_variables[t];
+		if (variable >= written_helper_of.size() || written_helper_of[variable] == DConstants::INVALID_INDEX) {
+			kept_variables.push_back(variable);
+			kept_columns.push_back(std::move(term_columns[t]));
+			continue;
+		}
+		for (idx_t row = 0; row < num_rows; row++) {
+			const double coefficient = term_columns[t].Get(row);
+			if (coefficient != 0.0) {
+				out.variables.push_back(variable);
+				out.rows.push_back(row);
+				out.coefficients.push_back(coefficient);
+			}
+		}
+	}
+	term_variables = std::move(kept_variables);
+	term_columns = std::move(kept_columns);
+	vector<idx_t> begin {0, out.variables.size()};
+	vector<double> constant {0.0};
+	WriteMembersIn(begin, out.variables, out.rows, out.coefficients, constant, true);
+	gstate.objective_member_constant = constant[0];
 }
 
 } // namespace duckdb

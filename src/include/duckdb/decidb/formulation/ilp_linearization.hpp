@@ -257,13 +257,6 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
 //!     constant from the signed interval DeriveAbsAuxiliaryBounds derived.
 void EmitAbsConstraints(SolverInput &input, const VarIndexer &indexer, NativeConstructPolicy policy);
 
-//! Writes each reducer helper where the plan's form says (ReducerValueLinkSpec::form, DecideHelperForm), at the end of
-//! assembly: a WRITTEN_IN helper's members into the rows and the objective that read it (SolverInput::inlined_helpers)
-//! or into the members of the one helper that reads it, its variable DecideVarScope::INLINED with no column; a
-//! ONE_MEMBER_WRITTEN_IN helper's groups of one member the same way, group by group (SolverInput::written_in). Returns
-//! whether any helper was written in: the column space must then be laid out again.
-bool WriteHelpersIn(SolverInput &input);
-
 //! The value rewrite's helper decisions (SolverInput::reducer_value_links), phase 1: box
 //! each helper instance by the reach of its own group's members -- the sum of their brackets
 //! for SUM/AVG, their cover for MIN/MAX -- so a Big-M over it has a span and the root LP
@@ -292,7 +285,6 @@ void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer);
 //! closing Big-M sized off the helper's box against the family's far end, and refused
 //! naming a column to bound where no such constant exists on the lowering arm; an extremum group of one member is that
 //! member, an equality (deck p. 112). The evaluated member rows are consumed here; none reaches `input.constraints`.
-//! An inlined helper has no definition: its members move to SolverInput::inlined_helpers.
 void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names,
                                 NativeConstructPolicy policy);
 

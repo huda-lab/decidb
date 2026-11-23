@@ -287,8 +287,8 @@ on the link of a facility-location model, `per g: sum(x) by (g) <= budget * open
 column: N rows of two entries, not N rows of a group's members.
 
 The pass states the form in the plan: the rewrite account of a `WRITTEN_IN` helper becomes
-`Kind::VALUE_HELPER_INLINED`, so a plain EXPLAIN prints it. Stage 06 applies the form (`WriteHelpersIn`) and decides
-nothing.
+`Kind::VALUE_HELPER_INLINED`, so a plain EXPLAIN prints it. Stage 08 applies the form where it lists the helpers
+(`DecideModelEmitter::HandLink`) and decides nothing.
 
 **Every pass that reads bodies reaches them through one enumerator** (`LogicalDecide::EnumerateBodies`, the Visitor
 pattern, as DuckDB's `LogicalOperatorVisitor::EnumerateExpressions` enumerates a node's expressions). It visits
@@ -485,9 +485,9 @@ preserved. **Ownership is unaffected**: the code lives in
 
 ### The helpers' order
 
-The links are listed innermost first (a range's, made first, then the reducers nested in it), which stage 06's
-inlining relies on. Where a helper is written in is stage 06's alone, decided from the readers the model has
-(`../06_model_formulation/done.md`, "Inlining a helper"): the plan records no reader of a helper.
+The links are listed innermost first (a range's, made first, then the reducers nested in it), which stage 08 relies on
+when it writes a helper's members into a later one (`../06_model_formulation/done.md`, "A helper written where it is
+read").
 
 ---
 

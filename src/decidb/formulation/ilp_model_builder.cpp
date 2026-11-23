@@ -146,14 +146,13 @@ static void BuildVarIndexer(VarIndexer &idx, const SolverInput &input) {
 	// Row block: num_rows * num_row_vars
 	idx.keyed_block_start = input.num_rows * row_var_count;
 
-	// Keyed block: assign base offsets per keyed variable. An inlined helper owns no column, but keeps the mapping
-	// that names the instance a row reads.
+	// The instances stage 08 wrote where they are read, which have no column.
+	auto written_in = [&](idx_t v) -> const vector<bool> * {
+		return v < input.written_in.size() && !input.written_in[v].empty() ? &input.written_in[v] : nullptr;
+	};
+	// Keyed block: assign base offsets per keyed variable.
 	idx_t keyed_offset = 0;
 	for (idx_t v = 0; v < num_decide_vars; v++) {
-		if (idx.var_scope[v] == DecideVarScope::INLINED) {
-			idx.var_keyed_mapping_idx[v] = input.variable_scopes[v].keyed_scope_idx;
-			continue;
-		}
 		if (idx.var_scope[v] != DecideVarScope::KEYED) {
 			continue;
 		}
@@ -164,8 +163,8 @@ static void BuildVarIndexer(VarIndexer &idx, const SolverInput &input) {
 		idx.keyed_block_var.push_back(v);
 		// An instance no row reads -- the absent class -- or one written into its readers has no column.
 		auto &mapping = idx.keyed_mappings[scope_idx];
-		auto *written_in = v < input.written_in.size() && !input.written_in[v].empty() ? &input.written_in[v] : nullptr;
-		if (mapping.absent_class == DConstants::INVALID_INDEX && !written_in) {
+		auto written = written_in(v);
+		if (mapping.absent_class == DConstants::INVALID_INDEX && !written) {
 			keyed_offset += mapping.num_classes;
 			continue;
 		}
@@ -174,7 +173,7 @@ static void BuildVarIndexer(VarIndexer &idx, const SolverInput &input) {
 		auto &slots = idx.instance_slot[v];
 		slots.assign(mapping.num_classes, DConstants::INVALID_INDEX);
 		for (idx_t inst = 0; inst < mapping.num_classes; inst++) {
-			if (inst == mapping.absent_class || (written_in && (*written_in)[inst])) {
+			if (inst == mapping.absent_class || (written && (*written)[inst])) {
 				continue;
 			}
 			slots[inst] = idx.slot_instance[v].size();
@@ -187,7 +186,7 @@ static void BuildVarIndexer(VarIndexer &idx, const SolverInput &input) {
 	idx.scalar_block_start = idx.keyed_block_start + keyed_offset;
 	idx_t scalar_count = 0;
 	for (idx_t v = 0; v < num_decide_vars; v++) {
-		if (idx.var_scope[v] != DecideVarScope::GLOBAL) {
+		if (idx.var_scope[v] != DecideVarScope::GLOBAL || written_in(v)) {
 			continue;
 		}
 		idx.scalar_var_index[v] = idx.scalar_block_start + scalar_count;
@@ -240,9 +239,13 @@ VarIndexer VarIndexer::Build(const SolverInput &input) {
 	return idx;
 }
 
-//! Whether each decision term of `ec` has solver columns of its own: every term names a different decision, and each
-//! is row-scoped. Then no two (term, data row) pairs share a column, and a row's terms are read without summing them.
+//! Whether each decision term of `ec` has solver columns of its own: every term names a different decision, each
+//! is row-scoped, and none is a helper's members. Then no two (term, data row) pairs share a column, and a row's terms
+//! are read without summing them.
 static bool TermsHaveTheirOwnColumns(const EvaluatedConstraint &ec, const VarIndexer &indexer) {
+	if (ec.members_written_in) {
+		return false;
+	}
 	std::unordered_set<idx_t> seen_vars;
 	for (idx_t v : ec.variable_indices) {
 		if (v == DConstants::INVALID_INDEX) {
@@ -256,56 +259,7 @@ static bool TermsHaveTheirOwnColumns(const EvaluatedConstraint &ec, const VarInd
 	return true;
 }
 
-//! Calls `add(column, coefficient)` for the columns decision `var` stands for at data row `row`, times `coefficient`,
-//! and returns the constant it carries there: its own column (a frame read resolving to its base's at the row it
-//! selects), or for an instance stage 06 wrote into its readers (SolverInput::inlined_helpers, D89) -- a helper
-//! inlined whole, or a MIN or MAX group of one member -- the terms of its members, each scaled by `coefficient`, read
-//! the same way in turn, whose constants, scaled, it returns. A clause skipped the rows reading an absent instance
-//!, and the objective dropped its terms there, so none reaches here with a coefficient; the
-//! objective reads one as no value (`absent_reads_nothing`, D84).
-template <class ADD>
-static double ForEachTermColumn(const SolverInput &input, const VarIndexer &indexer, idx_t var, idx_t row,
-                                double coefficient, bool absent_reads_nothing, ADD &&add) {
-	if (coefficient == 0.0) {
-		return 0.0;
-	}
-	const idx_t helper_idx =
-	    var < input.inlined_helper_of.size() ? input.inlined_helper_of[var] : DConstants::INVALID_INDEX;
-	const bool inlined = indexer.var_scope[var] == DecideVarScope::INLINED;
-	if (!inlined && helper_idx == DConstants::INVALID_INDEX) {
-		add(static_cast<int>(indexer.Get(var, row)), coefficient);
-		return 0.0;
-	}
-	if (helper_idx == DConstants::INVALID_INDEX) {
-		throw InternalException("DECIDE: a row reads a helper decision written into another helper's members");
-	}
-	auto &helper = input.inlined_helpers[helper_idx];
-	const idx_t instance = indexer.InstanceOf(var, row);
-	const idx_t group =
-	    instance < helper.group_of_instance.size() ? helper.group_of_instance[instance] : DConstants::INVALID_INDEX;
-	if (group == DConstants::INVALID_INDEX) {
-		if (!inlined && indexer.HasColumn(var, instance)) {
-			add(static_cast<int>(indexer.Get(var, row)), coefficient);
-			return 0.0;
-		}
-		if (absent_reads_nothing) {
-			return 0.0;
-		}
-		throw InternalException("DECIDE: a row reads %s where it is absent", helper.label);
-	}
-	auto &members = helper.members;
-	double constant = 0.0;
-	for (idx_t m = members.group_begin[group]; m < members.group_begin[group + 1]; m++) {
-		constant += coefficient * members.constants[m];
-		for (idx_t t = members.member_begin[m]; t < members.member_begin[m + 1]; t++) {
-			constant += ForEachTermColumn(input, indexer, members.variables[t], members.rows[t],
-			                              coefficient * members.coefficients[t], absent_reads_nothing, add);
-		}
-	}
-	return constant;
-}
-
-const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const SolverInput &input, const VarIndexer &indexer,
+const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const VarIndexer &indexer,
                                      const DecideClauseRef &written) {
 	auto &out = ec.emitted_rows;
 	if (!out.offsets.empty()) {
@@ -322,23 +276,21 @@ const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const Solver
 	} else {
 		accum.BeginForDecisions(indexer, records.variables.size() / std::max<idx_t>(num_emitted, 1), written);
 	}
-	auto copy = [&](int column, double coeff) {
-		out.columns.push_back(column);
-		out.values.push_back(coeff);
-	};
-	auto sum = [&](int column, double coeff) {
-		accum.Add(column, coeff);
-	};
 	out.offsets.reserve(num_emitted + 1);
 	out.offsets.push_back(0);
-	out.constants.assign(num_emitted, 0.0);
 	for (idx_t e = 0; e < num_emitted; e++) {
-		// An inlined helper's members stand in its place, and the constant they carry is the row's (ForEachTermColumn).
 		for (idx_t t = records.term_begin[e]; t < records.term_begin[e + 1]; t++) {
-			out.constants[e] += own_columns ? ForEachTermColumn(input, indexer, records.variables[t], records.rows[t],
-			                                                    records.coefficients[t], false, copy)
-			                                : ForEachTermColumn(input, indexer, records.variables[t], records.rows[t],
-			                                                    records.coefficients[t], false, sum);
+			const double coefficient = records.coefficients[t];
+			if (coefficient == 0.0) {
+				continue;
+			}
+			const auto column = static_cast<int>(indexer.Get(records.variables[t], records.rows[t]));
+			if (own_columns) {
+				out.columns.push_back(column);
+				out.values.push_back(coefficient);
+			} else {
+				accum.Add(column, coefficient);
+			}
 		}
 		if (!own_columns) {
 			accum.Flush(out.columns, out.values);
@@ -608,16 +560,22 @@ static void BuildModelObjective(SolverModel &model, SolverInput &input, const Va
 				}
 				continue;
 			}
-			// Accumulated: a keyed decision maps many rows onto one column. An inlined helper is its members, whose
-			// constants are the objective's, as its definition would have carried them.
-			auto add_objective = [&](int column, double coefficient) {
-				AddCoefficient(model.obj_coeffs[column], coefficient, input.objective_written);
-			};
+			// Accumulated: a keyed decision maps many rows onto one column.
 			for (idx_t row = 0; row < num_rows; row++) {
-				model.obj_constant +=
-				    ForEachTermColumn(input, indexer, decide_var_idx, row, col.Get(row), true, add_objective);
+				const double coefficient = col.Get(row);
+				if (coefficient != 0.0) {
+					AddCoefficient(model.obj_coeffs[indexer.Get(decide_var_idx, row)], coefficient,
+					               input.objective_written);
+				}
 			}
 		}
+	}
+	// Its terms on the helpers written where they are read: their members, whose constants stage 08 added to the
+	// objective's.
+	auto &members = input.objective_members;
+	for (idx_t t = 0; t < members.variables.size(); t++) {
+		AddCoefficient(model.obj_coeffs[indexer.Get(members.variables[t], members.rows[t])], members.coefficients[t],
+		               input.objective_written);
 	}
 
 	//===--------------------------------------------------------------------===//
@@ -791,7 +749,7 @@ static void BuildModelClauseRows(SolverModel &model, SolverInput &input, const V
 
 		// The rows the clause emits, read once (ClauseEmittedRows). The builder is their last reader, so it takes them
 		// from the clause, and they are freed with this iteration.
-		ClauseEmittedRows(eval_const, input, indexer, written);
+		ClauseEmittedRows(eval_const, indexer, written);
 		auto emitted = std::move(eval_const.emitted_rows);
 		for (idx_t e = 0; e < records.Count(); e++) {
 			ModelConstraint constr;
@@ -801,9 +759,9 @@ static void BuildModelClauseRows(SolverModel &model, SolverInput &input, const V
 			constr.indices.assign(emitted.columns.begin() + begin, emitted.columns.begin() + end);
 			constr.coefficients.assign(emitted.values.begin() + begin, emitted.values.begin() + end);
 			// What the left side holds beside its decisions moves to the bound, not dropped: its terms that read no
-			// decision (the `+ 3` of `x + 3 <= K`, the `c` of `SUM(x + c) >= K`) and the constants of the inlined
-			// helpers the row reads.
-			double lhs_offset = records.constants[e] + emitted.constants[e];
+			// decision (the `+ 3` of `x + 3 <= K`, the `c` of `SUM(x + c) >= K`) and the constants of the helpers
+			// written into the row.
+			double lhs_offset = records.constants[e];
 			ApplyComparisonSense(constr, eval_const.comparison_type, records.bounds[e] - lhs_offset, lhs_offset);
 			// F2: the group is stamped so a diagnosis over a grouped clause names the group its failure sits in
 			// (CollectUnreachableClauses reports one finding per clause, group and row). A per-row row stands for its
@@ -1059,9 +1017,6 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer, const 
 		// owns. Keyed variables collapse multiple rows onto one column;
 		// the repeated writes are idempotent (same var/label, instance pinned to
 		// the class id via Get's mapping).
-		if (indexer.var_scope[var] == DecideVarScope::INLINED) {
-			continue; // no column of its own
-		}
 		for (idx_t row = 0; row < indexer.num_rows; row++) {
 			// A row whose instance has no column (no class, or written into its readers) names none.
 			idx_t col = indexer.ColumnOrNone(var, row);

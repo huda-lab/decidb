@@ -165,10 +165,6 @@ struct EmittedRows {
 	vector<idx_t> offsets;
 	vector<int> columns;
 	vector<double> values;
-	//! Per emitted row, the constant its terms carry: the members' constants of the inlined helpers it reads (D89),
-	//! which go to its bound with the clause's own; 0 where it reads none.
-	vector<double> constants;
-
 	EmittedRows() = default;
 	EmittedRows(const EmittedRows &) {
 	}
@@ -296,8 +292,12 @@ struct ClauseRecords {
 };
 
 struct EvaluatedConstraint {
-	//! The decision of each term of the clause, INVALID_INDEX for a term that reads none.
+	//! The decision of each term of the clause, INVALID_INDEX for a term that reads none; for a clause stage 08 wrote
+	//! a helper's members into (`members_written_in`), each decision its rows name, once.
 	vector<idx_t> variable_indices;
+	//! Whether a term of the clause read a helper the plan writes where it is read, so its rows hold that helper's
+	//! members: a row may then name one column in several terms.
+	bool members_written_in = false;
 	//! The rows the clause emits.
 	ClauseRecords records;
 	//! The decision whose default floor of 0 this bound replaces on the rows its clause keeps
@@ -473,13 +473,16 @@ struct ReducerValueLinkSpec {
 	idx_t source_clause_id = DConstants::INVALID_INDEX;
 	//! A range frame's helper, one instance per window (D78), rather than a reducer's.
 	bool frame = false;
-	//! The form the plan gave the helper (DecideReducerValueDefinition::form).
-	DecideHelperForm form = DecideHelperForm::VARIABLE;
 	ReducerValueMembers members;
-	//! Set by WriteHelpersIn for one written into its rows and the objective (D89): they read an instance's
-	//! members in place of its column. Its bounds are still derived (a bound flows through it to the helpers among
-	//! its members); no definition is emitted, and its members move to SolverInput::inlined_helpers.
-	bool inlined = false;
+};
+
+//! The objective's terms on a helper the plan writes where it is read (DecideHelperForm), as stage 08 wrote them:
+//! `coefficients[t]` times decision `variables[t]` at data row `rows[t]`, the helper's members where the instance is
+//! written in and the helper itself where it keeps its column.
+struct ObjectiveMembers {
+	vector<idx_t> variables;
+	vector<idx_t> rows;
+	vector<double> coefficients;
 };
 
 //! A construct handed to the backend whole, instead of being lowered into rows.
@@ -675,25 +678,14 @@ struct SolverInput {
 	//! The indicator decisions of `norm(e, 0)` whose Big-M the formulation derives from the box (the binder emitted the
 	//! links `e <= M*z` and `-e <= M*z` with a placeholder on `z`).
 	vector<idx_t> l0_auto_indicators;
-	//! The value rewrite's helper decisions, each with its evaluated definition. Consumed
-	//! (moved into `constraints` or emitted as extremum links) by the formulation pass.
+	//! The value rewrite's helper decisions that keep a column, each with its evaluated definition: the groups stage
+	//! 08 did not write where they are read. Consumed (moved into `constraints` or emitted as extremum links) by the
+	//! formulation pass.
 	vector<ReducerValueLinkSpec> reducer_value_links;
-	//! The helpers stage 06 inlined into rows and the objective, moved here once their bounds are derived
-	//! (LinearizeReducerValueLinks): the model builder writes an instance's members wherever a row or the objective
-	//! reads it (ForEachInlinedColumn). `inlined_helper_of[v]` is decision v's entry, INVALID_INDEX for every other.
-	struct InlinedHelper {
-		ReducerValueMembers members;
-		//! Per instance of the helper, its group in `members`; INVALID_INDEX for an instance with no member, which no
-		//! reader reads (it is absent), and for one that keeps its column (`written_in` false).
-		vector<idx_t> group_of_instance;
-		string label;
-	};
-	vector<InlinedHelper> inlined_helpers;
-	vector<idx_t> inlined_helper_of;
-
 	// Linear objective
 	vector<CoefficientColumn> objective_coefficients; // [term_idx] = column of length num_rows
 	vector<idx_t> objective_variable_indices;         // [term_idx]
+	ObjectiveMembers objective_members;
 	//! The constant canonicalization peeled off the objective (LogicalDecide::objective_constant_offset). The model
 	//! builder adds the constants it meets in the terms to it (SolverModel::obj_constant).
 	double objective_constant = 0.0;
@@ -811,9 +803,9 @@ struct SolverInput {
 	//! whose definition reads an instance with none, or a NULL (D88); empty where none. An instance every row of
 	//! which reads none is a column fixed at 0, which no row reads, as an absent class is.
 	vector<vector<bool>> absent_reads;
-	//! Per keyed helper, the instances written into their readers as their one member (WriteHelpersIn: a MIN
-	//! or MAX group of one member is that member, deck p. 112), which own no column (VarIndexer::instance_slot);
-	//! empty for a helper none of which is.
+	//! Per helper, the instances stage 08 wrote where they are read (DecideHelperForm: a SUM or AVG the plan writes in,
+	//! a MIN or MAX group of one member, deck p. 112), which own no column (VarIndexer::instance_slot); empty for a
+	//! helper none of which is. No term stage 06 reads names one.
 	vector<vector<bool>> written_in;
 
 	//! Per-variable scope (row / keyed / query-wide / frame read).

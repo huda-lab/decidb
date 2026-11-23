@@ -1047,8 +1047,7 @@ idx_t DecideDescent::DecisionScope(idx_t variable, bool &global) const {
 	}
 	auto &scope = tree.variable_scopes[variable];
 	global = scope.IsGlobal();
-	return scope.IsKeyed() || scope.scope == DecideVarScope::INLINED ? scope.keyed_scope_idx
-	                                                                 : DConstants::INVALID_INDEX;
+	return scope.IsKeyed() ? scope.keyed_scope_idx : DConstants::INVALID_INDEX;
 }
 
 vector<Value> DecideDescent::Signature(idx_t node_index, idx_t entry) const {

@@ -29,20 +29,15 @@ enum class DecideSense : uint8_t { MAXIMIZE = 0, MINIMIZE = 1, FEASIBILITY = 2 }
 //!   FRAME_READ — never declared: a decision read at the row a frame selector selects for
 //!                each row (SolverInput::frame_reads). It owns no column; at a row it is
 //!                its base decision's column at the selected row. Execution creates it.
-//!   INLINED    — never declared: a helper decision stage 06 wrote where it is read
-//!                (SolverInput::inlined_helpers, D89). It owns no column; a row reading it
-//!                reads its members. `keyed_scope_idx` stays the scope that names its
-//!                instances.
 //! The values are serialized, so a stored plan reads under any rename.
-enum class DecideVarScope : uint8_t { ROW = 0, KEYED = 1, GLOBAL = 2, FRAME_READ = 3, INLINED = 4 };
+enum class DecideVarScope : uint8_t { ROW = 0, KEYED = 1, GLOBAL = 2, FRAME_READ = 3 };
 
 //! Per-variable scope assignment. Kept as one struct rather than parallel
 //! arrays so the optimizer's auxiliary-variable appends cannot desync the
 //! scope from its keyed scope index.
 struct DecideVarScopeInfo {
 	DecideVarScope scope = DecideVarScope::ROW;
-	//! Index into keyed_scopes / keyed_mappings. Meaningful when scope == KEYED, and for an
-	//! INLINED helper that was keyed (the scope naming its instances); INVALID_INDEX otherwise.
+	//! Index into keyed_scopes / keyed_mappings. Meaningful when scope == KEYED; INVALID_INDEX otherwise.
 	idx_t keyed_scope_idx = DConstants::INVALID_INDEX;
 	//! The key written after `per`, as written (`D.depotID, S.customerID`), so a message
 	//! can name the decision the way it was declared. Empty for every other spelling.

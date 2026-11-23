@@ -307,9 +307,6 @@ void DecideMapRowsInNoClass(KeyedMapping &mapping);
 void DecideListMember(const vector<CoefficientColumn> &columns, const vector<idx_t> &variables, idx_t row, double scale,
                       const DecideClauseRef &clause, ReducerValueMembers &out);
 
-//! The helpers' sizes, which DECIDB_PROFILE reports: their instances, members and members' terms.
-void DecideCountValueLinks(const vector<ReducerValueLinkSpec> &links);
-
 //! The least and the greatest of the values added, as ORDER BY places them (NULL last), so a message naming them does
 //! not depend on the order rows arrive in. It holds the values' addresses, which must outlive it.
 class DecideValueRange {

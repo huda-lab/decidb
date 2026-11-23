@@ -544,7 +544,7 @@ as stage 05 lowered them, its scope's `when c per K:` in front, after the clause
 row prints as its selector, `else` included (`at(previous else 0: x) over (t.period within t.product)`). The logical
 operator holds no tree and prints none of them; `EXPLAIN` prints the physical plan.
 
-EXPLAIN ANALYZE adds what the run made of each clause (`run_time_accounts`). A helper that stage 06 writes where it is
+EXPLAIN ANALYZE adds what the run made of each clause (`run_time_accounts`). A helper written where it is
 read holds no column (D89), so its line (`Kind::VALUE_HELPER_INLINED`) replaces the plan's, which says it becomes a
 helper decision: the clause prints one line about its helper. The variants line (`↳ per t.g: N constraints from M
 classes`) prints for every `per` clause that names classes, a clause whose rows merge into `by` groups included

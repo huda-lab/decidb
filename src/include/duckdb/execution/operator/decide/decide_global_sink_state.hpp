@@ -60,6 +60,12 @@ public:
 	//! The value rewrite's helper decisions, each with its reducer's members evaluated
 	//!; moved into SolverInput::reducer_value_links.
 	vector<ReducerValueLinkSpec> evaluated_value_links;
+	//! Per helper, the instances written where they are read; moved into SolverInput::written_in.
+	vector<vector<bool>> written_in;
+	//! The objective's terms on those helpers, as their members' terms, and the constant they carry; moved into
+	//! SolverInput::objective_members and added to its objective_constant.
+	ObjectiveMembers objective_members;
+	double objective_member_constant = 0.0;
 	vector<CoefficientColumn> evaluated_objective_coefficients; // [term_idx]
 	vector<idx_t> objective_variable_indices;
 

@@ -11,7 +11,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 
 | Path | Stage | Contents |
 |---|---|---|
-| `common/enums/decide.hpp` | all | `DecideSense`, `DecideVarScope` (`ROW` / `KEYED` / `GLOBAL` / `FRAME_READ` / `INLINED`) and `DecideVarScopeInfo`, `ConstraintKind`, `DecideHelperKind`, `DecideHelperRef` and the helper decisions' display-name prefixes |
+| `common/enums/decide.hpp` | all | `DecideSense`, `DecideVarScope` (`ROW` / `KEYED` / `GLOBAL` / `FRAME_READ`) and `DecideVarScopeInfo`, `ConstraintKind`, `DecideHelperKind`, `DecideHelperRef` and the helper decisions' display-name prefixes |
 | `common/decide_source_info.hpp` | 03 | `DecideSourceText` — the DECIDE tail's text and spans; `ConstraintSourceInfo` — the source display registry entry |
 | `common/decide_solver_capabilities.hpp` | 07 answers, 03/05/06/08 read | `SolverConstructSupport`, `SolverModelClass`, `DecideModelShape` and `ClassifyDecideModel` (the one classifier of a model's shape), `IsNonconvexProductGroup` — the backend differences upstream stages branch on. In `common/` because stage 07 answers it but four stages above read it |
 | `parser/decide/parsed_decide.hpp` | 01, 02 read | The parsed DECIDE part of a `SelectNode`: `DecideScope`, `DecideDeclaration`, `DecideClause`, `ParsedDecide` |
@@ -111,7 +111,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `decidb/formulation/linearization_minmax.cpp` | 06 | MIN/MAX: the extremum link of every helper |
 | `decidb/formulation/linearization_not_equal.cpp` | 06 | `<>` collapse and Big-M disjunction |
 | `decidb/formulation/linearization_bilinear_abs.cpp` | 06 | McCormick and ABS rows |
-| `decidb/formulation/linearization_reducer_value.cpp` | 06 | The value rewrite's helpers: the write-in of each the plan's form names (`WriteHelpersIn`, D89), their boxes and definitions |
+| `decidb/formulation/linearization_reducer_value.cpp` | 06 | The value rewrite's helpers that keep a column: their boxes and definitions |
 | `decidb/solver/decide_solve.cpp` | 07 | `SolveDecide`: the solve options, the solve, and a time limit's prompt to continue or incumbent |
 | `decidb/solver/ilp_solver.cpp` | 07 | Dispatch, INF_OR_UNBD probe, ray attachment |
 | `decidb/solver/solver_registry.cpp` | 07 | `REGISTERED_BACKENDS` — the one table naming every backend |

@@ -207,7 +207,7 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
 		// group, or one counted once beside the reducers, is bounded by what the row says about its instance. The
 		// row's bound is the clause's less its fixed terms, as the builder states it. A per-row clause emits its kept
 		// rows only: an excluded row's class's first row bounds the same instance.
-		auto &emitted = ClauseEmittedRows(ec, input, indexer, written);
+		auto &emitted = ClauseEmittedRows(ec, indexer, written);
 		auto &records = ec.records;
 		for (idx_t e = 0; nonneg && e < records.Count(); e++) {
 			double k = records.EffectiveBound(e);

@@ -390,8 +390,9 @@ into solver rows.
 
 **Departure from the deck: formulation is stage 06's.** The deck formulates node by
 node (pp. 111-119); here the emitter hands stage 06 one record per row and per value link, and stage 06
-(`WriteHelpersIn`, `EmitExtremumLink`) writes the rows, in the form the plan chose for each helper
-(`DecideHelperForm`, stage 05), so no node decides one. The models are the deck's: SUM inside SUM is the three rows of p. 119 over the six declared columns,
+(`LinearizeReducerValueLinks`, `EmitExtremumLink`) writes the definition rows. The form of each helper is the plan's
+(`DecideHelperForm`, stage 05), so no node decides one; a helper the plan writes where it is read is written there by
+the emitter. The models are the deck's: SUM inside SUM is the three rows of p. 119 over the six declared columns,
 MAX inside SUM the three rows and four envelope rows of p. 115 (`test_anr_nested.py` pins both), the frame the four
 rows of p. 108.
 
@@ -827,17 +828,22 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   (`FoldSingletonRows` marks it written) before the rigid box is captured, so a bound a
   clause folds into its box stands, and the static domain check skips it: a helper holds a
   reducer's value, negative wherever its terms are. A refusal in formulation names a helper
-  by its reducer. The end of assembly runs stage 06's `WriteHelpersIn` on the final
-  rows and objective (`assembly.inline_helpers`, D89). A node-owned G/O output keeps a value
-  column for each group with more than one MIN/MAX member and for every SUM/AVG group; a
-  singleton MIN/MAX group is written directly at its readers because its value is its member
-  (deck p. 112). That aliasing can change the column space, so the indexer is laid out again and
-  emitted clause rows are rebuilt. The floors and implied bounds keep only what holds of a
-  decision or an instance, so they stand.
+  by its reducer.
+- **A helper the plan writes where it is read** (`DecideHelperForm`, R43, R44). `ValueLinks` runs before any clause
+  or the objective is read, children first. `HandLink` keeps such a helper's members in the emitter
+  (`written_helpers`): a `WRITTEN_IN` SUM or AVG whole, a `ONE_MEMBER_WRITTEN_IN` MIN or MAX group by group where the
+  group has one member, the other groups going to stage 06 as a link. `WriteMembersIn` then rewrites each list of
+  terms that names a written-in instance, replacing the term by the instance's members times its coefficient and
+  adding their constants to the row's: a clause's records as `Rows` and `Groups` finish them (an ABS envelope's rows
+  among them), a later helper's members, and the objective's terms (`ObjectiveMembers`,
+  `SolverInput::objective_members`). One function serves the three, since a clause's records and a helper's members
+  delimit their terms the same way. Stage 06 receives `written_in`, the instances with no column, and lays its columns
+  out once. A clause row or a member that reads a written-in helper where it has no member is an internal error; the
+  objective's read of one is no read (D84).
 - **Counters** (`DECIDB_PROFILE`): `anr.frames`, `anr.frame_windows` and
   `anr.frame_positions` (one per point anchor, each value a range's windows list) once the
   frames are built; `anr.helpers`, `anr.helper_instances` (groups), `anr.members` and
-  `anr.member_terms` once the helpers' members are listed; `anr.inlined_helpers` from stage 06
+  `anr.member_terms` and `anr.inlined_helpers` (the helpers handed no link) once the helpers' members are listed
   -- beside the model's own `model.variables`, `model.linear_rows` and `model.linear_nonzeros`.
   `benchmark/decide/anr_scaling.py` reads them (`../../performance/benchmarking/anr_scaling.md`).
 

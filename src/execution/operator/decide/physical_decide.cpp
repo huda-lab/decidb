@@ -319,14 +319,17 @@ void PhysicalDecide::EvaluateTree(ClientContext &context, DecideGlobalSinkState 
 	columns.CheckData();
 	DecideModelEmitter emitter(*this, context, *tree, *descent, columns, gstate, key_values, names, num_rows);
 	emitter.KeyedMappings(keyed_mappings);
+	// The helpers first: a clause, the objective or another helper that reads one the plan writes in reads its
+	// members.
+	emitter.ValueLinks(keyed_mappings);
 	emitter.Constraints();
 	// A relation-qualified reducer reads each class's first entry, its first row, so the objective's columns are
 	// qualified as they are read.
 	emitter.Objective(evaluated);
 	ScaleObjectiveAvg(gstate, num_rows, evaluated);
+	emitter.ObjectiveMembers();
 	// What the data left of each clause is reported once its clauses and its objective are read.
 	ReportSkippedInstances(gstate);
-	emitter.ValueLinks(keyed_mappings);
 	// The bottom-up values the evaluation computed, each node's programs on its entries.
 	if (debug.values) {
 		fprintf(stderr, "DECIDB_VALUES_BEGIN\n%sDECIDB_VALUES_END\n", columns.Dump().c_str());
@@ -394,11 +397,15 @@ void PhysicalDecide::ReportAnEmptyObjective(const SolverInput &input) const {
 		}
 		return false;
 	};
+	auto nonzero = [](double coefficient) {
+		return coefficient != 0.0;
+	};
 	if (std::any_of(input.objective_coefficients.begin(), input.objective_coefficients.end(), reads) ||
+	    std::any_of(input.objective_members.coefficients.begin(), input.objective_members.coefficients.end(),
+	                nonzero) ||
 	    std::any_of(input.objective_product_groups.begin(), input.objective_product_groups.end(),
 	                [&](const EvaluatedProductGroup &group) { return reads(group.weight); }) ||
-	    std::any_of(input.global_obj_coeffs.begin(), input.global_obj_coeffs.end(),
-	                [](double coefficient) { return coefficient != 0.0; })) {
+	    std::any_of(input.global_obj_coeffs.begin(), input.global_obj_coeffs.end(), nonzero)) {
 		return;
 	}
 	fprintf(stderr, "DECIDE warning: the objective is 0 whatever the decisions: each of its terms has no value or a "
@@ -424,19 +431,19 @@ void PhysicalDecide::ReportInlinedHelpers(const SolverInput &input) const {
 		if (definition.form == DecideHelperForm::WRITTEN_IN) {
 			continue;
 		}
-		string line;
-		auto kind = LogicalDecide::RewriteAccount::Kind::RUN_TIME;
-		if (input.variable_scopes[helper].scope == DecideVarScope::INLINED) {
-			line = definition.label;
-			kind = LogicalDecide::RewriteAccount::Kind::VALUE_HELPER_INLINED;
-		} else if (helper < input.written_in.size() &&
-		           std::find(input.written_in[helper].begin(), input.written_in[helper].end(), true) !=
-		               input.written_in[helper].end()) {
-			line = definition.label + ": each group of one member is written where it is read, with no helper decision";
-		}
-		if (line.empty()) {
+		if (helper >= input.written_in.size() ||
+		    std::find(input.written_in[helper].begin(), input.written_in[helper].end(), true) ==
+		        input.written_in[helper].end()) {
 			continue;
 		}
+		// A query-wide MIN or MAX has the one group.
+		const bool query_wide = tree->variable_scopes[helper].IsGlobal();
+		const auto line =
+		    query_wide
+		        ? definition.label
+		        : definition.label + ": each group of one member is written where it is read, with no helper decision";
+		const auto kind = query_wide ? LogicalDecide::RewriteAccount::Kind::VALUE_HELPER_INLINED
+		                             : LogicalDecide::RewriteAccount::Kind::RUN_TIME;
 		// Each clause whose plan names the helper: an account of it is one of the helper (AddValueHelper).
 		for (auto &account : display.rewrite_accounts) {
 			if (account.subject == definition.label) {
@@ -501,6 +508,8 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	solver_input.num_decide_vars = num_decide_vars;
 	solver_input.keyed_mappings = std::move(keyed_mappings);
 	solver_input.absent_reads = gstate.absent_reads;
+	solver_input.written_in = std::move(gstate.written_in);
+	ReportInlinedHelpers(solver_input);
 	solver_input.variable_scopes = tree->variable_scopes;
 	// The decisions frames read at another row (SolverInput::frame_reads), after the plan's
 	// own: each its base read, at each row, at the row its frame selects -- or the row
@@ -648,21 +657,11 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// Objective (linear part)
 	solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
 	solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
-	solver_input.objective_constant = tree->objective_constant_offset;
+	solver_input.objective_members = std::move(gstate.objective_members);
+	solver_input.objective_constant = tree->objective_constant_offset + gstate.objective_member_constant;
 
 	solver_input.objective_product_groups = std::move(gstate.evaluated_objective_groups);
 
-	// The helpers the plan writes where they are read own no column (DecideHelperForm). The floors and implied bounds
-	// above read the helpers' columns and keep only what holds of a decision or an instance, so the column space is
-	// laid out again, and every row read against the old one is read anew.
-	phase.Next("assembly.inline_helpers");
-	if (WriteHelpersIn(solver_input)) {
-		ReportInlinedHelpers(solver_input);
-		out_var_indexer = VarIndexer::Build(solver_input);
-		for (auto &ec : solver_input.constraints) {
-			ec.emitted_rows = EmittedRows();
-		}
-	}
 	return solver_input;
 }
 

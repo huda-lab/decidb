@@ -243,7 +243,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 		const auto written = DecideWrittenClause(input, ec.provenance.origin.source_clause_id);
 		// The group's LHS, one row the clause emits (ClauseEmittedRows): a group of a grouped clause, the whole
 		// clause for an ungrouped one.
-		auto &emitted = ClauseEmittedRows(ec, input, var_indexer, written);
+		auto &emitted = ClauseEmittedRows(ec, var_indexer, written);
 
 		// I4 (aggregate `<>`): clause text used to name a dropped aggregate `<>`, carried
 		// onto every global z this `ec` allocates so the removal dial can label the edit.

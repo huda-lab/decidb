@@ -117,9 +117,14 @@ public:
 	//! The objective's linear terms and its product groups, each on the rows it reads, and each one's filter of those
 	//! rows in `evaluated`, which the qualifiers and AVG then read; none without an objective.
 	void Objective(PhysicalDecide::EvaluatedClauses &evaluated);
-	//! Each helper's members (DecideGlobalSinkState::evaluated_value_links), per group of its `by` key that holds
-	//! one, listed after the objective.
+	//! Each helper's members, per group of its `by` key that holds one, listed before any clause or the objective is
+	//! read. A helper the plan keeps a column for is handed to stage 06 (DecideGlobalSinkState::evaluated_value_links);
+	//! one it writes where it is read (DecideHelperForm) is kept here, and each reader's term on it is written as its
+	//! members (WriteMembersIn), so stage 06 meets no read of it.
 	void ValueLinks(const vector<KeyedMapping> &mappings);
+	//! The objective's terms on a helper the plan writes where it is read, as its members' terms
+	//! (DecideGlobalSinkState::objective_members), once the objective's columns are final.
+	void ObjectiveMembers();
 
 private:
 	//! A helper's members (language/guide.md §7.2): the entries of its G's operand it reads, every decision they read
@@ -150,6 +155,38 @@ private:
 	//! Per value-link node, its helper's members, read once where its classes are (HelperMapping), which ValueLinks
 	//! lists.
 	vector<LinkMembers> link_members;
+	//! A helper the plan writes where it is read: its members, and each instance's group among them. A SUM or AVG is
+	//! written in `whole`; of a MIN or MAX the groups of one member are, and an instance of another group keeps its
+	//! column (INVALID_INDEX).
+	struct WrittenHelper {
+		ReducerValueMembers members;
+		vector<idx_t> group_of_instance;
+		//! The classes of its key; null for a query-wide helper, which has the one instance.
+		const KeyedMapping *mapping = nullptr;
+		bool whole = false;
+		string label;
+	};
+	vector<WrittenHelper> written_helpers;
+	//! Per plan decision, its entry of `written_helpers`; INVALID_INDEX for every other.
+	vector<idx_t> written_helper_of;
+	//! The helpers listed, their instances, members and members' terms, and how many are handed no link.
+	struct HelperCounts {
+		idx_t helpers = 0, instances = 0, members = 0, terms = 0, written_in = 0;
+	};
+	HelperCounts helper_counts;
+
+	//! Hands a listed helper to stage 06, or keeps the instances its plan form writes where they are read.
+	void HandLink(ReducerValueLinkSpec &&spec, DecideHelperForm form, const vector<KeyedMapping> &mappings);
+	//! Writes each term of a list that reads a written-in instance as that instance's members, scaled by the term's
+	//! coefficient, their constants added to the constant of the term's row: `begin` delimits the rows, as a clause's
+	//! records and a helper's members do. A read of an instance with no member has no value: the objective drops it
+	//! (`absent_reads_nothing`, D84), and no clause row or member reaches here with one. Returns whether any term
+	//! named such a helper.
+	bool WriteMembersIn(vector<idx_t> &begin, vector<idx_t> &variables, vector<idx_t> &rows,
+	                    vector<double> &coefficients, vector<double> &constants, bool absent_reads_nothing) const;
+	//! The same over a clause's records, whose decisions (EvaluatedConstraint::variable_indices) are then those its
+	//! rows name.
+	void WriteMembersIn(EvaluatedConstraint &clause) const;
 
 	//! The rows the clause of `root` keeps, in the input's order, each with the entry standing for it, and numbered by
 	//! its place among them (place_of_row); `rows` takes them. Unplace clears the numbering once the clause is read.

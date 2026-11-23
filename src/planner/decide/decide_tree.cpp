@@ -84,9 +84,7 @@ static unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context
 			const auto &variable = field.decision < op.bound.variable_scopes.size()
 			                           ? op.bound.variable_scopes[field.decision]
 			                           : DecideVarScopeInfo();
-			const bool keyed = variable.IsKeyed() || (variable.scope == DecideVarScope::INLINED &&
-			                                          variable.keyed_scope_idx < op.bound.keyed_scopes.size());
-			per_row = per_row || (!variable.IsGlobal() && !keyed);
+			per_row = per_row || (!variable.IsGlobal() && !variable.IsKeyed());
 		}
 		if (!per_row) {
 			facts->scope.per = DecideClauseScope::PerRole::ONE_ROW_PER_CLASS;
@@ -325,16 +323,12 @@ public:
 		node.root = node.hidden = node.decision_value = true;
 		node.text = label->second;
 		auto &variable_scope = tree->variable_scopes[helper];
-		if (variable_scope.IsKeyed() || variable_scope.scope == DecideVarScope::INLINED) {
+		if (variable_scope.IsKeyed()) {
 			if (variable_scope.keyed_scope_idx >= op.bound.keyed_scopes.size()) {
-				if (variable_scope.scope != DecideVarScope::INLINED ||
-				    variable_scope.keyed_scope_idx != DConstants::INVALID_INDEX) {
-					throw InternalException("DECIDE tree: helper %llu has an invalid keyed scope", helper);
-				}
-			} else {
-				node.per = DecideTreePer::KEY;
-				node.key = op.bound.keyed_scopes[variable_scope.keyed_scope_idx].key;
+				throw InternalException("DECIDE tree: helper %llu has an invalid keyed scope", helper);
 			}
+			node.per = DecideTreePer::KEY;
+			node.key = op.bound.keyed_scopes[variable_scope.keyed_scope_idx].key;
 		} else if (variable_scope.IsGlobal()) {
 			node.per = DecideTreePer::ONE;
 		}
@@ -1223,8 +1217,7 @@ void DecideTree::Validate() const {
 			if (!variable_scopes.empty()) {
 				scope = variable_scopes[value_var];
 			}
-			const bool keyed = scope.IsKeyed() ||
-			                   (scope.scope == DecideVarScope::INLINED && scope.keyed_scope_idx < keyed_scopes.size());
+			const bool keyed = scope.IsKeyed();
 			const auto expected_per = scope.IsGlobal() ? DecideTreePer::ONE
 			                          : keyed          ? DecideTreePer::KEY
 			                                           : DecideTreePer::ROW;
