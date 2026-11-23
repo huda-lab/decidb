@@ -50,9 +50,6 @@ struct Level {
 //! What CheckCondition proved: one row-scoped BOOL decision under upper count quotas of two or more scopes, each scope
 //! inside the next, and a linear objective. The levels are listed finest first.
 struct Condition final : DirectApplicabilityCondition {
-	//! The constraints of the IR, which outlives the condition: the count clauses, and the fixed Boolean values.
-	vector<const DirectIRConstraint *> bound_factors;
-	vector<const DirectIRConstraint *> local_fixes;
 	vector<Level> levels;
 	//! The score: what S2 ranks the rows by.
 	DirectLinearScore score;
@@ -74,18 +71,20 @@ public:
 	const char *Name() const override {
 		return RULE_NAME;
 	}
-	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
-		if (!DirectIsOneRowDecision(ir, DirectDomain::BOOL)) {
+	unique_ptr<DirectApplicabilityCondition> CheckCondition(const LogicalDecide &decide,
+	                                                        ClientContext &context) const override {
+		vector<DirectClause> clauses;
+		DirectObjective objective;
+		vector<const DirectClause *> fixes, bounds;
+		if (!DirectIsOneRowDecision(decide, DirectDomain::BOOL) || !DirectReadClauses(context, decide, clauses) ||
+		    !DirectReadObjective(context, decide, objective) || !DirectSplitFixes(clauses, fixes, bounds) ||
+		    bounds.empty()) {
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();
-		if (!DirectSplitFixes(ir, condition->local_fixes, condition->bound_factors) ||
-		    condition->bound_factors.empty()) {
-			return nullptr;
-		}
-		if (!ProveLevels(ir, context, *condition) ||
-		    !DirectReadFixedValues(ir, context, condition->local_fixes, condition->fixed) ||
-		    !condition->score.Prove(ir, context)) {
+		if (!ProveLevels(decide, context, bounds, *condition) ||
+		    !DirectReadFixedValues(decide, clauses, context, fixes, condition->fixed) ||
+		    !condition->score.Prove(decide, objective, context)) {
 			return nullptr;
 		}
 		return std::move(condition);
@@ -97,19 +96,21 @@ public:
 	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
-	bool ReadClause(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &factor, Level &clause) const;
-	bool ProveLevels(const DirectIR &ir, ClientContext &context, Condition &condition) const;
+	bool ReadClause(const LogicalDecide &decide, ClientContext &context, const DirectClause &factor,
+	                Level &clause) const;
+	bool ProveLevels(const LogicalDecide &decide, ClientContext &context, const vector<const DirectClause *> &bounds,
+	                 Condition &condition) const;
 };
 
 //! One clause as a level of its own: an upper count limit on its scope, `SUM(x) <= k` (or `SUM(-x) >= -k`), with k a
 //! constant, rounded to whole rows now, or a value of the data, which the plan reads per group.
-bool Rule::ReadClause(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &factor,
+bool Rule::ReadClause(const LogicalDecide &decide, ClientContext &context, const DirectClause &factor,
                       Level &clause) const {
 	bool negated;
 	DirectCountLimit count;
-	if (!DirectReadScope(ir, factor, clause.scope) ||
+	if (!DirectReadScope(decide, factor, clause.scope) ||
 	    !DirectReadCountBody(context, factor.PlainSum()->terms, negated) ||
-	    !DirectReadCountLimit(ir, context, factor, negated, count)) {
+	    !DirectReadCountLimit(decide, context, factor, negated, count)) {
 		return false;
 	}
 	// A lower or an equal limit can force a selection, which the cascade of upper quotas cannot honor.
@@ -127,11 +128,12 @@ bool Rule::ReadClause(const DirectIR &ir, ClientContext &context, const DirectIR
 
 //! Each clause is an upper count limit on one scope. Clauses of one scope merge into one level, as S1 merges its
 //! bounds, and the levels must nest.
-bool Rule::ProveLevels(const DirectIR &ir, ClientContext &context, Condition &condition) const {
+bool Rule::ProveLevels(const LogicalDecide &decide, ClientContext &context, const vector<const DirectClause *> &bounds,
+                       Condition &condition) const {
 	vector<Level> merged;
-	for (auto factor : condition.bound_factors) {
+	for (auto factor : bounds) {
 		Level clause;
-		if (!ReadClause(ir, context, *factor, clause)) {
+		if (!ReadClause(decide, context, *factor, clause)) {
 			return false;
 		}
 		auto same = std::find_if(merged.begin(), merged.end(),

@@ -50,12 +50,17 @@ public:
 		return RULE_NAME;
 	}
 
-	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
+	unique_ptr<DirectApplicabilityCondition> CheckCondition(const LogicalDecide &decide,
+	                                                        ClientContext &context) const override {
 		auto condition = make_uniq<Condition>();
 		// The class plan reads the source, and the rows read it again to be given their answer.
 		condition->source_reads = 2;
-		if (!ProveDecision(ir, *condition) || !ProveBudget(ir, context, *condition) ||
-		    !ProveBox(ir, context, *condition) || !ProveObjective(ir, context, *condition)) {
+		vector<DirectClause> clauses;
+		DirectObjective objective;
+		if (!ProveDecision(decide, *condition) || !DirectReadClauses(context, decide, clauses) ||
+		    !DirectReadObjective(context, decide, objective) || !ProveBudget(decide, clauses, context, *condition) ||
+		    !ProveBox(decide, clauses, context, *condition) ||
+		    !ProveObjective(decide, objective, context, *condition)) {
 			return nullptr;
 		}
 		ReadOnRowsWithADecision(context, *condition);
@@ -70,32 +75,30 @@ public:
 	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
-	bool ProveDecision(const DirectIR &ir, Condition &condition) const;
+	bool ProveDecision(const LogicalDecide &decide, Condition &condition) const;
 	void ReadOnRowsWithADecision(ClientContext &context, Condition &condition) const;
-	bool ProveBudget(const DirectIR &ir, ClientContext &context, Condition &condition) const;
+	bool ProveBudget(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+	                 Condition &condition) const;
 	bool BudgetFitsKeys(const Condition &condition) const;
-	bool ProveBox(const DirectIR &ir, ClientContext &context, Condition &condition) const;
-	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
+	bool ProveBox(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+	              Condition &condition) const;
+	bool ProveObjective(const LogicalDecide &decide, const DirectObjective &objective, ClientContext &context,
+	                    Condition &condition) const;
 };
 
 //! One REAL decision, on each row or shared by the rows of a key. A decision of the whole query is another class.
-bool Rule::ProveDecision(const DirectIR &ir, Condition &condition) const {
-	if (ir.decisions.size() != 1 || ir.decisions[0].domain != DirectDomain::REAL ||
-	    ir.decisions[0].scope == DecideVarScope::GLOBAL) {
+bool Rule::ProveDecision(const LogicalDecide &decide, Condition &condition) const {
+	if (decide.bound.variables.size() != 1 || DirectDomainOf(decide, 0) != DirectDomain::REAL ||
+	    decide.bound.variable_scopes[0].scope == DecideVarScope::GLOBAL) {
 		return false;
 	}
-	bool keyed = ir.decisions[0].scope == DecideVarScope::KEYED;
-	if (ir.keyed_scopes.size() != (keyed ? 1 : 0)) {
+	auto &scope = decide.bound.variable_scopes[0];
+	bool keyed = scope.scope == DecideVarScope::KEYED;
+	if (decide.bound.keyed_scopes.size() != (keyed ? 1 : 0)) {
 		return false;
 	}
-	if (keyed) {
-		// A key's columns are columns of the source (the IR reads them as a row check would), so a copy is all it
-		// takes.
-		for (auto &element : ir.keyed_scopes[ir.decisions[0].keyed_scope].key) {
-			condition.keys.push_back(element.Copy());
-		}
-	}
-	return true;
+	// A declaration's key is columns of the source (the binder keeps every keyed decision's key live in it).
+	return !keyed || DirectReadKey(decide, decide.bound.keyed_scopes[scope.keyed_scope_idx].key, condition.keys);
 }
 
 //! A row with a NULL in an element of the decision's key that puts it in no class has no decision (D5), and nothing is
@@ -127,10 +130,11 @@ void Rule::ReadOnRowsWithADecision(ClientContext &context, Condition &condition)
 //! with a weight of any sign and a limit that is a constant or read from the data. The other constraints are per-row
 //! bounds on the decision, which ProveBox reads. A clause `per K:` repeats the whole total for each class, which is
 //! another class of problem.
-bool Rule::ProveBudget(const DirectIR &ir, ClientContext &context, Condition &condition) const {
-	const DirectIRConstraint *budget = nullptr;
-	for (auto &ir_node : ir.constraints) {
-		if (!ir_node.aggregate) {
+bool Rule::ProveBudget(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+                       Condition &condition) const {
+	const DirectClause *budget = nullptr;
+	for (auto &ir_node : clauses) {
+		if (!ir_node.Aggregate()) {
 			if (!ir_node.singleton_row) {
 				return false;
 			}
@@ -141,17 +145,17 @@ bool Rule::ProveBudget(const DirectIR &ir, ClientContext &context, Condition &co
 		}
 		budget = &ir_node;
 	}
-	if (!budget || budget->comparison != ExpressionType::COMPARE_LESSTHANOREQUALTO) {
+	if (!budget || budget->Comparison() != ExpressionType::COMPARE_LESSTHANOREQUALTO) {
 		return false;
 	}
-	if (!DirectProveSharedScope(ir, {budget}, condition.scope) || condition.scope.per) {
+	if (!DirectProveSharedScope(decide, {budget}, condition.scope) || condition.scope.per) {
 		return false;
 	}
 	// DirectProveSharedScope has proved that the clause is a plain SUM.
 	auto &sum = *budget->PlainSum();
 	if (!DirectOnlyLinearTerms(sum.terms) ||
-	    !DirectReadLinearPart(ir, context, sum, budget->written, condition.weights) ||
-	    !DirectReadLimit(ir, context, *budget, condition.limit)) {
+	    !DirectReadLinearPart(decide, context, sum, budget->written, condition.weights) ||
+	    !DirectReadLimit(decide, context, *budget, condition.limit)) {
 		return false;
 	}
 	condition.constant_weight = DirectFoldConstantSum(context, DirectValuesOn(condition.weights, 0), condition.weight);
@@ -169,18 +173,19 @@ bool Rule::BudgetFitsKeys(const Condition &condition) const {
 //! The box is [0, cap]: the lower end is the default 0 or a written 0, and every per-row clause bounds the decision
 //! from above alone, `a * x <= r` with a constant `a` above 0. A clause that also bounds it from below (`x >= l`, `x =
 //! cap`) is another class, and so is a coefficient `a` read from the data, whose sign decides the side.
-bool Rule::ProveBox(const DirectIR &ir, ClientContext &context, Condition &condition) const {
+bool Rule::ProveBox(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+                    Condition &condition) const {
 	DirectBoundReading reading;
-	if (!DirectReadBounds(ir, context, reading) || reading.boxes[0].lower != 0.0) {
+	if (!DirectReadBounds(decide, clauses, context, reading) || reading.boxes[0].lower != 0.0) {
 		return false;
 	}
-	for (auto &ir_node : ir.constraints) {
+	for (auto &ir_node : clauses) {
 		// A bound the solver folds into the box is in `boxes`, whose lower end is 0.
-		if (ir_node.aggregate || ir_node.variable_bound) {
+		if (ir_node.Aggregate() || ir_node.variable_bound) {
 			continue;
 		}
 		double coefficient;
-		if (ir_node.comparison != ExpressionType::COMPARE_LESSTHANOREQUALTO ||
+		if (ir_node.Comparison() != ExpressionType::COMPARE_LESSTHANOREQUALTO ||
 		    !TryEvaluateFoldableDouble(context, *ir_node.bound.a, coefficient, DIRECT_FINITE_CONSTANT) ||
 		    !(coefficient > 0.0)) {
 			return false;
@@ -193,18 +198,19 @@ bool Rule::ProveBox(const DirectIR &ir, ClientContext &context, Condition &condi
 
 //! One plain `MIN` of one linear term, maximized (the part's sign is negative) with no constant factor. A row whose
 //! data is NULL, or that a `when` drops, is not in the MIN (`kept`).
-bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
-	if (ir.objective.parts.size() != 1) {
+bool Rule::ProveObjective(const LogicalDecide &decide, const DirectObjective &objective, ClientContext &context,
+                          Condition &condition) const {
+	if (objective.parts.size() != 1) {
 		return false;
 	}
-	auto &part = ir.objective.parts[0];
+	auto &part = objective.parts[0];
 	if (!part.reduced || part.reducer != DecideReducerKind::MIN || part.qualifier != DConstants::INVALID_INDEX ||
 	    part.terms.size() != 1 || !part.terms[0].IsLinear()) {
 		return false;
 	}
 	auto &read = condition.objective;
-	return DirectReadLinearPart(ir, context, part, ir.objective.written, read.linear) &&
-	       DirectObjectivePartKept(ir, part, read.kept) && read.linear.sign < 0 && !read.linear.factor.present;
+	return DirectReadLinearPart(decide, context, part, objective.written, read.linear) &&
+	       DirectObjectivePartKept(decide, part, read.kept) && read.linear.sign < 0 && !read.linear.factor.present;
 }
 
 //===--------------------------------------------------------------------===//

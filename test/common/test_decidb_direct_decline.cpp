@@ -10,37 +10,42 @@
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rules.hpp"
 #include "duckdb/optimizer/decide/direct/direct_solve.hpp"
+#include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_decide_reducer_expression.hpp"
+#include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_parameter_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
-#include "duckdb/planner/expression/bound_subquery_expression.hpp"
 #include "duckdb/planner/expression/bound_window_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 
-// The decline branches of a rule's CheckCondition, tested on the IR. A rule's input is a DirectIR, so each case
-// hands the rule the IR of a small query and asserts that it declines. The IR is the one the rule driver builds: a
-// probe rule, installed through the rule driver's test seam, receives the IR the driver offers, optionally edits it,
-// calls the rule under test on it and records whether it applied. The query is planned (EXPLAIN), never run, and
-// the probe declines, so the solver path stays in place.
+// The decline branches of a rule's CheckCondition, tested on the operator a rule reads. Each case hands the rule the
+// bound DECIDE operator of a small query and asserts that it declines. A probe rule, installed through the rule
+// driver's test seam, receives the operator the driver offers, optionally edits it, calls the rule under test on it
+// and records whether it applied. The query is planned (EXPLAIN), never run, and the probe declines, so the solver
+// path stays in place; after an edit the probe raises, so the edited operator is never planned.
 //
-// The edit is for the shapes the front end never produces from SQL (an expression of the wrong
-// type, a column outside the source) and for grouping keys. Every case names the branch it
-// targets, and reaches an arm of the rule's decision code that no other case of the rule reaches (the per-arm
-// check is `make decide-coverage`). Each rule also has forms that apply, so a decline is about the one thing a
-// case changes.
-//
-// `DirectIRIsReadable` is the rule driver's own check; its cases build the IR struct from scratch.
+// The edit is for the shapes binding and canonicalization never produce from SQL (an expression of the wrong type, a
+// column outside the source, a product left unnormalized). It edits the bound clause, and the rule reads the result
+// with its own readers. Every case names the branch it targets, and reaches an arm of the rule's decision code that no
+// other case of the rule reaches (the per-arm check is `make decide-coverage`). Each rule also has forms that apply,
+// so a decline is about the one thing a case changes.
 
 using namespace duckdb;
 
 namespace direct_decline_test {
 
-using Edit = std::function<void(DirectIR &)>;
+using Edit = std::function<void(LogicalDecide &, ClientContext &)>;
 
-//! One query shape, the branch it targets, and the optional edit applied to the IR the query reads as.
+//! What the probe raises once it has the answer for an edited operator.
+const char *EDITED = "the probe edited the operator";
+
+//! One query shape, the branch it targets, and the optional edit applied to the operator the query binds to.
 struct Shape {
 	string branch;
 	string declaration;
@@ -60,8 +65,8 @@ const char *SOURCE_ROWS =
     " (3, 4.0::DOUBLE, 2, TRUE, 'c', 0.5::FLOAT)) t(id, w, cap, flag, name, f)";
 constexpr idx_t NAME_SLOT = 4;
 
-//! Offers the IR to `target`, after the edit, and records the answer. It always declines, so the query keeps its
-//! solver plan and EXPLAIN has nothing to run.
+//! Offers the operator to `target`, after the edit, and records the answer. It always declines, so the query keeps its
+//! solver plan and EXPLAIN has nothing to run; an edited operator is no query, so the probe raises instead.
 class ProbeRule final : public DirectSolveRule {
 public:
 	ProbeRule(duckdb::unique_ptr<DirectSolveRule> target_p, Edit edit_p, bool &offered_p, bool &applied_p)
@@ -70,14 +75,16 @@ public:
 	const char *Name() const override {
 		return "PROBE";
 	}
-	duckdb::unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir,
+	duckdb::unique_ptr<DirectApplicabilityCondition> CheckCondition(const LogicalDecide &decide,
 	                                                                ClientContext &context) const override {
 		offered = true;
-		if (edit) {
-			edit(const_cast<DirectIR &>(ir));
+		if (!edit) {
+			applied = target->CheckCondition(decide, context) != nullptr;
+			return nullptr;
 		}
-		applied = target->CheckCondition(ir, context) != nullptr;
-		return nullptr;
+		edit(const_cast<LogicalDecide &>(decide), context);
+		applied = target->CheckCondition(decide, context) != nullptr;
+		throw InvalidInputException(EDITED);
 	}
 	string Summary() const override {
 		return "probe";
@@ -95,8 +102,7 @@ private:
 
 using MakeRule = duckdb::unique_ptr<DirectSolveRule> (*)();
 
-//! Whether the rule applies to the shape. The shape must be one the rule driver offers the rule (the IR is read in
-//! full), so a case cannot decline because the front end failed to read the query.
+//! Whether the rule applies to the shape.
 bool Applies(MakeRule make_rule, Connection &con, const Shape &shape) {
 	INFO(shape.branch << " | " << shape.declaration << " | " << shape.constraints << " | " << shape.objective);
 	bool offered = false;
@@ -112,9 +118,10 @@ bool Applies(MakeRule make_rule, Connection &con, const Shape &shape) {
 	auto sql = "EXPLAIN SELECT id FROM (FROM " + string(shape.source ? shape.source : SOURCE_ROWS) + " DECIDE " +
 	           shape.declaration + " SUCH THAT " + shape.constraints + " " + shape.objective + ") q";
 	auto result = con.Query(sql);
-	if (shape.refused) {
+	if (shape.refused || shape.edit) {
 		REQUIRE(result->HasError());
-		REQUIRE(result->GetError().find("cannot hold") != string::npos);
+		INFO(result->GetError());
+		REQUIRE(result->GetError().find(shape.edit ? EDITED : "cannot hold") != string::npos);
 	} else {
 		REQUIRE_NO_FAIL(*result);
 	}
@@ -137,11 +144,23 @@ void ExpectApplies(MakeRule make_rule, Connection &con, const duckdb::vector<Sha
 }
 
 //===--------------------------------------------------------------------===//
-// Edits: shapes the front end does not produce from this SQL
+// Edits: shapes binding and canonicalization do not produce from this SQL
 //===--------------------------------------------------------------------===//
 
 duckdb::unique_ptr<Expression> True() {
 	return make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
+}
+
+duckdb::unique_ptr<Expression> Number(double value) {
+	return make_uniq<BoundConstantExpression>(Value::DOUBLE(value));
+}
+
+//! A parameter of a prepared statement, holding `value`.
+duckdb::unique_ptr<Expression> Parameter(const Value &value) {
+	auto parameter = make_uniq<BoundParameterExpression>("1");
+	parameter->return_type = value.type();
+	parameter->parameter_data = make_shared_ptr<BoundParameterData>(value);
+	return std::move(parameter);
 }
 
 //! A boolean over a column that is not one of the query's source columns.
@@ -149,50 +168,114 @@ duckdb::unique_ptr<Expression> ForeignBoolean() {
 	return make_uniq<BoundColumnRefExpression>(LogicalType::BOOLEAN, ColumnBinding(9999, 0));
 }
 
-DirectPart &LeftPart(DirectIR &ir, idx_t constraint = 0) {
-	return ir.constraints[constraint].lhs[0];
-}
-
-DecideSplitTerm CopyTerm(const DecideSplitTerm &term) {
-	DecideSplitTerm copy;
-	copy.sign = term.sign;
-	if (term.coefficient) {
-		copy.coefficient = term.coefficient->Copy();
-	}
-	copy.degree = term.degree;
-	copy.var_a = term.var_a;
-	for (auto &factor : term.factors) {
-		DecideSplitFactor read;
-		read.power = factor.power;
-		for (auto &part : factor.form) {
-			read.form.push_back(CopyTerm(part));
-		}
-		copy.factors.push_back(std::move(read));
-	}
-	if (term.opaque) {
-		copy.opaque = term.opaque->Copy();
-	}
-	for (auto &inner : term.inner) {
-		copy.inner.push_back(CopyTerm(inner));
-	}
-	return copy;
-}
-
-//! The linear form a square term squares.
-duckdb::vector<DecideSplitTerm> &SquareForm(DecideSplitTerm &term) {
-	return term.factors[0].form;
-}
-
 //! A column of the given type that is not one of the query's source columns.
 duckdb::unique_ptr<Expression> ForeignColumn(const LogicalType &type) {
 	return make_uniq<BoundColumnRefExpression>(type, ColumnBinding(9999, 0));
 }
 
-//! A comparison used as a value with two column children: the first is `first`, the second is source column `slot`.
-duckdb::unique_ptr<Expression> PairWithSourceColumn(DirectIR &ir, duckdb::unique_ptr<Expression> first, idx_t slot) {
-	return make_uniq<BoundComparisonExpression>(
-	    ExpressionType::COMPARE_EQUAL, std::move(first),
-	    make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER, ir.source_bindings[slot]));
+//! The two sides of a clause's comparison.
+duckdb::unique_ptr<Expression> &Lhs(LogicalDecide &decide, idx_t clause = 0) {
+	return decide.bound.clauses[clause].body->Cast<BoundComparisonExpression>().left;
+}
+duckdb::unique_ptr<Expression> &Rhs(LogicalDecide &decide, idx_t clause = 0) {
+	return decide.bound.clauses[clause].body->Cast<BoundComparisonExpression>().right;
+}
+
+//! The first expression under `root` that `wanted` accepts, in reading order, as the slot that holds it; null for none.
+duckdb::unique_ptr<Expression> *Find(duckdb::unique_ptr<Expression> &root,
+                                     const std::function<bool(const Expression &)> &wanted) {
+	if (wanted(*root)) {
+		return &root;
+	}
+	duckdb::unique_ptr<Expression> *found = nullptr;
+	ExpressionIterator::EnumerateChildren(*root, [&](duckdb::unique_ptr<Expression> &child) {
+		if (!found) {
+			found = Find(child, wanted);
+		}
+	});
+	return found;
+}
+
+//! The `index`-th reducer under `root`, in reading order: the slot that holds it.
+duckdb::unique_ptr<Expression> &ReducerSlot(duckdb::unique_ptr<Expression> &root, idx_t index = 0) {
+	auto slot = Find(root, [&](const Expression &expr) {
+		return expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER && index-- == 0;
+	});
+	REQUIRE(slot);
+	return *slot;
+}
+
+//! The reducer of a clause's left side, and the `part`-th reducer of the objective.
+BoundDecideReducerExpression &LeftReducer(LogicalDecide &decide, idx_t clause = 0) {
+	return ReducerSlot(Lhs(decide, clause))->Cast<BoundDecideReducerExpression>();
+}
+BoundDecideReducerExpression &ObjectiveReducer(LogicalDecide &decide, idx_t part = 0) {
+	return ReducerSlot(decide.bound.objective.body, part)->Cast<BoundDecideReducerExpression>();
+}
+
+//! The first column under `root` that is a column of the source (`decision` false) or a decision.
+duckdb::unique_ptr<Expression> &ColumnSlot(LogicalDecide &decide, duckdb::unique_ptr<Expression> &root,
+                                           bool decision = false) {
+	auto slot = Find(root, [&](const Expression &expr) {
+		return expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
+		       (expr.Cast<BoundColumnRefExpression>().binding.table_index == decide.decide_index) == decision;
+	});
+	REQUIRE(slot);
+	return *slot;
+}
+
+//! What a square squares: the first operand of the first `**` under `root`.
+duckdb::unique_ptr<Expression> &SquareBase(duckdb::unique_ptr<Expression> &root) {
+	auto slot = Find(root, [&](const Expression &expr) {
+		return expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION &&
+		       expr.Cast<BoundFunctionExpression>().function.name == "**";
+	});
+	REQUIRE(slot);
+	return (*slot)->Cast<BoundFunctionExpression>().children[0];
+}
+
+//! `left name right`, bound as the pipeline binds its own arithmetic.
+duckdb::unique_ptr<Expression> Op(ClientContext &context, const string &name, duckdb::unique_ptr<Expression> left,
+                                  duckdb::unique_ptr<Expression> right) {
+	duckdb::vector<duckdb::unique_ptr<Expression>> children;
+	children.push_back(std::move(left));
+	children.push_back(std::move(right));
+	return DecideRebindOperator(context, name, std::move(children));
+}
+
+//! A sum of two columns: `first` and source column `slot`.
+duckdb::unique_ptr<Expression> PairWithSourceColumn(LogicalDecide &decide, ClientContext &context,
+                                                    duckdb::unique_ptr<Expression> first, idx_t slot) {
+	return Op(context, "+", std::move(first),
+	          make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER, decide.SourceBindings()[slot]));
+}
+
+//! `-value`.
+duckdb::unique_ptr<Expression> Negated(ClientContext &context, duckdb::unique_ptr<Expression> value) {
+	duckdb::vector<duckdb::unique_ptr<Expression>> children;
+	children.push_back(std::move(value));
+	return DecideRebindOperator(context, "-", std::move(children));
+}
+
+//! `slot` times `factor`, the factor first, as a coefficient is written.
+void Scale(ClientContext &context, duckdb::unique_ptr<Expression> &slot, duckdb::unique_ptr<Expression> factor) {
+	slot = Op(context, "*", std::move(factor), std::move(slot));
+}
+
+//! The first decision, squared.
+duckdb::unique_ptr<Expression> DecisionSquared(LogicalDecide &decide, ClientContext &context) {
+	return Op(context, "*", decide.bound.variables[0]->Copy(), decide.bound.variables[0]->Copy());
+}
+
+//! The first element of the key a clause's reducer groups by.
+DecideKeyElement &ByElement(LogicalDecide &decide, idx_t clause = 0) {
+	return decide.bound.keys[LeftReducer(decide, clause).by].elements[0];
+}
+
+//! Puts `expression` where the key element's expression is, with no collation.
+void SetKeyElement(DecideKeyElement &element, duckdb::unique_ptr<Expression> expression) {
+	element.expression = std::move(expression);
+	element.collated = nullptr;
 }
 
 //===--------------------------------------------------------------------===//
@@ -256,7 +339,9 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	shapes.push_back(S1("two decisions", "SUM(x) <= 2", nullptr, S1_OBJECTIVE, "x(BOOL), y(BOOL)"));
 	shapes.push_back(S1("a REAL decision", "SUM(x) <= 2", nullptr, S1_OBJECTIVE, "x(REAL)"));
 	shapes.push_back(S1("a query-wide decision", "s <= 1", nullptr, "MAXIMIZE s", "per (): s(BOOL)"));
-	shapes.push_back(S1("a keyed scope", "SUM(x) <= 2", [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
+	shapes.push_back(S1("a keyed scope", "SUM(x) <= 2", [](LogicalDecide &decide, ClientContext &context) {
+		decide.bound.keyed_scopes.emplace_back();
+	}));
 	// CheckCondition: the constraints.
 	shapes.push_back(S1("a membership constraint", "SUM(x) <= 2 AND x IN (0, 1)"));
 	shapes.push_back(S1("a count that is not a bound", "SUM(x) <> 1"));
@@ -265,30 +350,31 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	shapes.push_back(S1("a per-row clause that is a square", "SUM(x) <= 2 AND POWER(x, 2) <= 1"));
 	// ProveScope.
 	shapes.push_back(S1("a count with a negative sign", "0 - SUM(x) >= -2"));
-	// The canonicalizer reads `0 - SUM(x)` as a scale of -1, so only an edit sets the part's own sign.
+	// The canonicalizer reads `0 - SUM(x)` as a scale of -1, so only an edit negates the reducer itself.
 	shapes.push_back(
-	    S1("a count whose part has a negative sign", "SUM(x) <= 2", [](DirectIR &ir) { LeftPart(ir).sign = -1; }));
+	    S1("a count whose part has a negative sign", "SUM(x) <= 2", [](LogicalDecide &decide, ClientContext &context) {
+		    Lhs(decide) = Negated(context, std::move(Lhs(decide)));
+	    }));
 	shapes.push_back(S1("an average where a count is", "AVG(x) <= 1"));
-	shapes.push_back(S1("a qualified count", "SUM(x) <= 2", [](DirectIR &ir) { LeftPart(ir).qualifier = 0; }));
 	shapes.push_back(S1("a sum of two aggregates", "SUM(x) + SUM(x) <= 2"));
 	shapes.push_back(S1("a later bound that is not a plain count", "SUM(x) >= 1 AND 2 * SUM(x) <= 4"));
 	shapes.push_back(S1("a later bound with another aggregate WHEN and clause WHEN", "SUM(x) >= 1 AND SUM(x) <= 2",
-	                    [](DirectIR &ir) {
-		                    LeftPart(ir, 1).filter = True();
-		                    ir.constraints[1].scope.when = True();
+	                    [](LogicalDecide &decide, ClientContext &context) {
+		                    LeftReducer(decide, 1).filter = True();
+		                    decide.bound.clauses[1].scope.when = True();
 	                    }));
 	shapes.push_back(S1("bounds with different keys", "SUM(x) by (flag) >= 1 AND SUM(x) by (name) <= 2"));
 	shapes.push_back(S1("a bound with a key beside one without", "SUM(x) by (flag) >= 1 AND SUM(x) <= 2"));
-	shapes.push_back(S1("a key that reads a decision", "SUM(x) by (flag) <= 2", [](DirectIR &ir) {
-		LeftPart(ir).by[0].grouping =
-		    make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER, ColumnBinding(ir.decide_index, 0));
-	}));
+	shapes.push_back(
+	    S1("a key that is a parameter", "SUM(x) by (flag) <= 2", [](LogicalDecide &decide, ClientContext &context) {
+		    SetKeyElement(ByElement(decide), Parameter(Value::BOOLEAN(true)));
+	    }));
 	shapes.push_back(S1("a second bound without the WHEN the first has", "when flag: SUM(x) >= 1 AND SUM(x) <= 2"));
 	shapes.push_back(
 	    S1("bounds with different WHEN conditions", "when flag: SUM(x) >= 1 AND when NOT flag: SUM(x) <= 2"));
 	shapes.push_back(S1("a WHEN that may raise", "when CAST(cap AS TINYINT) > 0: SUM(x) <= 2"));
-	shapes.push_back(S1("a WHEN that is not Boolean", "SUM(x) <= 2", [](DirectIR &ir) {
-		ir.constraints[0].scope.when = make_uniq<BoundConstantExpression>(Value::INTEGER(1));
+	shapes.push_back(S1("a WHEN that is not Boolean", "SUM(x) <= 2", [](LogicalDecide &decide, ClientContext &context) {
+		decide.bound.clauses[0].scope.when = make_uniq<BoundConstantExpression>(Value::INTEGER(1));
 	}));
 	// ProveFixedVariables.
 	shapes.push_back(
@@ -302,21 +388,18 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	shapes.push_back(
 	    S1("a fixed value that is a constant but not a finite number", "SUM(x) <= 2 AND x = 'inf'::DOUBLE"));
 	// SourceBooleanFixedValue: the value is a Boolean column or expression cast to a number.
-	shapes.push_back(
-	    S1("a fixed value from a Boolean expression over a column outside the source", "SUM(x) <= 2 AND x <= flag",
-	       [](DirectIR &ir) { ir.constraints[1].rhs->Cast<BoundCastExpression>().child = ForeignBoolean(); }));
+	shapes.push_back(S1("a fixed value from a Boolean expression over a column outside the source",
+	                    "SUM(x) <= 2 AND x <= flag", [](LogicalDecide &decide, ClientContext &context) {
+		                    Rhs(decide, 1)->Cast<BoundCastExpression>().child = ForeignBoolean();
+	                    }));
 	shapes.push_back(S1("a fixed value from a Boolean expression that reads no column", "SUM(x) <= 2 AND x <= flag",
-	                    [](DirectIR &ir) {
-		                    ir.constraints[1].rhs->Cast<BoundCastExpression>().child =
+	                    [](LogicalDecide &decide, ClientContext &context) {
+		                    Rhs(decide, 1)->Cast<BoundCastExpression>().child =
 		                        make_uniq<BoundReferenceExpression>(LogicalType::BOOLEAN, 0);
 	                    }));
-	shapes.push_back(S1("a fixed value from a number that is not Boolean", "SUM(x) <= 2 AND x <= flag",
-	                    [](DirectIR &ir) { ir.constraints[1].rhs->return_type = LogicalType::VARCHAR; }));
 	shapes.push_back(S1("a fixed value from a Boolean expression that is a parameter", "SUM(x) <= 2 AND x <= flag",
-	                    [](DirectIR &ir) {
-		                    auto parameter = make_uniq<BoundParameterExpression>("1");
-		                    parameter->return_type = LogicalType::BOOLEAN;
-		                    ir.constraints[1].rhs->Cast<BoundCastExpression>().child = std::move(parameter);
+	                    [](LogicalDecide &decide, ClientContext &context) {
+		                    Rhs(decide, 1)->Cast<BoundCastExpression>().child = Parameter(Value::BOOLEAN(true));
 	                    }));
 	// ProveBounds.
 	shapes.push_back(S1("a count body with a column coefficient", "SUM(w*x) <= 2"));
@@ -324,38 +407,44 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	shapes.push_back(S1("a count body that is a square", "SUM(POWER(x, 2)) <= 2"));
 	// The right-hand-side rewrite turns an aggregate on the right into a source column, so the IR holds one only when
 	// the rewrite leaves it.
-	shapes.push_back(S1("a count bound that is an aggregate", "SUM(x) <= 2", [](DirectIR &ir) {
-		ir.constraints[0].rhs = make_uniq<BoundAggregateExpression>(CountStarFun::GetFunction(),
-		                                                            duckdb::vector<duckdb::unique_ptr<Expression>>(),
-		                                                            nullptr, nullptr, AggregateType::NON_DISTINCT);
-	}));
+	shapes.push_back(
+	    S1("a count bound that is an aggregate", "SUM(x) <= 2", [](LogicalDecide &decide, ClientContext &context) {
+		    Rhs(decide, 0) = make_uniq<BoundAggregateExpression>(CountStarFun::GetFunction(),
+		                                                         duckdb::vector<duckdb::unique_ptr<Expression>>(),
+		                                                         nullptr, nullptr, AggregateType::NON_DISTINCT);
+	    }));
 	shapes.push_back(S1("a strict lower count bound at the exact range", "SUM(x) > 9007199254740992"));
 	shapes.push_back(S1("a lower count bound above the exact range", "SUM(x) >= 1e30"));
-	shapes.push_back(S1("a count bound that is a column of a correlated query", "SUM(x) <= 2", [](DirectIR &ir) {
-		ir.constraints[0].rhs = make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER, ir.source_bindings[2], 1);
-	}));
-	shapes.push_back(S1("a count bound that is a column outside the source", "SUM(x) <= 2",
-	                    [](DirectIR &ir) { ir.constraints[0].rhs = ForeignColumn(LogicalType::INTEGER); }));
-	shapes.push_back(S1("a count bound that is a cast to a type that is not a number", "SUM(x) <= cap",
-	                    [](DirectIR &ir) { ir.constraints[0].rhs->return_type = LogicalType::BOOLEAN; }));
+	shapes.push_back(S1("a count bound that is a column of a correlated query", "SUM(x) <= 2",
+	                    [](LogicalDecide &decide, ClientContext &context) {
+		                    Rhs(decide, 0) = make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER,
+		                                                                         decide.SourceBindings()[2], 1);
+	                    }));
+	shapes.push_back(S1(
+	    "a count bound that is a column outside the source", "SUM(x) <= 2",
+	    [](LogicalDecide &decide, ClientContext &context) { Rhs(decide, 0) = ForeignColumn(LogicalType::INTEGER); }));
+	shapes.push_back(
+	    S1("a count bound that is a cast to a type that is not a number", "SUM(x) <= cap",
+	       [](LogicalDecide &decide, ClientContext &context) { Rhs(decide, 0)->return_type = LogicalType::BOOLEAN; }));
 	// ProveObjective.
 	shapes.push_back(S1("an average objective", "SUM(x) <= 2", nullptr, "MAXIMIZE AVG(w*x)"));
 	shapes.push_back(S1("an objective WHEN that reads more than the source", "SUM(x) <= 2", nullptr,
 	                    "MAXIMIZE when txid_current() >= 0: SUM(w*x)"));
 	shapes.push_back(S1("an objective part WHEN that reads more than the source", "SUM(x) <= 2", nullptr,
 	                    "MAXIMIZE SUM(when txid_current() >= 0: w*x)"));
-	shapes.push_back(
-	    S1("a qualified objective part", "SUM(x) <= 2", [](DirectIR &ir) { ir.objective.parts[0].qualifier = 0; }));
 	shapes.push_back(S1("an objective constant", "SUM(x) <= 2", nullptr, "MAXIMIZE SUM(w*x + 1)"));
 	shapes.push_back(S1("an objective divided by zero", "SUM(x) <= 2", nullptr, "MAXIMIZE SUM(w*x) / 0"));
 	shapes.push_back(
 	    S1("an objective scaled by infinity", "SUM(x) <= 2", nullptr, "MAXIMIZE 'inf'::DOUBLE * SUM(w*x)"));
-	shapes.push_back(S1("an objective coefficient that is a string", "SUM(x) <= 2", [](DirectIR &ir) {
-		ir.objective.parts[0].terms[0].coefficient = make_uniq<BoundConstantExpression>(Value("a"));
-	}));
-	shapes.push_back(
-	    S1("an objective coefficient that reads a column outside the source", "SUM(x) <= 2",
-	       [](DirectIR &ir) { ir.objective.parts[0].terms[0].coefficient = ForeignColumn(LogicalType::DOUBLE); }));
+	shapes.push_back(S1(
+	    "an objective coefficient that is a string", "SUM(x) <= 2", [](LogicalDecide &decide, ClientContext &context) {
+		    ColumnSlot(decide, ObjectiveReducer(decide).children[0]) = make_uniq<BoundConstantExpression>(Value("a"));
+	    }));
+	shapes.push_back(S1("an objective coefficient that reads a column outside the source", "SUM(x) <= 2",
+	                    [](LogicalDecide &decide, ClientContext &context) {
+		                    ColumnSlot(decide, ObjectiveReducer(decide).children[0]) =
+		                        ForeignColumn(LogicalType::DOUBLE);
+	                    }));
 	shapes.push_back(S1("an objective coefficient fixed only within the query", "SUM(x) <= 2", nullptr,
 	                    "MAXIMIZE SUM(txid_current()*x)"));
 	shapes.push_back(S1("several objective terms where a coefficient has a child that may raise before another child",
@@ -387,12 +476,13 @@ duckdb::vector<Shape> A1AppliesShapes() {
 	shapes.push_back(
 	    A1("a whole-numbered decision with strict folded bounds", "x > 0 AND x < 5", nullptr, A1_OBJECTIVE, "x(INT)"));
 	shapes.push_back(
-	    A1("an objective part with a filter", "x <= cap", [](DirectIR &ir) { ir.objective.parts[0].filter = True(); }));
+	    A1("an objective part with a filter", "x <= cap",
+	       [](LogicalDecide &decide, ClientContext &context) { ObjectiveReducer(decide).filter = True(); }));
 	shapes.push_back(A1(
 	    "a square over two terms of one decision", "x <= cap",
-	    [](DirectIR &ir) {
-		    auto &inner = SquareForm(ir.objective.parts[0].terms[0]);
-		    inner.push_back(CopyTerm(inner[0]));
+	    [](LogicalDecide &decide, ClientContext &context) {
+		    auto &base = SquareBase(ObjectiveReducer(decide).children[0]);
+		    base = Op(context, "+", decide.bound.variables[0]->Copy(), std::move(base));
 	    },
 	    "MINIMIZE SUM(POWER(x - w, 2))"));
 	return shapes;
@@ -401,7 +491,9 @@ duckdb::vector<Shape> A1AppliesShapes() {
 duckdb::vector<Shape> A1DeclineShapes() {
 	duckdb::vector<Shape> shapes;
 	// CheckCondition: the decisions.
-	shapes.push_back(A1("a keyed scope", "x <= cap", [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
+	shapes.push_back(A1("a keyed scope", "x <= cap", [](LogicalDecide &decide, ClientContext &context) {
+		decide.bound.keyed_scopes.emplace_back();
+	}));
 	shapes.push_back(A1("a query-wide decision", "s <= 3", nullptr, "MAXIMIZE s", "per (): s(REAL)"));
 	// CheckCondition: the constraints.
 	shapes.push_back(A1("an aggregate constraint", "SUM(x) <= 5"));
@@ -412,48 +504,52 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	shapes.push_back(A1("a left part over two decisions", "x + y <= 3", nullptr, A1_OBJECTIVE, "x(REAL), y(REAL)"));
 	// CheckCondition: the objective.
 	shapes.push_back(A1("an average objective", "x <= cap", nullptr, "MAXIMIZE AVG(w*x)"));
-	shapes.push_back(
-	    A1("a qualified objective part", "x <= cap", [](DirectIR &ir) { ir.objective.parts[0].qualifier = 0; }));
 	shapes.push_back(A1("an objective term that is an absolute value", "x <= cap", nullptr, "MAXIMIZE SUM(ABS(x))"));
 	// DirectReadBounds.
-	shapes.push_back(A1("a bound whose value is a subquery", "x <= cap", [](DirectIR &ir) {
-		ir.constraints[0].rhs = make_uniq<BoundSubqueryExpression>(LogicalType::DOUBLE);
-	}));
-	shapes.push_back(A1("a bound whose value is a parameter", "x <= cap", [](DirectIR &ir) {
-		ir.constraints[0].rhs = make_uniq<BoundParameterExpression>("1");
-		ir.constraints[0].rhs->return_type = LogicalType::DOUBLE;
-	}));
-	shapes.push_back(A1("a bound whose value is an aggregate", "x <= cap", [](DirectIR &ir) {
-		ir.constraints[0].rhs = make_uniq<BoundAggregateExpression>(CountStarFun::GetFunction(),
-		                                                            duckdb::vector<duckdb::unique_ptr<Expression>>(),
-		                                                            nullptr, nullptr, AggregateType::NON_DISTINCT);
-	}));
-	shapes.push_back(A1("a bound whose value reads the decision", "x <= cap", [](DirectIR &ir) {
-		ir.constraints[0].rhs =
-		    make_uniq<BoundColumnRefExpression>(LogicalType::DOUBLE, ColumnBinding(ir.decide_index, 0));
-	}));
-	shapes.push_back(A1("a bound whose value has a correlated child", "x <= cap", [](DirectIR &ir) {
-		ir.constraints[0].rhs = PairWithSourceColumn(
-		    ir, make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER, ir.source_bindings[2], 1), 2);
-	}));
-	shapes.push_back(A1("a bound whose value has a child outside the source", "x <= cap", [](DirectIR &ir) {
-		ir.constraints[0].rhs = PairWithSourceColumn(ir, ForeignColumn(LogicalType::INTEGER), 2);
-	}));
-	shapes.push_back(A1("a bound whose value is a window", "x <= cap", [](DirectIR &ir) {
-		ir.constraints[0].rhs =
-		    make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr, nullptr);
-	}));
-	shapes.push_back(A1("a bound whose value is a string", "x <= cap",
-	                    [](DirectIR &ir) { ir.constraints[0].rhs = make_uniq<BoundConstantExpression>(Value("a")); }));
+	shapes.push_back(
+	    A1("a bound whose value is a parameter", "x <= cap",
+	       [](LogicalDecide &decide, ClientContext &context) { Rhs(decide, 0) = Parameter(Value::DOUBLE(1)); }));
+	shapes.push_back(
+	    A1("a bound whose value is an aggregate", "x <= cap", [](LogicalDecide &decide, ClientContext &context) {
+		    Rhs(decide, 0) = make_uniq<BoundAggregateExpression>(CountStarFun::GetFunction(),
+		                                                         duckdb::vector<duckdb::unique_ptr<Expression>>(),
+		                                                         nullptr, nullptr, AggregateType::NON_DISTINCT);
+	    }));
+	shapes.push_back(
+	    A1("a bound whose value reads the decision", "x <= cap", [](LogicalDecide &decide, ClientContext &context) {
+		    Rhs(decide, 0) =
+		        make_uniq<BoundColumnRefExpression>(LogicalType::DOUBLE, ColumnBinding(decide.decide_index, 0));
+	    }));
+	shapes.push_back(
+	    A1("a bound whose value has a correlated child", "x <= cap", [](LogicalDecide &decide, ClientContext &context) {
+		    Rhs(decide, 0) = PairWithSourceColumn(
+		        decide, context,
+		        make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER, decide.SourceBindings()[2], 1), 2);
+	    }));
+	shapes.push_back(A1("a bound whose value has a child outside the source", "x <= cap",
+	                    [](LogicalDecide &decide, ClientContext &context) {
+		                    Rhs(decide, 0) =
+		                        PairWithSourceColumn(decide, context, ForeignColumn(LogicalType::INTEGER), 2);
+	                    }));
+	shapes.push_back(
+	    A1("a bound whose value is a window", "x <= cap", [](LogicalDecide &decide, ClientContext &context) {
+		    Rhs(decide, 0) = make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT,
+		                                                      nullptr, nullptr);
+	    }));
 	shapes.push_back(A1("a bound under a WHEN that may raise", "when CAST(cap AS TINYINT) > 0: x <= cap"));
-	shapes.push_back(A1("a bound under a WHEN that is not Boolean", "x <= cap", [](DirectIR &ir) {
-		ir.constraints[0].scope.when = make_uniq<BoundConstantExpression>(Value::INTEGER(1));
-	}));
-	shapes.push_back(A1("a bound with a coefficient that is a string", "x <= cap", [](DirectIR &ir) {
-		LeftPart(ir).terms[0].coefficient = make_uniq<BoundConstantExpression>(Value("a"));
-	}));
+	shapes.push_back(
+	    A1("a bound under a WHEN that is not Boolean", "x <= cap", [](LogicalDecide &decide, ClientContext &context) {
+		    decide.bound.clauses[0].scope.when = make_uniq<BoundConstantExpression>(Value::INTEGER(1));
+	    }));
+	shapes.push_back(A1(
+	    "a bound with a coefficient that is a string", "x <= cap", [](LogicalDecide &decide, ClientContext &context) {
+		    Scale(context, Lhs(decide), Number(1));
+		    Lhs(decide)->Cast<BoundFunctionExpression>().children[0] = make_uniq<BoundConstantExpression>(Value("a"));
+	    }));
 	shapes.push_back(A1("a bound with a coefficient that reads a column outside the source", "x <= cap",
-	                    [](DirectIR &ir) { LeftPart(ir).terms[0].coefficient = ForeignColumn(LogicalType::DOUBLE); }));
+	                    [](LogicalDecide &decide, ClientContext &context) {
+		                    Scale(context, Lhs(decide), ForeignColumn(LogicalType::DOUBLE));
+	                    }));
 	shapes.push_back(A1("a Boolean bound below the domain", "x <= -1", nullptr, A1_OBJECTIVE, "x(BOOL)"));
 	shapes.back().refused = true;
 	// ProveObjective.
@@ -463,48 +559,34 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	                    "MAXIMIZE SUM(txid_current()*x)"));
 	shapes.push_back(A1("an objective divided by zero", "x <= cap", nullptr, "MAXIMIZE SUM(w*x) / 0"));
 	shapes.push_back(A1("an objective scaled by infinity", "x <= cap", nullptr, "MAXIMIZE 'inf'::DOUBLE * SUM(w*x)"));
-	shapes.push_back(A1("an objective part with a filter that reads more than the source", "x <= cap",
-	                    [](DirectIR &ir) { ir.objective.parts[0].filter = ForeignBoolean(); }));
+	shapes.push_back(
+	    A1("an objective part with a filter that reads more than the source", "x <= cap",
+	       [](LogicalDecide &decide, ClientContext &context) { ObjectiveReducer(decide).filter = ForeignBoolean(); }));
 	shapes.push_back(A1("an objective constant fixed only within the query", "x <= cap", nullptr,
 	                    "MAXIMIZE SUM(w*x + txid_current())"));
 	shapes.push_back(A1(
 	    "a square scaled by zero", "x <= cap",
-	    [](DirectIR &ir) {
-		    ir.objective.parts[0].terms[0].coefficient = make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
+	    [](LogicalDecide &decide, ClientContext &context) {
+		    Scale(context, ObjectiveReducer(decide).children[0], Number(0));
 	    },
 	    "MINIMIZE SUM(POWER(x - w, 2))"));
 	shapes.push_back(A1(
 	    "a square scaled by a number that is not finite", "x <= cap",
-	    [](DirectIR &ir) {
-		    ir.objective.parts[0].terms[0].coefficient =
-		        make_uniq<BoundConstantExpression>(Value::DOUBLE(std::numeric_limits<double>::quiet_NaN()));
+	    [](LogicalDecide &decide, ClientContext &context) {
+		    Scale(context, ObjectiveReducer(decide).children[0], Number(std::numeric_limits<double>::quiet_NaN()));
 	    },
 	    "MINIMIZE SUM(POWER(x - w, 2))"));
 	shapes.push_back(A1("a square weighted by a column", "x <= cap", nullptr, "MINIMIZE SUM(w * POWER(x - cap, 2))"));
-	// The binder rejects an objective with two quadratic groups, so the second square is added to the IR.
+	// The binder rejects an objective with two quadratic groups, so an edit adds the second square.
 	shapes.push_back(A1(
 	    "two squares", "x <= cap",
-	    [](DirectIR &ir) {
-		    auto &terms = ir.objective.parts[0].terms;
-		    terms.push_back(CopyTerm(terms[0]));
+	    [](LogicalDecide &decide, ClientContext &context) {
+		    auto &body = ObjectiveReducer(decide).children[0];
+		    body = Op(context, "+", body->Copy(), std::move(body));
 	    },
 	    "MINIMIZE SUM(POWER(x - w, 2))"));
 	shapes.push_back(
 	    A1("a square over two decisions", "x <= cap", nullptr, "MINIMIZE SUM(POWER(x + y, 2))", "x(REAL), y(REAL)"));
-	shapes.push_back(A1(
-	    "a square over a term that is neither linear nor constant", "x <= cap",
-	    [](DirectIR &ir) {
-		    SquareForm(ir.objective.parts[0].terms[0])[1].opaque =
-		        make_uniq<BoundConstantExpression>(Value::INTEGER(0));
-	    },
-	    "MINIMIZE SUM(POWER(x - w, 2))"));
-	shapes.push_back(A1(
-	    "a square over no decision", "x <= cap",
-	    [](DirectIR &ir) {
-		    auto &inner = SquareForm(ir.objective.parts[0].terms[0]);
-		    inner.erase(inner.begin());
-	    },
-	    "MINIMIZE SUM(POWER(x - w, 2))"));
 	shapes.push_back(A1("a square with a constant fixed only within the query", "x <= cap", nullptr,
 	                    "MINIMIZE SUM(POWER(x - txid_current(), 2))"));
 	return shapes;
@@ -575,8 +657,9 @@ duckdb::vector<Shape> R1AppliesShapes() {
 	                    "when flag: SUM(cap*x) >= 1 AND SUM(when flag: cap*x) <= 5"));
 	shapes.push_back(R1("a range with the WHEN on the aggregate of both",
 	                    "SUM(when flag: cap*x) >= 1 AND SUM(when flag: cap*x) <= 5"));
-	shapes.push_back(R1("a WHEN on the clause and on the aggregate", "SUM(when flag: cap*x) <= 5",
-	                    [](DirectIR &ir) { ir.constraints[0].scope.when = True(); }));
+	shapes.push_back(
+	    R1("a WHEN on the clause and on the aggregate", "SUM(when flag: cap*x) <= 5",
+	       [](LogicalDecide &decide, ClientContext &context) { decide.bound.clauses[0].scope.when = True(); }));
 	// Several decisions in one budget: the pieces of a benefit. Each decision has its own weight, value and bounds.
 	shapes.push_back(R1("two decisions in one budget, each with its own bound and its own weight",
 	                    "x <= cap AND y <= cap AND SUM(cap*x + w*y) <= 5", nullptr, "MAXIMIZE SUM(w*x + cap*y)",
@@ -605,7 +688,9 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	shapes.push_back(R1("an INT decision", "SUM(cap*x) <= 5", nullptr, R1_OBJECTIVE, "x(INT)"));
 	shapes.push_back(R1("a BOOL decision", "SUM(cap*x) <= 5", nullptr, R1_OBJECTIVE, "x(BOOL)"));
 	shapes.push_back(R1("a query-wide decision", "SUM(cap*s) <= 5", nullptr, "MAXIMIZE s", "per (): s(REAL)"));
-	shapes.push_back(R1("a keyed scope", "SUM(cap*x) <= 5", [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
+	shapes.push_back(R1("a keyed scope", "SUM(cap*x) <= 5", [](LogicalDecide &decide, ClientContext &context) {
+		decide.bound.keyed_scopes.emplace_back();
+	}));
 	// CheckCondition: the constraints.
 	shapes.push_back(R1("no budget, only a bound", "x <= cap"));
 	// Aggregate constraints are one budget only when their sums have the same terms (ProveBudgetClause).
@@ -631,9 +716,10 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	    R1("another WHEN on the second clause", "when flag: SUM(cap*x) >= 1 AND when NOT flag: SUM(cap*x) <= 5"));
 	shapes.push_back(R1("another WHEN on the aggregate of the second clause",
 	                    "when flag: SUM(cap*x) >= 1 AND SUM(when cap > 1: cap*x) <= 5"));
-	shapes.push_back(R1("a WHEN on the clause and on the aggregate of the second clause",
-	                    "when flag: SUM(cap*x) >= 1 AND SUM(when flag: cap*x) <= 5",
-	                    [](DirectIR &ir) { ir.constraints[1].scope.when = True(); }));
+	shapes.push_back(
+	    R1("a WHEN on the clause and on the aggregate of the second clause",
+	       "when flag: SUM(cap*x) >= 1 AND SUM(when flag: cap*x) <= 5",
+	       [](LogicalDecide &decide, ClientContext &context) { decide.bound.clauses[1].scope.when = True(); }));
 	shapes.push_back(
 	    R1("a second clause of the budget that is not a plain sum", "SUM(cap*x) >= 1 AND 2 * SUM(cap*x) <= 5"));
 	shapes.push_back(R1("a WHEN that reads more than the source", "when txid_current() >= 0: SUM(cap*x) <= 5"));
@@ -651,19 +737,21 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	shapes.push_back(R1("a squared budget", "x <= cap AND SUM(POWER(x, 2)) <= 5"));
 	shapes.push_back(
 	    R1("a budget with a weight fixed only within the query", "x <= cap AND SUM(txid_current()*x) <= 5"));
-	shapes.push_back(R1("a budget with a weight outside the source", "x <= cap AND SUM(cap*x) <= 5", [](DirectIR &ir) {
-		LeftPart(ir, 1).terms[0].coefficient = ForeignColumn(LogicalType::DOUBLE);
-	}));
+	shapes.push_back(R1("a budget with a weight outside the source", "x <= cap AND SUM(cap*x) <= 5",
+	                    [](LogicalDecide &decide, ClientContext &context) {
+		                    ColumnSlot(decide, LeftReducer(decide, 1).children[0]) =
+		                        ForeignColumn(LogicalType::INTEGER);
+	                    }));
 	// A limit of the data must be a numeric value of the source row (ProveDataLimit); a constant is read as a number.
 	// The bound-side window rewrite reduces a limit that varies by row to a column, so this one has one value already.
 	shapes.push_back(
 	    R1("a budget limit fixed only within the query", "x <= cap AND SUM(w*x) <= SUM(cap) * txid_current()"));
-	shapes.push_back(
-	    R1("a budget limit that is an aggregate the rewrite left", "x <= cap AND SUM(w*x) <= 5", [](DirectIR &ir) {
-		    ir.constraints[1].rhs = make_uniq<BoundAggregateExpression>(
-		        CountStarFun::GetFunction(), duckdb::vector<duckdb::unique_ptr<Expression>>(), nullptr, nullptr,
-		        AggregateType::NON_DISTINCT);
-	    }));
+	shapes.push_back(R1("a budget limit that is an aggregate the rewrite left", "x <= cap AND SUM(w*x) <= 5",
+	                    [](LogicalDecide &decide, ClientContext &context) {
+		                    Rhs(decide, 1) = make_uniq<BoundAggregateExpression>(
+		                        CountStarFun::GetFunction(), duckdb::vector<duckdb::unique_ptr<Expression>>(), nullptr,
+		                        nullptr, AggregateType::NON_DISTINCT);
+	                    }));
 	shapes.push_back(R1("a budget limit that is infinite", "x <= cap AND SUM(cap*x) <= 'inf'::DOUBLE"));
 	shapes.push_back(R1("a budget limit of 1e20", "x <= cap AND SUM(cap*x) <= 1e20"));
 	shapes.push_back(R1("a budget limit of minus 1e20", "x <= cap AND SUM(cap*x) <= -1e20"));
@@ -673,22 +761,16 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	shapes.push_back(
 	    R1("a second comparison of the budget with a limit of 1e20", "SUM(cap*x) >= 1 AND SUM(cap*x) <= 1e20"));
 	// ProveBounds.
-	shapes.push_back(R1("a bound whose value is a subquery", "x <= cap AND SUM(cap*x) <= 5", [](DirectIR &ir) {
-		ir.constraints[0].rhs = make_uniq<BoundSubqueryExpression>(LogicalType::DOUBLE);
-	}));
+	shapes.push_back(
+	    R1("a bound whose value reads a column outside the source", "x <= cap AND SUM(cap*x) <= 5",
+	       [](LogicalDecide &decide, ClientContext &context) { Rhs(decide, 0) = ForeignColumn(LogicalType::DOUBLE); }));
 	shapes.push_back(R1("a bound below the built-in domain", "x <= -1 AND SUM(cap*x) <= 5"));
 	shapes.back().refused = true;
-	shapes.push_back(R1("a budget key that reads a decision", "SUM(cap*x) by (name) <= 5", [](DirectIR &ir) {
-		LeftPart(ir).by[0].grouping =
-		    make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER, ColumnBinding(ir.decide_index, 0));
-	}));
 	shapes.push_back(R1("an objective WHEN that reads more than the source", "x <= cap AND SUM(cap*x) <= 5", nullptr,
 	                    "MAXIMIZE when txid_current() >= 0: SUM(w*x)"));
 	shapes.push_back(R1("an objective part WHEN that reads more than the source", "x <= cap AND SUM(cap*x) <= 5",
 	                    nullptr, "MAXIMIZE SUM(when txid_current() >= 0: w*x)"));
 	shapes.push_back(R1("an average objective", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE AVG(w*x)"));
-	shapes.push_back(R1("a qualified objective part", "x <= cap AND SUM(cap*x) <= 5",
-	                    [](DirectIR &ir) { ir.objective.parts[0].qualifier = 0; }));
 	// A term that multiplies two decisions is not a value per decision (OnlyLinearTerms).
 	shapes.push_back(R1("an objective product of two decisions", "x <= cap AND y <= cap AND SUM(cap*x + cap*y) <= 5",
 	                    nullptr, "MAXIMIZE SUM(x*y)", "x(REAL), y(REAL)"));
@@ -789,20 +871,6 @@ Shape N1(const string &branch, const string &constraints, Edit edit = nullptr, c
 	return {branch, declaration, constraints, objective, std::move(edit)};
 }
 
-//! A second square, which the front end refuses to build from SQL: `x^2` on the IR's first decision.
-void AddSquare(duckdb::vector<DecideSplitTerm> &terms) {
-	DecideSplitTerm inner;
-	inner.degree = 1;
-	inner.var_a = 0;
-	inner.coefficient = make_uniq<BoundConstantExpression>(Value::DOUBLE(1.0));
-	DecideSplitTerm square;
-	square.degree = 2;
-	square.factors.resize(1);
-	square.factors[0].power = 2;
-	square.factors[0].form.push_back(std::move(inner));
-	terms.push_back(std::move(square));
-}
-
 //! A shape whose limit is the plain one and whose objective is the one the case is about.
 Shape N1Objective(const string &branch, const string &objective, Edit edit = nullptr) {
 	return N1(branch, N1_LIMIT, std::move(edit), objective);
@@ -864,9 +932,12 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	    N1("two decisions", "SUM(POWER(x, 2)) <= 25 AND y <= 1", nullptr, N1_OBJECTIVE, "x(REAL), y(REAL)"));
 	shapes.push_back(N1("an INT decision", N1_LIMIT, nullptr, N1_OBJECTIVE, "x(INT)"));
 	shapes.push_back(N1("a BOOL decision", N1_LIMIT, nullptr, N1_OBJECTIVE, "x(BOOL)"));
-	shapes.push_back(
-	    N1("a query-wide decision", N1_LIMIT, [](DirectIR &ir) { ir.decisions[0].scope = DecideVarScope::GLOBAL; }));
-	shapes.push_back(N1("a keyed scope", N1_LIMIT, [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
+	shapes.push_back(N1("a query-wide decision", N1_LIMIT, [](LogicalDecide &decide, ClientContext &context) {
+		decide.bound.variable_scopes[0].scope = DecideVarScope::GLOBAL;
+	}));
+	shapes.push_back(N1("a keyed scope", N1_LIMIT, [](LogicalDecide &decide, ClientContext &context) {
+		decide.bound.keyed_scopes.emplace_back();
+	}));
 	// ProveLimitClause: the one aggregate clause.
 	shapes.push_back(N1("no aggregate clause", "x >= 0"));
 	shapes.push_back(N1("a per-row square", "POWER(x, 2) <= 9"));
@@ -880,10 +951,7 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	shapes.push_back(N1("a negated sum", "-SUM(POWER(x, 2)) >= -25"));
 	shapes.push_back(N1("an average", "AVG(POWER(x, 2)) <= 25"));
 	shapes.push_back(N1("a WHEN that reads more than the source", "when txid_current() >= 0: SUM(POWER(x, 2)) <= 25"));
-	shapes.push_back(N1("a linear limit", N1_LIMIT, [](DirectIR &ir) {
-		auto &term = LeftPart(ir).terms[0];
-		term = CopyTerm(SquareForm(term)[0]);
-	}));
+	shapes.push_back(N1("a linear limit", "SUM(x) <= 25"));
 	shapes.push_back(N1("a square and a linear term in the limit", "SUM(POWER(x, 2) + w * x) <= 25"));
 	shapes.push_back(N1("a square and a constant term in the limit", "SUM(POWER(x, 2) + 1) <= 25"));
 	shapes.push_back(N1("a ball off center by a constant", "SUM(POWER(x - 1, 2)) <= 25"));
@@ -898,9 +966,10 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	// The read of the square stops at this term, with the slope already read: only the read's own answer declines it.
 	shapes.push_back(
 	    N1("a center in the limit fixed only within the query", "SUM(POWER(x + txid_current(), 2)) <= 25"));
-	shapes.push_back(N1("a square of slope zero in the limit", N1_LIMIT, [](DirectIR &ir) {
-		SquareForm(LeftPart(ir).terms[0])[0].coefficient = make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
-	}));
+	shapes.push_back(
+	    N1("a square of slope zero in the limit", N1_LIMIT, [](LogicalDecide &decide, ClientContext &context) {
+		    Scale(context, ColumnSlot(decide, LeftReducer(decide).children[0], true), Number(0));
+	    }));
 	shapes.push_back(N1("a square past a DOUBLE", "SUM(POWER(1e200 * x, 2)) <= 25"));
 	shapes.push_back(N1("a negative square", "SUM(-POWER(x, 2)) <= 25"));
 	// DirectReadLimit.
@@ -919,11 +988,9 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	shapes.push_back(N1("a bound under a WHEN", "when flag: x >= 0 AND SUM(POWER(x, 2)) <= 25"));
 	shapes.push_back(
 	    N1("a bound that DirectReadBounds cannot read", "x <= 2 AND SUM(POWER(x, 2)) <= 25",
-	       [](DirectIR &ir) { ir.constraints[0].rhs = make_uniq<BoundSubqueryExpression>(LogicalType::DOUBLE); }));
+	       [](LogicalDecide &decide, ClientContext &context) { Rhs(decide, 0) = ForeignColumn(LogicalType::DOUBLE); }));
 	// ProveObjective: the part.
 	shapes.push_back(N1Objective("an average objective", "MAXIMIZE AVG(w*x)"));
-	shapes.push_back(N1Objective("a qualified objective part", N1_OBJECTIVE,
-	                             [](DirectIR &ir) { ir.objective.parts[0].qualifier = 0; }));
 	shapes.push_back(
 	    N1Objective("an objective coefficient fixed only within the query", "MAXIMIZE SUM(txid_current()*x)"));
 	shapes.push_back(N1Objective("an objective divided by zero", "MAXIMIZE SUM(w*x) / 0"));
@@ -932,31 +999,32 @@ duckdb::vector<Shape> N1DeclineShapes() {
 	// ProveObjective: the terms.
 	shapes.push_back(
 	    N1Objective("an objective constant fixed only within the query", "MAXIMIZE SUM(w*x + txid_current())"));
-	shapes.push_back(
-	    N1Objective("a term that is neither linear, constant nor a square", N1_OBJECTIVE, [](DirectIR &ir) {
-		    auto &term = ir.objective.parts[0].terms[0];
-		    DecideSplitFactor factor;
-		    factor.form.push_back(CopyTerm(term));
-		    term.degree = 2;
-		    term.factors.push_back(std::move(factor));
-		    term.factors.push_back(DecideSplitFactor {});
-		    term.factors[1].form.push_back(CopyTerm(term.factors[0].form[0]));
-	    }));
+	shapes.push_back(N1Objective("a term that is neither linear, constant nor a square", N1_OBJECTIVE,
+	                             [](LogicalDecide &decide, ClientContext &context) {
+		                             auto shifted = Op(context, "+", decide.bound.variables[0]->Copy(), Number(1));
+		                             Scale(context, ObjectiveReducer(decide).children[0], std::move(shifted));
+	                             }));
 	shapes.push_back(N1Objective("two squares in one part", "MINIMIZE SUM(POWER(x - w, 2))",
-	                             [](DirectIR &ir) { AddSquare(ir.objective.parts[0].terms); }));
+	                             [](LogicalDecide &decide, ClientContext &context) {
+		                             auto &body = ObjectiveReducer(decide).children[0];
+		                             body = Op(context, "+", std::move(body), DecisionSquared(decide, context));
+	                             }));
 	shapes.push_back(N1Objective("two squares in two parts", "MINIMIZE SUM(POWER(x, 2)) + SUM(w*x)",
-	                             [](DirectIR &ir) { AddSquare(ir.objective.parts[1].terms); }));
+	                             [](LogicalDecide &decide, ClientContext &context) {
+		                             auto &body = ObjectiveReducer(decide, 1).children[0];
+		                             body = Op(context, "+", std::move(body), DecisionSquared(decide, context));
+	                             }));
 	shapes.push_back(N1Objective("a row-valued slope in the objective", "MINIMIZE SUM(POWER(w * x - 1, 2))"));
 	shapes.push_back(N1Objective("a slope in the objective fixed only within the query",
 	                             "MINIMIZE SUM(POWER(txid_current() * x, 2))"));
 	shapes.push_back(N1Objective("a center in the objective fixed only within the query",
 	                             "MINIMIZE SUM(POWER(x - txid_current(), 2))"));
 	shapes.push_back(N1Objective("a square weighted by a column", "MINIMIZE SUM(w * POWER(x, 2))"));
-	shapes.push_back(
-	    N1Objective("a square of slope zero in the objective", "MINIMIZE SUM(POWER(x, 2))", [](DirectIR &ir) {
-		    SquareForm(ir.objective.parts[0].terms[0])[0].coefficient =
-		        make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
-	    }));
+	shapes.push_back(N1Objective("a square of slope zero in the objective", "MINIMIZE SUM(POWER(x, 2))",
+	                             [](LogicalDecide &decide, ClientContext &context) {
+		                             Scale(context, ColumnSlot(decide, ObjectiveReducer(decide).children[0], true),
+		                                   Number(0));
+	                             }));
 	shapes.push_back(N1Objective("a square past a DOUBLE", "MINIMIZE SUM(POWER(1e200 * x, 2))"));
 	shapes.push_back(
 	    N1Objective("a square past a DOUBLE with its part's factor", "MINIMIZE 1e308 * SUM(1e10 * POWER(x - w, 2))"));
@@ -1058,8 +1126,7 @@ duckdb::vector<Shape> A2DeclineShapes() {
 	shapes.push_back(A2("a whole-numbered decision", "c BETWEEN 0 AND 10", nullptr, A2_OBJECTIVE, "per (): c(INT)"));
 	shapes.push_back(A2("a decision of each row", "c BETWEEN 0 AND 10", nullptr, A2_OBJECTIVE, "c(REAL)"));
 	// ProveInterval.
-	shapes.push_back(A2("a constraint that is not a bound", "c BETWEEN 0 AND 10",
-	                    [](DirectIR &ir) { ir.constraints[0].singleton_row = false; }));
+	shapes.push_back(A2("a constraint that is not a bound", "c * c <= 4"));
 	shapes.push_back(A2("a bound below the built-in domain", "c <= -1"));
 	shapes.back().refused = true;
 	// ProveObjective.
@@ -1076,10 +1143,10 @@ duckdb::vector<Shape> A2DeclineShapes() {
 	                    "MINIMIZE SUM(txid_current() * POWER(c - w, 2))"));
 	shapes.push_back(
 	    A2("a slope read from the data", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(w * c - f, 2))"));
-	shapes.push_back(A2("a square of slope zero", "c BETWEEN 0 AND 10", [](DirectIR &ir) {
-		SquareForm(ir.objective.parts[0].terms[0])[0].coefficient =
-		    make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
-	}));
+	shapes.push_back(
+	    A2("a square of slope zero", "c BETWEEN 0 AND 10", [](LogicalDecide &decide, ClientContext &context) {
+		    Scale(context, ColumnSlot(decide, ObjectiveReducer(decide).children[0], true), Number(0));
+	    }));
 	shapes.push_back(
 	    A2("a square past a DOUBLE", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE SUM(POWER(1e200 * c - w, 2))"));
 	// ProveObjective: the absolute loss and the maximum absolute loss.
@@ -1115,9 +1182,8 @@ duckdb::vector<Shape> A2DeclineShapes() {
 	                    "MINIMIZE SUM(ABS(c - w)) / 1e308"));
 	shapes.push_back(A2(
 	    "an absolute value of slope zero", "c BETWEEN 0 AND 10",
-	    [](DirectIR &ir) {
-		    ir.objective.parts[0].terms[0].inner[0].coefficient =
-		        make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
+	    [](LogicalDecide &decide, ClientContext &context) {
+		    Scale(context, ColumnSlot(decide, ObjectiveReducer(decide).children[0], true), Number(0));
 	    },
 	    "MINIMIZE SUM(ABS(c - w))"));
 	shapes.push_back(A2("an absolute value past a DOUBLE", "c BETWEEN 0 AND 10", nullptr,
@@ -1128,14 +1194,24 @@ duckdb::vector<Shape> A2DeclineShapes() {
 	                    "MINIMIZE when txid_current() >= 0: SUM(ABS(c - w))"));
 	shapes.push_back(A2(
 	    "an absolute value with a factor that is not a constant", "c BETWEEN 0 AND 10",
-	    [](DirectIR &ir) { ir.objective.parts[0].scale = ForeignColumn(LogicalType::DOUBLE); },
+	    [](LogicalDecide &decide, ClientContext &context) {
+		    Scale(context, ReducerSlot(decide.bound.objective.body), ForeignColumn(LogicalType::DOUBLE));
+	    },
 	    "MINIMIZE SUM(ABS(c - w))"));
 	shapes.push_back(A2(
-	    "a qualified absolute value", "c BETWEEN 0 AND 10", [](DirectIR &ir) { ir.objective.parts[0].qualifier = 0; },
+	    "a qualified absolute value", "c BETWEEN 0 AND 10",
+	    [](LogicalDecide &decide, ClientContext &context) {
+		    decide.bound.keyed_scopes.emplace_back();
+		    ObjectiveReducer(decide).per = 0;
+	    },
 	    "MINIMIZE SUM(ABS(c - w))"));
 	shapes.push_back(A2(
 	    "a qualified maximum absolute value", "c BETWEEN 0 AND 10",
-	    [](DirectIR &ir) { ir.objective.parts[0].qualifier = 0; }, "MINIMIZE MAX(ABS(c - w))"));
+	    [](LogicalDecide &decide, ClientContext &context) {
+		    decide.bound.keyed_scopes.emplace_back();
+		    ObjectiveReducer(decide).per = 0;
+	    },
+	    "MINIMIZE MAX(ABS(c - w))"));
 	shapes.push_back(A2("a minimized negated part", "c BETWEEN 0 AND 10", nullptr, "MINIMIZE -SUM(POWER(c - w, 2))"));
 	shapes.push_back(A2("a maximized convex square", "c BETWEEN 0 AND 10", nullptr, "MAXIMIZE SUM(POWER(c - w, 2))"));
 	return shapes;
@@ -1267,9 +1343,12 @@ duckdb::vector<Shape> O1DeclineShapes() {
 	    O1Cost("a source that is a join", O1_OBJECTIVE, "o1_left l, o1_right r WHERE l.position < r.rposition"));
 	shapes.push_back(O1("two decisions", O1_CONSTRAINTS, nullptr, O1_OBJECTIVE, "x(BOOL), y(BOOL)"));
 	shapes.push_back(O1("a REAL decision", O1_CONSTRAINTS, nullptr, O1_OBJECTIVE, "x(REAL)"));
-	shapes.push_back(O1("a query-wide decision", O1_CONSTRAINTS,
-	                    [](DirectIR &ir) { ir.decisions[0].scope = DecideVarScope::GLOBAL; }));
-	shapes.push_back(O1("a keyed scope", O1_CONSTRAINTS, [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
+	shapes.push_back(O1("a query-wide decision", O1_CONSTRAINTS, [](LogicalDecide &decide, ClientContext &context) {
+		decide.bound.variable_scopes[0].scope = DecideVarScope::GLOBAL;
+	}));
+	shapes.push_back(O1("a keyed scope", O1_CONSTRAINTS, [](LogicalDecide &decide, ClientContext &context) {
+		decide.bound.keyed_scopes.emplace_back();
+	}));
 	shapes.push_back(O1("one constraint", "per l: SUM(x) by (l) = 1"));
 	shapes.push_back(O1("a third constraint", string(O1_CONSTRAINTS) + " AND x <= 1"));
 	// ProveClause.
@@ -1284,15 +1363,16 @@ duckdb::vector<Shape> O1DeclineShapes() {
 	shapes.push_back(O1("a clause under a WHEN", "when l.flag per l: SUM(x) by (l) = 1 AND per r: SUM(x) by (r) = 1"));
 	shapes.push_back(O1("a sum that is not by its key", "per l: SUM(x) by (r) = 1 AND per r: SUM(x) by (r) = 1"));
 	shapes.push_back(O1("a coefficient other than one", "per l: SUM(2 * x) by (l) = 1 AND per r: SUM(x) by (r) = 1"));
-	shapes.push_back(
-	    O1("a negative term", O1_CONSTRAINTS, [](DirectIR &ir) { ir.constraints[0].lhs[0].terms[0].sign = -1; }));
+	shapes.push_back(O1("a negative term", O1_CONSTRAINTS, [](LogicalDecide &decide, ClientContext &context) {
+		auto &body = LeftReducer(decide).children[0];
+		body = Negated(context, std::move(body));
+	}));
 	shapes.push_back(O1("a constant beside the decision", "per l: SUM(x + 1) by (l) = 1 AND per r: SUM(x) by (r) = 1"));
 	shapes.push_back(O1("a square of the decision", "per l: SUM(x * x) by (l) = 1 AND per r: SUM(x) by (r) = 1"));
 	shapes.push_back(O1("a column key", "per l.id: SUM(x) by (l.id) = 1 AND per r.rid: SUM(x) by (r.rid) = 1"));
-	shapes.push_back(O1("a key element that is not a column", O1_CONSTRAINTS, [](DirectIR &ir) {
-		ir.constraints[0].classes[0].grouping = True();
-		ir.constraints[0].lhs[0].by[0].grouping = True();
-	}));
+	shapes.push_back(
+	    O1("a key element that is not a column", O1_CONSTRAINTS,
+	       [](LogicalDecide &decide, ClientContext &context) { SetKeyElement(ByElement(decide), True()); }));
 	shapes.push_back(O1("a key of both sides", "per l, r: SUM(x) by (l, r) = 1 AND per r: SUM(x) by (r) = 1"));
 	shapes.push_back(O1("both keys of one side", "per l: SUM(x) by (l) = 1 AND per l: SUM(x) by (l) = 1"));
 	// ProveCost.
@@ -1410,11 +1490,10 @@ duckdb::vector<Shape> S3AppliesShapes() {
 	shapes.push_back(S3("a budget aggregate WHEN and the same objective part WHEN", "SUM(when flag: w*x) <= 9", nullptr,
 	                    "MAXIMIZE SUM(when flag: x)"));
 	shapes.push_back(S3("a weight that may raise", "SUM(CAST(cap AS TINYINT) * x) <= 9"));
-	// The front end guards every term of a body that reads a column, so a constant term of 1 beside a column term is
-	// not a constant either; an edit makes it one.
-	shapes.push_back(S3("a constant weight of 1 beside a column weight", "SUM(x + w*x) <= 9", [](DirectIR &ir) {
-		LeftPart(ir).terms[0].coefficient = make_uniq<BoundConstantExpression>(Value::DOUBLE(1.0));
-	}));
+	// A sum that skips a row guards every term of its body, so a constant term of 1 beside a column term is not a
+	// constant either; an edit drops the skip.
+	shapes.push_back(S3("a constant weight of 1 beside a column weight", "SUM(x + w*x) <= 9",
+	                    [](LogicalDecide &decide, ClientContext &context) { LeftReducer(decide).filter = nullptr; }));
 	return shapes;
 }
 
@@ -1424,9 +1503,12 @@ duckdb::vector<Shape> S3DeclineShapes() {
 	shapes.push_back(
 	    S3("a second decision", "SUM(w*x + w*y) <= 9", nullptr, "MAXIMIZE SUM(x + y)", "x(BOOL), y(BOOL)"));
 	shapes.push_back(S3("a REAL decision", S3_BUDGET, nullptr, S3_OBJECTIVE, "x(REAL)"));
-	shapes.push_back(
-	    S3("a query-wide decision", S3_BUDGET, [](DirectIR &ir) { ir.decisions[0].scope = DecideVarScope::GLOBAL; }));
-	shapes.push_back(S3("a keyed scope", S3_BUDGET, [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
+	shapes.push_back(S3("a query-wide decision", S3_BUDGET, [](LogicalDecide &decide, ClientContext &context) {
+		decide.bound.variable_scopes[0].scope = DecideVarScope::GLOBAL;
+	}));
+	shapes.push_back(S3("a keyed scope", S3_BUDGET, [](LogicalDecide &decide, ClientContext &context) {
+		decide.bound.keyed_scopes.emplace_back();
+	}));
 	// ProveConstraints: one budget, compared with `<=`, beside the per-row clauses that fix items.
 	shapes.push_back(S3("a second budget", "SUM(w*x) <= 9 AND SUM(cap*x) <= 9"));
 	shapes.push_back(S3("no budget, a fixed value alone", "x = 1"));
@@ -1560,7 +1642,9 @@ duckdb::vector<Shape> S2DeclineShapes() {
 	shapes.push_back(S2("two decisions", S2_CHAIN, nullptr, S2_OBJECTIVE, "x(BOOL), y(BOOL)"));
 	shapes.push_back(S2("a REAL decision", S2_CHAIN, nullptr, S2_OBJECTIVE, "x(REAL)"));
 	shapes.push_back(S2("a query-wide decision", "s <= 1", nullptr, "MAXIMIZE s", "per (): s(BOOL)"));
-	shapes.push_back(S2("a keyed scope", S2_CHAIN, [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
+	shapes.push_back(S2("a keyed scope", S2_CHAIN, [](LogicalDecide &decide, ClientContext &context) {
+		decide.bound.keyed_scopes.emplace_back();
+	}));
 	shapes.push_back(S2("a membership constraint", string(S2_CHAIN) + " AND x IN (0, 1)"));
 	shapes.push_back(S2("no count clause, only a fixed value", "x = 1"));
 	shapes.push_back(
@@ -1571,15 +1655,12 @@ duckdb::vector<Shape> S2DeclineShapes() {
 	// ProveLevels: the scope of a clause (DirectReadScope).
 	shapes.push_back(S2("a clause that is not a plain count", "2 * SUM(x) by (flag) <= 2 AND SUM(x) <= 3"));
 	shapes.push_back(S2("an average where a count is", "AVG(x) by (flag) <= 1 AND SUM(x) <= 3"));
-	shapes.push_back(S2("a qualified count", S2_CHAIN, [](DirectIR &ir) { ir.constraints[0].lhs[0].qualifier = 0; }));
-	shapes.push_back(S2("a count whose part has a negative sign", S2_CHAIN,
-	                    [](DirectIR &ir) { ir.constraints[0].lhs[0].sign = -1; }));
+	shapes.push_back(
+	    S2("a count whose part has a negative sign", S2_CHAIN, [](LogicalDecide &decide, ClientContext &context) {
+		    Lhs(decide) = Negated(context, std::move(Lhs(decide)));
+	    }));
 	shapes.push_back(S2("a WHEN that reads more than the source",
 	                    "when txid_current() >= 0: SUM(x) by (flag) <= 1 AND SUM(x) <= 3"));
-	shapes.push_back(S2("a key that reads a decision", "SUM(x) by (flag) <= 1 AND SUM(x) <= 3", [](DirectIR &ir) {
-		LeftPart(ir).by[0].grouping =
-		    make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER, ColumnBinding(ir.decide_index, 0));
-	}));
 	// ProveLevels: the body and the limit of a clause.
 	shapes.push_back(S2("a count body with a column coefficient", "SUM(w*x) by (flag) <= 1 AND SUM(x) <= 3"));
 	shapes.push_back(S2("a count body that adds up to two", "SUM(2*x) by (flag) <= 2 AND SUM(x) <= 3"));
@@ -1689,8 +1770,9 @@ duckdb::vector<Shape> R4DeclineShapes() {
 	shapes.push_back(R4("a decision shared by a key under a limit read from a column", "x <= cap AND SUM(x) <= f",
 	                    nullptr, R4_OBJECTIVE, "per name: x(REAL)"));
 	shapes.push_back(R4("a decision of the whole query", "x <= 9", nullptr, R4_OBJECTIVE, "per (): x(REAL)"));
-	shapes.push_back(R4("a keyed scope beside a decision on each row", R4_CONSTRAINTS,
-	                    [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
+	shapes.push_back(
+	    R4("a keyed scope beside a decision on each row", R4_CONSTRAINTS,
+	       [](LogicalDecide &decide, ClientContext &context) { decide.bound.keyed_scopes.emplace_back(); }));
 	shapes.push_back(R4("a decision shared by a key under a budget with a WHEN", "x <= cap AND when flag: SUM(x) <= 9",
 	                    nullptr, R4_OBJECTIVE, "per name: x(REAL)"));
 	shapes.push_back(R4("a decision shared by a key under a budget by a finer key",
@@ -1709,9 +1791,9 @@ duckdb::vector<Shape> R4DeclineShapes() {
 	shapes.push_back(R4("a weight fixed only within the query", "x <= cap AND SUM(txid_current() * x) <= 9"));
 	shapes.push_back(R4("a budget of 1e20", "x <= cap AND SUM(x) <= 1e20"));
 	// ProveBox.
-	shapes.push_back(R4("a bound that DirectReadBounds cannot read", R4_CONSTRAINTS, [](DirectIR &ir) {
-		ir.constraints[0].rhs = make_uniq<BoundSubqueryExpression>(LogicalType::DOUBLE);
-	}));
+	shapes.push_back(
+	    R4("a bound that DirectReadBounds cannot read", R4_CONSTRAINTS,
+	       [](LogicalDecide &decide, ClientContext &context) { Rhs(decide, 0) = ForeignColumn(LogicalType::DOUBLE); }));
 	shapes.push_back(R4("a lower bound below zero", "x >= -1 AND x <= cap AND SUM(x) <= 9"));
 	shapes.push_back(R4("a lower bound read from a column", "x >= f AND x <= cap AND SUM(x) <= 9"));
 	shapes.push_back(R4("a capacity with a negative coefficient on the decision", "-x <= cap AND SUM(x) <= 9"));
@@ -1719,8 +1801,10 @@ duckdb::vector<Shape> R4DeclineShapes() {
 	// ProveObjective: the part.
 	shapes.push_back(R4Objective("no objective", ""));
 	shapes.push_back(R4Objective("a maximum", "MINIMIZE MAX(x / w)"));
-	shapes.push_back(
-	    R4Objective("a qualified MIN", R4_OBJECTIVE, [](DirectIR &ir) { ir.objective.parts[0].qualifier = 0; }));
+	shapes.push_back(R4(
+	    "a qualified MIN", R4_CONSTRAINTS,
+	    [](LogicalDecide &decide, ClientContext &context) { ObjectiveReducer(decide).per = 0; }, R4_OBJECTIVE,
+	    "per name: x(REAL)"));
 	shapes.push_back(R4Objective("a minimized MIN", "MINIMIZE MIN(x / w)"));
 	// ProveObjective: the terms and the factor.
 	shapes.push_back(R4Objective("a column beside the term in the MIN", "MAXIMIZE MIN(x / w + f)"));
@@ -1811,39 +1895,10 @@ TEST_CASE("Every rule and every other rule never apply to the same query", "[dec
 }
 
 //===--------------------------------------------------------------------===//
-// The rule driver's check that the front end read the whole IR
-//===--------------------------------------------------------------------===//
-
-//! An IR the front end read in full, built by hand: one proved constraint and a finite offset.
-DirectIR ReadableIR() {
-	DirectIR ir;
-	ir.constraints.emplace_back();
-	ir.objective.status = DirectAnalysisStatus::PROVED;
-	ir.objective.offset = 0;
-	return ir;
-}
-
-TEST_CASE("The rule driver offers a rule only an IR the front end read in full", "[decidb]") {
-	REQUIRE(DirectIRIsReadable(ReadableIR()));
-
-	// Each case breaks the one thing it names.
-	auto objective = ReadableIR();
-	objective.objective.status = DirectAnalysisStatus::NOT_PROVED;
-	CHECK(!DirectIRIsReadable(objective));
-	auto offset = ReadableIR();
-	offset.objective.offset = std::numeric_limits<double>::infinity();
-	CHECK(!DirectIRIsReadable(offset));
-	auto constraint = ReadableIR();
-	constraint.constraints.emplace_back();
-	constraint.constraints[1].status = DirectAnalysisStatus::NOT_PROVED;
-	CHECK(!DirectIRIsReadable(constraint));
-}
-
-//===--------------------------------------------------------------------===//
 // Keyed plans
 //===--------------------------------------------------------------------===//
 
-// A reducer's `by` key is read into the IR (DirectPart::by). S1 and R1 group by it, and their answer must equal the
+// A reducer's `by` key is read into its part (DirectPart::by). S1 and R1 group by it, and their answer must equal the
 // solver's on the same query.
 
 //! Source columns: id, g (VARCHAR; rows 8 and 9 have a NULL g, which is in no group, so the keyed plans and the solver

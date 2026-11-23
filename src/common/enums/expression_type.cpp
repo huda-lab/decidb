@@ -153,6 +153,8 @@ string ExpressionTypeToString(ExpressionType type) {
 		return "BOUND_DECIDE_REDUCER";
 	case ExpressionType::BOUND_DECIDE_FRAME:
 		return "BOUND_DECIDE_FRAME";
+	case ExpressionType::BOUND_DECIDE_NULL_GUARD:
+		return "BOUND_DECIDE_NULL_GUARD";
 	case ExpressionType::INVALID:
 		break;
 	}
@@ -248,6 +250,8 @@ string ExpressionClassToString(ExpressionClass type) {
 		return "BOUND_DECIDE_REDUCER";
 	case ExpressionClass::BOUND_DECIDE_FRAME:
 		return "BOUND_DECIDE_FRAME";
+	case ExpressionClass::BOUND_DECIDE_NULL_GUARD:
+		return "BOUND_DECIDE_NULL_GUARD";
 	default:
 		return "ExpressionClass::!!UNIMPLEMENTED_CASE!!";
 	}

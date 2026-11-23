@@ -69,15 +69,20 @@ public:
 		return RULE_NAME;
 	}
 
-	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
-		if (!DirectIsOneRowDecision(ir, DirectDomain::REAL)) {
+	unique_ptr<DirectApplicabilityCondition> CheckCondition(const LogicalDecide &decide,
+	                                                        ClientContext &context) const override {
+		vector<DirectClause> clauses;
+		DirectObjective objective;
+		if (!DirectIsOneRowDecision(decide, DirectDomain::REAL) || !DirectReadClauses(context, decide, clauses) ||
+		    !DirectReadObjective(context, decide, objective)) {
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();
-		condition->objective_written = ir.objective.written;
+		condition->objective_written = objective.written;
 		condition->source_reads = 2;
-		if (!ProveLimitClause(ir, context, *condition) || !ProveBox(ir, context, *condition) ||
-		    !ProveObjective(ir, context, *condition)) {
+		if (!ProveLimitClause(decide, clauses, context, *condition) ||
+		    !ProveBox(decide, clauses, context, *condition) ||
+		    !ProveObjective(decide, objective, context, *condition)) {
 			return nullptr;
 		}
 		return std::move(condition);
@@ -91,17 +96,21 @@ public:
 	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
-	bool ProveLimitClause(const DirectIR &ir, ClientContext &context, Condition &condition) const;
-	bool ProveBox(const DirectIR &ir, ClientContext &context, Condition &condition) const;
-	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
+	bool ProveLimitClause(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+	                      Condition &condition) const;
+	bool ProveBox(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+	              Condition &condition) const;
+	bool ProveObjective(const LogicalDecide &decide, const DirectObjective &objective, ClientContext &context,
+	                    Condition &condition) const;
 };
 
 //! The one aggregate clause: a plain `SUM` of one square, centered on zero, with `<=`. Every other clause is a per-row
 //! bound, which ProveBox reads.
-bool Rule::ProveLimitClause(const DirectIR &ir, ClientContext &context, Condition &condition) const {
-	const DirectIRConstraint *clause = nullptr;
-	for (auto &ir_node : ir.constraints) {
-		if (!ir_node.aggregate) {
+bool Rule::ProveLimitClause(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+                            Condition &condition) const {
+	const DirectClause *clause = nullptr;
+	for (auto &ir_node : clauses) {
+		if (!ir_node.Aggregate()) {
 			if (!ir_node.singleton_row) {
 				return false;
 			}
@@ -112,10 +121,10 @@ bool Rule::ProveLimitClause(const DirectIR &ir, ClientContext &context, Conditio
 		}
 		clause = &ir_node;
 	}
-	if (!clause || clause->comparison != ExpressionType::COMPARE_LESSTHANOREQUALTO) {
+	if (!clause || clause->Comparison() != ExpressionType::COMPARE_LESSTHANOREQUALTO) {
 		return false;
 	}
-	if (!DirectProveSharedScope(ir, {clause}, condition.scope)) {
+	if (!DirectProveSharedScope(decide, {clause}, condition.scope)) {
 		return false;
 	}
 	// DirectProveSharedScope has proved that the clause is a plain SUM.
@@ -124,7 +133,7 @@ bool Rule::ProveLimitClause(const DirectIR &ir, ClientContext &context, Conditio
 		return false;
 	}
 	DirectWeightedForm square;
-	if (!DirectReadSquareTerm(ir, terms[0], clause->written, square) || !square.inner.constant.empty()) {
+	if (!DirectReadSquareTerm(decide, terms[0], clause->written, square) || !square.inner.constant.empty()) {
 		return false;
 	}
 	// The coefficient is one positive constant. A coefficient read from the data (`SUM(w * POWER(x, 2))`) can be
@@ -144,14 +153,15 @@ bool Rule::ProveLimitClause(const DirectIR &ir, ClientContext &context, Conditio
 	}
 	condition.limit_written = clause->written;
 	condition.slope = std::move(square.inner);
-	return DirectReadLimit(ir, context, *clause, condition.limit);
+	return DirectReadLimit(decide, context, *clause, condition.limit);
 }
 
 //! The box is the default [0, inf), or (-inf, inf) with a lower bound of magnitude 1e20 or more. Any other bound, even
 //! one that would not bind, is not this class: it needs the projection onto a clipped ball.
-bool Rule::ProveBox(const DirectIR &ir, ClientContext &context, Condition &condition) const {
+bool Rule::ProveBox(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+                    Condition &condition) const {
 	DirectBoundReading reading;
-	if (!DirectReadBounds(ir, context, reading) || !reading.clauses.empty()) {
+	if (!DirectReadBounds(decide, clauses, context, reading) || !reading.clauses.empty()) {
 		return false;
 	}
 	auto &box = reading.boxes[0];
@@ -195,10 +205,11 @@ static bool SquareCoversEveryLinearTerm(const vector<DirectQuadraticPart> &parts
 }
 
 //! No objective, or `SUM` parts of linear terms, per-row constants and at most one square, convex.
-bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
-	for (auto &part : ir.objective.parts) {
+bool Rule::ProveObjective(const LogicalDecide &decide, const DirectObjective &objective, ClientContext &context,
+                          Condition &condition) const {
+	for (auto &part : objective.parts) {
 		DirectQuadraticPart read;
-		if (!part.IsPlainSum() || !DirectReadQuadraticPart(ir, context, part, ir.objective.written, read)) {
+		if (!part.IsPlainSum() || !DirectReadQuadraticPart(decide, context, part, objective.written, read)) {
 			return false;
 		}
 		if (!read.squares.empty()) {

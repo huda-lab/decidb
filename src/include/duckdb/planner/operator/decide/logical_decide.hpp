@@ -866,7 +866,7 @@ public:
 	void EnumerateBodies(const std::function<void(DecideOwnedBody &)> &callback);
 	//! The columns the node's expressions read from its input: the child's, then the placeholders of the bound
 	//! aggregates the path has not built yet (bound_aggregates).
-	vector<ColumnBinding> SourceBindings();
+	vector<ColumnBinding> SourceBindings() const;
 
 	// --- Implement virtual functions ---
 

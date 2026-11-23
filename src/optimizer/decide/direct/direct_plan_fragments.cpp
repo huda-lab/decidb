@@ -497,26 +497,26 @@ unique_ptr<BoundWindowExpression> DirectRunningSum(Optimizer &optimizer, const E
 	return sum;
 }
 
-bool DirectReadScope(const DirectIR &ir, const DirectIRConstraint &clause, DirectSharedScope &scope) {
+bool DirectReadScope(const LogicalDecide &decide, const DirectClause &clause, DirectSharedScope &scope) {
 	bool ok;
 	auto when = clause.Membership(ok);
 	if (!ok) {
 		return false;
 	}
 	if (when) {
-		if (!DirectIsSourceOnlyPredicate(*when, ir.decide_index, ir.source_bindings)) {
+		if (!DirectIsSourceOnlyPredicate(*when, decide.decide_index, decide.SourceBindings())) {
 			return false;
 		}
 		scope.when = std::move(when);
 	}
 	// A `by` key holds expressions, which can be volatile. A `per` key holds columns and relations only.
 	for (auto &key : clause.PlainSum()->by) {
-		if (!DirectIsDecisionFreeDeterministic(*key.grouping, ir.decide_index)) {
+		if (!DirectIsDecisionFreeDeterministic(*key.grouping, decide.decide_index)) {
 			return false;
 		}
 		scope.keys.push_back(key.Copy());
 	}
-	scope.per = clause.per_class;
+	scope.per = clause.PerClass();
 	for (auto &key : clause.classes) {
 		scope.classes.push_back(key.Copy());
 		scope.gated = scope.gated || key.no_group;
@@ -529,15 +529,15 @@ bool DirectSameScope(const DirectSharedScope &a, const DirectSharedScope &b) {
 	       DirectSameKey(a.classes, b.classes);
 }
 
-bool DirectProveSharedScope(const DirectIR &ir, const vector<const DirectIRConstraint *> &clauses,
+bool DirectProveSharedScope(const LogicalDecide &decide, const vector<const DirectClause *> &clauses,
                             DirectSharedScope &scope) {
 	D_ASSERT(!clauses.empty());
-	if (!DirectReadScope(ir, *clauses[0], scope)) {
+	if (!DirectReadScope(decide, *clauses[0], scope)) {
 		return false;
 	}
 	for (idx_t i = 1; i < clauses.size(); i++) {
 		DirectSharedScope other;
-		if (!DirectReadScope(ir, *clauses[i], other) || !DirectSameScope(scope, other)) {
+		if (!DirectReadScope(decide, *clauses[i], other) || !DirectSameScope(scope, other)) {
 			return false;
 		}
 	}
@@ -778,12 +778,12 @@ ExprPtr DirectGroupCountLimitRows(const ExpressionBuilder &calc, Optimizer &opti
 	});
 }
 
-bool DirectLinearScore::Prove(const DirectIR &ir, ClientContext &context) {
+bool DirectLinearScore::Prove(const LogicalDecide &decide, const DirectObjective &objective, ClientContext &context) {
 	// Every linear term in x scores separately: `SUM((p + q) * x)` splits into `p * x` and `q * x`, and the score
 	// adds the signed coefficients in order, as the solver's like-term collection does.
-	auto &parts = ir.objective.parts;
+	auto &parts = objective.parts;
 	idx_t term_count = 0;
-	objective_written = ir.objective.written;
+	objective_written = objective.written;
 	for (auto &part : parts) {
 		if (!part.IsPlainSum() || !DirectOnlyLinearTerms(part.terms)) {
 			return false;
@@ -795,8 +795,8 @@ bool DirectLinearScore::Prove(const DirectIR &ir, ClientContext &context) {
 		// other. It must be a finite constant, and a divisor must not be zero. Anything else stays on the solver.
 		DirectLinearPart read;
 		unique_ptr<Expression> kept;
-		if (!DirectReadLinearPart(ir, context, part, ir.objective.written, read) ||
-		    !DirectObjectivePartKept(ir, part, kept)) {
+		if (!DirectReadLinearPart(decide, context, part, objective.written, read) ||
+		    !DirectObjectivePartKept(decide, part, kept)) {
 			return false;
 		}
 		for (auto &term : read.terms) {

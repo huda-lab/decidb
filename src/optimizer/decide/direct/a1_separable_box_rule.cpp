@@ -89,39 +89,43 @@ public:
 		return RULE_NAME;
 	}
 
-	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
-		if (!ir.keyed_scopes.empty()) {
+	unique_ptr<DirectApplicabilityCondition> CheckCondition(const LogicalDecide &decide,
+	                                                        ClientContext &context) const override {
+		if (!decide.bound.keyed_scopes.empty()) {
 			return nullptr;
 		}
-		for (auto &decision : ir.decisions) {
-			if (decision.scope != DecideVarScope::ROW) {
+		for (auto &scope : decide.bound.variable_scopes) {
+			if (scope.scope != DecideVarScope::ROW) {
 				return nullptr;
 			}
 		}
-		for (auto &ir_node : ir.constraints) {
-			if (ir_node.aggregate) {
-				return nullptr;
-			}
-			if (!ir_node.singleton_row) {
+		vector<DirectClause> clauses;
+		DirectObjective objective;
+		if (!DirectReadClauses(context, decide, clauses) || !DirectReadObjective(context, decide, objective)) {
+			return nullptr;
+		}
+		for (auto &clause : clauses) {
+			if (clause.Aggregate() || !clause.singleton_row) {
 				return nullptr;
 			}
 		}
-		for (auto &part : ir.objective.parts) {
+		for (auto &part : objective.parts) {
 			if (!part.IsPlainSum()) {
 				return nullptr;
 			}
 		}
 		auto condition = make_uniq<Condition>();
-		condition->objective_written = ir.objective.written;
-		for (auto &decision : ir.decisions) {
+		condition->objective_written = objective.written;
+		for (idx_t i = 0; i < decide.bound.variables.size(); i++) {
 			Decision prepared;
-			prepared.name = decision.name;
-			prepared.declaration = decision.declaration;
-			prepared.domain = decision.domain;
-			prepared.output_type = decision.output_type;
+			prepared.name = decide.bound.variables[i]->GetName();
+			prepared.declaration = decide.bound.variable_scopes[i].declaration;
+			prepared.domain = DirectDomainOf(decide, i);
+			prepared.output_type = decide.bound.variables[i]->return_type;
 			condition->decisions.push_back(std::move(prepared));
 		}
-		if (!ProveBounds(ir, context, *condition) || !ProveObjective(ir, context, *condition)) {
+		if (!ProveBounds(decide, clauses, context, *condition) ||
+		    !ProveObjective(decide, objective, context, *condition)) {
 			return nullptr;
 		}
 		condition->constant_problem = IsConstantProblem(*condition);
@@ -138,14 +142,17 @@ public:
 	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
-	bool ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition) const;
-	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
+	bool ProveBounds(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+	                 Condition &condition) const;
+	bool ProveObjective(const LogicalDecide &decide, const DirectObjective &objective, ClientContext &context,
+	                    Condition &condition) const;
 };
 
 //! The decision's box before any per-row bound, and the clauses the plan evaluates per row, from the shared reader.
-bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition) const {
+bool Rule::ProveBounds(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+                       Condition &condition) const {
 	DirectBoundReading reading;
-	if (!DirectReadBounds(ir, context, reading)) {
+	if (!DirectReadBounds(decide, clauses, context, reading)) {
 		return false;
 	}
 	condition.clauses = std::move(reading.clauses);
@@ -158,11 +165,12 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 
 //! Each part reads as linear terms, per-row constants and squares, and the objective holds at most one square (the
 //! solver rejects a second).
-bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
+bool Rule::ProveObjective(const LogicalDecide &decide, const DirectObjective &objective, ClientContext &context,
+                          Condition &condition) const {
 	idx_t squares = 0;
-	for (auto &part : ir.objective.parts) {
+	for (auto &part : objective.parts) {
 		DirectQuadraticPart prepared;
-		if (!DirectReadQuadraticPart(ir, context, part, ir.objective.written, prepared)) {
+		if (!DirectReadQuadraticPart(decide, context, part, objective.written, prepared)) {
 			return false;
 		}
 		for (auto &square : prepared.squares) {

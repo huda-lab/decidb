@@ -544,7 +544,7 @@ void LogicalDecide::EnumerateBodies(const std::function<void(DecideOwnedBody &)>
 	}
 }
 
-vector<ColumnBinding> LogicalDecide::SourceBindings() {
+vector<ColumnBinding> LogicalDecide::SourceBindings() const {
 	auto result = children[0]->GetColumnBindings();
 	for (auto &aggregate : bound.bound_aggregates) {
 		result.push_back(aggregate.column);

@@ -330,6 +330,19 @@
     "constructor": ["return_type", "frame", "children"]
   },
   {
+    "class": "BoundDecideNullGuardExpression",
+    "base": "Expression",
+    "enum": "BOUND_DECIDE_NULL_GUARD",
+    "members": [
+      {
+        "id": 200,
+        "name": "guard",
+        "type": "Expression*"
+      }
+    ],
+    "constructor": ["guard"]
+  },
+  {
     "class": "BoundDecideNullTestExpression",
     "base": "Expression",
     "enum": "BOUND_DECIDE_NULL_TEST",

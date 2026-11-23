@@ -8,7 +8,6 @@ import json
 import re
 import re
 import math
-from pathlib import Path
 
 import pytest
 
@@ -16,6 +15,7 @@ from decidb_cli import assert_error_text, error_kind
 
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
 from ._direct_oracle_common import outcome, without_gurobi
+from ._output_helpers import INTERNAL_TAG_RE
 
 
 def _source_query(scores, capacity, sense="MAXIMIZE"):
@@ -176,9 +176,9 @@ def test_a1_whole_number_range_error_is_the_solvers_error_word_for_word(
     assert _raw(decidb_cli_highs, sql, mode="off", expect_number_range=True).stderr == direct
 
 
-# A plan prints an expression by its alias, so a pipeline tag left on a value a direct plan computes reaches EXPLAIN
-# (`__source_fragment_0__`). The rule driver strips every tag from the operators it installs; the cases are the values
-# that carry one: a scalar subquery in a bound, a `when` and an objective coefficient, and a data reducer's bound.
+# A plan prints an expression by its alias, so an internal name left on a value a direct plan computes reaches EXPLAIN.
+# The cases are the values the pipeline rewrites before a rule reads them: a scalar subquery in a bound, a `when` and
+# an objective coefficient, and a data reducer's bound.
 _TAGGED_BOUNDS = {
     "s1_scalar_subquery": "x(BOOL) SUCH THAT SUM(x) <= 1 AND x <= (SELECT max(v) FROM range(2) r(v)) MAXIMIZE SUM(s * x)",
     "a1_scalar_subquery": "x(REAL) SUCH THAT x <= (SELECT max(v) FROM range(2) r(v)) MAXIMIZE SUM(s * x)",
@@ -190,24 +190,14 @@ _TAGGED_BOUNDS = {
 }
 
 
-def _pipeline_tags():
-    """Every tag spelling DECIDE stamps on an expression alias (`__source_fragment_`, `__null_guard__`, ...), read from
-    the constants in `enums/decide.hpp` so a tag added there is checked without a change here. A prefix tag matches the
-    spelling before its payload."""
-    header = Path(__file__).resolve().parents[3] / "src/include/duckdb/common/enums/decide.hpp"
-    tags = re.findall(r'const char \*\w*TAG\w* = "(__\w+)"', header.read_text())
-    assert tags
-    return tags
-
-
 @pytest.mark.correctness
 @pytest.mark.parametrize("shape", sorted(_TAGGED_BOUNDS))
 def test_explain_of_a_direct_plan_shows_no_pipeline_tag(decidb_cli, shape):
     sql = "SELECT id, x FROM (VALUES (1, 2.0, 1.0), (2, 3.0, 2.0)) t(id, c, s) " f"DECIDE {_TAGGED_BOUNDS[shape]}"
     plan = _raw(decidb_cli, f"EXPLAIN {sql}").stdout
     assert "Direct solve" in plan, plan
-    leaked = [tag for tag in _pipeline_tags() if tag in plan]
-    assert not leaked, (leaked, plan)
+    leaked = INTERNAL_TAG_RE.search(plan)
+    assert leaked is None, (leaked.group(0), plan)
 
 
 def _wide_decide(shape, width):

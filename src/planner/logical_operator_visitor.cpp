@@ -232,6 +232,7 @@ void LogicalOperatorVisitor::VisitExpression(unique_ptr<Expression> *expression)
 	case ExpressionClass::BOUND_UNNEST:
 		result = VisitReplace(expr.Cast<BoundUnnestExpression>(), expression);
 		break;
+	case ExpressionClass::BOUND_DECIDE_NULL_GUARD:
 	case ExpressionClass::BOUND_DECIDE_NULL_TEST:
 	case ExpressionClass::BOUND_DECIDE_REDUCER:
 	case ExpressionClass::BOUND_DECIDE_FRAME:

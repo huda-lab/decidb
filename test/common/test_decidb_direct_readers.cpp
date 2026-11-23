@@ -17,21 +17,21 @@ using namespace duckdb;
 
 namespace {
 
-LogicalDecide *FindDirectIRInput(LogicalOperator &op) {
+LogicalDecide *FindReadDecide(LogicalOperator &op) {
 	if (op.type == LogicalOperatorType::LOGICAL_DECIDE) {
 		return &op.Cast<LogicalDecide>();
 	}
 	for (auto &child : op.children) {
-		if (auto *found = FindDirectIRInput(*child)) {
+		if (auto *found = FindReadDecide(*child)) {
 			return found;
 		}
 	}
 	return nullptr;
 }
 
-//! The optimized plan of `sql` with the DECIDE optimizer off, as the IR reads it: bound
+//! The optimized plan of `sql` with the DECIDE optimizer off, as a rule reads it: bound
 //! columns not yet resolved to chunk positions, which `ExtractPlan` also does.
-duckdb::unique_ptr<LogicalOperator> IRPlan(Connection &con, const string &sql) {
+duckdb::unique_ptr<LogicalOperator> ReadPlan(Connection &con, const string &sql) {
 	if (!con.HasActiveTransaction()) {
 		con.BeginTransaction();
 	}
@@ -43,18 +43,24 @@ duckdb::unique_ptr<LogicalOperator> IRPlan(Connection &con, const string &sql) {
 	return optimizer.Optimize(std::move(planner.plan));
 }
 
-//! IR for one DECIDE query, read before any DECIDE rewrite.
-struct QueryIR {
-	QueryIR(Connection &con, const string &sql) {
+//! What the rules' readers read of one DECIDE query, before any DECIDE rewrite.
+struct QueryReading {
+	QueryReading(Connection &con, const string &sql) {
 		REQUIRE_NO_FAIL(con.Query("SET disabled_optimizers='decide_optimizer'"));
-		// Reading the IR can rebind a coefficient, which reads the catalog; the optimizer always has a transaction.
-		plan = IRPlan(con, sql);
-		decide = FindDirectIRInput(*plan);
+		// A reader can rebind a coefficient, which reads the catalog; the optimizer always has a transaction.
+		plan = ReadPlan(con, sql);
+		decide = FindReadDecide(*plan);
 		REQUIRE(decide != nullptr);
 		client = con.context.get();
-		ir = DirectIR::Read(*client, *decide);
+		Read();
 	}
-	//! Gives every norm marker in the constraints the order `order` and reads the IR again.
+	void Read() {
+		clauses.clear();
+		objective = DirectObjective();
+		clauses_read = DirectReadClauses(*client, *decide, clauses);
+		objective_read = DirectReadObjective(*client, *decide, objective);
+	}
+	//! Gives every norm marker in the constraints the order `order` and reads again.
 	void ReorderNorms(DecideNorm::Order order) {
 		for (auto &clause : decide->bound.clauses) {
 			ExpressionIterator::EnumerateExpression(clause.body, [&](Expression &expression) {
@@ -63,16 +69,20 @@ struct QueryIR {
 				}
 			});
 		}
-		ir = DirectIR::Read(*client, *decide);
+		Read();
 	}
 	duckdb::unique_ptr<LogicalOperator> plan;
 	LogicalDecide *decide = nullptr;
 	ClientContext *client = nullptr;
-	DirectIR ir;
+	//! The clauses read, up to and including the first one no rule's plan reads when `clauses_read` is false.
+	duckdb::vector<DirectClause> clauses;
+	bool clauses_read = false;
+	DirectObjective objective;
+	bool objective_read = false;
 };
 
 //! A query over three rows of (id, w, cap, flag) with the given declaration, constraints and objective.
-string IRQuery(const string &declaration, const string &constraints, const string &objective) {
+string ReadQuery(const string &declaration, const string &constraints, const string &objective) {
 	return "SELECT id FROM (FROM (VALUES (1, 2.0::DOUBLE, 3, TRUE), (2, 1.0::DOUBLE, 1, FALSE),"
 	       " (3, 4.0::DOUBLE, 2, TRUE)) t(id, w, cap, flag) DECIDE " +
 	       declaration + " SUCH THAT " + constraints + " " + objective + ") q";
@@ -94,12 +104,8 @@ DirectSolveRule *FindS1Rule(duckdb::vector<duckdb::unique_ptr<DirectSolveRule>> 
 //! Whether `rule` applies to the query.
 bool RuleApplies(DirectSolveRule &rule, Connection &con, const string &declaration, const string &constraints,
                  const string &objective, string *condition_text = nullptr) {
-	QueryIR query(con, IRQuery(declaration, constraints, objective));
-	// Mirrors the rule driver, which offers a rule only an IR it could read.
-	if (!DirectIRIsReadable(query.ir)) {
-		return false;
-	}
-	auto condition = rule.CheckCondition(query.ir, *con.context);
+	QueryReading query(con, ReadQuery(declaration, constraints, objective));
+	auto condition = rule.CheckCondition(*query.decide, *con.context);
 	if (!condition) {
 		return false;
 	}
@@ -111,43 +117,32 @@ bool RuleApplies(DirectSolveRule &rule, Connection &con, const string &declarati
 
 } // namespace
 
-TEST_CASE("Direct-solve IR retains complete bound-clause attribution", "[decidb]") {
+TEST_CASE("A clause the query text holds no place for is read by no rule", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	REQUIRE_NO_FAIL(con.Query("SET disabled_optimizers='decide_optimizer'"));
-	con.BeginTransaction();
-
-	auto plan = IRPlan(con, "SELECT id, x FROM ("
+	QueryReading query(con, "SELECT id, x FROM ("
 	                        " FROM (VALUES (1, 9.0::DOUBLE), (2, -1.0::DOUBLE)) s(id,score)"
 	                        " DECIDE x(BOOL) SUCH THAT SUM(x)<=1 MAXIMIZE SUM(score*x)"
 	                        ") q");
-	auto *decide = FindDirectIRInput(*plan);
-	REQUIRE(decide != nullptr);
-	auto ir = DirectIR::Read(*con.context, *decide);
-	REQUIRE(ir.decisions.size() == 1);
-	REQUIRE(ir.decisions[0].domain == DirectDomain::BOOL);
-	REQUIRE(ir.decisions[0].scope == DecideVarScope::ROW);
-	REQUIRE(ir.objective.status == DirectAnalysisStatus::PROVED);
-	REQUIRE(ir.objective.parts.size() == 1);
-	REQUIRE(ir.constraints.size() == 1);
-	REQUIRE(ir.constraints[0].status == DirectAnalysisStatus::PROVED);
+	REQUIRE(DirectDomainOf(*query.decide, 0) == DirectDomain::BOOL);
+	REQUIRE(query.clauses_read);
+	REQUIRE(query.clauses.size() == 1);
+	REQUIRE(query.objective_read);
+	REQUIRE(query.objective.parts.size() == 1);
 	auto rules = RegisteredDirectRules();
 	auto *s1 = FindS1Rule(rules);
 	REQUIRE(s1 != nullptr);
-	auto condition = s1->CheckCondition(ir, *con.context);
-	REQUIRE(condition != nullptr);
+	REQUIRE(s1->CheckCondition(*query.decide, *con.context) != nullptr);
 	REQUIRE(s1->Summary() == "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi");
 
-	// Missing provenance must become a not-proved IR node.
-	decide->bound.clauses[0].origin = DecideRowOrigin();
-	auto damaged = DirectIR::Read(*con.context, *decide);
-	REQUIRE(damaged.constraints.size() == 1);
-	REQUIRE(damaged.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
-	// The rule driver offers no rule an IR with a not-proved constraint.
-	REQUIRE(!DirectIRIsReadable(damaged));
+	// A clause with no provenance has no name in a message: its reader declines it, and so does the rule.
+	query.decide->bound.clauses[0].origin = DecideRowOrigin();
+	query.Read();
+	REQUIRE(!query.clauses_read);
+	REQUIRE(s1->CheckCondition(*query.decide, *con.context) == nullptr);
 }
 
-TEST_CASE("Direct-solve IR records the source columns declared NOT NULL", "[decidb]") {
+TEST_CASE("The source facts hold the source columns declared NOT NULL", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	REQUIRE_NO_FAIL(con.Query("CREATE TABLE t (a INTEGER NOT NULL, b INTEGER, k INTEGER PRIMARY KEY)"));
@@ -158,10 +153,10 @@ TEST_CASE("Direct-solve IR records the source columns declared NOT NULL", "[deci
 	// The source columns of `t`, in order, are a, b and k.
 	auto read = [&](const string &source) {
 		auto plan =
-		    IRPlan(con, "SELECT * FROM (FROM " + source + " DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(x)) q");
-		auto *decide = FindDirectIRInput(*plan);
+		    ReadPlan(con, "SELECT * FROM (FROM " + source + " DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(x)) q");
+		auto *decide = FindReadDecide(*plan);
 		REQUIRE(decide != nullptr);
-		return DirectIR::Read(*con.context, *decide).not_null;
+		return DirectSourceFacts(*decide).not_null;
 	};
 	// A declared column is in it, and so is a primary key; an undeclared one is not.
 	auto scanned = read("t");
@@ -178,7 +173,7 @@ TEST_CASE("Direct-solve IR records the source columns declared NOT NULL", "[deci
 	REQUIRE(read("u").empty());
 }
 
-TEST_CASE("S1 IR preserves both interval bounds and exact equality", "[decidb]") {
+TEST_CASE("S1 reads both interval bounds and exact equality", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	REQUIRE_NO_FAIL(con.Query("SET disabled_optimizers='decide_optimizer'"));
@@ -187,14 +182,13 @@ TEST_CASE("S1 IR preserves both interval bounds and exact equality", "[decidb]")
 	auto *s1 = FindS1Rule(rules);
 	REQUIRE(s1 != nullptr);
 	for (auto &constraint : {"SUM(x)>=1 AND SUM(x)<=2", "SUM(x)=2", "SUM(x)>=1"}) {
-		auto plan = IRPlan(con, "SELECT id,x FROM ("
-		                        " FROM (VALUES (1, 9.0::DOUBLE), (2, -1.0::DOUBLE)) s(id,score)"
-		                        " DECIDE x(BOOL) SUCH THAT " +
-		                            string(constraint) + " MAXIMIZE SUM(score*x)) q");
-		auto *decide = FindDirectIRInput(*plan);
+		auto plan = ReadPlan(con, "SELECT id,x FROM ("
+		                          " FROM (VALUES (1, 9.0::DOUBLE), (2, -1.0::DOUBLE)) s(id,score)"
+		                          " DECIDE x(BOOL) SUCH THAT " +
+		                              string(constraint) + " MAXIMIZE SUM(score*x)) q");
+		auto *decide = FindReadDecide(*plan);
 		REQUIRE(decide != nullptr);
-		auto ir = DirectIR::Read(*con.context, *decide);
-		auto condition = s1->CheckCondition(ir, *con.context);
+		auto condition = s1->CheckCondition(*decide, *con.context);
 		REQUIRE(condition != nullptr);
 		REQUIRE(s1->Summary() == "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi");
 	}
@@ -209,14 +203,13 @@ TEST_CASE("S1 condition normalizes finite count bounds", "[decidb]") {
 	auto *s1 = FindS1Rule(rules);
 	REQUIRE(s1 != nullptr);
 	for (auto &constraint : {"SUM(x)<=1.5", "SUM(x)<2", "SUM(x)=1.5"}) {
-		auto plan = IRPlan(con, "SELECT id, x FROM ("
-		                        " FROM (VALUES (1, 9.0::DOUBLE)) s(id,score)"
-		                        " DECIDE x(BOOL) SUCH THAT " +
-		                            string(constraint) + " MAXIMIZE SUM(score*x)) q");
-		auto *decide = FindDirectIRInput(*plan);
+		auto plan = ReadPlan(con, "SELECT id, x FROM ("
+		                          " FROM (VALUES (1, 9.0::DOUBLE)) s(id,score)"
+		                          " DECIDE x(BOOL) SUCH THAT " +
+		                              string(constraint) + " MAXIMIZE SUM(score*x)) q");
+		auto *decide = FindReadDecide(*plan);
 		REQUIRE(decide != nullptr);
-		auto ir = DirectIR::Read(*con.context, *decide);
-		auto condition = s1->CheckCondition(ir, *con.context);
+		auto condition = s1->CheckCondition(*decide, *con.context);
 		REQUIRE(condition != nullptr);
 		REQUIRE(s1->Summary() == "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi");
 	}
@@ -231,14 +224,13 @@ TEST_CASE("S1 condition rejects an unrepresentable bound and volatile coefficien
 	auto *s1 = FindS1Rule(rules);
 	REQUIRE(s1 != nullptr);
 	auto applies = [&](const string &constraint, const string &objective) {
-		auto plan = IRPlan(con, "SELECT id, x FROM ("
-		                        " FROM (VALUES (1, 9.0::DOUBLE)) s(id,score)"
-		                        " DECIDE x(BOOL) SUCH THAT " +
-		                            constraint + " MAXIMIZE " + objective + ") q");
-		auto *decide = FindDirectIRInput(*plan);
+		auto plan = ReadPlan(con, "SELECT id, x FROM ("
+		                          " FROM (VALUES (1, 9.0::DOUBLE)) s(id,score)"
+		                          " DECIDE x(BOOL) SUCH THAT " +
+		                              constraint + " MAXIMIZE " + objective + ") q");
+		auto *decide = FindReadDecide(*plan);
 		REQUIRE(decide != nullptr);
-		auto ir = DirectIR::Read(*con.context, *decide);
-		return s1->CheckCondition(ir, *con.context) != nullptr;
+		return s1->CheckCondition(*decide, *con.context) != nullptr;
 	};
 	// The plain form of each case applies, so the case declines for the one thing it changes.
 	REQUIRE(applies("SUM(x)<=1", "SUM(score*x)"));
@@ -246,112 +238,94 @@ TEST_CASE("S1 condition rejects an unrepresentable bound and volatile coefficien
 	REQUIRE(!applies("SUM(x)<=1", "SUM((score+txid_current())*x)"));
 }
 
-TEST_CASE("Direct-solve IR retains a when and reads a reducer's by key", "[decidb]") {
+TEST_CASE("A reducer's by key is read into its part", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	REQUIRE_NO_FAIL(con.Query("SET disabled_optimizers='decide_optimizer'"));
-	con.BeginTransaction();
 
-	auto constraint_plan = IRPlan(con, "SELECT id, x FROM ("
-	                                   " FROM (VALUES (1, 9.0::DOUBLE, TRUE)) s(id,score,active)"
-	                                   " DECIDE x(BOOL) SUCH THAT when active: SUM(x)<=1"
-	                                   " MAXIMIZE SUM(score*x)"
-	                                   ") q");
-	auto *constraint_decide = FindDirectIRInput(*constraint_plan);
-	REQUIRE(constraint_decide != nullptr);
-	auto constraint_ir = DirectIR::Read(*con.context, *constraint_decide);
-	REQUIRE(constraint_ir.constraints.size() == 1);
-	REQUIRE(constraint_ir.constraints[0].scope.when != nullptr);
-	REQUIRE(constraint_ir.constraints[0].lhs[0].by.empty());
+	QueryReading plain(con, "SELECT id, x FROM ("
+	                        " FROM (VALUES (1, 9.0::DOUBLE, TRUE)) s(id,score,active)"
+	                        " DECIDE x(BOOL) SUCH THAT when active: SUM(x)<=1"
+	                        " MAXIMIZE SUM(score*x)"
+	                        ") q");
+	REQUIRE(plain.clauses_read);
+	REQUIRE(plain.clauses[0].When() != nullptr);
+	REQUIRE(plain.clauses[0].lhs[0].by.empty());
 
-	auto per_plan = IRPlan(con, "SELECT id, x FROM ("
-	                            " FROM (VALUES (1, 9.0::DOUBLE, 'A'::VARCHAR),"
-	                            " (2, -1.0::DOUBLE, 'B'::VARCHAR)) s(id,score,dept)"
-	                            " DECIDE x(BOOL) SUCH THAT SUM(x) by (dept)<=1"
-	                            " MAXIMIZE SUM(score*x)"
-	                            ") q");
-	auto *per_decide = FindDirectIRInput(*per_plan);
-	REQUIRE(per_decide != nullptr);
-	auto per_ir = DirectIR::Read(*con.context, *per_decide);
+	QueryReading keyed(con, "SELECT id, x FROM ("
+	                        " FROM (VALUES (1, 9.0::DOUBLE, 'A'::VARCHAR),"
+	                        " (2, -1.0::DOUBLE, 'B'::VARCHAR)) s(id,score,dept)"
+	                        " DECIDE x(BOOL) SUCH THAT SUM(x) by (dept)<=1"
+	                        " MAXIMIZE SUM(score*x)"
+	                        ") q");
 	// The key lives on the reducer's part, where `by` is written: the column the rows group on, the name a message
 	// gives it, and a NULL in it puts the row in no group (D5).
-	REQUIRE(per_ir.constraints.size() == 1);
-	REQUIRE(per_ir.constraints[0].status == DirectAnalysisStatus::PROVED);
-	auto &key = per_ir.constraints[0].lhs[0].by;
+	REQUIRE(keyed.clauses_read);
+	auto &key = keyed.clauses[0].lhs[0].by;
 	REQUIRE(key.size() == 1);
 	REQUIRE(key[0].name == "dept");
 	REQUIRE(key[0].no_group);
 	REQUIRE(key[0].grouping->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF);
 
-	// A key of two elements keeps their order; a relation's columns compare NULL as a value.
-	auto pair_plan = IRPlan(con, "SELECT id, x FROM ("
-	                             " FROM (VALUES (1, 9.0::DOUBLE, 'A'::VARCHAR, TRUE)) s(id,score,dept,flag)"
-	                             " DECIDE x(BOOL) SUCH THAT SUM(x) by (dept, flag)<=1 AND SUM(x) by (s)<=1"
-	                             " MAXIMIZE SUM(score*x)"
-	                             ") q");
-	auto *pair_decide = FindDirectIRInput(*pair_plan);
-	REQUIRE(pair_decide != nullptr);
-	auto pair_ir = DirectIR::Read(*con.context, *pair_decide);
-	REQUIRE(pair_ir.constraints.size() == 2);
-	auto &pair = pair_ir.constraints[0].lhs[0].by;
+	// A key of two elements keeps both; a relation's columns compare NULL as a value.
+	QueryReading both(con, "SELECT id, x FROM ("
+	                       " FROM (VALUES (1, 9.0::DOUBLE, 'A'::VARCHAR, TRUE)) s(id,score,dept,flag)"
+	                       " DECIDE x(BOOL) SUCH THAT SUM(x) by (dept, flag)<=1 AND SUM(x) by (s)<=1"
+	                       " MAXIMIZE SUM(score*x)"
+	                       ") q");
+	REQUIRE(both.clauses_read);
+	REQUIRE(both.clauses.size() == 2);
+	auto &pair = both.clauses[0].lhs[0].by;
 	REQUIRE(pair.size() == 2);
 	REQUIRE((pair[0].name == "dept" && pair[1].name == "flag"));
-	auto &relation = pair_ir.constraints[1].lhs[0].by;
+	auto &relation = both.clauses[1].lhs[0].by;
 	REQUIRE(!relation.empty());
 	for (auto &element : relation) {
 		REQUIRE(!element.no_group);
 	}
 
-	auto objective_plan = IRPlan(con, "SELECT id, x FROM ("
-	                                  " FROM (VALUES (1, 9.0::DOUBLE, TRUE)) s(id,score,active)"
-	                                  " DECIDE x(BOOL) SUCH THAT SUM(x)<=1"
-	                                  " MAXIMIZE when active: SUM(score*x)"
-	                                  ") q");
-	auto *objective_decide = FindDirectIRInput(*objective_plan);
-	REQUIRE(objective_decide != nullptr);
-	auto objective_ir = DirectIR::Read(*con.context, *objective_decide);
-	// Objective WHEN is a modelled IR node now, not a not-proved one.
-	REQUIRE(objective_ir.objective.status == DirectAnalysisStatus::PROVED);
-	REQUIRE(objective_ir.objective.scope.when != nullptr);
-	REQUIRE(objective_ir.objective.parts.size() == 1);
+	// An objective under a `when` reads as its parts; the `when` stays the operator's.
+	QueryReading objective(con, "SELECT id, x FROM ("
+	                            " FROM (VALUES (1, 9.0::DOUBLE, TRUE)) s(id,score,active)"
+	                            " DECIDE x(BOOL) SUCH THAT SUM(x)<=1"
+	                            " MAXIMIZE when active: SUM(score*x)"
+	                            ") q");
+	REQUIRE(objective.objective_read);
+	REQUIRE(objective.objective.parts.size() == 1);
 }
 
-TEST_CASE("Direct-solve IR models every decision domain and scope", "[decidb]") {
+TEST_CASE("The readers give every decision's domain and a relation key's columns", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	QueryIR query(con, IRQuery("x(BOOL), n(INT), r(REAL), per (): s(INT), per t: e(BOOL)",
-	                           "x <= 1 AND n <= 3 AND r <= 2 AND s <= 4 AND e <= 1",
-	                           "MAXIMIZE SUM(w*x) + SUM(n) + SUM(r) + s + SUM(e)"));
-	auto &ir = query.ir;
-	REQUIRE(ir.decisions.size() == 5);
-	REQUIRE(ir.decisions[0].domain == DirectDomain::BOOL);
-	REQUIRE(ir.decisions[0].output_type == LogicalType::INTEGER);
-	REQUIRE(ir.decisions[1].domain == DirectDomain::INT);
-	REQUIRE(ir.decisions[2].domain == DirectDomain::REAL);
-	REQUIRE(ir.decisions[3].scope == DecideVarScope::GLOBAL);
-	REQUIRE(ir.decisions[4].scope == DecideVarScope::KEYED);
-	REQUIRE(ir.decisions[4].keyed_scope == 0);
-	REQUIRE(ir.keyed_scopes.size() == 1);
+	QueryReading query(con, ReadQuery("x(BOOL), n(INT), r(REAL), per (): s(INT), per t: e(BOOL)",
+	                                  "x <= 1 AND n <= 3 AND r <= 2 AND s <= 4 AND e <= 1",
+	                                  "MAXIMIZE SUM(w*x) + SUM(n) + SUM(r) + s + SUM(e)"));
+	auto &decide = *query.decide;
+	REQUIRE(DirectDomainOf(decide, 0) == DirectDomain::BOOL);
+	REQUIRE(DirectDomainOf(decide, 1) == DirectDomain::INT);
+	REQUIRE(DirectDomainOf(decide, 2) == DirectDomain::REAL);
 	// `per t` is a relation element: it stands for every column t stores, and a NULL in one is a value of its own.
-	auto &relation_key = ir.keyed_scopes[0].key;
+	REQUIRE(decide.bound.keyed_scopes.size() == 1);
+	duckdb::vector<DirectKeyElement> relation_key;
+	REQUIRE(DirectReadKey(decide, decide.bound.keyed_scopes[0].key, relation_key));
 	REQUIRE(relation_key.size() == 4);
 	for (auto &element : relation_key) {
 		REQUIRE(!element.no_group);
 		REQUIRE(element.grouping);
 	}
 	// The query-wide decision is a row-level part beside the reducers.
-	REQUIRE(ir.objective.parts.size() == 5);
-	REQUIRE(!ir.objective.parts[3].reduced);
+	REQUIRE(query.objective_read);
+	REQUIRE(query.objective.parts.size() == 5);
+	REQUIRE(!query.objective.parts[3].reduced);
 }
 
-TEST_CASE("Direct-solve IR reads a keyed decision's key", "[decidb]") {
+TEST_CASE("A keyed decision's key is read as the plan reads it", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	// A column element is in no class on a NULL (D5), and a key of two columns keeps both.
-	QueryIR query(con, IRQuery("per cap, flag: e(BOOL)", "e <= 1", "MAXIMIZE SUM(w*e)"));
-	REQUIRE(query.ir.decisions[0].scope == DecideVarScope::KEYED);
-	REQUIRE(query.ir.keyed_scopes.size() == 1);
-	auto &key = query.ir.keyed_scopes[0].key;
+	QueryReading query(con, ReadQuery("per cap, flag: e(BOOL)", "e <= 1", "MAXIMIZE SUM(w*e)"));
+	REQUIRE(query.decide->bound.keyed_scopes.size() == 1);
+	duckdb::vector<DirectKeyElement> key;
+	REQUIRE(DirectReadKey(*query.decide, query.decide->bound.keyed_scopes[0].key, key));
 	REQUIRE(key.size() == 2);
 	for (auto &element : key) {
 		REQUIRE(element.no_group);
@@ -362,45 +336,41 @@ TEST_CASE("Direct-solve IR reads a keyed decision's key", "[decidb]") {
 	REQUIRE((key[0].name == "flag") != (key[1].name == "flag"));
 }
 
-TEST_CASE("Direct-solve IR models comparisons, membership, and right-hand sides", "[decidb]") {
+TEST_CASE("The clause reader reads comparisons, membership, and right-hand sides", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	QueryIR query(con, IRQuery("x(INT), y(INT)",
-	                           "x + y <= 3 AND x <> 1 AND y IN (0, 2) AND SUM(x) <= cap AND "
-	                           "SUM(y) <= (SELECT 5) AND SUM(x) BETWEEN 1 AND 2",
-	                           "MAXIMIZE SUM(w*x)"));
-	auto &constraints = query.ir.constraints;
+	QueryReading query(con, ReadQuery("x(INT), y(INT)",
+	                                  "x + y <= 3 AND x <> 1 AND y IN (0, 2) AND SUM(x) <= cap AND "
+	                                  "SUM(y) <= (SELECT 5) AND SUM(x) BETWEEN 1 AND 2",
+	                                  "MAXIMIZE SUM(w*x)"));
+	REQUIRE(query.clauses_read);
+	auto &constraints = query.clauses;
 	REQUIRE(constraints.size() == 7);
-	for (auto &constraint : constraints) {
-		REQUIRE(constraint.status == DirectAnalysisStatus::PROVED);
-	}
 	// One constraint per row, holding both decisions.
-	REQUIRE(!constraints[0].aggregate);
+	REQUIRE(!constraints[0].Aggregate());
 	REQUIRE(constraints[0].lhs.size() == 1);
 	REQUIRE(!constraints[0].lhs[0].reduced);
 	REQUIRE(constraints[0].lhs[0].terms.size() == 2);
-	REQUIRE(constraints[1].comparison == ExpressionType::COMPARE_NOTEQUAL);
-	REQUIRE(constraints[2].comparison == ExpressionType::COMPARE_IN);
-	REQUIRE(constraints[3].aggregate);
+	REQUIRE(constraints[1].Comparison() == ExpressionType::COMPARE_NOTEQUAL);
+	REQUIRE(constraints[2].Comparison() == ExpressionType::COMPARE_IN);
+	REQUIRE(constraints[3].Aggregate());
 	// BETWEEN is two written comparisons.
-	REQUIRE(constraints[5].comparison == ExpressionType::COMPARE_GREATERTHANOREQUALTO);
-	REQUIRE(constraints[6].comparison == ExpressionType::COMPARE_LESSTHANOREQUALTO);
+	REQUIRE(constraints[5].Comparison() == ExpressionType::COMPARE_GREATERTHANOREQUALTO);
+	REQUIRE(constraints[6].Comparison() == ExpressionType::COMPARE_LESSTHANOREQUALTO);
 }
 
-TEST_CASE("Direct-solve IR models reducers, filters, qualifiers, scales and norms", "[decidb]") {
+TEST_CASE("The clause reader reads reducers, filters, qualifiers, scales and norms", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	QueryIR query(con, IRQuery("per t: x(INT), y(INT)",
-	                           "AVG(y) <= 2 AND MIN(y) >= 0 AND MAX(y) <= 3 AND SUM(when flag: y) <= 2 AND "
-	                           "SUM(per t: x) <= 4 AND 2 * SUM(y) <= 9 AND norm(y, 0) <= 2 AND "
-	                           "norm(y - cap, 1) <= 5",
-	                           "MINIMIZE SUM(w*y)"));
-	auto &constraints = query.ir.constraints;
-	REQUIRE(constraints.size() == 8);
-	for (idx_t i = 0; i < constraints.size(); i++) {
-		// `norm(y, 0)` needs indicator variables: it reads as a not-proved part, not as a reducer.
-		REQUIRE(constraints[i].status == (i == 6 ? DirectAnalysisStatus::NOT_PROVED : DirectAnalysisStatus::PROVED));
-		REQUIRE(constraints[i].lhs.size() == 1);
+	QueryReading query(con, ReadQuery("per t: x(INT), y(INT)",
+	                                  "AVG(y) <= 2 AND MIN(y) >= 0 AND MAX(y) <= 3 AND SUM(when flag: y) <= 2 AND "
+	                                  "SUM(per t: x) <= 4 AND 2 * SUM(y) <= 9 AND norm(y - cap, 1) <= 5",
+	                                  "MINIMIZE SUM(w*y)"));
+	REQUIRE(query.clauses_read);
+	auto &constraints = query.clauses;
+	REQUIRE(constraints.size() == 7);
+	for (auto &constraint : constraints) {
+		REQUIRE(constraint.lhs.size() == 1);
 	}
 	REQUIRE(constraints[0].lhs[0].reducer == DecideReducerKind::AVG);
 	REQUIRE(constraints[1].lhs[0].reducer == DecideReducerKind::MIN);
@@ -408,111 +378,107 @@ TEST_CASE("Direct-solve IR models reducers, filters, qualifiers, scales and norm
 	REQUIRE(constraints[3].lhs[0].filter != nullptr);
 	REQUIRE(constraints[4].lhs[0].qualifier == 0);
 	REQUIRE(constraints[5].lhs[0].scale != nullptr);
-	REQUIRE(constraints[6].lhs[0].status == DirectAnalysisStatus::NOT_PROVED);
 	// L1 reads as its definition: SUM of an absolute value.
-	REQUIRE(constraints[7].lhs[0].reducer == DecideReducerKind::SUM);
-	REQUIRE(constraints[7].lhs[0].terms.size() == 1);
-	REQUIRE(constraints[7].lhs[0].terms[0].IsAbs());
+	REQUIRE(constraints[6].lhs[0].reducer == DecideReducerKind::SUM);
+	REQUIRE(constraints[6].lhs[0].terms.size() == 1);
+	REQUIRE(constraints[6].lhs[0].terms[0].IsAbs());
 }
 
-TEST_CASE("Direct-solve IR reads a norm marker of any order as a not-proved part, never an exception", "[decidb]") {
+TEST_CASE("The clause reader declines a norm marker of any order, never raising", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	QueryIR query(con, IRQuery("y(INT)", "norm(y, 0) <= 2", "MINIMIZE SUM(w*y)"));
-	REQUIRE(query.ir.constraints.size() == 1);
-	REQUIRE(query.ir.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
+	// `norm(y, 0)` needs indicator variables: no rule models it.
+	QueryReading query(con, ReadQuery("y(INT)", "norm(y, 0) <= 2", "MINIMIZE SUM(w*y)"));
+	REQUIRE(!query.clauses_read);
 	// An order canonicalization would have expanded.
 	REQUIRE_NOTHROW(query.ReorderNorms(DecideNorm::Order::L2));
-	auto &constraint = query.ir.constraints[0];
-	REQUIRE(constraint.status == DirectAnalysisStatus::NOT_PROVED);
-	REQUIRE(constraint.lhs[0].status == DirectAnalysisStatus::NOT_PROVED);
+	REQUIRE(!query.clauses_read);
 }
 
-TEST_CASE("Direct-solve IR models products and squares, and declines a nested objective", "[decidb]") {
+TEST_CASE("The readers read products and squares, and decline a nested objective", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	QueryIR products(con,
-	                 IRQuery("x(INT), y(INT)", "SUM(x*y) <= 4 AND SUM(POWER(x - cap, 2)) <= 9", "MAXIMIZE SUM(w*x)"));
-	auto &constraints = products.ir.constraints;
+	QueryReading products(
+	    con, ReadQuery("x(INT), y(INT)", "SUM(x*y) <= 4 AND SUM(POWER(x - cap, 2)) <= 9", "MAXIMIZE SUM(w*x)"));
+	REQUIRE(products.clauses_read);
+	auto &constraints = products.clauses;
 	REQUIRE(constraints.size() == 2);
 	REQUIRE(constraints[0].lhs[0].terms[0].IsProduct());
 	REQUIRE(constraints[1].lhs[0].terms[0].IsSquare());
 
 	// A product inside an absolute value is not algebra any rule reads.
-	QueryIR product_in_abs(con, IRQuery("x(INT), y(INT)", "x <= 3", "MINIMIZE SUM(ABS(x*y - 1))"));
-	REQUIRE(product_in_abs.ir.objective.status == DirectAnalysisStatus::NOT_PROVED);
+	QueryReading product_in_abs(con, ReadQuery("x(INT), y(INT)", "x <= 3", "MINIMIZE SUM(ABS(x*y - 1))"));
+	REQUIRE(!product_in_abs.objective_read);
 
 	// No rule models the helper decision a nested reducer becomes (D81), `outer(per k: inner(e) by (k))` included.
-	QueryIR nested(con, IRQuery("x(INT)", "x <= 3", "MINIMIZE SUM(per id: MAX(w*x) by (id))"));
-	REQUIRE(nested.ir.objective.status == DirectAnalysisStatus::NOT_PROVED);
-	REQUIRE(nested.ir.objective.parts.empty());
+	QueryReading nested(con, ReadQuery("x(INT)", "x <= 3", "MINIMIZE SUM(per id: MAX(w*x) by (id))"));
+	REQUIRE(!nested.objective_read);
+	REQUIRE(nested.objective.parts.empty());
 }
 
-TEST_CASE("Direct-solve IR reads an aggregate clause per class and leaves a per-row clause per class to the solver",
-          "[decidb]") {
+TEST_CASE("The clause reader reads an aggregate clause per class and declines a per-row clause per class", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	// `per K: C` is one constraint per class and variant (D70); an aggregate clause bounds the total of each group, and
 	// its instances differ only in their bound, which the group's tightest bound covers: it reads as the clause.
-	QueryIR aggregate(con, IRQuery("x(BOOL)", "per flag: SUM(x) <= cap", "MAXIMIZE SUM(w*x)"));
-	REQUIRE(aggregate.ir.status == DirectAnalysisStatus::PROVED);
-	REQUIRE(aggregate.ir.constraints.size() == 1);
-	REQUIRE(aggregate.ir.constraints[0].status == DirectAnalysisStatus::PROVED);
-	REQUIRE(aggregate.ir.constraints[0].aggregate);
-	REQUIRE(aggregate.ir.row_checks.empty());
+	QueryReading aggregate(con, ReadQuery("x(BOOL)", "per flag: SUM(x) <= cap", "MAXIMIZE SUM(w*x)"));
+	REQUIRE(aggregate.clauses_read);
+	REQUIRE(aggregate.clauses.size() == 1);
+	REQUIRE(aggregate.clauses[0].Aggregate());
+	REQUIRE(aggregate.clauses[0].PerClass());
+	REQUIRE(aggregate.clauses[0].classes.size() == 1);
 
 	// A clause per row would hold in a class alone: no rule models it.
-	QueryIR per_row(con, IRQuery("x(BOOL)", "SUM(x) <= 2 AND per flag: x <= 1", "MAXIMIZE SUM(w*x)"));
-	REQUIRE(per_row.ir.constraints.size() == 2);
-	REQUIRE(per_row.ir.constraints[0].status == DirectAnalysisStatus::PROVED);
-	REQUIRE(per_row.ir.constraints[1].status == DirectAnalysisStatus::NOT_PROVED);
+	QueryReading per_row(con, ReadQuery("x(BOOL)", "SUM(x) <= 2 AND per flag: x <= 1", "MAXIMIZE SUM(w*x)"));
+	REQUIRE(!per_row.clauses_read);
+	REQUIRE(per_row.clauses.size() == 2);
 
 	// A reducer's own `per` over a body with variants reads the key's classes split by the body's values (D71), which
 	// the operator numbers and no rule's plan reads.
-	QueryIR variants(con, IRQuery("x(BOOL)", "sum(per flag: x) <= 1", "MAXIMIZE SUM(w*x)"));
-	REQUIRE(variants.ir.status == DirectAnalysisStatus::NOT_PROVED);
+	QueryReading variants(con, ReadQuery("x(BOOL)", "sum(per flag: x) <= 1", "MAXIMIZE SUM(w*x)"));
+	REQUIRE(!variants.clauses_read);
 	// An objective with a field is produced once (D72), which the operator checks and no rule's plan does.
-	QueryIR once(con, IRQuery("x(BOOL), per (): s(INT)", "x <= 1 AND s <= 3", "MAXIMIZE SUM(w*x) + cap * s"));
-	REQUIRE(once.ir.objective.status == DirectAnalysisStatus::NOT_PROVED);
+	QueryReading once(con, ReadQuery("x(BOOL), per (): s(INT)", "x <= 1 AND s <= 3", "MAXIMIZE SUM(w*x) + cap * s"));
+	REQUIRE(!once.objective_read);
 }
 
-TEST_CASE("Direct-solve IR reports what it cannot model as not proved", "[decidb]") {
+TEST_CASE("The clause reader declines at the first clause it cannot read", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	// A decision under ABS inside a square is not linear algebra the splitter can read.
-	QueryIR query(con, IRQuery("x(INT)", "x <= 3 AND SUM(POWER(ABS(x - cap), 2)) <= 9", "MAXIMIZE SUM(w*x)"));
-	auto &ir = query.ir;
-	REQUIRE(ir.constraints.size() == 2);
-	REQUIRE(ir.constraints[0].status == DirectAnalysisStatus::PROVED);
-	REQUIRE(ir.constraints[1].status == DirectAnalysisStatus::NOT_PROVED);
+	QueryReading query(con, ReadQuery("x(INT)", "x <= 3 AND SUM(POWER(ABS(x - cap), 2)) <= 9", "MAXIMIZE SUM(w*x)"));
+	REQUIRE(!query.clauses_read);
+	REQUIRE(query.clauses.size() == 2);
 }
 
-TEST_CASE("Direct-solve IR declines a frame selector", "[decidb]") {
+TEST_CASE("No rule reads a frame selector", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	// A frame reads the row its position selects on a timeline, which the operator computes and no rule's plan reads:
-	// the IR is not read. Its marker, an aggregate `first`, is never taken for a reducer.
-	QueryIR root(con, IRQuery("x(INT)", "x <= at(previous else 3: cap) over (id)", "MAXIMIZE SUM(x)"));
-	REQUIRE(root.ir.status == DirectAnalysisStatus::NOT_PROVED);
-	REQUIRE_FALSE(DirectIRIsReadable(root.ir));
-	QueryIR reduced(con, IRQuery("x(INT)", "x <= 3 AND SUM(at(first: x) over (id)) <= 4", "MAXIMIZE SUM(x)"));
-	REQUIRE_FALSE(DirectIRIsReadable(reduced.ir));
-	REQUIRE(reduced.ir.constraints.size() == 2);
-	REQUIRE(reduced.ir.constraints[1].status == DirectAnalysisStatus::NOT_PROVED);
+	// A frame reads the row its position selects on a timeline, which the operator computes and no rule's plan reads.
+	// One over data is no value of the source row, so every rule declines the bound that holds it.
+	QueryReading data(con, ReadQuery("x(INT)", "x <= at(previous else 3: cap) over (id)", "MAXIMIZE SUM(x)"));
+	for (auto &rule : RegisteredDirectRules()) {
+		INFO(rule->Name());
+		REQUIRE(rule->CheckCondition(*data.decide, *con.context) == nullptr);
+	}
+	// One over a decision is no term a rule reads. Its marker, an aggregate `first`, is never taken for a reducer.
+	QueryReading reduced(con, ReadQuery("x(INT)", "x <= 3 AND SUM(at(first: x) over (id)) <= 4", "MAXIMIZE SUM(x)"));
+	REQUIRE(!reduced.clauses_read);
+	REQUIRE(reduced.clauses.size() == 2);
 }
 
-TEST_CASE("Direct-solve IR says which bounds the solver folds into a variable's box", "[decidb]") {
+TEST_CASE("The clause reader says which bounds the solver folds into a variable's box", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 
-	// One decision, constraints that each produce one IR node in order; `expected` is the solver's folding of each.
+	// One decision, constraints that each read as one clause in order; `expected` is the solver's folding of each.
 	auto check = [&](const string &declaration, const string &constraints, duckdb::vector<bool> expected) {
-		QueryIR query(con, IRQuery(declaration, constraints, "MINIMIZE SUM(x)"));
-		auto &ir = query.ir;
+		QueryReading query(con, ReadQuery(declaration, constraints, "MINIMIZE SUM(x)"));
 		INFO(declaration << " | " << constraints);
-		REQUIRE(ir.constraints.size() == expected.size());
+		REQUIRE(query.clauses_read);
+		REQUIRE(query.clauses.size() == expected.size());
 		for (idx_t i = 0; i < expected.size(); i++) {
-			REQUIRE(ir.constraints[i].variable_bound == expected[i]);
+			REQUIRE(query.clauses[i].variable_bound == expected[i]);
 		}
 	};
 
@@ -532,9 +498,8 @@ TEST_CASE("Direct-solve IR says which bounds the solver folds into a variable's 
 	// into the box the classifier reads for both paths.
 	for (auto affine : {"2*x >= -6", "x + 1 >= -2", "-x <= 3", "x >= 0 - 3"}) {
 		check("x(REAL)", affine, {true});
-		QueryIR query(con, IRQuery("x(REAL)", affine, "MINIMIZE SUM(x)"));
-		auto &bound = query.ir.constraints[0];
-		REQUIRE(bound.status == DirectAnalysisStatus::PROVED);
+		QueryReading query(con, ReadQuery("x(REAL)", affine, "MINIMIZE SUM(x)"));
+		auto &bound = query.clauses[0];
 		REQUIRE(bound.bound.sense == '>');
 		REQUIRE(bound.bound.lower_value == -3.0);
 	}
@@ -550,15 +515,15 @@ TEST_CASE("Direct-solve IR says which bounds the solver folds into a variable's 
 	check("x(REAL)", "x >= -3 AND x <= cap AND when flag: x >= -1", {true, false, false});
 }
 
-TEST_CASE("A1 IR reads each objective spelling the solver accepts", "[decidb]") {
+TEST_CASE("The objective reader reads each spelling the solver accepts", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 
 	// A square carries its coefficient (none is 1) and the linear form it squares: x - w is [x, w with sign -1].
-	QueryIR square(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(x - w, 2))"));
-	REQUIRE(square.ir.objective.status == DirectAnalysisStatus::PROVED);
-	REQUIRE(square.ir.objective.parts.size() == 1);
-	auto &terms = square.ir.objective.parts[0].terms;
+	QueryReading square(con, ReadQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(x - w, 2))"));
+	REQUIRE(square.objective_read);
+	REQUIRE(square.objective.parts.size() == 1);
+	auto &terms = square.objective.parts[0].terms;
 	REQUIRE(terms.size() == 1);
 	REQUIRE(terms[0].IsSquare());
 	REQUIRE(terms[0].coefficient == nullptr);
@@ -569,31 +534,31 @@ TEST_CASE("A1 IR reads each objective spelling the solver accepts", "[decidb]") 
 	REQUIRE(form[1].sign == -1);
 
 	// A constant factor inside the SUM is the square's coefficient; one outside stays on the part.
-	QueryIR inside(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(3*POWER(x - w, 2))"));
-	auto &inside_square = inside.ir.objective.parts[0].terms[0];
+	QueryReading inside(con, ReadQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(3*POWER(x - w, 2))"));
+	auto &inside_square = inside.objective.parts[0].terms[0];
 	REQUIRE(inside_square.IsSquare());
 	REQUIRE(inside_square.coefficient != nullptr);
-	// A NULL `w` skips the row, so the coefficient is guarded as every other term's is (GuardCoefficients); the guard
-	// reads 0 on that row and 3 on every other.
+	// A NULL `w` skips the row, so the coefficient is guarded as every other term's is
+	// (BoundDecideNullGuardExpression); the guard reads 0 on that row and 3 on every other.
 	REQUIRE(DecideIsGuarded(*inside_square.coefficient));
 	REQUIRE(ExpressionExecutor::EvaluateScalar(*con.context, DecideUnguarded(*inside_square.coefficient))
 	            .GetValue<double>() == 3.0);
-	QueryIR outside(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE 2*SUM(POWER(x - w, 2))"));
-	REQUIRE(outside.ir.objective.parts[0].scale != nullptr);
-	REQUIRE(!outside.ir.objective.parts[0].scale_divides);
-	QueryIR divided(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(x - w, 2))/2"));
-	REQUIRE(divided.ir.objective.parts[0].scale_divides);
-	QueryIR negated(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE -SUM(POWER(x - w, 2))"));
-	REQUIRE(negated.ir.objective.parts[0].sign == -1);
+	QueryReading outside(con, ReadQuery("x(REAL)", "x <= cap", "MINIMIZE 2*SUM(POWER(x - w, 2))"));
+	REQUIRE(outside.objective.parts[0].scale != nullptr);
+	REQUIRE(!outside.objective.parts[0].scale_divides);
+	QueryReading divided(con, ReadQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(x - w, 2))/2"));
+	REQUIRE(divided.objective.parts[0].scale_divides);
+	QueryReading negated(con, ReadQuery("x(REAL)", "x <= cap", "MINIMIZE -SUM(POWER(x - w, 2))"));
+	REQUIRE(negated.objective.parts[0].sign == -1);
 	// The objective is a minimization: MAXIMIZE writes its flip as the sign of each part.
-	QueryIR maximized(con, IRQuery("x(REAL)", "x <= cap", "MAXIMIZE SUM(POWER(x - w, 2))"));
-	REQUIRE(maximized.ir.objective.parts[0].sign == -1);
-	QueryIR maximized_negation(con, IRQuery("x(REAL)", "x <= cap", "MAXIMIZE -SUM(POWER(x - w, 2))"));
-	REQUIRE(maximized_negation.ir.objective.parts[0].sign == 1);
+	QueryReading maximized(con, ReadQuery("x(REAL)", "x <= cap", "MAXIMIZE SUM(POWER(x - w, 2))"));
+	REQUIRE(maximized.objective.parts[0].sign == -1);
+	QueryReading maximized_negation(con, ReadQuery("x(REAL)", "x <= cap", "MAXIMIZE -SUM(POWER(x - w, 2))"));
+	REQUIRE(maximized_negation.objective.parts[0].sign == 1);
 
 	// x*x - 2*w*x is a square plus a negative linear term; a constant stays beside the square.
-	QueryIR expanded(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(x*x - 2*w*x + 5)"));
-	auto &expanded_terms = expanded.ir.objective.parts[0].terms;
+	QueryReading expanded(con, ReadQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(x*x - 2*w*x + 5)"));
+	auto &expanded_terms = expanded.objective.parts[0].terms;
 	REQUIRE(expanded_terms.size() == 3);
 	REQUIRE(expanded_terms[0].IsSquare());
 	REQUIRE(expanded_terms[1].IsLinear());
@@ -601,34 +566,27 @@ TEST_CASE("A1 IR reads each objective spelling the solver accepts", "[decidb]") 
 	REQUIRE(expanded_terms[2].IsConstant());
 
 	// A row-valued coefficient inside the square is in its form; one outside it, written either way, is the square's
-	// coefficient, which the IR reads and a rule's square reader takes as the square's weight (DirectReadSquareTerm).
-	QueryIR inner_weight(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(w*x - 3, 2))"));
-	REQUIRE(inner_weight.ir.objective.status == DirectAnalysisStatus::PROVED);
+	// coefficient, which a rule's square reader takes as the square's weight (DirectReadSquareTerm).
+	QueryReading inner_weight(con, ReadQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(w*x - 3, 2))"));
+	REQUIRE(inner_weight.objective_read);
 	for (auto objective : {"MINIMIZE SUM(w*POWER(x - 1, 2))", "MINIMIZE SUM(w*x*x)"}) {
-		QueryIR outer_weight(con, IRQuery("x(REAL)", "x <= cap", objective));
-		REQUIRE(outer_weight.ir.objective.status == DirectAnalysisStatus::PROVED);
-		auto &weighted = outer_weight.ir.objective.parts[0].terms[0];
+		QueryReading outer_weight(con, ReadQuery("x(REAL)", "x <= cap", objective));
+		REQUIRE(outer_weight.objective_read);
+		auto &weighted = outer_weight.objective.parts[0].terms[0];
 		REQUIRE(weighted.IsSquare());
 		REQUIRE(weighted.coefficient != nullptr);
 		REQUIRE(!weighted.coefficient->IsFoldable());
 	}
 
-	// An objective-level WHEN is a scope on the objective; no objective is no part at all.
-	QueryIR when(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE when flag: SUM(POWER(x - w, 2))"));
-	REQUIRE(when.ir.objective.scope.when != nullptr);
-	QueryIR none(con, IRQuery("x(REAL)", "x <= cap", ""));
-	REQUIRE(none.ir.objective.parts.empty());
+	// No objective is no part at all.
+	QueryReading none(con, ReadQuery("x(REAL)", "x <= cap", ""));
+	REQUIRE(none.objective_read);
+	REQUIRE(none.objective.parts.empty());
 
 	// A per-row bound with a coefficient keeps the coefficient in the term; the constant moves to the right side.
-	QueryIR affine(con, IRQuery("x(REAL)", "2*x + 1 <= cap", "MAXIMIZE SUM(x)"));
-	REQUIRE(affine.ir.constraints[0].lhs[0].terms.size() == 1);
-	REQUIRE(affine.ir.constraints[0].lhs[0].terms[0].IsLinear());
-
-	// The output type follows the declared type.
-	QueryIR types(con, IRQuery("x(REAL), n(INT), b(BOOL)", "x <= cap AND n <= cap AND b <= 1", "MAXIMIZE SUM(x)"));
-	REQUIRE(types.ir.decisions[0].output_type == LogicalType::DOUBLE);
-	REQUIRE(types.ir.decisions[1].output_type == LogicalType::BIGINT);
-	REQUIRE(types.ir.decisions[2].output_type == LogicalType::INTEGER);
+	QueryReading affine(con, ReadQuery("x(REAL)", "2*x + 1 <= cap", "MAXIMIZE SUM(x)"));
+	REQUIRE(affine.clauses[0].lhs[0].terms.size() == 1);
+	REQUIRE(affine.clauses[0].lhs[0].terms[0].IsLinear());
 }
 
 TEST_CASE("A1 accepts a separable box-constrained problem and declines anything else", "[decidb]") {
@@ -750,56 +708,58 @@ TEST_CASE("R1 never applies to a query S1 or A1 applies to", "[decidb]") {
 	}
 }
 
-TEST_CASE("Direct-solve IR marks a clause the front end cannot read as not proved", "[decidb]") {
+TEST_CASE("The clause reader declines a per-row term that is neither linear nor an ABS", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 
 	// A per-row side with a decision under ABS inside a square has a term the splitter cannot read.
-	QueryIR unknown_row(con, IRQuery("x(INT)", "POWER(ABS(x - cap), 2) <= 9", "MAXIMIZE SUM(w*x)"));
-	REQUIRE(unknown_row.ir.constraints.size() == 1);
-	REQUIRE(unknown_row.ir.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
-	QueryIR known_row(con, IRQuery("x(INT)", "ABS(x - cap) <= 9", "MAXIMIZE SUM(w*x)"));
-	REQUIRE(known_row.ir.constraints[0].status == DirectAnalysisStatus::PROVED);
+	QueryReading unknown_row(con, ReadQuery("x(INT)", "POWER(ABS(x - cap), 2) <= 9", "MAXIMIZE SUM(w*x)"));
+	REQUIRE(!unknown_row.clauses_read);
+	QueryReading known_row(con, ReadQuery("x(INT)", "ABS(x - cap) <= 9", "MAXIMIZE SUM(w*x)"));
+	REQUIRE(known_row.clauses_read);
 }
 
-TEST_CASE("Direct-solve IR records the two sides of a cross product", "[decidb]") {
+TEST_CASE("The source facts hold the two sides of a cross product", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	REQUIRE_NO_FAIL(con.Query("CREATE TABLE l AS SELECT * FROM (VALUES (1, 5), (2, -3), (3, 8)) t(id, pos)"));
 	REQUIRE_NO_FAIL(con.Query("CREATE TABLE r AS SELECT * FROM (VALUES (1, 4), (2, 6)) t(id, pos)"));
 
 	SECTION("A one-side filter sits inside its side, so the cross product is complete") {
-		QueryIR query(con,
-		              "SELECT sel FROM l CROSS JOIN r WHERE l.pos > 0 DECIDE sel(BOOL) SUCH THAT per l: "
-		              "SUM(sel) BY (l) = 1 AND per r: SUM(sel) BY (r) = 1 MINIMIZE SUM(POWER(l.pos - r.pos, 2) * sel)");
-		auto &sides = query.ir.cross_product;
+		QueryReading query(
+		    con, "SELECT sel FROM l CROSS JOIN r WHERE l.pos > 0 DECIDE sel(BOOL) SUCH THAT per l: "
+		         "SUM(sel) BY (l) = 1 AND per r: SUM(sel) BY (r) = 1 MINIMIZE SUM(POWER(l.pos - r.pos, 2) * sel)");
+		DirectSourceFacts sides(*query.decide);
+		auto source_bindings = query.decide->SourceBindings();
 		// l stores (id, pos) and r stores (id, pos): each side holds exactly its own columns, left first.
 		REQUIRE(sides.left.size() == 2);
 		REQUIRE(sides.right.size() == 2);
-		REQUIRE(query.ir.source_bindings.size() == 4);
+		REQUIRE(source_bindings.size() == 4);
 		for (idx_t i = 0; i < 2; i++) {
-			REQUIRE(sides.left[i] == query.ir.source_bindings[i]);
-			REQUIRE(sides.right[i] == query.ir.source_bindings[2 + i]);
+			REQUIRE(sides.left[i] == source_bindings[i]);
+			REQUIRE(sides.right[i] == source_bindings[2 + i]);
 		}
 	}
 
 	SECTION("A filter across both sides makes a join, which leaves both empty") {
-		QueryIR query(con,
-		              "SELECT sel FROM l CROSS JOIN r WHERE l.pos < r.pos DECIDE sel(BOOL) SUCH THAT per l: "
-		              "SUM(sel) BY (l) = 1 AND per r: SUM(sel) BY (r) = 1 MINIMIZE SUM(POWER(l.pos - r.pos, 2) * sel)");
-		REQUIRE(query.ir.cross_product.left.empty());
-		REQUIRE(query.ir.cross_product.right.empty());
+		QueryReading query(
+		    con, "SELECT sel FROM l CROSS JOIN r WHERE l.pos < r.pos DECIDE sel(BOOL) SUCH THAT per l: "
+		         "SUM(sel) BY (l) = 1 AND per r: SUM(sel) BY (r) = 1 MINIMIZE SUM(POWER(l.pos - r.pos, 2) * sel)");
+		DirectSourceFacts sides(*query.decide);
+		REQUIRE(sides.left.empty());
+		REQUIRE(sides.right.empty());
 	}
 
 	SECTION("A single table has no sides") {
-		QueryIR query(
+		QueryReading query(
 		    con, "SELECT sel FROM l DECIDE sel(BOOL) SUCH THAT per l: SUM(sel) BY (l) = 1 MINIMIZE SUM(pos * sel)");
-		REQUIRE(query.ir.cross_product.left.empty());
-		REQUIRE(query.ir.cross_product.right.empty());
+		DirectSourceFacts sides(*query.decide);
+		REQUIRE(sides.left.empty());
+		REQUIRE(sides.right.empty());
 	}
 }
 
-TEST_CASE("Direct-solve IR records the keys of the tables the source scans", "[decidb]") {
+TEST_CASE("The source facts hold the keys of the tables the source scans", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	// The source columns of k, in order, are a, b, c, d, e, f. The keys are (a, b), the primary key; d; and (d, f).
@@ -818,9 +778,9 @@ TEST_CASE("Direct-solve IR records the keys of the tables the source scans", "[d
 		return result;
 	};
 	auto read = [&](const string &source) {
-		QueryIR query(con,
-		              "SELECT * FROM (FROM " + source + " DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(x)) q");
-		return query.ir.keys;
+		QueryReading query(con, "SELECT * FROM (FROM " + source +
+		                            " DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(x)) q");
+		return DirectSourceFacts(*query.decide).keys;
 	};
 
 	SECTION("A key is a UNIQUE or PRIMARY KEY constraint whose columns are all NOT NULL") {
@@ -853,7 +813,7 @@ TEST_CASE("Direct-solve IR records the keys of the tables the source scans", "[d
 TEST_CASE("A clause keeps the shape and the direction bound reduction read", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	QueryIR query(con, IRQuery("x(INT)", "sum(x) <= 5", "MAXIMIZE sum(x)"));
+	QueryReading query(con, ReadQuery("x(INT)", "sum(x) <= 5", "MAXIMIZE sum(x)"));
 	auto &clause = query.decide->bound.clauses[0];
 	REQUIRE(clause.shape == CanonicalConstraintClass::AGGREGATE);
 	REQUIRE(clause.body->type == ExpressionType::COMPARE_LESSTHANOREQUALTO);

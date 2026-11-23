@@ -29,8 +29,13 @@ bool DirectIsDecisionFreeDeterministic(const Expression &expr, idx_t decide_inde
 	// The binder refuses a volatile function in a clause (RefuseVolatile). The consistency test still declines one that
 	// is constant only within a query (`now()`, `txid_current()`), which a rule does not prove safe to evaluate in its
 	// plan.
-	if (BoundExpressionReferencesDecide(expr, decide_index) || !expr.IsConsistent() || expr.HasSubquery() ||
-	    expr.HasParameter() || expr.IsAggregate() || expr.IsWindow()) {
+	if (BoundExpressionReferencesDecide(expr, decide_index) || !expr.IsConsistent() || expr.HasParameter() ||
+	    expr.IsAggregate() || expr.IsWindow()) {
+		return false;
+	}
+	// A frame selector reads the row its position selects on a timeline (language/guide.md §5.6), which the operator
+	// computes: it is no value of the source row.
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_FRAME) {
 		return false;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
@@ -146,8 +151,7 @@ bool DirectIsSourceOnlyNumericMayRaise(const Expression &expr, idx_t decide_inde
 }
 
 bool DirectIsSourceOnlyValue(const Expression &expr, idx_t decide_index, const vector<ColumnBinding> &source_bindings) {
-	return (expr.return_type.IsNumeric() || expr.return_type == LogicalType::BOOLEAN) &&
-	       DirectIsDecisionFreeDeterministic(expr, decide_index) && DirectReferencesOnlySource(expr, source_bindings);
+	return DirectIsDecisionFreeDeterministic(expr, decide_index) && DirectReferencesOnlySource(expr, source_bindings);
 }
 
 bool DirectIsWholeNumbered(DirectDomain domain) {
@@ -191,9 +195,9 @@ double DirectMagnitudeBound(ClientContext &context, const Expression &expr) {
 	return DirectTypeMagnitude(expr.return_type);
 }
 
-bool DirectProveValue(const DirectIR &ir, const Expression &expr) {
-	return expr.return_type.IsNumeric() && DirectIsDecisionFreeDeterministic(expr, ir.decide_index) &&
-	       DirectReferencesOnlySource(expr, ir.source_bindings);
+bool DirectProveValue(const LogicalDecide &decide, const Expression &expr) {
+	return expr.return_type.IsNumeric() && DirectIsDecisionFreeDeterministic(expr, decide.decide_index) &&
+	       DirectReferencesOnlySource(expr, decide.SourceBindings());
 }
 
 } // namespace duckdb

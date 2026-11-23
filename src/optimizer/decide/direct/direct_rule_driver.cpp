@@ -23,6 +23,8 @@
 #include "duckdb/optimizer/decide/direct/direct_late_materialization.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/expression/bound_decide_null_guard_expression.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/logical_operator_visitor.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
@@ -132,14 +134,25 @@ bool DirectCanSkipSourceOutput(LogicalOperator &source, ColumnBinding binding) {
 	}
 }
 
-//! Strips the pipeline's tags from every expression of the operators above `source`. The row checks and the rule copy
-//! tagged expressions into those operators; nothing reads the tags there, and a plan prints an expression by its
-//! alias, so a tag left there would reach EXPLAIN. The source keeps its own aliases.
+//! A NULL guard read as the COALESCE or CASE it holds, so DuckDB's rewriter simplifies it as it does any other.
+void UnwrapNullGuards(unique_ptr<Expression> &expr) {
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_NULL_GUARD) {
+		expr = std::move(expr->Cast<BoundDecideNullGuardExpression>().guard);
+	}
+	ExpressionIterator::EnumerateChildren(*expr, [](unique_ptr<Expression> &child) { UnwrapNullGuards(child); });
+}
+
+//! Strips the pipeline's tags from every expression of the operators above `source`, and unwraps the NULL guards. The
+//! row checks and the rule copy tagged expressions into those operators; nothing reads the tags there, and a plan
+//! prints an expression by its alias, so a tag left there would reach EXPLAIN. The source keeps its own aliases.
 void StripTagsAbove(LogicalOperator &op, const LogicalOperator &source) {
 	if (&op == &source) {
 		return;
 	}
-	LogicalOperatorVisitor::EnumerateExpressions(op, [](unique_ptr<Expression> *expr) { DecideStripTags(**expr); });
+	LogicalOperatorVisitor::EnumerateExpressions(op, [](unique_ptr<Expression> *expr) {
+		UnwrapNullGuards(*expr);
+		DecideStripTags(**expr);
+	});
 	for (auto &child : op.children) {
 		StripTagsAbove(*child, source);
 	}
@@ -183,21 +196,6 @@ DirectSubstitute DirectBuildOverOneRead(DirectSourceReader &reader,
 	return substitute;
 }
 
-bool DirectIRIsReadable(const DirectIR &ir) {
-	if (ir.status != DirectAnalysisStatus::PROVED) {
-		return false;
-	}
-	if (ir.objective.status != DirectAnalysisStatus::PROVED || !std::isfinite(ir.objective.offset)) {
-		return false;
-	}
-	for (auto &constraint : ir.constraints) {
-		if (constraint.status != DirectAnalysisStatus::PROVED) {
-			return false;
-		}
-	}
-	return true;
-}
-
 void RegisterDirectSolve(DBConfig &config) {
 	config.AddExtensionOption(
 	    "decide_direct_solve",
@@ -213,20 +211,18 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	DecideProfileScope direct_profile("optimizer.direct.analyze");
 	auto &decide = op->Cast<LogicalDecide>();
 	D_ASSERT(decide.children.size() == 1 && decide.children[0]);
-	auto ir = DirectIR::Read(optimizer.context, decide);
 	auto &source = *decide.children[0];
-	// An IR the front end could not read is offered to no rule, which leaves the node as a query no rule applies to.
-	auto rules = DirectIRIsReadable(ir) ? RulesFor(optimizer.context) : vector<unique_ptr<DirectSolveRule>>();
+	auto rules = RulesFor(optimizer.context);
 	optional_ptr<const DirectSolveRule> selected;
 	unique_ptr<DirectApplicabilityCondition> condition;
 	for (auto &rule : rules) {
 		if (selected) {
-			// Rules tell queries apart by the IR they require, so a second rule that applies is a bug in the rules,
+			// Rules tell queries apart by the shape they require, so a second rule that applies is a bug in the rules,
 			// which a debug build catches here. A release build takes the first rule that applies.
-			D_ASSERT(!rule->CheckCondition(ir, optimizer.context));
+			D_ASSERT(!rule->CheckCondition(decide, optimizer.context));
 			continue;
 		}
-		condition = rule->CheckCondition(ir, optimizer.context);
+		condition = rule->CheckCondition(decide, optimizer.context);
 		if (condition) {
 			selected = rule.get();
 		}
@@ -266,10 +262,11 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	// its copy decision once, from the real total. The bounds join every read, and the checks gate every read the rule
 	// takes.
 	DirectSourceReader reader(optimizer, std::move(decide.children[0]),
-	                          condition->source_reads + decide.bound.bound_aggregates.size() + ir.row_checks.size(),
+	                          condition->source_reads + decide.bound.bound_aggregates.size() +
+	                              decide.value_checks.size(),
 	                          late_materialization.stored_columns);
 	DirectAddBoundTables(optimizer, reader, decide);
-	DirectAddRowChecks(optimizer, reader, ir.row_checks);
+	DirectAddRowChecks(optimizer, reader, decide.value_checks);
 	auto substitute = selected->Apply(reader, optimizer, *condition);
 	// A rule passes every column of its read along: the node's source columns, then the source row id and the bounds'
 	// values. The node's outputs have neither of the last, so the adapter is not told of them.

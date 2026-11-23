@@ -172,11 +172,11 @@ bool IsIn(const vector<ColumnBinding> &columns, ColumnBinding binding) {
 
 //! Whether the side's key fixes `position` on every row of a class: it is a column of the key, or the key holds a key
 //! of the position's table.
-bool Determines(const DirectIR &ir, const Side &side, ColumnBinding position) {
+bool Determines(const DirectSourceFacts &source, const Side &side, ColumnBinding position) {
 	if (IsIn(side.key, position)) {
 		return true;
 	}
-	for (auto &table_key : ir.keys) {
+	for (auto &table_key : source.keys) {
 		if (table_key[0].table_index == position.table_index &&
 		    std::all_of(table_key.begin(), table_key.end(), [&](ColumnBinding at) { return IsIn(side.key, at); })) {
 			return true;
@@ -190,21 +190,26 @@ public:
 	const char *Name() const override {
 		return RULE_NAME;
 	}
-	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
-		if (ir.cross_product.left.empty() || !DirectIsOneRowDecision(ir, DirectDomain::BOOL) ||
-		    ir.constraints.size() != 2) {
+	unique_ptr<DirectApplicabilityCondition> CheckCondition(const LogicalDecide &decide,
+	                                                        ClientContext &context) const override {
+		vector<DirectClause> clauses;
+		DirectObjective objective;
+		DirectSourceFacts source(decide);
+		if (source.left.empty() || !DirectIsOneRowDecision(decide, DirectDomain::BOOL) ||
+		    decide.bound.clauses.size() != 2 || !DirectReadClauses(context, decide, clauses) ||
+		    !DirectReadObjective(context, decide, objective)) {
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();
 		Side first, second;
 		bool first_on_left, second_on_left;
-		if (!ProveClause(ir, context, ir.constraints[0], first, first_on_left) ||
-		    !ProveClause(ir, context, ir.constraints[1], second, second_on_left) || first_on_left == second_on_left) {
+		if (!ProveClause(source, context, clauses[0], first, first_on_left) ||
+		    !ProveClause(source, context, clauses[1], second, second_on_left) || first_on_left == second_on_left) {
 			return nullptr;
 		}
 		condition->left = std::move(first_on_left ? first : second);
 		condition->right = std::move(first_on_left ? second : first);
-		if (!ProveCost(ir, context, *condition)) {
+		if (!ProveCost(decide, source, objective, context, *condition)) {
 			return nullptr;
 		}
 		// The source's rows are read once: by the pairs (each side reads its own rows).
@@ -219,20 +224,21 @@ public:
 	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
-	bool ProveClause(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &clause, Side &side,
+	bool ProveClause(const DirectSourceFacts &source, ClientContext &context, const DirectClause &clause, Side &side,
 	                 bool &on_left) const;
-	bool ProveCost(const DirectIR &ir, ClientContext &context, Condition &condition) const;
+	bool ProveCost(const LogicalDecide &decide, const DirectSourceFacts &source, const DirectObjective &objective,
+	               ClientContext &context, Condition &condition) const;
 };
 
 //! A clause `per K: SUM(x) by (K) = 1`, where K is a relation key (a NULL is a value of its own) whose columns all come
 //! from one side of the cross product. `on_left` says which.
-bool Rule::ProveClause(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &clause, Side &side,
+bool Rule::ProveClause(const DirectSourceFacts &source, ClientContext &context, const DirectClause &clause, Side &side,
                        bool &on_left) const {
 	double one;
 	bool plain_sum;
 	auto when = clause.Membership(plain_sum);
-	if (!clause.per_class || clause.classes.empty() || clause.comparison != ExpressionType::COMPARE_EQUAL ||
-	    !FoldsTo(context, *clause.rhs, one) || one != 1.0 || !plain_sum || when) {
+	if (!clause.PerClass() || clause.classes.empty() || clause.Comparison() != ExpressionType::COMPARE_EQUAL ||
+	    !FoldsTo(context, clause.Rhs(), one) || one != 1.0 || !plain_sum || when) {
 		return false;
 	}
 	auto &sum = clause.lhs[0];
@@ -248,11 +254,10 @@ bool Rule::ProveClause(const DirectIR &ir, ClientContext &context, const DirectI
 		}
 		auto binding = element.grouping->Cast<BoundColumnRefExpression>().binding;
 		// A column of the key that may be NULL puts a row in no class, which the plan does not model.
-		if (element.no_group && !IsIn(ir.not_null, binding)) {
+		if (element.no_group && !IsIn(source.not_null, binding)) {
 			return false;
 		}
-		auto in_left = std::find(ir.cross_product.left.begin(), ir.cross_product.left.end(), binding) !=
-		               ir.cross_product.left.end();
+		auto in_left = IsIn(source.left, binding);
 		if (i > 0 && in_left != on_left) {
 			return false;
 		}
@@ -265,14 +270,14 @@ bool Rule::ProveClause(const DirectIR &ir, ClientContext &context, const DirectI
 
 //! The objective: one `SUM(k * cost * x)`, with the cost a distance minimized or a product of one position of each
 //! side. Records the position columns and the rank direction.
-bool Rule::ProveCost(const DirectIR &ir, ClientContext &context, Condition &condition) const {
-	auto &objective = ir.objective;
-	if (objective.parts.size() != 1 || objective.scope.when) {
+bool Rule::ProveCost(const LogicalDecide &decide, const DirectSourceFacts &source, const DirectObjective &objective,
+                     ClientContext &context, Condition &condition) const {
+	if (objective.parts.size() != 1 || decide.bound.objective.scope.when) {
 		return false;
 	}
 	auto &part = objective.parts[0];
 	if (!part.IsPlainSum() || part.filter || part.terms.size() != 1 || !part.terms[0].IsLinear() ||
-	    !DirectReadLinearPart(ir, context, part, objective.written, condition.cost)) {
+	    !DirectReadLinearPart(decide, context, part, objective.written, condition.cost)) {
 		return false;
 	}
 	auto &cost = condition.cost;
@@ -292,14 +297,14 @@ bool Rule::ProveCost(const DirectIR &ir, ClientContext &context, Condition &cond
 		left.position_type = of_left.return_type;
 		right.position = of_right.binding;
 		right.position_type = of_right.return_type;
-		return Determines(ir, left, left.position) && Determines(ir, right, right.position);
+		return Determines(source, left, left.position) && Determines(source, right, right.position);
 	};
 	if (!place(*a, *b) && !place(*b, *a)) {
 		return false;
 	}
 	// A NULL position costs nothing against any partner, which the order of the positions cannot place: the plan must
 	// know that no position is NULL.
-	if (!IsIn(ir.not_null, condition.left.position) || !IsIn(ir.not_null, condition.right.position)) {
+	if (!IsIn(source.not_null, condition.left.position) || !IsIn(source.not_null, condition.right.position)) {
 		return false;
 	}
 	// The cost is minimized. A distance of negative weight is a maximized distance, which no ranking gives.

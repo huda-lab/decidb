@@ -156,7 +156,9 @@ enum class ExpressionType : uint8_t {
 	// DeciDB: a reducer of a DECIDE clause
 	BOUND_DECIDE_REDUCER = 236,
 	// DeciDB: a frame of a DECIDE clause
-	BOUND_DECIDE_FRAME = 237
+	BOUND_DECIDE_FRAME = 237,
+	// DeciDB: a coefficient read as 0 on the rows a SUM skips
+	BOUND_DECIDE_NULL_GUARD = 238
 };
 
 //===--------------------------------------------------------------------===//
@@ -217,6 +219,8 @@ enum class ExpressionClass : uint8_t {
 	BOUND_DECIDE_REDUCER = 44,
 	// DeciDB: a frame of a DECIDE clause (BoundDecideFrameExpression)
 	BOUND_DECIDE_FRAME = 45,
+	// DeciDB: a coefficient read as 0 on the rows a SUM skips (BoundDecideNullGuardExpression)
+	BOUND_DECIDE_NULL_GUARD = 46,
 	//===--------------------------------------------------------------------===//
 	// Miscellaneous
 	//===--------------------------------------------------------------------===//

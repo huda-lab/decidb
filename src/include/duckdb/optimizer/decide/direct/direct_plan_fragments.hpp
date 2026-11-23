@@ -363,9 +363,9 @@ ExprPtr DirectInclusiveRowsExpr(const ExpressionBuilder &calc, ExpressionType co
 ExprPtr DirectGroupCountLimitRows(const ExpressionBuilder &calc, Optimizer &optimizer, const DirectCountLimit &count,
                                   bool upper, const ExprPtr &value);
 
-//! `function` (a BoundDecideReducerExpression with no argument) as the aggregate itself, reading `arguments` (each argument
-//! the reducer binds, a collated MIN or MAX's included; none for COUNT(*)) on the rows where `reads` holds (null for
-//! every row).
+//! `function` (a BoundDecideReducerExpression with no argument) as the aggregate itself, reading `arguments` (each
+//! argument the reducer binds, a collated MIN or MAX's included; none for COUNT(*)) on the rows where `reads` holds
+//! (null for every row).
 unique_ptr<Expression> DirectAggregateOf(const Expression &function, vector<unique_ptr<Expression>> arguments,
                                          unique_ptr<Expression> reads);
 
@@ -390,7 +390,7 @@ struct DirectSharedScope {
 
 //! Reads one clause's scope: the same plain SUM scope (`Membership`), `by` key and `per` key, and a `when` and keys a
 //! plan can compute for each row (no decision, nothing volatile, no subquery). False when the clause reads no scope.
-bool DirectReadScope(const DirectIR &ir, const DirectIRConstraint &clause, DirectSharedScope &scope);
+bool DirectReadScope(const LogicalDecide &decide, const DirectClause &clause, DirectSharedScope &scope);
 
 //! Whether two scopes cover the same rows in the same groups: an equal `when` or none on both, `by` and `per` keys
 //! that group alike (DirectSameKey), and both written `per` or neither.
@@ -398,7 +398,7 @@ bool DirectSameScope(const DirectSharedScope &a, const DirectSharedScope &b);
 
 //! Proves that every clause covers the same rows in the same groups and reads the scope: each clause's scope
 //! (DirectReadScope), all of them the same (DirectSameScope). False when one is unread or they differ.
-bool DirectProveSharedScope(const DirectIR &ir, const vector<const DirectIRConstraint *> &clauses,
+bool DirectProveSharedScope(const LogicalDecide &decide, const vector<const DirectClause *> &clauses,
                             DirectSharedScope &scope);
 
 //! Appends to `input` a column that is true when some row `when` keeps in the row's group of `groups` has a class of
@@ -504,9 +504,9 @@ struct DirectLinearScore {
 	//! The objective, which the score names once every share is fine and their sum is not.
 	DecideClauseRef objective_written;
 
-	//! Reads the objective of `ir` as a signed sum of `SUM(coefficient * x)` terms; false when it is not one. Each
+	//! Reads `objective` as a signed sum of `SUM(coefficient * x)` terms; false when it is not one. Each
 	//! coefficient must be evaluable per source row.
-	bool Prove(const DirectIR &ir, ClientContext &context);
+	bool Prove(const LogicalDecide &decide, const DirectObjective &objective, ClientContext &context);
 
 	//! Whether the score of a row can fail: the terms, with their factors, are bounded by a sum below the range of a
 	//! DOUBLE only if none can.

@@ -51,6 +51,9 @@ unique_ptr<Expression> Expression::Deserialize(Deserializer &deserializer) {
 	case ExpressionClass::BOUND_DECIDE_FRAME:
 		result = BoundDecideFrameExpression::Deserialize(deserializer);
 		break;
+	case ExpressionClass::BOUND_DECIDE_NULL_GUARD:
+		result = BoundDecideNullGuardExpression::Deserialize(deserializer);
+		break;
 	case ExpressionClass::BOUND_DECIDE_NULL_TEST:
 		result = BoundDecideNullTestExpression::Deserialize(deserializer);
 		break;
@@ -204,6 +207,17 @@ unique_ptr<Expression> BoundDecideFrameExpression::Deserialize(Deserializer &des
 	auto frame = deserializer.ReadPropertyWithDefault<idx_t>(201, "frame");
 	auto children = deserializer.ReadPropertyWithDefault<vector<unique_ptr<Expression>>>(202, "children");
 	auto result = duckdb::unique_ptr<BoundDecideFrameExpression>(new BoundDecideFrameExpression(std::move(return_type), frame, std::move(children)));
+	return std::move(result);
+}
+
+void BoundDecideNullGuardExpression::Serialize(Serializer &serializer) const {
+	Expression::Serialize(serializer);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(200, "guard", guard);
+}
+
+unique_ptr<Expression> BoundDecideNullGuardExpression::Deserialize(Deserializer &deserializer) {
+	auto guard = deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(200, "guard");
+	auto result = duckdb::unique_ptr<BoundDecideNullGuardExpression>(new BoundDecideNullGuardExpression(std::move(guard)));
 	return std::move(result);
 }
 

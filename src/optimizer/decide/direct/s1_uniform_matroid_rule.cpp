@@ -28,10 +28,6 @@ namespace direct_s1_uniform_matroid {
 constexpr const char *RULE_NAME = "S1_UNIFORM_MATROID";
 
 struct Condition final : DirectApplicabilityCondition {
-	//! The constraints of the IR, which outlives the condition: the count bounds, and the fixed Boolean values.
-	vector<const DirectIRConstraint *> bound_factors;
-	vector<const DirectIRConstraint *> local_fixes;
-
 	idx_t lower = 0;
 	idx_t upper = 0;
 	bool has_upper = false;
@@ -53,18 +49,20 @@ public:
 	const char *Name() const override {
 		return RULE_NAME;
 	}
-	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
-		if (!DirectIsOneRowDecision(ir, DirectDomain::BOOL)) {
+	unique_ptr<DirectApplicabilityCondition> CheckCondition(const LogicalDecide &decide,
+	                                                        ClientContext &context) const override {
+		vector<DirectClause> clauses;
+		DirectObjective objective;
+		vector<const DirectClause *> fixes, bounds;
+		if (!DirectIsOneRowDecision(decide, DirectDomain::BOOL) || !DirectReadClauses(context, decide, clauses) ||
+		    !DirectReadObjective(context, decide, objective) || !DirectSplitFixes(clauses, fixes, bounds) ||
+		    bounds.empty()) {
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();
-		if (!DirectSplitFixes(ir, condition->local_fixes, condition->bound_factors) ||
-		    condition->bound_factors.empty()) {
-			return nullptr;
-		}
-		if (!ProveScope(ir, *condition) ||
-		    !DirectReadFixedValues(ir, context, condition->local_fixes, condition->fixed) ||
-		    !ProveBounds(ir, context, *condition) || !condition->score.Prove(ir, context)) {
+		if (!DirectProveSharedScope(decide, bounds, condition->scope) ||
+		    !DirectReadFixedValues(decide, clauses, context, fixes, condition->fixed) ||
+		    !ProveBounds(decide, context, bounds, *condition) || !condition->score.Prove(decide, objective, context)) {
 			return nullptr;
 		}
 		return std::move(condition);
@@ -76,27 +74,20 @@ public:
 	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
-	bool ProveScope(const DirectIR &ir, Condition &condition) const;
-	bool ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition) const;
+	bool ProveBounds(const LogicalDecide &decide, ClientContext &context, const vector<const DirectClause *> &bounds,
+	                 Condition &condition) const;
 };
-
-//! Every bound counts the same rows: one `SUM(x)` per bound with the same group keys and the same `when` membership.
-//! Records the group keys (the `by` key of the `SUM(x)`s, and the `per` key of the clauses) and the membership the plan
-//! scopes by. A row whose `by` key is NULL is in no group (D5): the plan ranks it apart from every group, and a `when`
-//! that drops a row does the same.
-bool Rule::ProveScope(const DirectIR &ir, Condition &condition) const {
-	return DirectProveSharedScope(ir, condition.bound_factors, condition.scope);
-}
 
 //! The count bounds: constant ones fold into one inclusive interval, source-valued ones are kept for the plan to
 //! read per group. Every bound counts `x` once, as `x` or `-x` (DirectReadCountBody), and bounds the count from one
 //! side or both (a `<>` is a decline).
-bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition) const {
-	for (auto factor : condition.bound_factors) {
+bool Rule::ProveBounds(const LogicalDecide &decide, ClientContext &context, const vector<const DirectClause *> &bounds,
+                       Condition &condition) const {
+	for (auto factor : bounds) {
 		bool negated;
 		DirectCountLimit count;
 		if (!DirectReadCountBody(context, factor->PlainSum()->terms, negated) ||
-		    !DirectReadCountLimit(ir, context, *factor, negated, count) ||
+		    !DirectReadCountLimit(decide, context, *factor, negated, count) ||
 		    (!DecideIsLowerBound(count.comparison) && !DecideIsUpperBound(count.comparison))) {
 			return false;
 		}

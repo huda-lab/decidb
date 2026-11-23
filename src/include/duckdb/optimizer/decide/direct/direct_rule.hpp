@@ -23,35 +23,20 @@ class LogicalDecide;
 class LogicalOperator;
 class Optimizer;
 
-//! NOT_PROVED means the front end cannot certify this IR node; a rule must decline it.
-enum class DirectAnalysisStatus : uint8_t { PROVED, NOT_PROVED };
-
 //===--------------------------------------------------------------------===//
-// Intermediate representation
+// What a rule reads
 //===--------------------------------------------------------------------===//
 //
-// What a rule may know about a DECIDE problem, read once from the bound, canonical
-// tree before any DECIDE rewrite (see context/docs/direct_solve/architecture/
-// ir.md). The front end is the only code that knows LogicalDecide's layout and the
-// bound-tree spelling of DECIDE constructs; rules read meaning. Data-valued expressions
-// (coefficients, bounds, `when` conditions) stay DuckDB expressions over the source.
-// The IR owns everything it holds. Anything the front end cannot model is NOT_PROVED,
-// per constraint and per objective part.
+// A rule reads the bound DECIDE operator before any DECIDE rewrite (context/docs/direct_solve/architecture/ir.md): the
+// decisions, the keys and each clause's scope are its fields. Two readings are made on demand by the rule that wants
+// them, with the solver path's own term splitter and bound classifier: a clause's left side and the objective as
+// additive parts (DirectReadClauses, DirectReadObjective). Data-valued expressions (coefficients, bounds, `when`
+// conditions) stay DuckDB expressions over the source. A reader returns false for a clause no rule's plan reads.
 
 enum class DirectDomain : uint8_t { BOOL, INT, REAL };
 
-struct DirectIRDecision {
-	//! The name the user declared, as the solver quotes it.
-	string name;
-	//! Where it is declared, which an error about the decision points at (LogicalDecide::variable_scopes).
-	optional_idx declaration;
-	DirectDomain domain;
-	//! The SQL type of the decision's output column (INTEGER for BOOL, BIGINT for INT, DOUBLE for REAL).
-	LogicalType output_type;
-	DecideVarScope scope;
-	//! Index into DirectIR::keyed_scopes for a KEYED decision.
-	idx_t keyed_scope = DConstants::INVALID_INDEX;
-};
+//! The domain of the declared decision `decision`.
+DirectDomain DirectDomainOf(const LogicalDecide &decide, idx_t decision);
 
 //! One element of a grouping key: the expression rows group on (`DecideKeyElement::Grouping()`, the collated one) and
 //! the expression a message quotes (`DecideKeyElement::expression`).
@@ -72,14 +57,6 @@ struct DirectKeyElement {
 		copy.no_group = no_group;
 		return copy;
 	}
-};
-
-//! A relation whose tuples carry one identity: a table-scoped declaration (`T.x`) or a reducer qualifier
-//! (`sum(per D: e)`).
-struct DirectIRKeyedScope {
-	//! The identity key, one element per column: a column element has no class on a NULL, a column a relation element
-	//! stands for takes NULL as a value (`DirectKeyElement::no_group`).
-	vector<DirectKeyElement> key;
 };
 
 //! Whether every expression of `a` is one of `b`'s: the groups of `b` are no coarser than `a`'s. A key is a set of
@@ -105,7 +82,6 @@ inline bool DirectSameKey(const vector<DirectKeyElement> &a, const vector<Direct
 
 //! One additive part of a constraint's left side or of the objective: `sign * scale * reducer(terms)`.
 struct DirectPart {
-	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
 	int sign = 1;
 	//! A query-wide factor canonicalization left on the reducer; null for none.
 	unique_ptr<Expression> scale;
@@ -120,35 +96,31 @@ struct DirectPart {
 	vector<DirectKeyElement> by;
 	//! The reducer's own `when` (`sum(when c: x)`).
 	unique_ptr<Expression> filter;
-	//! Keyed scope the reducer is qualified by (`sum(per D: e)`), or INVALID_INDEX.
+	//! Keyed scope the reducer is qualified by (`sum(per D: e)`, BoundDecide::keyed_scopes), or INVALID_INDEX.
 	idx_t qualifier = DConstants::INVALID_INDEX;
 	//! The body's terms.
 	vector<DecideSplitTerm> terms;
 
 	//! Whether the part is a plain `SUM(...)` of the objective: the SUM reducer, not qualified by a keyed scope. Its
-	//! sign, factor and filter are the rule's to read. An objective part has no `by` key: the front end refuses an
-	//! objective with one, which is produced once (D72).
+	//! sign, factor and filter are the rule's to read. An objective part has no `by` key: DirectReadObjective refuses
+	//! an objective with one, which is produced once (D72).
 	bool IsPlainSum() const {
 		return reduced && reducer == DecideReducerKind::SUM && qualifier == DConstants::INVALID_INDEX;
 	}
 };
 
-//! Which rows a constraint or objective applies to: a row whose `when` is false or NULL does not join.
-struct DirectIRScope {
-	unique_ptr<Expression> when;
-};
+//! One SUCH THAT clause as a rule reads it: the bound clause, with the reading of its left side and of the bound it
+//! puts on one decision.
+struct DirectClause {
+	explicit DirectClause(const BoundDecideClause &clause_p) : clause(clause_p) {
+	}
 
-struct DirectIRConstraint {
-	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
+	const BoundDecideClause &clause;
 	//! The clause as a message refers to it, as the solver path does: a number the plan computes past a DOUBLE points
 	//! at its clause (DecideValueRole::TOO_LARGE).
 	DecideClauseRef written;
-	//! True for a reduced constraint, false for one constraint per row.
-	bool aggregate = false;
-	//! COMPARE_LESSTHANOREQUALTO ... COMPARE_NOTEQUAL, or COMPARE_IN for a membership `x IN (v, ...)`.
-	ExpressionType comparison = ExpressionType::INVALID;
+	//! The left side: the parts of a reduced constraint, or one row-level part.
 	vector<DirectPart> lhs;
-	unique_ptr<Expression> rhs;
 	//! True when the comparison is a bound on one decision, read into `bound` by the solver path's own classifier
 	//! (DecideReadSingletonRow): the values it admits, on each row it keeps.
 	bool singleton_row = false;
@@ -158,12 +130,29 @@ struct DirectIRConstraint {
 	//! intersects with it (D41), except a constant floor under a `when`, which replaces it on the rows the
 	//! `when` keeps (DecideSingletonRow::LiftsDefaultFloor).
 	bool variable_bound = false;
-	DirectIRScope scope;
-	//! The clause is written `per K: C` (D6): one constraint per class of K, each bounding the whole total. `classes`
-	//! is K; a row whose K has a NULL in a NO_GROUP element is in no class, and with no class at all the clause has no
-	//! instance. Empty for `per ()`.
-	bool per_class = false;
+	//! The key of a clause written `per K: C` (D6): one constraint per class of K, each bounding the whole total. A row
+	//! whose K has a NULL in a NO_GROUP element is in no class, and with no class at all the clause has no instance.
+	//! Empty for `per ()`.
 	vector<DirectKeyElement> classes;
+
+	//! True for a reduced constraint, false for one constraint per row.
+	bool Aggregate() const {
+		return clause.shape == CanonicalConstraintClass::AGGREGATE;
+	}
+	//! COMPARE_LESSTHANOREQUALTO ... COMPARE_NOTEQUAL, or COMPARE_IN for a membership `x IN (v, ...)`.
+	ExpressionType Comparison() const {
+		return clause.body->type;
+	}
+	//! The right side of a comparison.
+	const Expression &Rhs() const;
+	//! The clause's `when`: a row where it is false or NULL does not join. Null for none.
+	const Expression *When() const {
+		return clause.scope.when.get();
+	}
+	//! Whether the clause is written `per K: C`.
+	bool PerClass() const {
+		return clause.scope.HasPer();
+	}
 
 	//! The reduced left side when it is one plain `SUM(...)`: unsigned, unscaled, unqualified, not nested; null
 	//! otherwise. Its own `when`, if any, is the returned part's `filter`.
@@ -174,38 +163,42 @@ struct DirectIRConstraint {
 	unique_ptr<Expression> Membership(bool &ok) const;
 };
 
-struct DirectIRObjective {
-	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
-	//! Decision-free additive constant canonicalization folded out of the objective. The parts below are a
-	//! minimization, so both are of the objective negated when the query was written MAXIMIZE.
-	double offset = 0;
+//! Reads every clause of the query. False when one is a clause no rule's plan reads: a clause the query text holds no
+//! place for, a comparison on a reducer's value, a term that is neither linear nor an ABS, an L0 norm, a key that
+//! reads more than the source, a `per` on a constraint per row, or a reducer's own `per` whose classes split by the
+//! variants of its body (KeyedScopeInfo::signature).
+bool DirectReadClauses(ClientContext &context, const LogicalDecide &decide, vector<DirectClause> &clauses);
+
+//! The objective as a rule reads it. The parts are a minimization: of the objective negated when the query was
+//! written MAXIMIZE, as BoundDecide::objective_constant_offset is.
+struct DirectObjective {
 	//! The objective as a message refers to it, as the solver path does.
 	DecideClauseRef written;
 	vector<DirectPart> parts;
-	DirectIRScope scope;
 };
 
-//! The two sides of a source that is a complete cross product: every row of one side meets every row of the other. Both
-//! are empty when the source is not a cross product.
-struct DirectIRCrossProduct {
+//! Reads the objective; no parts for a query with none. False when a part is one no rule's plan reads (as for a
+//! clause), a reducer holds a reducer (D81), the objective has variants (D72), or its constant offset is not finite.
+bool DirectReadObjective(ClientContext &context, const LogicalDecide &decide, DirectObjective &objective);
+
+//! The key `key` (BoundDecide::keys) as a plan reads it; no element for the empty key. False when it reads more than
+//! the source.
+bool DirectReadKey(const LogicalDecide &decide, idx_t key, vector<DirectKeyElement> &elements);
+
+//! An expression of the source as the user wrote it, for a message that names a value (RenderDecideSource).
+string DirectRender(const LogicalDecide &decide, const Expression &expr);
+//! Where an expression of the source stands in the query, as the error that names it points (invalid for one the
+//! query text holds no place for).
+optional_idx DirectPlace(const LogicalDecide &decide, const Expression &expr);
+
+//! What the plan below the DECIDE node declares, read by the rule that wants it (O1).
+struct DirectSourceFacts {
+	explicit DirectSourceFacts(const LogicalDecide &decide);
+
+	//! The two sides of a source that is a complete cross product: every row of one side meets every row of the other.
+	//! Only DECIDE's own child counts: a projection, filter or join between them leaves both empty.
 	vector<ColumnBinding> left;
 	vector<ColumnBinding> right;
-};
-
-struct DirectIR {
-	static DirectIR Read(ClientContext &context, LogicalDecide &decide);
-
-	//! Prints an expression of the source as the user wrote it, for a message that names a value (RenderDecideSource).
-	//! It reads the DECIDE node the IR was read from, which outlives the IR.
-	std::function<string(const Expression &)> render;
-	//! Where an expression of the source stands in the query, as the error that names it points (invalid for one the
-	//! query text holds no place for).
-	std::function<optional_idx(const Expression &)> place;
-	idx_t decide_index;
-	vector<DirectIRDecision> decisions;
-	vector<DirectIRKeyedScope> keyed_scopes;
-	vector<ColumnBinding> source_bindings;
-	DirectIRCrossProduct cross_product;
 	//! The source bindings of a directly scanned table's columns that the table declares NOT NULL.
 	vector<ColumnBinding> not_null;
 	//! The keys of the directly scanned tables, each as the source bindings of its columns: a UNIQUE constraint (the
@@ -213,14 +206,11 @@ struct DirectIR {
 	//! never agree on a key as DuckDB's index compares them; that comparison ignores a column's collation, so a rule
 	//! that groups by a key must also check that its grouping applies none.
 	vector<vector<ColumnBinding>> keys;
-	vector<DirectIRConstraint> constraints;
-	DirectIRObjective objective;
-	//! The value checks (LogicalDecide::value_checks) the plan makes on the source rows, which the rule driver adds
-	//! above every rule's plan.
-	vector<unique_ptr<Expression>> row_checks;
-	//! NOT_PROVED when the DECIDE operator owes the rows a check the plan cannot make: a reducer's own `per` whose
-	//! classes split by the variants of its body (KeyedScopeInfo::signature).
-	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
+
+private:
+	//! The walk goes down through filters and cross products, which pass their children's bindings and values
+	//! through; any other operator (a projection, a join) ends it, so a binding it makes is never recorded.
+	void ReadTableFacts(const LogicalOperator &op);
 };
 
 //! Only CheckCondition can construct an applicability condition. Apply receives this
@@ -254,21 +244,15 @@ struct DirectSubstitute {
 	bool pipelined = false;
 };
 
-//! Whether the front end read the whole IR: the constraints and the objective are all proved (each constraint too),
-//! the objective offset is finite. The decisions, the keyed scopes and the source
-//! are always read in full. The rule driver offers a rule an IR only when this holds, so a rule checks only what
-//! concerns its own class.
-bool DirectIRIsReadable(const DirectIR &ir);
-
 //! The lifecycle the rule driver runs: CheckCondition, then Apply. CheckCondition checks the query's shape and then
-//! establishes what the plan relies on; when the condition does not hold it returns null and leaves the DECIDE node
-//! untouched. Summary is the one line the rule adds to the EXPLAIN annotation. Rules are disjoint: each requires
-//! IR the others forbid, so at most one applies to a query. A debug build asserts it; a release build takes the first.
+//! establishes what the plan relies on; when the condition does not hold it returns null. Summary is the one line the
+//! rule adds to the EXPLAIN annotation. Rules are disjoint: each requires a shape the others forbid, so at most one
+//! applies to a query. A debug build asserts it; a release build takes the first.
 class DirectSolveRule {
 public:
 	virtual ~DirectSolveRule() = default;
 	virtual const char *Name() const = 0;
-	virtual unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir,
+	virtual unique_ptr<DirectApplicabilityCondition> CheckCondition(const LogicalDecide &decide,
 	                                                                ClientContext &context) const = 0;
 	virtual string Summary() const = 0;
 	//! `reader` reads the DECIDE input, gated by the row checks when there are any; the rule reads the source

@@ -11,10 +11,11 @@ add_library_unity(
   direct_runtime_checks.cpp
   direct_rule_driver.cpp
   direct_expression.cpp
-  direct_ir.cpp
+  direct_clause_reader.cpp
   direct_registry.cpp
   direct_result_adapter.cpp
   direct_late_materialization.cpp
+  direct_source_facts.cpp
   direct_source_reader.cpp
   n1_euclidean_ball_rule.cpp
   o1_monge_assignment_rule.cpp

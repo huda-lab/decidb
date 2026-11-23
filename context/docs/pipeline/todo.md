@@ -28,18 +28,6 @@ every one of them:
 - **Tests** (R32): focused tests in each task's **Done when**; `make decide-test` once at the end of each queue
   group; every other suite in TREE-28.
 
-## TREE-8 — Direct rules read `BoundDecide`
-
-- **Problem.** `DirectIR` is a second representation the nine direct rules read (R17). The design is
-  `review/TREE-8-design.md`; its three open points are ruled: the NULL guard is a decorator class (R39), the decline
-  tests edit the operator and an unreachable arm goes with its case (R40), each whole-query fact is read by the
-  reader that meets it (R41).
-- **Change.** R17: each rule reads the clauses and nodes; `DirectIR` and `DirectFrontEnd` go; `NULL_GUARD_TAG` and
-  its two writers go.
-- **Needs.** TREE-20.
-- **Done when.** `DirectIR` and `NULL_GUARD_TAG` are named nowhere; `./test/decide/run_tests.sh -k "direct"` and
-  `build/release/test/unittest "[decidb]"` pass; no rule fires or declines on a query where it did the other.
-
 ## TREE-9 — The tag machinery goes
 
 - **Problem.** With no tag written, the code that finds, strips and refuses tags has no reader.
@@ -47,7 +35,6 @@ every one of them:
   parsers, `DECIDE_TAGS`), tag stripping at renders, `RebuiltAlias` and the splicing after it
   (`decide_product_form.cpp:386-415`), and the refusal of a user name that holds a tag (BIND-3,
   `decide_binder.cpp:49`) with its tests. The seven helper name prefixes stay as display names.
-- **Needs.** TREE-8.
 - **Done when.** `enums/decide.hpp` holds no tag constant; a decision named like a former tag is accepted and
   solves (`./test/decide/run_tests.sh -k "decision_name or tag"`).
 
@@ -58,7 +45,7 @@ every one of them:
   as one struct). The stage docs describe carriers by tag.
 - **Change.** design.md § 3 and § 3.5 match the code cell by cell; § 3.9's acceptance list is checked line by
   line. The stage docs (01 to 05, 08's planning part, `code_structure.md`, the glossary) describe the tree in the
-  present tense. `direct_solve/architecture/ir.md` is the readers' contract.
+  present tense.
 - **Needs.** TREE-9.
 - **Done when.** Every name design.md § 3 gives is found by `grep` in `src/`; § 3.9 holds line by line.
 

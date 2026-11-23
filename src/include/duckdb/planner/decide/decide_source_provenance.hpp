@@ -67,12 +67,12 @@ void FinalizeConstraintSourceInfo(const vector<BoundDecideClause> &clauses, vect
 string RenderDecideSource(const Expression &expr, const DecideSourceText &text,
                           const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> *keys = nullptr);
 
-//! The value a NULL guard (NULL_GUARD_TAG) protects: the first operand of a COALESCE, the THEN of a CASE. An expression
-//! that is no guard is its own value. What a guard protects is what a message names and what decides whether the value
-//! is a constant: the guard itself reads a column.
+//! The value a NULL guard (BoundDecideNullGuardExpression) protects. An expression that is no guard is its own value.
+//! What a guard protects is what a message names and what decides whether the value is a constant: the guard itself
+//! reads a column.
 const Expression &DecideUnguarded(const Expression &expr);
 
-//! Whether `expr` is a NULL guard (NULL_GUARD_TAG), so DecideUnguarded reads through it.
+//! Whether `expr` is a NULL guard, so DecideUnguarded reads through it.
 bool DecideIsGuarded(const Expression &expr);
 
 //! What a message about a clause renders with: the query's text and the registries above. A column reads as the user

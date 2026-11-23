@@ -71,7 +71,8 @@ public:
 	const char *Name() const override {
 		return name.c_str();
 	}
-	duckdb::unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &, ClientContext &) const override {
+	duckdb::unique_ptr<DirectApplicabilityCondition> CheckCondition(const LogicalDecide &,
+	                                                                ClientContext &) const override {
 		if (!applies) {
 			return nullptr;
 		}
@@ -282,24 +283,18 @@ TEST_CASE("Direct rule driver runs the rule that applies when another does not",
 	}
 }
 
-TEST_CASE("Direct rule driver offers a rule no IR the front end could not read", "[decidb]") {
+TEST_CASE("No registered rule applies to a query whose clause or objective its readers decline", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	// The stub applies to whatever it is offered, so a plan with its name proves the IR was offered to it.
-	InstallRules(con, [] {
-		RuleList rules;
-		rules.push_back(make_uniq<StubRule>("STUB_OFFERED", true, 1));
-		return rules;
-	});
 	auto query_of = [](const string &clauses) {
 		return "SELECT v, x FROM (FROM (SELECT i AS v FROM range(3) t(i)) DECIDE x(BOOL) SUCH THAT " + clauses +
 		       ") q ORDER BY v";
 	};
-	// The control: a readable IR is offered to the rule.
-	REQUIRE(ExplainText(con, query_of("SUM(x) <= 1 MAXIMIZE SUM(v*x)")).find("STUB_OFFERED") != string::npos);
+	// The control: S1 applies to the plain form.
+	REQUIRE(ExplainText(con, query_of("SUM(x) <= 1 MAXIMIZE SUM(v*x)")).find("Direct solve") != string::npos);
 
-	// Each query leaves one part of the IR unread. The first is a single constraint the front end cannot model, the
-	// second an objective it cannot model, the third a non-finite objective offset.
+	// Each query is the control with one thing a reader declines: a constraint no rule models, an objective no rule
+	// models, an objective offset that is not finite.
 	for (string clauses : {"SUM(x) <= 1 AND norm(x, 0) <= 1 MAXIMIZE SUM(v*x)", "SUM(x) <= 1 MAXIMIZE norm(x, 0, 100)",
 	                       "SUM(x) <= 1 MAXIMIZE SUM(v*x) + 'inf'::DOUBLE"}) {
 		INFO(clauses);
@@ -581,9 +576,9 @@ public:
 	const char *Name() const override {
 		return "STUB_ROW_CHECK_COUNT";
 	}
-	duckdb::unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir,
+	duckdb::unique_ptr<DirectApplicabilityCondition> CheckCondition(const LogicalDecide &decide,
 	                                                                ClientContext &) const override {
-		*count = ir.row_checks.size();
+		*count = decide.value_checks.size();
 		return nullptr;
 	}
 	string Summary() const override {

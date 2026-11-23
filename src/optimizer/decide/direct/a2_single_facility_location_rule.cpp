@@ -395,23 +395,27 @@ public:
 		return RULE_NAME;
 	}
 
-	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
-		if (ir.decisions.size() != 1 || ir.decisions[0].domain != DirectDomain::REAL ||
-		    ir.decisions[0].scope == DecideVarScope::ROW) {
+	unique_ptr<DirectApplicabilityCondition> CheckCondition(const LogicalDecide &decide,
+	                                                        ClientContext &context) const override {
+		vector<DirectClause> clauses;
+		DirectObjective objective;
+		if (decide.bound.variables.size() != 1 || DirectDomainOf(decide, 0) != DirectDomain::REAL ||
+		    decide.bound.variable_scopes[0].scope == DecideVarScope::ROW ||
+		    !DirectReadClauses(context, decide, clauses) || !DirectReadObjective(context, decide, objective)) {
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();
-		condition->written = ir.objective.written;
+		condition->written = objective.written;
 		// The class plan reads the source, and the rows read it again to be given their class's answer.
 		condition->source_reads = 2;
-		if (ir.decisions[0].scope == DecideVarScope::KEYED) {
-			// A key's columns are columns of the source (the IR reads them as a row check would), so a copy is all it
-			// takes.
-			for (auto &element : ir.keyed_scopes[ir.decisions[0].keyed_scope].key) {
-				condition->keys.push_back(element.Copy());
-			}
+		// A declaration's key is columns of the source (the binder keeps every keyed decision's key live in it).
+		auto &scope = decide.bound.variable_scopes[0];
+		if (scope.scope == DecideVarScope::KEYED &&
+		    !DirectReadKey(decide, decide.bound.keyed_scopes[scope.keyed_scope_idx].key, condition->keys)) {
+			return nullptr;
 		}
-		if (!ProveInterval(ir, context, *condition) || !ProveObjective(ir, context, *condition)) {
+		if (!ProveInterval(decide, clauses, context, *condition) ||
+		    !ProveObjective(decide, objective, context, *condition)) {
 			return nullptr;
 		}
 		return std::move(condition);
@@ -426,21 +430,24 @@ public:
 	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
-	bool ProveInterval(const DirectIR &ir, ClientContext &context, Condition &condition) const;
-	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
+	bool ProveInterval(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+	                   Condition &condition) const;
+	bool ProveObjective(const LogicalDecide &decide, const DirectObjective &objective, ClientContext &context,
+	                    Condition &condition) const;
 };
 
 //! Every constraint is a bound on `c`. The solver folds the ones known before the query runs into the decision's box,
 //! and the rest, read from the data or under a `when`, bind the same decision on each row they keep, so a class's
 //! interval is their intersection. An empty interval is not declined: the plan raises the solver's infeasible error.
-bool Rule::ProveInterval(const DirectIR &ir, ClientContext &context, Condition &condition) const {
-	for (auto &ir_node : ir.constraints) {
+bool Rule::ProveInterval(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+                         Condition &condition) const {
+	for (auto &ir_node : clauses) {
 		if (!ir_node.singleton_row) {
 			return false;
 		}
 	}
 	DirectBoundReading reading;
-	if (!DirectReadBounds(ir, context, reading)) {
+	if (!DirectReadBounds(decide, clauses, context, reading)) {
 		return false;
 	}
 	condition.lower = reading.boxes[0].lower;
@@ -464,9 +471,10 @@ static bool SquareIsConvex(ClientContext &context, const DirectQuadraticPart &pa
 //! One plain `SUM` of one square, and nothing else: no linear term, no per-row constant. The square's slope folds to a
 //! nonzero constant, and its weight is a constant that makes it convex (SquareIsConvex) or a value read from the data.
 //! The rows it reads (the objective's `when` and the part's own) are the part's `kept`.
-static unique_ptr<Loss> ProveSquare(const DirectIR &ir, ClientContext &context, const DirectPart &part_ir) {
+static unique_ptr<Loss> ProveSquare(const LogicalDecide &decide, const DirectObjective &objective,
+                                    ClientContext &context, const DirectPart &part_ir) {
 	DirectQuadraticPart part;
-	if (!part_ir.IsPlainSum() || !DirectReadQuadraticPart(ir, context, part_ir, ir.objective.written, part)) {
+	if (!part_ir.IsPlainSum() || !DirectReadQuadraticPart(decide, context, part_ir, objective.written, part)) {
 		return nullptr;
 	}
 	if (part.squares.size() != 1 || !part.linear.terms.empty() || !part.constants.empty()) {
@@ -484,11 +492,11 @@ static unique_ptr<Loss> ProveSquare(const DirectIR &ir, ClientContext &context, 
 //! and the constant of `K * ABS(s*c + t)`. `weight` is `K` oriented as a minimum and `slope` is `s`. False when
 //! `s` is not a nonzero constant, or `K` is not a constant that is positive once the part's sign is applied: a weight
 //! read from the data is the solver's. The part holds the `ABS` and no other term (ProveObjective).
-static bool ReadAbsolute(const DirectIR &ir, ClientContext &context, const DirectPart &part_ir,
-                         DirectQuadraticPart &part, double &weight, double &slope) {
-	if (!DirectReadLinearPart(ir, context, part_ir, ir.objective.written, part.linear) ||
-	    !DirectObjectivePartKept(ir, part_ir, part.kept) ||
-	    !DirectReadAbsTerm(ir, part_ir.terms[0], ir.objective.written, part.squares.emplace_back())) {
+static bool ReadAbsolute(const LogicalDecide &decide, const DirectObjective &objective, ClientContext &context,
+                         const DirectPart &part_ir, DirectQuadraticPart &part, double &weight, double &slope) {
+	if (!DirectReadLinearPart(decide, context, part_ir, objective.written, part.linear) ||
+	    !DirectObjectivePartKept(decide, part_ir, part.kept) ||
+	    !DirectReadAbsTerm(decide, part_ir.terms[0], objective.written, part.squares.emplace_back())) {
 		return false;
 	}
 	auto &read = part.squares[0];
@@ -503,10 +511,11 @@ static bool ReadAbsolute(const DirectIR &ir, ClientContext &context, const Direc
 
 //! One plain `SUM` of one `ABS`. The weight of a center, `K * |s|`, is a normal DOUBLE: a smaller one has lost the bits
 //! that order the medians.
-static unique_ptr<Loss> ProveAbsolute(const DirectIR &ir, ClientContext &context, const DirectPart &part_ir) {
+static unique_ptr<Loss> ProveAbsolute(const LogicalDecide &decide, const DirectObjective &objective,
+                                      ClientContext &context, const DirectPart &part_ir) {
 	DirectQuadraticPart part;
 	double weight, slope;
-	if (!part_ir.IsPlainSum() || !ReadAbsolute(ir, context, part_ir, part, weight, slope)) {
+	if (!part_ir.IsPlainSum() || !ReadAbsolute(decide, objective, context, part_ir, part, weight, slope)) {
 		return nullptr;
 	}
 	double center_weight = weight * std::fabs(slope);
@@ -517,11 +526,13 @@ static unique_ptr<Loss> ProveAbsolute(const DirectIR &ir, ClientContext &context
 }
 
 //! One plain `MAX` of one `ABS`, minimized. The midpoint of the extreme centers is the same for every positive `K`.
-static unique_ptr<Loss> ProveMaxAbsolute(const DirectIR &ir, ClientContext &context, const DirectPart &part_ir) {
+static unique_ptr<Loss> ProveMaxAbsolute(const LogicalDecide &decide, const DirectObjective &objective,
+                                         ClientContext &context, const DirectPart &part_ir) {
 	DirectQuadraticPart part;
 	double weight, slope;
 	// The reducer is a MAX (ProveObjective): a plain one is not qualified by a keyed scope.
-	if (part_ir.qualifier != DConstants::INVALID_INDEX || !ReadAbsolute(ir, context, part_ir, part, weight, slope)) {
+	if (part_ir.qualifier != DConstants::INVALID_INDEX ||
+	    !ReadAbsolute(decide, objective, context, part_ir, part, weight, slope)) {
 		return nullptr;
 	}
 	return make_uniq<MaxAbsoluteLoss>(std::move(part), weight);
@@ -529,17 +540,18 @@ static unique_ptr<Loss> ProveMaxAbsolute(const DirectIR &ir, ClientContext &cont
 
 //! The objective is one part holding one loss: a square, an `ABS` summed, or an `ABS` maximized. The part holds
 //! nothing beside its loss, and its rows are the ones the objective's `when` and the part's own keep.
-bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
-	if (ir.objective.parts.size() != 1) {
+bool Rule::ProveObjective(const LogicalDecide &decide, const DirectObjective &objective, ClientContext &context,
+                          Condition &condition) const {
+	if (objective.parts.size() != 1) {
 		return false;
 	}
-	auto &part = ir.objective.parts[0];
+	auto &part = objective.parts[0];
 	if (part.terms.size() != 1 || !part.terms[0].IsAbs()) {
-		condition.loss = ProveSquare(ir, context, part);
+		condition.loss = ProveSquare(decide, objective, context, part);
 	} else if (part.reduced && part.reducer == DecideReducerKind::MAX) {
-		condition.loss = ProveMaxAbsolute(ir, context, part);
+		condition.loss = ProveMaxAbsolute(decide, objective, context, part);
 	} else {
-		condition.loss = ProveAbsolute(ir, context, part);
+		condition.loss = ProveAbsolute(decide, objective, context, part);
 	}
 	return condition.loss != nullptr;
 }

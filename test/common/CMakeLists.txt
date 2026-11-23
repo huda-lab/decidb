@@ -9,7 +9,7 @@ add_library_unity(
   test_decidb_diagnostic_engines.cpp
   test_decidb_direct_decline.cpp
   test_decidb_direct_rule_driver.cpp
-  test_decidb_direct_ir.cpp
+  test_decidb_direct_readers.cpp
   test_decidb_descent_reads.cpp
   test_decidb_numeric_policy.cpp
   test_decidb_probe_models.cpp

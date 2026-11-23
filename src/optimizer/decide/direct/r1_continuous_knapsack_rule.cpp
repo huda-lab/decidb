@@ -73,15 +73,19 @@ public:
 		return RULE_NAME;
 	}
 
-	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
-		vector<const DirectIRConstraint *> budgets;
-		if (!ProveDecision(ir) || !ProveConstraints(ir, budgets)) {
+	unique_ptr<DirectApplicabilityCondition> CheckCondition(const LogicalDecide &decide,
+	                                                        ClientContext &context) const override {
+		vector<DirectClause> clauses;
+		DirectObjective objective;
+		vector<const DirectClause *> budgets;
+		if (!ProveDecision(decide) || !DirectReadClauses(context, decide, clauses) ||
+		    !DirectReadObjective(context, decide, objective) || !ProveConstraints(clauses, budgets)) {
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();
 		condition->source_reads = SOURCE_READS;
-		if (!ProveBudget(ir, context, budgets, *condition) || !ProveBounds(ir, context, *condition) ||
-		    !ProveObjective(ir, context, *condition)) {
+		if (!ProveBudget(decide, context, budgets, *condition) || !ProveBounds(decide, clauses, context, *condition) ||
+		    !ProveObjective(decide, objective, context, *condition)) {
 			return nullptr;
 		}
 		return std::move(condition);
@@ -95,27 +99,30 @@ public:
 	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
-	bool ProveDecision(const DirectIR &ir) const;
-	bool ProveConstraints(const DirectIR &ir, vector<const DirectIRConstraint *> &budgets) const;
-	bool ProveBudget(const DirectIR &ir, ClientContext &context, const vector<const DirectIRConstraint *> &budgets,
+	bool ProveDecision(const LogicalDecide &decide) const;
+	bool ProveConstraints(const vector<DirectClause> &clauses, vector<const DirectClause *> &budgets) const;
+	bool ProveBudget(const LogicalDecide &decide, ClientContext &context, const vector<const DirectClause *> &budgets,
 	                 Condition &condition) const;
-	bool ProveBudgetScope(const DirectIR &ir, const vector<const DirectIRConstraint *> &budgets,
+	bool ProveBudgetScope(const LogicalDecide &decide, const vector<const DirectClause *> &budgets,
 	                      Condition &condition) const;
-	bool ProveBudgetClause(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &ir_node,
+	bool ProveBudgetClause(const LogicalDecide &decide, ClientContext &context, const DirectClause &ir_node,
 	                       Condition &condition, bool first) const;
-	bool ProveLimit(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &ir_node,
+	bool ProveLimit(const LogicalDecide &decide, ClientContext &context, const DirectClause &ir_node,
 	                Condition &condition) const;
-	bool ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition) const;
-	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
+	bool ProveBounds(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+	                 Condition &condition) const;
+	bool ProveObjective(const LogicalDecide &decide, const DirectObjective &objective, ClientContext &context,
+	                    Condition &condition) const;
 };
 
 //! Every decision is a row-scoped REAL decision: an item is one decision on one row.
-bool Rule::ProveDecision(const DirectIR &ir) const {
-	if (!ir.keyed_scopes.empty()) {
+bool Rule::ProveDecision(const LogicalDecide &decide) const {
+	if (!decide.bound.keyed_scopes.empty()) {
 		return false;
 	}
-	for (auto &decision : ir.decisions) {
-		if (decision.domain != DirectDomain::REAL || decision.scope != DecideVarScope::ROW) {
+	for (idx_t i = 0; i < decide.bound.variables.size(); i++) {
+		if (DirectDomainOf(decide, i) != DirectDomain::REAL ||
+		    decide.bound.variable_scopes[i].scope != DecideVarScope::ROW) {
 			return false;
 		}
 	}
@@ -125,9 +132,9 @@ bool Rule::ProveDecision(const DirectIR &ir) const {
 //! The aggregate constraints are the budget's clauses (it is what keeps R1 apart from A1); the caller proves they are
 //! one budget. Every other constraint is a per-row bound on one decision: a constraint that reads two decisions links
 //! them, and stays with the solver.
-bool Rule::ProveConstraints(const DirectIR &ir, vector<const DirectIRConstraint *> &budgets) const {
-	for (auto &ir_node : ir.constraints) {
-		if (ir_node.aggregate) {
+bool Rule::ProveConstraints(const vector<DirectClause> &clauses, vector<const DirectClause *> &budgets) const {
+	for (auto &ir_node : clauses) {
+		if (ir_node.Aggregate()) {
 			budgets.push_back(&ir_node);
 			continue;
 		}
@@ -154,14 +161,14 @@ bool SameBudgetTerms(const DirectLinearPart &a, const DirectLinearPart &b) {
 
 //! Every clause of the budget covers the same rows: the same group keys in the same order, and the same `when` (written
 //! on the clause or on the sum: both read as a membership of the budget). Records the scope the plan applies.
-bool Rule::ProveBudgetScope(const DirectIR &ir, const vector<const DirectIRConstraint *> &budgets,
+bool Rule::ProveBudgetScope(const LogicalDecide &decide, const vector<const DirectClause *> &budgets,
                             Condition &condition) const {
-	return DirectProveSharedScope(ir, budgets, condition.scope);
+	return DirectProveSharedScope(decide, budgets, condition.scope);
 }
 
 //! One clause of the budget: `SUM(w*x)`, a plain SUM of linear terms (its scope is proved by ProveBudgetScope), against
 //! a limit with `<=`, `>=` or `=`. The first clause sets the weights; each later one must have the same.
-bool Rule::ProveBudgetClause(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &ir_node,
+bool Rule::ProveBudgetClause(const LogicalDecide &decide, ClientContext &context, const DirectClause &ir_node,
                              Condition &condition, bool first) const {
 	// ProveBudgetScope has proved that every clause is a plain SUM.
 	auto sum = ir_node.PlainSum();
@@ -169,7 +176,7 @@ bool Rule::ProveBudgetClause(const DirectIR &ir, ClientContext &context, const D
 		return false;
 	}
 	DirectLinearPart weights;
-	if (!DirectReadLinearPart(ir, context, *sum, ir_node.written, weights)) {
+	if (!DirectReadLinearPart(decide, context, *sum, ir_node.written, weights)) {
 		return false;
 	}
 	if (first) {
@@ -177,15 +184,15 @@ bool Rule::ProveBudgetClause(const DirectIR &ir, ClientContext &context, const D
 	} else if (!SameBudgetTerms(condition.budget, weights)) {
 		return false;
 	}
-	return ProveLimit(ir, context, ir_node, condition);
+	return ProveLimit(decide, context, ir_node, condition);
 }
 
 //! The limit of a clause: a constant the solver reads as a number, folded into the budget's interval, or a value of the
 //! source row, kept for the plan to reduce per group (DirectReadLimit; AggregatePlanBuilder::GroupTotals).
-bool Rule::ProveLimit(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &ir_node,
+bool Rule::ProveLimit(const LogicalDecide &decide, ClientContext &context, const DirectClause &ir_node,
                       Condition &condition) const {
 	DirectLimit limit;
-	if (!DirectReadLimit(ir, context, ir_node, limit)) {
+	if (!DirectReadLimit(decide, context, ir_node, limit)) {
 		return false;
 	}
 	if (!limit.constant) {
@@ -193,7 +200,7 @@ bool Rule::ProveLimit(const DirectIR &ir, ClientContext &context, const DirectIR
 		return true;
 	}
 	// The binder refuses `<`, `>` and `<>` over a REAL decision, so the comparison is `<=`, `>=` or `=`.
-	auto comparison = ir_node.comparison;
+	auto comparison = ir_node.Comparison();
 	if (DecideIsUpperBound(comparison)) {
 		condition.upper = std::min(condition.upper, limit.number);
 	}
@@ -203,14 +210,14 @@ bool Rule::ProveLimit(const DirectIR &ir, ClientContext &context, const DirectIR
 	return true;
 }
 
-bool Rule::ProveBudget(const DirectIR &ir, ClientContext &context, const vector<const DirectIRConstraint *> &budgets,
+bool Rule::ProveBudget(const LogicalDecide &decide, ClientContext &context, const vector<const DirectClause *> &budgets,
                        Condition &condition) const {
-	if (!ProveBudgetScope(ir, budgets, condition)) {
+	if (!ProveBudgetScope(decide, budgets, condition)) {
 		return false;
 	}
 	condition.budget_written = budgets[0]->written;
 	for (idx_t i = 0; i < budgets.size(); i++) {
-		if (!ProveBudgetClause(ir, context, *budgets[i], condition, i == 0)) {
+		if (!ProveBudgetClause(decide, context, *budgets[i], condition, i == 0)) {
 			return false;
 		}
 	}
@@ -218,9 +225,10 @@ bool Rule::ProveBudget(const DirectIR &ir, ClientContext &context, const vector<
 }
 
 //! Each decision's box before any per-row bound, and the clauses the plan evaluates per row, from the shared reader.
-bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition) const {
+bool Rule::ProveBounds(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+                       Condition &condition) const {
 	DirectBoundReading reading;
-	if (!DirectReadBounds(ir, context, reading)) {
+	if (!DirectReadBounds(decide, clauses, context, reading)) {
 		return false;
 	}
 	condition.clauses = std::move(reading.clauses);
@@ -229,21 +237,22 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 }
 
 //! The objective: signed, scaled `SUM(v*x)` parts, or none. Each coefficient must be a value of the source row.
-bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
-	for (auto &part : ir.objective.parts) {
+bool Rule::ProveObjective(const LogicalDecide &decide, const DirectObjective &objective, ClientContext &context,
+                          Condition &condition) const {
+	for (auto &part : objective.parts) {
 		if (!part.IsPlainSum() || !DirectOnlyLinearTerms(part.terms)) {
 			return false;
 		}
 		DirectLinearPart read;
 		unique_ptr<Expression> kept;
-		if (!DirectReadLinearPart(ir, context, part, ir.objective.written, read) ||
-		    !DirectObjectivePartKept(ir, part, kept)) {
+		if (!DirectReadLinearPart(decide, context, part, objective.written, read) ||
+		    !DirectObjectivePartKept(decide, part, kept)) {
 			return false;
 		}
 		condition.objective.push_back(std::move(read));
 		condition.objective_kept.push_back(std::move(kept));
 	}
-	condition.objective_written = ir.objective.written;
+	condition.objective_written = objective.written;
 	return true;
 }
 

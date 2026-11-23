@@ -17,10 +17,10 @@
 
 namespace duckdb {
 
-static bool DirectProveValues(const DirectIR &ir, const vector<DecideSplitTerm> &terms,
+static bool DirectProveValues(const LogicalDecide &decide, const vector<DecideSplitTerm> &terms,
                               vector<DirectSignedValue> &out) {
 	for (auto &term : terms) {
-		if (!DirectProveValue(ir, *term.coefficient)) {
+		if (!DirectProveValue(decide, *term.coefficient)) {
 			return false;
 		}
 		DirectSignedValue value;
@@ -31,21 +31,21 @@ static bool DirectProveValues(const DirectIR &ir, const vector<DecideSplitTerm> 
 	return true;
 }
 
-bool DirectContradictsDomain(const DirectIR &ir) {
+bool DirectContradictsDomain(const LogicalDecide &decide, const vector<DirectClause> &clauses) {
 	// Every bound here is the user's (Add): direct solve runs before RewriteInDomain, so a rule reads an IN as written
 	// and never the bounds its lowering adds (AddLowered).
-	vector<DecideWrittenBox> written(ir.decisions.size());
-	for (auto &ir_node : ir.constraints) {
+	vector<DecideWrittenBox> written(decide.bound.variables.size());
+	for (auto &ir_node : clauses) {
 		if (ir_node.variable_bound) {
 			written[ir_node.bound.var_idx].Add(ir_node.bound.sense, ir_node.bound.written_k);
-		} else if (ir_node.scope.when && ir_node.singleton_row && ir_node.bound.LiftsDefaultFloor()) {
+		} else if (ir_node.When() && ir_node.singleton_row && ir_node.bound.LiftsDefaultFloor()) {
 			// A floor under a `when` replaces the default on the rows it keeps (AddLowered counts it only when
 			// negative); the solve says whether the clauses on the other rows leave a value.
 			written[ir_node.bound.var_idx].AddLowered('>', ir_node.bound.written_k);
 		}
 	}
 	for (idx_t decision = 0; decision < written.size(); decision++) {
-		if (written[decision].ContradictsDomain(ir.decisions[decision].domain == DirectDomain::BOOL)) {
+		if (written[decision].ContradictsDomain(DirectDomainOf(decide, decision) == DirectDomain::BOOL)) {
 			return true;
 		}
 	}
@@ -53,8 +53,8 @@ bool DirectContradictsDomain(const DirectIR &ir) {
 	// keeps (DecideModelEmitter::CheckDomain): against the box above, whose floor is the lowest any clause lowers the
 	// decision to, with the bound's own ends put in. Which rows an instance keeps is known only from the data, so a
 	// rule declines every such bound; the solver then raises the error or, where no row is kept, solves.
-	for (auto &ir_node : ir.constraints) {
-		if (ir_node.aggregate || !ir_node.singleton_row || ir_node.variable_bound ||
+	for (auto &ir_node : clauses) {
+		if (ir_node.Aggregate() || !ir_node.singleton_row || ir_node.variable_bound ||
 		    !ir_node.bound.constant_on_read_rows) {
 			continue;
 		}
@@ -65,25 +65,26 @@ bool DirectContradictsDomain(const DirectIR &ir) {
 		if (std::isfinite(ir_node.bound.lower_value)) {
 			DecideFoldSingletonRow(box, '>', ir_node.bound.lower_value);
 		}
-		if (DecideBoxContradictsDomain(box, ir.decisions[ir_node.bound.var_idx].domain == DirectDomain::BOOL)) {
+		if (DecideBoxContradictsDomain(box, DirectDomainOf(decide, ir_node.bound.var_idx) == DirectDomain::BOOL)) {
 			return true;
 		}
 	}
 	return false;
 }
 
-bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundReading &reading) {
+bool DirectReadBounds(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+                      DirectBoundReading &reading) {
 	// The solver rejects, before it reads any row, a box that contradicts the variable's built-in domain. It says so on
 	// an empty source too, so the query is left to the solver, which reports it, rather than proved here and answered
 	// with no rows.
-	if (DirectContradictsDomain(ir)) {
+	if (DirectContradictsDomain(decide, clauses)) {
 		return false;
 	}
-	idx_t decision_count = ir.decisions.size();
+	idx_t decision_count = decide.bound.variables.size();
 	// The values the bounds the solver folds admit, folded by the function the solver's own folding pass calls.
 	vector<DecideBoundBox> admitted(decision_count);
-	for (auto &ir_node : ir.constraints) {
-		if (ir_node.aggregate) {
+	for (auto &ir_node : clauses) {
+		if (ir_node.Aggregate()) {
 			continue;
 		}
 		auto &bound = ir_node.bound;
@@ -91,11 +92,11 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 		// The classifier and the IR read the comparison with the same term splitter: one part of linear terms in the
 		// decision.
 		D_ASSERT(ir_node.singleton_row && ir_node.lhs.size() == 1);
-		if (!DirectIsSourceOnlyValue(*ir_node.rhs, ir.decide_index, ir.source_bindings)) {
+		if (!DirectIsSourceOnlyValue(ir_node.Rhs(), decide.decide_index, decide.SourceBindings())) {
 			return false;
 		}
-		if (ir_node.scope.when &&
-		    !DirectIsSourceOnlyPredicate(*ir_node.scope.when, ir.decide_index, ir.source_bindings)) {
+		if (ir_node.When() &&
+		    !DirectIsSourceOnlyPredicate(*ir_node.When(), decide.decide_index, decide.SourceBindings())) {
 			return false;
 		}
 		if (ir_node.variable_bound) {
@@ -109,17 +110,17 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 		}
 		DirectBoundClause clause;
 		clause.decision = decision;
-		if (!DirectProveValues(ir, ir_node.lhs[0].terms, clause.coefficient)) {
+		if (!DirectProveValues(decide, ir_node.lhs[0].terms, clause.coefficient)) {
 			return false;
 		}
-		clause.rhs = ir_node.rhs->Copy();
-		clause.coefficient_names = DirectNamesOf(ir, clause.coefficient, ir_node.written);
-		clause.rhs_text = ir.render(*clause.rhs);
-		clause.rhs_place = ir.place(*clause.rhs);
+		clause.rhs = ir_node.Rhs().Copy();
+		clause.coefficient_names = DirectNamesOf(decide, clause.coefficient, ir_node.written);
+		clause.rhs_text = DirectRender(decide, *clause.rhs);
+		clause.rhs_place = DirectPlace(decide, *clause.rhs);
 		clause.lower = bound.RowLower();
 		clause.upper = bound.RowUpper();
-		if (ir_node.scope.when) {
-			clause.when = ir_node.scope.when->Copy();
+		if (ir_node.When()) {
+			clause.when = ir_node.When()->Copy();
 			clause.lifts_floor = bound.LiftsDefaultFloor();
 		}
 		reading.clauses.push_back(std::move(clause));
@@ -128,13 +129,13 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 	// BOOL always has: its floor stays 0.
 	for (auto &clause : reading.clauses) {
 		clause.lifts_floor = clause.lifts_floor && !admitted[clause.decision].lower_written &&
-		                     ir.decisions[clause.decision].domain != DirectDomain::BOOL;
+		                     DirectDomainOf(decide, clause.decision) != DirectDomain::BOOL;
 	}
 	reading.boxes.resize(decision_count);
 	for (idx_t decision = 0; decision < decision_count; decision++) {
 		// A written lower bound replaces the default of 0, except that a BOOL never leaves {0, 1}. An end of magnitude
 		// 1e20 or more (a written -1e30 included) is no bound.
-		bool boolean = ir.decisions[decision].domain == DirectDomain::BOOL;
+		bool boolean = DirectDomainOf(decide, decision) == DirectDomain::BOOL;
 		auto &box = admitted[decision];
 		double lower = DecideIsOpenBelow(box.lower) ? NEGATIVE_INFINITY : box.lower;
 		double upper = DecideIsOpenAbove(box.upper) ? POSITIVE_INFINITY : box.upper;
@@ -212,25 +213,25 @@ ExprPtr DirectBoxIsEmpty(const ExpressionBuilder &calc, const ExprPtr &lower, co
 	                 calc.Cmp(ExpressionType::COMPARE_EQUAL, upper, calc.Num(NEGATIVE_INFINITY))});
 }
 
-bool DirectReadLimit(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &constraint,
+bool DirectReadLimit(const LogicalDecide &decide, ClientContext &context, const DirectClause &constraint,
                      DirectLimit &limit) {
-	if (TryEvaluateFoldableDouble(context, *constraint.rhs, limit.number, DIRECT_FINITE_CONSTANT)) {
+	if (TryEvaluateFoldableDouble(context, constraint.Rhs(), limit.number, DIRECT_FINITE_CONSTANT)) {
 		limit.constant = true;
 		return std::fabs(limit.number) < DECIDE_EFFECTIVE_INFINITY;
 	}
-	limit.data.comparison = constraint.comparison;
-	if (!DirectIsSourceOnlyNumericMayRaise(*constraint.rhs, ir.decide_index, ir.source_bindings)) {
+	limit.data.comparison = constraint.Comparison();
+	if (!DirectIsSourceOnlyNumericMayRaise(constraint.Rhs(), decide.decide_index, decide.SourceBindings())) {
 		return false;
 	}
-	limit.data.value = constraint.rhs->Copy();
+	limit.data.value = constraint.Rhs().Copy();
 	return true;
 }
 
-bool DirectReadCountLimit(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &constraint,
+bool DirectReadCountLimit(const LogicalDecide &decide, ClientContext &context, const DirectClause &constraint,
                           bool negated, DirectCountLimit &count) {
 	count.negated = negated;
-	count.comparison = negated ? FlipComparisonExpression(constraint.comparison) : constraint.comparison;
-	if (!DirectReadLimit(ir, context, constraint, count.limit)) {
+	count.comparison = negated ? FlipComparisonExpression(constraint.Comparison()) : constraint.Comparison();
+	if (!DirectReadLimit(decide, context, constraint, count.limit)) {
 		return false;
 	}
 	if (negated && count.limit.constant) {
@@ -239,12 +240,13 @@ bool DirectReadCountLimit(const DirectIR &ir, ClientContext &context, const Dire
 	return true;
 }
 
-DecideNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedValue> &values,
+DecideNumberNames DirectNamesOf(const LogicalDecide &decide, const vector<DirectSignedValue> &values,
                                 const DecideClauseRef &clause) {
 	DecideNumberNames names;
 	names.clause = clause;
 	for (auto &value : values) {
-		DecideNameValue(names, *value.expr, value.sign, ir.render(*value.expr), ir.place(*value.expr));
+		DecideNameValue(names, *value.expr, value.sign, DirectRender(decide, *value.expr),
+		                DirectPlace(decide, *value.expr));
 	}
 	return names;
 }
@@ -291,7 +293,7 @@ bool DirectOnlyLinearTerms(const vector<DecideSplitTerm> &terms) {
 	return true;
 }
 
-bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const DirectPart &part,
+bool DirectReadLinearPart(const LogicalDecide &decide, ClientContext &context, const DirectPart &part,
                           const DecideClauseRef &clause, DirectLinearPart &out) {
 	out.sign = part.sign;
 	if (!DirectPartFactor(context, part, out.factor)) {
@@ -301,70 +303,69 @@ bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const Dire
 		if (!term.IsLinear()) {
 			continue;
 		}
-		if (!DirectProveValue(ir, *term.coefficient)) {
+		if (!DirectProveValue(decide, *term.coefficient)) {
 			return false;
 		}
 		out.terms.push_back({term.var_a, term.sign, term.coefficient->Copy()});
 	}
-	for (idx_t decision = 0; decision < ir.decisions.size(); decision++) {
-		out.names.push_back(DirectNamesOf(ir, DirectValuesOn(out, decision), clause));
+	for (idx_t decision = 0; decision < decide.bound.variables.size(); decision++) {
+		out.names.push_back(DirectNamesOf(decide, DirectValuesOn(out, decision), clause));
 	}
 	return true;
 }
 
-bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, const DecideClauseRef &clause,
+bool DirectReadConstantTerm(const LogicalDecide &decide, const DecideSplitTerm &term, const DecideClauseRef &clause,
                             DirectConstantTerm &out) {
-	if (!DirectProveValue(ir, *term.coefficient)) {
+	if (!DirectProveValue(decide, *term.coefficient)) {
 		return false;
 	}
 	out.sign = term.sign;
 	out.value = term.coefficient->Copy();
 	vector<DirectSignedValue> value;
 	value.push_back({term.sign, term.coefficient->Copy()});
-	out.value_names = DirectNamesOf(ir, value, clause);
+	out.value_names = DirectNamesOf(decide, value, clause);
 	return true;
 }
 
 //! The weight of a square or an absolute value: the term's sign and its coefficient (1 when it has none), which a rule
 //! that needs it constant folds (DirectFoldConstantSum).
-static bool DirectReadWeight(const DirectIR &ir, const DecideSplitTerm &term, const DecideClauseRef &clause,
+static bool DirectReadWeight(const LogicalDecide &decide, const DecideSplitTerm &term, const DecideClauseRef &clause,
                              vector<DirectSignedValue> &weight, DecideNumberNames &names) {
-	if (term.coefficient && !DirectProveValue(ir, *term.coefficient)) {
+	if (term.coefficient && !DirectProveValue(decide, *term.coefficient)) {
 		return false;
 	}
 	DirectSignedValue value;
 	value.sign = term.sign;
 	value.expr = term.coefficient ? term.coefficient->Copy() : make_uniq<BoundConstantExpression>(Value::DOUBLE(1.0));
 	weight.push_back(std::move(value));
-	names = DirectNamesOf(ir, weight, clause);
+	names = DirectNamesOf(decide, weight, clause);
 	return true;
 }
 
-//! The one decision a form's linear terms name; false when they name two, none, or a term is neither linear nor
+//! The one decision a form's linear terms name; false when they name two. A form is what a square or an ABS of
+//! decisions holds, so it names one, and the clause reader has refused a term in it that is neither linear nor
 //! constant.
-static bool DirectReadFormDecision(const DirectIR &ir, const vector<DecideSplitTerm> &form, idx_t &decision) {
-	bool has_decision = false;
+static bool DirectReadFormDecision(const vector<DecideSplitTerm> &form, idx_t &decision) {
+	decision = DConstants::INVALID_INDEX;
 	for (auto &inner : form) {
-		if (inner.IsLinear()) {
-			if (has_decision && decision != inner.var_a) {
-				return false;
-			}
-			decision = inner.var_a;
-			has_decision = true;
-		} else if (!inner.IsConstant()) {
+		if (!inner.IsLinear()) {
+			continue;
+		}
+		if (decision != DConstants::INVALID_INDEX && decision != inner.var_a) {
 			return false;
 		}
+		decision = inner.var_a;
 	}
-	return has_decision;
+	return true;
 }
 
-bool DirectReadLinearForm(const DirectIR &ir, const vector<DecideSplitTerm> &form, const DecideClauseRef &clause,
-                          DirectLinearForm &out) {
-	if (!DirectReadFormDecision(ir, form, out.decision)) {
+bool DirectReadLinearForm(const LogicalDecide &decide, const vector<DecideSplitTerm> &form,
+                          const DecideClauseRef &clause, DirectLinearForm &out) {
+	if (!DirectReadFormDecision(form, out.decision)) {
 		return false;
 	}
 	for (auto &inner : form) {
-		if (!DirectProveValue(ir, *inner.coefficient)) {
+		if (!DirectProveValue(decide, *inner.coefficient)) {
 			return false;
 		}
 		DirectSignedValue value;
@@ -372,24 +373,24 @@ bool DirectReadLinearForm(const DirectIR &ir, const vector<DecideSplitTerm> &for
 		value.expr = inner.coefficient->Copy();
 		(inner.IsLinear() ? out.linear : out.constant).push_back(std::move(value));
 	}
-	out.linear_names = DirectNamesOf(ir, out.linear, clause);
-	out.constant_names = DirectNamesOf(ir, out.constant, clause);
+	out.linear_names = DirectNamesOf(decide, out.linear, clause);
+	out.constant_names = DirectNamesOf(decide, out.constant, clause);
 	return true;
 }
 
-bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const DecideClauseRef &clause,
+bool DirectReadSquareTerm(const LogicalDecide &decide, const DecideSplitTerm &term, const DecideClauseRef &clause,
                           DirectWeightedForm &out) {
-	return term.IsSquare() && DirectReadWeight(ir, term, clause, out.weight, out.weight_names) &&
-	       DirectReadLinearForm(ir, term.factors[0].form, clause, out.inner);
+	return term.IsSquare() && DirectReadWeight(decide, term, clause, out.weight, out.weight_names) &&
+	       DirectReadLinearForm(decide, term.factors[0].form, clause, out.inner);
 }
 
-bool DirectReadAbsTerm(const DirectIR &ir, const DecideSplitTerm &term, const DecideClauseRef &clause,
+bool DirectReadAbsTerm(const LogicalDecide &decide, const DecideSplitTerm &term, const DecideClauseRef &clause,
                        DirectWeightedForm &out) {
 	if (!term.IsAbs()) {
 		throw InternalException("DECIDE: an absolute value is expected here; the A2 rule promises an ABS term");
 	}
-	return DirectReadWeight(ir, term, clause, out.weight, out.weight_names) &&
-	       DirectReadLinearForm(ir, term.inner, clause, out.inner);
+	return DirectReadWeight(decide, term, clause, out.weight, out.weight_names) &&
+	       DirectReadLinearForm(decide, term.inner, clause, out.inner);
 }
 
 bool DirectFoldConstantSum(ClientContext &context, const vector<DirectSignedValue> &values, double &total) {
@@ -404,12 +405,12 @@ bool DirectFoldConstantSum(ClientContext &context, const vector<DirectSignedValu
 	return true;
 }
 
-bool DirectObjectivePartKept(const DirectIR &ir, const DirectPart &part, unique_ptr<Expression> &kept) {
-	for (auto when : {ir.objective.scope.when.get(), part.filter.get()}) {
+bool DirectObjectivePartKept(const LogicalDecide &decide, const DirectPart &part, unique_ptr<Expression> &kept) {
+	for (auto when : {decide.bound.objective.scope.when.get(), part.filter.get()}) {
 		if (!when) {
 			continue;
 		}
-		if (!DirectIsSourceOnlyPredicate(*when, ir.decide_index, ir.source_bindings)) {
+		if (!DirectIsSourceOnlyPredicate(*when, decide.decide_index, decide.SourceBindings())) {
 			return false;
 		}
 		kept =
@@ -419,9 +420,10 @@ bool DirectObjectivePartKept(const DirectIR &ir, const DirectPart &part, unique_
 	return true;
 }
 
-bool DirectReadQuadraticPart(const DirectIR &ir, ClientContext &context, const DirectPart &part,
+bool DirectReadQuadraticPart(const LogicalDecide &decide, ClientContext &context, const DirectPart &part,
                              const DecideClauseRef &clause, DirectQuadraticPart &out) {
-	if (!DirectReadLinearPart(ir, context, part, clause, out.linear) || !DirectObjectivePartKept(ir, part, out.kept)) {
+	if (!DirectReadLinearPart(decide, context, part, clause, out.linear) ||
+	    !DirectObjectivePartKept(decide, part, out.kept)) {
 		return false;
 	}
 	for (auto &term : part.terms) {
@@ -430,12 +432,12 @@ bool DirectReadQuadraticPart(const DirectIR &ir, ClientContext &context, const D
 		}
 		if (term.IsConstant()) {
 			out.constants.emplace_back();
-			if (!DirectReadConstantTerm(ir, term, clause, out.constants.back())) {
+			if (!DirectReadConstantTerm(decide, term, clause, out.constants.back())) {
 				return false;
 			}
 		} else {
 			out.squares.emplace_back();
-			if (!DirectReadSquareTerm(ir, term, clause, out.squares.back())) {
+			if (!DirectReadSquareTerm(decide, term, clause, out.squares.back())) {
 				return false;
 			}
 		}
@@ -469,22 +471,22 @@ bool DirectReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &
 	return true;
 }
 
-const vector<DecideSplitTerm> *DirectFixedTerms(const DirectIRConstraint &constraint) {
-	if (constraint.aggregate || !DirectOnlyLinearTerms(constraint.lhs[0].terms)) {
+const vector<DecideSplitTerm> *DirectFixedTerms(const DirectClause &constraint) {
+	if (constraint.Aggregate() || !DirectOnlyLinearTerms(constraint.lhs[0].terms)) {
 		return nullptr;
 	}
 	return &constraint.lhs[0].terms;
 }
 
-bool DirectIsOneRowDecision(const DirectIR &ir, DirectDomain domain) {
-	return ir.decisions.size() == 1 && ir.decisions[0].domain == domain &&
-	       ir.decisions[0].scope == DecideVarScope::ROW && ir.keyed_scopes.empty();
+bool DirectIsOneRowDecision(const LogicalDecide &decide, DirectDomain domain) {
+	return decide.bound.variables.size() == 1 && DirectDomainOf(decide, 0) == domain &&
+	       decide.bound.variable_scopes[0].scope == DecideVarScope::ROW && decide.bound.keyed_scopes.empty();
 }
 
-bool DirectSplitFixes(const DirectIR &ir, vector<const DirectIRConstraint *> &fixes,
-                      vector<const DirectIRConstraint *> &others) {
-	for (auto &constraint : ir.constraints) {
-		if (constraint.comparison == ExpressionType::COMPARE_IN) {
+bool DirectSplitFixes(const vector<DirectClause> &clauses, vector<const DirectClause *> &fixes,
+                      vector<const DirectClause *> &others) {
+	for (auto &constraint : clauses) {
+		if (constraint.Comparison() == ExpressionType::COMPARE_IN) {
 			return false;
 		}
 		(DirectFixedTerms(constraint) ? fixes : others).push_back(&constraint);
@@ -495,12 +497,13 @@ bool DirectSplitFixes(const DirectIR &ir, vector<const DirectIRConstraint *> &fi
 //! True when every term's coefficient is a finite constant or a number of the source row (`w`, `w / 2`, `w - 2`), which
 //! a plan can read on the rows its clause keeps, where a coefficient that can raise raises as the solver does. A
 //! literal that is not a finite number is the solver's to report.
-static bool SourceOnlyCoefficients(ClientContext &context, const DirectIR &ir, const vector<DecideSplitTerm> &terms) {
+static bool SourceOnlyCoefficients(ClientContext &context, const LogicalDecide &decide,
+                                   const vector<DecideSplitTerm> &terms) {
 	for (auto &term : terms) {
 		double value;
 		if (term.coefficient->IsFoldable()
 		        ? !TryEvaluateFoldableDouble(context, *term.coefficient, value, DIRECT_FINITE_CONSTANT)
-		        : !DirectIsSourceOnlyNumericMayRaise(*term.coefficient, ir.decide_index, ir.source_bindings)) {
+		        : !DirectIsSourceOnlyNumericMayRaise(*term.coefficient, decide.decide_index, decide.SourceBindings())) {
 			return false;
 		}
 	}
@@ -516,8 +519,8 @@ static const Expression *SourceBooleanFixedValue(const Expression &expr, idx_t d
 		return nullptr;
 	}
 	auto &cast = expr.Cast<BoundCastExpression>();
-	if (cast.child->return_type != LogicalType::BOOLEAN || !expr.return_type.IsNumeric() ||
-	    DirectMayThrow(*cast.child) || !DirectIsDecisionFreeDeterministic(*cast.child, decide_index) ||
+	if (cast.child->return_type != LogicalType::BOOLEAN || DirectMayThrow(*cast.child) ||
+	    !DirectIsDecisionFreeDeterministic(*cast.child, decide_index) ||
 	    !DirectReferencesOnlySource(*cast.child, source_bindings) || !DirectHasColumnReference(*cast.child)) {
 		return nullptr;
 	}
@@ -545,17 +548,17 @@ static void FixFromBooleanSource(const ExpressionBuilder &calc, ExpressionType t
 }
 
 //! A clause read as the values of {0, 1} each row allows.
-static bool FixFromAllowedValues(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &factor,
+static bool FixFromAllowedValues(const LogicalDecide &decide, ClientContext &context, const DirectClause &factor,
                                  bool constant_slope, DirectFixedValues &fixed) {
 	ExpressionBuilder calc(context);
-	auto when = factor.scope.when.get();
-	auto &value = *factor.rhs;
+	auto when = factor.When();
+	auto &value = factor.Rhs();
 	// A literal that is not a finite number is the solver's to report. A value of the row may raise: the plan reads it
 	// on the rows the clause keeps (OnKeptRows), where the solver reads it too.
 	double constant;
 	bool constant_value = TryEvaluateFoldableDouble(context, value, constant, DIRECT_FINITE_CONSTANT);
-	if (!constant_value &&
-	    (value.IsFoldable() || !DirectIsSourceOnlyNumericMayRaise(value, ir.decide_index, ir.source_bindings))) {
+	if (!constant_value && (value.IsFoldable() ||
+	                        !DirectIsSourceOnlyNumericMayRaise(value, decide.decide_index, decide.SourceBindings()))) {
 		return false;
 	}
 	// Whether the row allows `x = v`. A singleton row allows the values between the ends the solver path's classifier
@@ -567,7 +570,7 @@ static bool FixFromAllowedValues(const DirectIR &ir, ClientContext &context, con
 			return calc.If(calc.Cmp(le, calc.Wrap(factor.bound.RowLower()), calc.Num(v)),
 			               calc.Cmp(le, calc.Num(v), calc.Wrap(factor.bound.RowUpper())), calc.Bool(false));
 		}
-		return calc.Cmp(factor.comparison, calc.Num(v), calc.Cast(calc.Of(value), LogicalType::DOUBLE));
+		return calc.Cmp(factor.Comparison(), calc.Num(v), calc.Cast(calc.Of(value), LogicalType::DOUBLE));
 	};
 	if (constant_value && constant_slope) {
 		double zero, one;
@@ -598,25 +601,26 @@ static bool FixFromAllowedValues(const DirectIR &ir, ClientContext &context, con
 	for (auto &term : *DirectFixedTerms(factor)) {
 		if (!term.coefficient->IsFoldable()) {
 			fixed.source_values.push_back({term.coefficient->Copy(), true, when ? when->Copy() : nullptr, true,
-			                               ir.render(*term.coefficient), ir.place(*term.coefficient)});
+			                               DirectRender(decide, *term.coefficient),
+			                               DirectPlace(decide, *term.coefficient)});
 		}
 	}
 	if (!constant_value) {
 		auto reject_nan = value.return_type == LogicalType::FLOAT || value.return_type == LogicalType::DOUBLE;
-		fixed.source_values.push_back(
-		    {value.Copy(), reject_nan, when ? when->Copy() : nullptr, false, ir.render(value), ir.place(value)});
+		fixed.source_values.push_back({value.Copy(), reject_nan, when ? when->Copy() : nullptr, false,
+		                               DirectRender(decide, value), DirectPlace(decide, value)});
 	}
 	return true;
 }
 
 //! One clause on `x` alone: the rows it fixes to 1 or to 0, and the values the plan checks on each row.
-static bool ReadFixedValue(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &factor,
+static bool ReadFixedValue(const LogicalDecide &decide, ClientContext &context, const DirectClause &factor,
                            DirectFixedValues &fixed) {
-	auto when = factor.scope.when.get();
-	if (when && !DirectIsSourceOnlyPredicate(*when, ir.decide_index, ir.source_bindings)) {
+	auto when = factor.When();
+	if (when && !DirectIsSourceOnlyPredicate(*when, decide.decide_index, decide.SourceBindings())) {
 		return false;
 	}
-	auto type = factor.comparison;
+	auto type = factor.Comparison();
 	auto &terms = *DirectFixedTerms(factor);
 	// The coefficients add up to one constant, as the solver's like-term collection sums them, or, in a singleton
 	// row, to a value of the row (`w * x >= 1`), whose ends the classifier reads per row. A `<>` and a Boolean source
@@ -624,10 +628,10 @@ static bool ReadFixedValue(const DirectIR &ir, ClientContext &context, const Dir
 	double slope;
 	bool constant_slope = DirectConstantSlope(context, terms, slope);
 	bool unit = constant_slope && slope == 1.0;
-	if (!constant_slope && !(factor.singleton_row && SourceOnlyCoefficients(context, ir, terms))) {
+	if (!constant_slope && !(factor.singleton_row && SourceOnlyCoefficients(context, decide, terms))) {
 		return false;
 	}
-	auto source_value = SourceBooleanFixedValue(*factor.rhs, ir.decide_index, ir.source_bindings);
+	auto source_value = SourceBooleanFixedValue(factor.Rhs(), decide.decide_index, decide.SourceBindings());
 	if (source_value && unit &&
 	    (type == ExpressionType::COMPARE_EQUAL || type == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
 	     type == ExpressionType::COMPARE_GREATERTHANOREQUALTO)) {
@@ -637,19 +641,19 @@ static bool ReadFixedValue(const DirectIR &ir, ClientContext &context, const Dir
 	if (!factor.singleton_row && !unit) {
 		return false;
 	}
-	return FixFromAllowedValues(ir, context, factor, constant_slope, fixed);
+	return FixFromAllowedValues(decide, context, factor, constant_slope, fixed);
 }
 
-bool DirectReadFixedValues(const DirectIR &ir, ClientContext &context,
-                           const vector<const DirectIRConstraint *> &clauses, DirectFixedValues &fixed) {
+bool DirectReadFixedValues(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+                           const vector<const DirectClause *> &fixes, DirectFixedValues &fixed) {
 	// A bound the solver folds that contradicts the Boolean's built-in domain makes it raise an error that quotes the
 	// bound (`x >= 2 cannot hold for a BOOL variable.`) before it reads a row; that early error is not a rule's to
 	// reproduce.
-	if (DirectContradictsDomain(ir)) {
+	if (DirectContradictsDomain(decide, clauses)) {
 		return false;
 	}
-	for (auto clause : clauses) {
-		if (!ReadFixedValue(ir, context, *clause, fixed)) {
+	for (auto clause : fixes) {
+		if (!ReadFixedValue(decide, context, *clause, fixed)) {
 			return false;
 		}
 	}

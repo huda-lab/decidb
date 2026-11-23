@@ -124,6 +124,9 @@ void ExpressionIterator::EnumerateChildren(Expression &expr,
 		}
 		break;
 	}
+	case ExpressionClass::BOUND_DECIDE_NULL_GUARD:
+		callback(expr.Cast<BoundDecideNullGuardExpression>().guard);
+		break;
 	case ExpressionClass::BOUND_DECIDE_NULL_TEST:
 		callback(expr.Cast<BoundDecideNullTestExpression>().test);
 		break;

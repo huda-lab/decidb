@@ -15,7 +15,7 @@ namespace duckdb {
 class ClientContext;
 enum class DecideValueRole : uint8_t;
 enum class DirectDomain : uint8_t;
-struct DirectIR;
+class LogicalDecide;
 struct DirectPart;
 
 //! Rule-independent questions about a bound expression. A rule asks them while proving that an expression may be
@@ -84,10 +84,10 @@ bool DirectPartFactor(ClientContext &context, const DirectPart &part, DirectFact
 bool DirectIsSourceOnlyNumericMayRaise(const Expression &expr, idx_t decide_index,
                                        const vector<ColumnBinding> &source_bindings);
 
-//! A numeric or Boolean value a rule may read per row: deterministic, independent of the decisions, over source columns
-//! only, with or without a column. Unlike DirectIsSourceOnlyNumericMayRaise it may be Boolean and mention no column,
-//! for a rule that evaluates it on the rows that read it, where the solver raises too (nothing is computed on a row a
-//! `when` drops).
+//! A value a rule may read per row: deterministic, independent of the decisions, over source columns only, with or
+//! without a column. Its type is the caller's to know: a bound's right side is a number, as binding made it. Unlike
+//! DirectIsSourceOnlyNumericMayRaise it may mention no column, for a rule that evaluates it on the rows that read it,
+//! where the solver raises too (nothing is computed on a row a `when` drops).
 bool DirectIsSourceOnlyValue(const Expression &expr, idx_t decide_index, const vector<ColumnBinding> &source_bindings);
 
 //! Abstract interpretation over magnitudes, seeded by types: the largest magnitude a value of `type` holds, as a
@@ -105,6 +105,6 @@ bool DirectIsWholeNumbered(DirectDomain domain);
 
 //! A coefficient or value the plan evaluates per row: numeric, deterministic, independent of the decisions, over the
 //! source. It may raise when evaluated; the plan evaluates it on the rows that read it, as the solver does.
-bool DirectProveValue(const DirectIR &ir, const Expression &expr);
+bool DirectProveValue(const LogicalDecide &decide, const Expression &expr);
 
 } // namespace duckdb

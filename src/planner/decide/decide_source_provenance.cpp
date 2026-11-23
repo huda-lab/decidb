@@ -13,6 +13,7 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
+#include "duckdb/planner/expression/bound_decide_null_guard_expression.hpp"
 #include "duckdb/planner/expression/bound_decide_null_test_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
@@ -116,19 +117,11 @@ private:
 };
 
 bool DecideIsGuarded(const Expression &expr) {
-	return HasDecideTag(expr.GetAlias(), NULL_GUARD_TAG);
+	return expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_NULL_GUARD;
 }
 
 const Expression &DecideUnguarded(const Expression &expr) {
-	if (!DecideIsGuarded(expr)) {
-		return expr;
-	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CASE) {
-		return *expr.Cast<BoundCaseExpression>().case_checks[0].then_expr;
-	}
-	D_ASSERT(expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR &&
-	         expr.type == ExpressionType::OPERATOR_COALESCE);
-	return *expr.Cast<BoundOperatorExpression>().children[0];
+	return DecideIsGuarded(expr) ? expr.Cast<BoundDecideNullGuardExpression>().Value() : expr;
 }
 
 //! The binary arithmetic operator `expr` applies, looking through the casts the binder
@@ -376,7 +369,7 @@ static bool QuoteSpan(const Expression &expr, const RenderContext &ctx, string &
 }
 
 static string RenderSource(const Expression &expr, const RenderContext &ctx, int parent_precedence) {
-	if (HasDecideTag(expr.GetAlias(), NULL_GUARD_TAG)) {
+	if (DecideIsGuarded(expr)) {
 		return RenderSource(DecideUnguarded(expr), ctx, parent_precedence);
 	}
 	string quoted;

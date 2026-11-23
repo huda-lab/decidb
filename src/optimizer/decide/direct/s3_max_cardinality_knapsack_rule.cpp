@@ -55,11 +55,17 @@ public:
 		return RULE_NAME;
 	}
 
-	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
+	unique_ptr<DirectApplicabilityCondition> CheckCondition(const LogicalDecide &decide,
+	                                                        ClientContext &context) const override {
 		auto condition = make_uniq<Condition>();
-		const DirectIRConstraint *clause = nullptr;
-		if (!DirectIsOneRowDecision(ir, DirectDomain::BOOL) || !ProveConstraints(ir, context, *condition, clause) ||
-		    !ProveBudget(ir, context, *clause, *condition) || !ProveObjective(ir, context, *condition)) {
+		vector<DirectClause> clauses;
+		DirectObjective objective;
+		const DirectClause *clause = nullptr;
+		if (!DirectIsOneRowDecision(decide, DirectDomain::BOOL) || !DirectReadClauses(context, decide, clauses) ||
+		    !DirectReadObjective(context, decide, objective) ||
+		    !ProveConstraints(decide, clauses, context, *condition, clause) ||
+		    !ProveBudget(decide, context, *clause, *condition) ||
+		    !ProveObjective(decide, objective, context, *condition)) {
 			return nullptr;
 		}
 		return std::move(condition);
@@ -73,40 +79,41 @@ public:
 	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
-	bool ProveConstraints(const DirectIR &ir, ClientContext &context, Condition &condition,
-	                      const DirectIRConstraint *&clause) const;
-	bool ProveBudget(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &clause,
+	bool ProveConstraints(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+	                      Condition &condition, const DirectClause *&clause) const;
+	bool ProveBudget(const LogicalDecide &decide, ClientContext &context, const DirectClause &clause,
 	                 Condition &condition) const;
-	bool ProveScope(const DirectIR &ir, const DirectIRConstraint &clause, Condition &condition) const;
+	bool ProveScope(const LogicalDecide &decide, const DirectClause &clause, Condition &condition) const;
 	bool ProveWeights(ClientContext &context, const vector<DecideSplitTerm> &terms) const;
-	bool ProveObjectivePart(const DirectIR &ir, ClientContext &context, const DirectPart &part,
-	                        unique_ptr<Expression> &kept, double &count) const;
+	bool ProveObjectivePart(const LogicalDecide &decide, const DirectObjective &objective, ClientContext &context,
+	                        const DirectPart &part, unique_ptr<Expression> &kept, double &count) const;
 	bool ProveObjectiveRows(const Condition &condition, const unique_ptr<Expression> &kept, bool first,
 	                        bool &filtered) const;
-	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
+	bool ProveObjective(const LogicalDecide &decide, const DirectObjective &objective, ClientContext &context,
+	                    Condition &condition) const;
 };
 
 //! The constraints are one budget, compared with `<=` or `>=`, and the per-row clauses on the decision, which fix items
 //! (DirectReadFixedValues reads them as S1 does); a membership constraint, a second budget and no budget are declines.
 //! That the budget is an aggregate is proved with its scope (ProveScope).
-bool Rule::ProveConstraints(const DirectIR &ir, ClientContext &context, Condition &condition,
-                            const DirectIRConstraint *&clause) const {
-	vector<const DirectIRConstraint *> fixes, budgets;
-	if (!DirectSplitFixes(ir, fixes, budgets) || budgets.size() != 1) {
+bool Rule::ProveConstraints(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+                            Condition &condition, const DirectClause *&clause) const {
+	vector<const DirectClause *> fixes, budgets;
+	if (!DirectSplitFixes(clauses, fixes, budgets) || budgets.size() != 1) {
 		return false;
 	}
 	clause = budgets[0];
-	condition.at_least = clause->comparison == ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-	return (condition.at_least || clause->comparison == ExpressionType::COMPARE_LESSTHANOREQUALTO) &&
-	       DirectReadFixedValues(ir, context, fixes, condition.fixed);
+	condition.at_least = clause->Comparison() == ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+	return (condition.at_least || clause->Comparison() == ExpressionType::COMPARE_LESSTHANOREQUALTO) &&
+	       DirectReadFixedValues(decide, clauses, context, fixes, condition.fixed);
 }
 
 //! The budget covers the rows its `when` (on the clause or in the sum) keeps, or every row, in the groups of its `by`
 //! key. A `per K:` class gives it a smaller scope, which stays with the solver.
-bool Rule::ProveScope(const DirectIR &ir, const DirectIRConstraint &clause, Condition &condition) const {
-	vector<const DirectIRConstraint *> budgets {&clause};
+bool Rule::ProveScope(const LogicalDecide &decide, const DirectClause &clause, Condition &condition) const {
+	vector<const DirectClause *> budgets {&clause};
 	// A gated scope has classes, so the classes decline it too.
-	return DirectProveSharedScope(ir, budgets, condition.scope) && condition.scope.classes.empty();
+	return DirectProveSharedScope(decide, budgets, condition.scope) && condition.scope.classes.empty();
 }
 
 //! Each weight is a finite constant or a number of the source row (DirectReadLinearPart has proved the latter, which
@@ -124,28 +131,28 @@ bool Rule::ProveWeights(ClientContext &context, const vector<DecideSplitTerm> &t
 
 //! `SUM(w*x) <= B` or `>= B`: a plain SUM of linear terms on the decision, in the scope ProveScope proves, with weights
 //! ProveWeights proves and a limit the shared reader reads.
-bool Rule::ProveBudget(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &clause,
+bool Rule::ProveBudget(const LogicalDecide &decide, ClientContext &context, const DirectClause &clause,
                        Condition &condition) const {
-	if (!ProveScope(ir, clause, condition)) {
+	if (!ProveScope(decide, clause, condition)) {
 		return false;
 	}
 	// ProveScope has proved that the clause is a plain SUM.
 	auto sum = clause.PlainSum();
 	return DirectOnlyLinearTerms(sum->terms) &&
-	       DirectReadLinearPart(ir, context, *sum, clause.written, condition.budget) &&
-	       ProveWeights(context, sum->terms) && DirectReadLimit(ir, context, clause, condition.limit);
+	       DirectReadLinearPart(decide, context, *sum, clause.written, condition.budget) &&
+	       ProveWeights(context, sum->terms) && DirectReadLimit(decide, context, clause, condition.limit);
 }
 
 //! One objective part: a plain SUM of linear terms, each coefficient a finite constant, on the rows `kept` names (null
 //! for every row). `count` is the part's coefficient on the decision in the objective's own (minimizing) direction.
-bool Rule::ProveObjectivePart(const DirectIR &ir, ClientContext &context, const DirectPart &part,
-                              unique_ptr<Expression> &kept, double &count) const {
+bool Rule::ProveObjectivePart(const LogicalDecide &decide, const DirectObjective &objective, ClientContext &context,
+                              const DirectPart &part, unique_ptr<Expression> &kept, double &count) const {
 	if (!part.IsPlainSum() || !DirectOnlyLinearTerms(part.terms)) {
 		return false;
 	}
 	DirectLinearPart read;
-	if (!DirectReadLinearPart(ir, context, part, ir.objective.written, read) ||
-	    !DirectObjectivePartKept(ir, part, kept)) {
+	if (!DirectReadLinearPart(decide, context, part, objective.written, read) ||
+	    !DirectObjectivePartKept(decide, part, kept)) {
 		return false;
 	}
 	double slope;
@@ -175,13 +182,14 @@ bool Rule::ProveObjectiveRows(const Condition &condition, const unique_ptr<Expre
 //! finite number, below zero for a maximum budget (the parts are a minimization, so a count that is maximized is
 //! negative) and above zero for a minimum one, on all the rows or on the budget's. Any other objective, none included,
 //! and the other two pairings (a trivial answer: select nothing, or everything) are a decline.
-bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
+bool Rule::ProveObjective(const LogicalDecide &decide, const DirectObjective &objective, ClientContext &context,
+                          Condition &condition) const {
 	double total = 0;
 	bool filtered = false;
-	for (idx_t i = 0; i < ir.objective.parts.size(); i++) {
+	for (idx_t i = 0; i < objective.parts.size(); i++) {
 		unique_ptr<Expression> kept;
 		double count;
-		if (!ProveObjectivePart(ir, context, ir.objective.parts[i], kept, count) ||
+		if (!ProveObjectivePart(decide, objective, context, objective.parts[i], kept, count) ||
 		    !ProveObjectiveRows(condition, kept, i == 0, filtered)) {
 			return false;
 		}

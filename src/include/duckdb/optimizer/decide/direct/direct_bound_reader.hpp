@@ -14,12 +14,12 @@ namespace duckdb {
 
 class ClientContext;
 
-// The shared reader of what a direct rule takes from the IR. The file is named for its first half, the per-row bounds
-// on a decision. It also reads the terms of an objective part or a budget: linear terms (DirectReadLinearPart),
-// per-row constants (DirectReadConstantTerm), squares (DirectReadSquareTerm) and the rows a part reads
-// (DirectObjectivePartKept), composed into DirectReadQuadraticPart. It reads the limit of an aggregate constraint too
-// (DirectReadLimit). DirectNamesOf and DirectIsFiniteWhereKept, which name and test a value those readers produce,
-// stand here too.
+// The shared reader of what a direct rule takes from a clause or the objective. The file is named for its first half,
+// the per-row bounds on a decision. It also reads the terms of an objective part or a budget: linear terms
+// (DirectReadLinearPart), per-row constants (DirectReadConstantTerm), squares (DirectReadSquareTerm) and the rows a
+// part reads (DirectObjectivePartKept), composed into DirectReadQuadraticPart. It reads the limit of an aggregate
+// constraint too (DirectReadLimit). DirectNamesOf and DirectIsFiniteWhereKept, which name and test a value those
+// readers produce, stand here too.
 
 //! The solver's infinite ends of a box, written once for every rule that builds or reads one.
 constexpr double POSITIVE_INFINITY = std::numeric_limits<double>::infinity();
@@ -49,7 +49,7 @@ struct DirectBoundClause {
 	vector<DirectSignedValue> coefficient;
 	unique_ptr<Expression> rhs;
 	//! What a message calls them: the coefficient's values and its clause (DirectNamesOf), and the right side as the
-	//! user wrote it and where (DirectIR::render, DirectIR::place).
+	//! user wrote it and where (DirectRender, DirectPlace).
 	DecideNumberNames coefficient_names;
 	string rhs_text;
 	optional_idx rhs_place;
@@ -78,17 +78,18 @@ struct DirectBoundReading {
 	vector<DirectDecisionBox> boxes;
 };
 
-//! Reads every per-row constraint of `ir` as a bound on one decision. An aggregate constraint is not a bound and is
-//! skipped: the rule reads it, and A1, which has none, declines it. The rule's CheckCondition has checked each per-row
-//! constraint as a bound on one decision (`singleton_row`). A bound the solver folds into the variable
+//! Reads every per-row constraint of `clauses` as a bound on one decision. An aggregate constraint is not a bound and
+//! is skipped: the rule reads it, and A1, which has none, declines it. The rule's CheckCondition has checked each
+//! per-row constraint as a bound on one decision (`singleton_row`). A bound the solver folds into the variable
 //! (`variable_bound`) replaces the default lower bound of 0 and tightens the upper one; every other bound is a clause.
 //! Returns false when a value cannot be proved or the box as written contradicts the decision's built-in domain, which
 //! the solver reports.
-bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundReading &reading);
+bool DirectReadBounds(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+                      DirectBoundReading &reading);
 
 //! True when the bounds the solver folds into a decision (`variable_bound`), as written, contradict its built-in domain
 //! (DecideWrittenBox): the solver raises that error before it reads a row, so a rule that answers the query declines.
-bool DirectContradictsDomain(const DirectIR &ir);
+bool DirectContradictsDomain(const LogicalDecide &decide, const vector<DirectClause> &clauses);
 
 //! The columns of one clause's values, evaluated on every row.
 struct DirectBoundColumns {
@@ -146,7 +147,7 @@ struct DirectLimit {
 //! a value of the data, which is read at run time instead. A value of the data is a numeric, deterministic expression
 //! over source columns that mentions at least one and may raise (the plan evaluates it on the rows that read it, as the
 //! solver does, so both raise on the same inputs). False when it is neither.
-bool DirectReadLimit(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &constraint,
+bool DirectReadLimit(const LogicalDecide &decide, ClientContext &context, const DirectClause &constraint,
                      DirectLimit &limit);
 
 //! The limit of a count constraint `SUM(x) <comparison> B`, or `SUM(-x) <comparison> B`, read as a limit on the count
@@ -164,7 +165,7 @@ struct DirectCountLimit {
 //! constraint's body is `SUM(-x)`. A constant is rounded to whole rows by DirectInclusiveRows, a limit of the data by
 //! DirectInclusiveRowsExpr. False when DirectReadLimit reads no limit, which includes a constant of magnitude
 //! DECIDE_EFFECTIVE_INFINITY or more.
-bool DirectReadCountLimit(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &constraint,
+bool DirectReadCountLimit(const LogicalDecide &decide, ClientContext &context, const DirectClause &constraint,
                           bool negated, DirectCountLimit &count);
 
 //===--------------------------------------------------------------------===//
@@ -202,7 +203,7 @@ vector<DirectSignedValue> DirectValuesOn(const DirectLinearPart &part, idx_t dec
 //! What a message names for a number computed from `values` (DecideNumberNames): each value printed as the user wrote
 //! it, in reading order, and `clause`; the value's place when there is one value. A constant the query text holds no
 //! place for is no value of the user's: a number made of only those names the clause.
-DecideNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedValue> &values,
+DecideNumberNames DirectNamesOf(const LogicalDecide &decide, const vector<DirectSignedValue> &values,
                                 const DecideClauseRef &clause);
 
 //! Whether a number computed from `values` (with the part's `factor`) needs no invalid-value check: the
@@ -232,7 +233,7 @@ bool DirectOnlyLinearTerms(const vector<DecideSplitTerm> &terms);
 //! A term that is not linear is skipped, and so are the part's reducer, filter and qualifier: the rule checks those,
 //! and which decision a term names. `clause` is the clause (or the objective) the part belongs to, which a message
 //! names.
-bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const DirectPart &part,
+bool DirectReadLinearPart(const LogicalDecide &decide, ClientContext &context, const DirectPart &part,
                           const DecideClauseRef &clause, DirectLinearPart &out);
 
 //===--------------------------------------------------------------------===//
@@ -269,25 +270,25 @@ struct DirectWeightedForm {
 };
 
 //! Reads a CONSTANT term of a part. False when its value is not a numeric value of the source row.
-bool DirectReadConstantTerm(const DirectIR &ir, const DecideSplitTerm &term, const DecideClauseRef &clause,
+bool DirectReadConstantTerm(const LogicalDecide &decide, const DecideSplitTerm &term, const DecideClauseRef &clause,
                             DirectConstantTerm &out);
 
 //! Reads the terms of a linear form (the factor of a square, or what an absolute value holds): linear terms of one
-//! declared decision, and constants, each with a coefficient that is a numeric value of the source row. False when a
-//! term is of another kind, the form names no decision or two, or a value cannot be proved.
-bool DirectReadLinearForm(const DirectIR &ir, const vector<DecideSplitTerm> &form, const DecideClauseRef &clause,
-                          DirectLinearForm &out);
+//! declared decision, and constants, each with a coefficient that is a numeric value of the source row. False when the
+//! form names two decisions or a value cannot be proved.
+bool DirectReadLinearForm(const LogicalDecide &decide, const vector<DecideSplitTerm> &form,
+                          const DecideClauseRef &clause, DirectLinearForm &out);
 
 //! Reads a square of a part: a linear form squared under a coefficient. False when the form is not linear in one
 //! decision, or the coefficient or a value in the form is not a numeric value of the source row. A weight read from the
 //! data is read like any other; a rule that needs a constant one folds it (DirectFoldConstantSum).
-bool DirectReadSquareTerm(const DirectIR &ir, const DecideSplitTerm &term, const DecideClauseRef &clause,
+bool DirectReadSquareTerm(const LogicalDecide &decide, const DecideSplitTerm &term, const DecideClauseRef &clause,
                           DirectWeightedForm &out);
 
 //! Reads an absolute value of a part, `ABS(inner)` under a coefficient, into the same form a square is read into.
 //! DirectReadQuadraticPart does not call it, so a rule that does not take an absolute loss declines one without a check
 //! of its own. `term` is an `ABS`. False when its form or coefficient cannot be read.
-bool DirectReadAbsTerm(const DirectIR &ir, const DecideSplitTerm &term, const DecideClauseRef &clause,
+bool DirectReadAbsTerm(const LogicalDecide &decide, const DecideSplitTerm &term, const DecideClauseRef &clause,
                        DirectWeightedForm &out);
 
 //! The signed sum of `values` as one constant, with a NULL guard read through (a row it skips reads 0, as coefficient
@@ -308,15 +309,15 @@ struct DirectQuadraticPart {
 
 //! Reads a part of an objective into its linear terms, constants and squares (DirectReadLinearPart,
 //! DirectReadConstantTerm, DirectReadSquareTerm, DirectObjectivePartKept). False when any of them cannot be read, a
-//! linear term names a decision the IR does not declare, or a term is of another kind. How many squares the rule
+//! linear term names a decision the query does not declare, or a term is of another kind. How many squares the rule
 //! admits, and which signs, is the rule's to check on `out`.
-bool DirectReadQuadraticPart(const DirectIR &ir, ClientContext &context, const DirectPart &part,
+bool DirectReadQuadraticPart(const LogicalDecide &decide, ClientContext &context, const DirectPart &part,
                              const DecideClauseRef &clause, DirectQuadraticPart &out);
 
 //! The rows an objective part reads: those the objective's `when` and the part's own both keep, over the source, or
 //! null for every row. A row they drop (a false or NULL `when`) has no coefficient in the part, which a rule reads as
 //! 0. False when a `when` is not a predicate of the source that cannot raise.
-bool DirectObjectivePartKept(const DirectIR &ir, const DirectPart &part, unique_ptr<Expression> &kept);
+bool DirectObjectivePartKept(const LogicalDecide &decide, const DirectPart &part, unique_ptr<Expression> &kept);
 
 //===--------------------------------------------------------------------===//
 // Fixed values of a BOOL decision
@@ -335,16 +336,16 @@ bool DirectReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &
 
 //! The decision's terms on a per-row left side, as in a fixed value `x = 1`; null for an aggregate constraint or a
 //! left side with a term that is not linear. A membership constraint (`x IN (...)`) is the caller's to decline.
-const vector<DecideSplitTerm> *DirectFixedTerms(const DirectIRConstraint &constraint);
+const vector<DecideSplitTerm> *DirectFixedTerms(const DirectClause &constraint);
 
 //! Whether the problem declares one decision of `domain`, one per row, and no keyed scope: the shape
 //! S1, S2, S3, N1 and O1 read.
-bool DirectIsOneRowDecision(const DirectIR &ir, DirectDomain domain);
+bool DirectIsOneRowDecision(const LogicalDecide &decide, DirectDomain domain);
 
 //! Splits the constraints in order: the per-row clauses on the decision (DirectFixedTerms), which DirectReadFixedValues
 //! reads, go to `fixes`, and every other constraint goes to `others`. False on a membership constraint (`x IN (...)`).
-bool DirectSplitFixes(const DirectIR &ir, vector<const DirectIRConstraint *> &fixes,
-                      vector<const DirectIRConstraint *> &others);
+bool DirectSplitFixes(const vector<DirectClause> &clauses, vector<const DirectClause *> &fixes,
+                      vector<const DirectClause *> &others);
 
 //! A value from the row that fixes `x`: it must be neither NULL nor, for a floating point value, NaN; a coefficient
 //! must also be finite.
@@ -372,12 +373,12 @@ struct DirectFixedValues {
 	}
 };
 
-//! Reads each clause of `clauses` (per-row constraints with DirectFixedTerms) as a fixed value: `x = 1`, `2 * x >= 1`,
-//! `x <= flag`, `x <> c`, under an optional `when`. False when a clause is not one the plan can read, or when a bound
-//! the solver folds contradicts the decision's built-in domain (DirectContradictsDomain: the solver raises that error
-//! before it reads a row).
-bool DirectReadFixedValues(const DirectIR &ir, ClientContext &context,
-                           const vector<const DirectIRConstraint *> &clauses, DirectFixedValues &fixed);
+//! Reads each clause of `fixes` (per-row constraints of `clauses` with DirectFixedTerms) as a fixed value: `x = 1`, `2
+//! * x >= 1`, `x <= flag`, `x <> c`, under an optional `when`. False when a clause is not one the plan can read, or
+//! when a bound the solver folds contradicts the decision's built-in domain (DirectContradictsDomain: the solver raises
+//! that error before it reads a row).
+bool DirectReadFixedValues(const LogicalDecide &decide, const vector<DirectClause> &clauses, ClientContext &context,
+                           const vector<const DirectClause *> &fixes, DirectFixedValues &fixed);
 
 //! True on a row where any of `conditions` is true; false for none. `Any` tests its first condition first and this
 //! tests the last first, the solver's order.

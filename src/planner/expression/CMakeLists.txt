@@ -10,6 +10,7 @@ add_library_unity(
   bound_comparison_expression.cpp
   bound_conjunction_expression.cpp
   bound_constant_expression.cpp
+  bound_decide_null_guard_expression.cpp
   bound_decide_null_test_expression.cpp
   bound_decide_frame_expression.cpp
   bound_decide_reducer_expression.cpp

@@ -16,6 +16,7 @@
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_decide_null_guard_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -528,8 +529,7 @@ private:
 			auto guarded = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_COALESCE, type);
 			guarded->children.push_back(std::move(coefficient));
 			guarded->children.push_back(make_uniq<BoundConstantExpression>(Value::INTEGER(0).DefaultCastAs(type)));
-			guarded->SetAlias(NULL_GUARD_TAG);
-			coefficient = std::move(guarded);
+			coefficient = make_uniq<BoundDecideNullGuardExpression>(std::move(guarded));
 		};
 		for (auto &term : objective.terms) {
 			zero_if_null(term.coefficient);
