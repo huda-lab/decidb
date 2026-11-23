@@ -1076,9 +1076,7 @@ BoundDecideClause DecideCanonicalizer::CanonicalizeFunctionRow(const BoundDecide
 	auto written = NormalizeProducts(context, decide_index, desugared ? *desugared : *row.body);
 	result.body = CanonicalizeComparisonInternal(*written);
 	result.query_wide_bound = BoundIsQueryWide(*result.body);
-	result.shape = ContainsDecisionReducer(*result.body->Cast<BoundComparisonExpression>().left)
-	                   ? CanonicalConstraintClass::AGGREGATE
-	                   : CanonicalConstraintClass::PER_ROW;
+	ClassifyClause(result, Clause::CONSTRAINT);
 	return result;
 }
 
@@ -1221,18 +1219,15 @@ BoundDecideClause DecideCanonicalizer::CanonicalizeObjective(const BoundDecideCl
 	auto result = objective.Copy();
 	result.EnumerateExpressions([&](unique_ptr<Expression> &expression) { DesugarNormsInPlace(expression); });
 	NormalizeProductsInPlace(context, decide_index, result.body);
-	bool value_shape = false;
-	result.body =
-	    CanonicalizeObjectiveInternal(*result.body, out_constant_offset, sense == DecideSense::MAXIMIZE, value_shape);
-	result.shape = value_shape ? CanonicalConstraintClass::VALUE : CanonicalConstraintClass::INVALID;
+	result.body = CanonicalizeObjectiveInternal(*result.body, out_constant_offset, sense == DecideSense::MAXIMIZE);
+	ClassifyClause(result, Clause::OBJECTIVE);
 	return result;
 }
 
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const Expression &objective,
-                                                                          double &out_constant_offset, bool negate,
-                                                                          bool &out_value_shape) const {
+                                                                          double &out_constant_offset,
+                                                                          bool negate) const {
 	DecideProfileScope profile("canonicalize.objective");
-	out_value_shape = false;
 	// No decision content anywhere. Not a shape this pass owns, and not an error: the binder refuses it.
 	if (!ReferencesDecideVar(objective)) {
 		return objective.Copy();
@@ -1276,10 +1271,6 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 		}
 	}
 	auto result = BuildAdditive(decision_atoms);
-	// A reducer under a Boolean decision takes the VALUE shape, as a comparison does: the value rewrite holds the
-	// reducer in a helper decision, and the product with it is a Boolean product.
-	out_value_shape = std::any_of(decision_atoms.begin(), decision_atoms.end(),
-	                              [&](const Atom &atom) { return atom.scale && ReferencesDecideVar(*atom.scale); });
 	// A reducer holding a reducer takes the value rewrite, as in a constraint: the shape is
 	// decided here, once, and the rewrite reads the tag.
 	TagNestedObjectiveReducers(*this, *result, decide_index);
@@ -1469,7 +1460,7 @@ void DecideCanonicalizer::VerifyCanonical(const BoundDecideClause &clause) const
 			CanonicalInvariantFailure("C6", "the clause's bound is not recorded as the value it is", *clause.body);
 		}
 		auto classified = clause.Copy();
-		ClassifyClause(classified);
+		ClassifyClause(classified, Clause::CONSTRAINT);
 		if (classified.shape == CanonicalConstraintClass::VALUE && clause.shape != CanonicalConstraintClass::VALUE) {
 			CanonicalInvariantFailure("C5", "the clause takes the value shape and is not recorded in it", *clause.body);
 		}
@@ -1489,9 +1480,20 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeClauseBody(const Express
 	return CanonicalizeComparisonInternal(body);
 }
 
-void DecideCanonicalizer::ClassifyClause(BoundDecideClause &clause) const {
+void DecideCanonicalizer::ClassifyClause(BoundDecideClause &clause, Clause role) const {
 	clause.shape = CanonicalConstraintClass::INVALID;
 	clause.group_key = DConstants::INVALID_INDEX;
+	if (role == Clause::OBJECTIVE) {
+		// A reducer under a Boolean decision takes the VALUE shape, as a comparison does: the value rewrite holds the
+		// reducer in a helper decision, and the product with it is a Boolean product. The objective has no other.
+		vector<Atom> atoms;
+		Decompose(*clause.body, 1, atoms, Clause::OBJECTIVE);
+		if (std::any_of(atoms.begin(), atoms.end(),
+		                [&](const Atom &atom) { return atom.scale && ReferencesDecideVar(*atom.scale); })) {
+			clause.shape = CanonicalConstraintClass::VALUE;
+		}
+		return;
+	}
 	if (clause.body->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
 		return;
 	}
@@ -1559,12 +1561,9 @@ void DecideCanonicalizer::CanonicalizeClauses(vector<BoundDecideClause> &clauses
 		NormalizeProductsInPlace(context, decide_index, clause.body);
 	}
 	for (auto &clause : canonical) {
-		const bool classified = clause.shape != CanonicalConstraintClass::INVALID;
 		clause.body = CanonicalizeClauseBody(*clause.body);
 		clause.query_wide_bound = BoundIsQueryWide(*clause.body);
-		if (!classified) {
-			ClassifyClause(clause);
-		}
+		ClassifyClause(clause, Clause::CONSTRAINT);
 	}
 	for (auto &clause : canonical) {
 		if (clause.body->GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {

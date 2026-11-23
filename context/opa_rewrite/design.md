@@ -215,7 +215,7 @@ three steps, where column bindings are final (`plan_decide.cpp:224`):
 
    | Kind | Facts | Rule |
    |---|---|---|
-   | A fact of the written clause | shape (value or aggregate), its grouping key, its variant signature | set once by the canonicalizer, stored on the clause, never recomputed. [read] The rewrites replace reducers by helpers, so recomputing after them gives a different answer (`decide_canonicalizer.cpp:1668`, `decide_tree.cpp:784`). The shape has a second writer: the scoped-reducer pass, which discharges the VALUE shape by putting helpers where the reducers were, classifies the clause it leaves (`ClassifyClause`), since the tree reads that clause as per-row or aggregate |
+   | A fact of the canonical clause | shape (value or aggregate), its grouping key | a function of the canonical body and the scope with one writer, `ClassifyClause`, which the canonicalizing boundary calls each time it canonicalizes a clause, a function-owned row or the objective (R29). No reader recomputes it. The variant signature is set by the binder and stored |
    | A fact joined over a helper's readers | the sides a MIN or MAX helper needs (`push`), whether an ABS is exact, the innermost-first order of definitions | stored on the definition; a rewrite that adds a reader widens it |
    | Computed when asked | degree | never stored, as today |
 
@@ -321,8 +321,8 @@ Ruled by the owner (`decisions.md` R21 to R26):
 3. **Shared things are tables named by typed index** (§ 3.1, § 3.2.3): keys, frames, and one table of helper
    definitions that owns each helper's body. A reading node owning its body would make a helper per copy of a
    clause.
-4. **A written clause's shape and signature are stored once, and one debug check guards bound reduction**
-   (contract 4). Computing them when asked gives a different answer after the rewrites.
+4. **A clause's shape has one writer, the canonicalizing boundary, and one debug check guards bound reduction**
+   (contract 4, R29). No reader computes the shape.
 
 ### 3.8 Risks
 

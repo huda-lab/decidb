@@ -28,21 +28,6 @@ every one of them:
 - **Tests** (R32): focused tests in each task's **Done when**; `make decide-test` once at the end of each queue
   group; every other suite in TREE-28.
 
-## TREE-16 — A clause's shape has one writer
-
-- **Problem.** `BoundDecideClause::shape` has four writers and a sentinel. `CanonicalizeClauses` skips
-  classification when `shape != INVALID`, so a re-canonicalized clause keeps a stale shape
-  (`decide_canonicalizer.cpp:1586-1592`). The scoped-reducer pass builds a second canonicalizer to overwrite it
-  (`decide_rewrite_scoped.cpp:575-579`). `CanonicalizeFunctionRow` classifies by another rule at physical planning
-  (`decide_tree.cpp:623-625`). The objective reuses the enum as a boolean (`decide_canonicalizer.cpp:1252`).
-- **Change.** R29: shape is a function of the canonical body and the scope, so the canonicalizing boundary sets it
-  every time it canonicalizes a clause, and nothing else writes it. The scoped pass's call and the function row's
-  own rule go; the objective's fact gets its own field or goes. Start from
-  `context/opa_rewrite/review/tree6e_option_b_canonicalizer.patch`.
-- **Done when.** `shape` is assigned in one function; `./test/decide/run_tests.sh -k "scoped or minmax or value or
-  shape or canonical"` and `build/release/test/unittest "[decidb]"` pass; design.md § 3.3 contract 4 states one
-  writer.
-
 ## TREE-17 — The body enumeration re-canonicalizes what a pass marks
 
 - **Problem.** "A pass canonicalizes the clause it changes" is a tail copied into three passes
@@ -54,7 +39,6 @@ every one of them:
 - **Change.** Template Method: a pass's callback sets `DecideOwnedBody::changed` where it replaces an expression
   (DuckDB's `changes_made`), and `EnumerateBodies` canonicalizes the marked clauses and the objective once when the
   pass returns. No pass canonicalizes by itself and none copies a body to compare.
-- **Needs.** TREE-16.
 - **Done when.** No rewrite file calls the canonicalizer on a clause it holds;
   `./test/decide/run_tests.sh -k "abs or bilinear or product or minmax or norm or avg or not_equal or scoped"`
   passes.

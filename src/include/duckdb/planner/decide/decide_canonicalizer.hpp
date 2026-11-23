@@ -85,7 +85,7 @@
 // Peeling is also where the scale-specific rule "a factor on a reducer must be
 // one value for the whole query" is enforced.
 //
-// SHAPE IS DECIDED AT THIS BOUNDARY, once for a clause, and stored on it
+// SHAPE IS DECIDED AT THIS BOUNDARY, each time it canonicalizes a clause, and stored on it
 // (BoundDecideClause::shape, group_key; ClassifyClause). After rebuilding, ClassifyScoped reads the
 // decision side as one of three shapes: ROWS (no decision reducer: one row per kept
 // row or class), AGGREGATE (decision reducers sharing one `by` key beside query-wide
@@ -218,14 +218,8 @@ public:
 	//! `canonical_differs` whether canonicalization changed that clause (its source clause names it).
 	void CanonicalizeClauses(vector<BoundDecideClause> &clauses, vector<ConstraintSourceInfo> *sources = nullptr) const;
 
-	//! Decide the shape of a canonical clause and the `by` key of its aggregate shape, with the clause's scope
-	//! (BoundDecideClause::shape, group_key). CanonicalizeClauses calls it once for a clause; the one pass that
-	//! replaces a clause's reducers by helpers (RewriteScopedReducers) calls it for the clause it leaves.
-	void ClassifyClause(BoundDecideClause &clause) const;
-
 	//! Canonicalize one row a function made after the clauses were canonicalized (an ABS envelope, an L0 link, a
-	//! body definition row): a copy with the same spelling as a clause. Its shape is read off the row, aggregate
-	//! where a decision reducer stands on its decision side: no scope decides it, and no value rewrite follows.
+	//! body definition row): a copy with the same spelling and the same classification as a clause.
 	BoundDecideClause CanonicalizeFunctionRow(const BoundDecideClause &row) const;
 
 	//! The variant signature of every scoped expression of the canonical clauses with a field
@@ -348,6 +342,11 @@ private:
 	//! A data-only reducer is RIGHT: the right-hand side evaluates any DuckDB aggregate over its
 	//! groups, so K1 reads decisions left, data right, with no third case.
 	enum class Placement : uint8_t { LEFT, RIGHT };
+
+	//! The one writer of a record's shape and of the `by` key of its aggregate shape (BoundDecideClause::shape,
+	//! group_key): a function of the canonical body and the scope, set each time the boundary canonicalizes the
+	//! record (R29). An objective takes the VALUE shape or none.
+	void ClassifyClause(BoundDecideClause &clause, Clause role) const;
 
 	//! One additive term of a comparison side. `expr` is borrowed from the input
 	//! tree and is only ever copied, never mutated. Binder-inserted casts over the
@@ -473,9 +472,8 @@ private:
 	//! `from`'s kind over `child`, carrying its alias, facts and `when`.
 	unique_ptr<Expression> RebindReducer(const BoundDecideReducerExpression &from, unique_ptr<Expression> child) const;
 	unique_ptr<Expression> CanonicalizeComparisonInternal(const Expression &comparison) const;
-	//! `value_shape`: a reducer stands under a Boolean decision, so the value rewrite holds it in a helper decision.
 	unique_ptr<Expression> CanonicalizeObjectiveInternal(const Expression &objective, double &out_constant_offset,
-	                                                     bool negate, bool &value_shape) const;
+	                                                     bool negate) const;
 
 	void VerifyCanonicalComparison(const BoundComparisonExpression &comparison) const;
 

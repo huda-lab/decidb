@@ -13,8 +13,7 @@ the owner rules first.
 # Phase 5 — The parser builds the tree
 
 ## 5.2 The clause record (one lane)
-- [ ] TREE-16 A clause's shape has one writer — pipeline/todo.md § TREE-16
-- [ ] TREE-17 The body enumeration re-canonicalizes what a pass marks — pipeline/todo.md § TREE-17 (needs: TREE-16)
+- [ ] TREE-17 The body enumeration re-canonicalizes what a pass marks — pipeline/todo.md § TREE-17
 - [ ] TREE-18 The bound-read debug check states its condition — pipeline/todo.md § TREE-18 (needs: TREE-17)
 - [ ] TREE-19 Clause-record leftovers — pipeline/todo.md § TREE-19
 - [ ] TREE-20 A recorded reducer's query-wide fact comes from its record — pipeline/todo.md § TREE-20

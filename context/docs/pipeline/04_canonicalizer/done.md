@@ -585,12 +585,11 @@ hold may take several values in a class, each a variant (D70). So `per D: sum(sh
 (D) <= D.cap * open`, with `open` declared `per D:`, is AGGREGATE: one row per depot with
 that depot's `open` column. Under `per D.depotID`, `D.cap` is not one of the key's
 elements, so the same link takes a helper per group and one row per variant. Execution counts the term once in each group's row (`CountOnce`, stage
-08). The shape is a fact of the written clause, decided with its scope: `CanonicalizeClauses` calls `ClassifyClause`
-once for a clause and stores the result (`BoundDecideClause::shape`), and a clause that goes through the
-canonicalizer again keeps it. The rewrites replace reducers by helpers, so classifying the comparison again after
-them gives another answer; the one pass that does replace a clause's reducers (`RewriteScopedReducers`, stage 05),
-which discharges the VALUE shape by putting helpers where the reducers were, calls `ClassifyClause` for the clause it
-leaves. The shape has these two writers and no other. Every reader reads the field.
+08). The shape is a function of the canonical body and the scope, and it has one writer (R29): `ClassifyClause`, which the
+boundary calls each time it canonicalizes a clause, a function-owned row or the objective, and which stores the result
+(`BoundDecideClause::shape`). A pass that replaces a clause's reducers by helpers (`RewriteScopedReducers`, stage 05)
+sends the clause back through the boundary, which gives it the shape of what is left. No reader recomputes it: every
+reader reads the field. The objective takes the VALUE shape (a reducer under a Boolean decision) or none.
 
 An aggregate-shape clause stores the `by` key its decision reducers share (`BoundDecideClause::group_key`), the
 one grouping carrier after this stage, since later rewrites rebuild the reducers. Its `per K:` stays, as on

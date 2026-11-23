@@ -565,13 +565,9 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 			HandProductsToBilinear(cmp.left, clause.origin);
 		}
 		// Helpers stand where the reducers were: the clause goes back through the canonicalizing boundary (a helper
-		// under a sign is spelled as a decision is), and has the shape of what is left, one row per class or per group
-		// of the reducers it keeps. The canonicalizer is made here, to read the helpers' scopes.
+		// under a sign is spelled as a decision is), which gives it the shape of what is left, one row per class or
+		// per group of the reducers it keeps.
 		decide.CanonicalizeClause(optimizer.context, clause);
-		DecideCanonicalizer(optimizer.context, decide.decide_index, decide.bound.variable_scopes,
-		                    decide.bound.keyed_scopes, decide.bound.keys, decide.bound.is_boolean_var,
-		                    decide.bound.computed_values)
-		    .ClassifyClause(clause);
 	};
 
 	// The objective is one expression under its sense (`MAXIMIZE b * sum(x)`): a reducer under a Boolean decision
