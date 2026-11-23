@@ -29,12 +29,13 @@ struct FormRow {
 	double constant = 0.0;
 };
 
-static FormRow ReadFormRow(const vector<idx_t> &variables, const vector<CoefficientColumn> &columns, idx_t row,
-                           const VarIndexer &indexer, const DecideClauseRef &written) {
+static FormRow ReadFormRow(const vector<idx_t> &variables, const vector<CoefficientColumn> &columns, idx_t place,
+                           idx_t row, const VarIndexer &indexer, const DecideClauseRef &written) {
 	FormRow form;
-	// `variables` and `columns` are pushed together (DecideModelEmitter), and each column holds every data row.
+	// `variables` and `columns` are pushed together (DecideModelEmitter), and each column holds the data row `row` at
+	// `place`.
 	for (idx_t t = 0; t < variables.size(); t++) {
-		double a = columns[t].Get(row);
+		double a = columns[t].Get(place);
 		if (a == 0.0) {
 			continue;
 		}
@@ -97,22 +98,23 @@ static void AddProductRow(const FormRow &left, const FormRow &right, double w, s
 	AddCoefficient(constant, w * left.constant * right.constant, written);
 }
 
-//! One product group (EvaluatedProductGroup) on one row: Q gets `w * l * rᵀ` in the monomial convention, the cross
-//! terms with a form's constant go to `add_linear`, and the product of the constants to `constant`.
+//! One product group (EvaluatedProductGroup) on the data row `row`, which its columns hold at `place`: Q gets
+//! `w * l * rᵀ` in the monomial convention, the cross terms with a form's constant go to `add_linear`, and the product
+//! of the constants to `constant`.
 template <class ADD_LINEAR>
-static void AddProductGroupRow(const EvaluatedProductGroup &group, idx_t row, const VarIndexer &indexer,
+static void AddProductGroupRow(const EvaluatedProductGroup &group, idx_t place, idx_t row, const VarIndexer &indexer,
                                std::unordered_map<uint64_t, double> &q, ADD_LINEAR &&add_linear, double &constant,
                                const DecideClauseRef &written) {
-	double w = group.weight.Get(row);
+	double w = group.weight.Get(place);
 	if (w == 0.0) {
 		return;
 	}
-	auto left = ReadFormRow(group.left_variables, group.left_coefficients, row, indexer, written);
+	auto left = ReadFormRow(group.left_variables, group.left_coefficients, place, row, indexer, written);
 	if (group.square) {
 		AddSquareRow(left, w, q, add_linear, constant, written);
 		return;
 	}
-	auto right = ReadFormRow(group.right_variables, group.right_coefficients, row, indexer, written);
+	auto right = ReadFormRow(group.right_variables, group.right_coefficients, place, row, indexer, written);
 	AddProductRow(left, right, w, q, add_linear, constant, written);
 }
 
@@ -634,7 +636,7 @@ static void BuildModelObjective(SolverModel &model, SolverInput &input, const Va
 			    model.nonconvex_quadratic || IsNonconvexProductGroup(group.square, group.weight_sign);
 			for (idx_t row = 0; row < num_rows; row++) {
 				AddProductGroupRow(
-				    group, row, indexer, q_map,
+				    group, row, row, indexer, q_map,
 				    [&](int flat_idx, double value) {
 					    AddCoefficient(model.obj_coeffs[flat_idx], value, input.objective_written);
 				    },
@@ -844,7 +846,7 @@ static void BuildModelClauseRows(SolverModel &model, SolverInput &input, const V
 		for (auto &group : clause.products) {
 			for (idx_t k = clause.row_begin[e]; k < clause.row_begin[e + 1]; k++) {
 				AddProductGroupRow(
-				    group, clause.rows[k], indexer, q_accum,
+				    group, clause.rows[k], clause.data_rows[clause.rows[k]], indexer, q_accum,
 				    [&](int flat_idx, double value) { AddCoefficient(linear_accum[flat_idx], value, written); },
 				    rhs_adjustment, written);
 			}

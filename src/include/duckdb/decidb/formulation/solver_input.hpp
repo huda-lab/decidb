@@ -180,8 +180,9 @@ struct EmittedRows {
 	EmittedRows &operator=(EmittedRows &&) = default;
 };
 
-//! A product group (DecideProductGroup) evaluated on every row: `weight[row] * l(row) * r(row)`, where `l` and `r` are
-//! linear forms in that row's decisions. A square has no right form and multiplies `left` by itself.
+//! A product group (DecideProductGroup) evaluated on every row its reader holds (the objective's every data row, a
+//! clause's kept rows by place): `weight[row] * l(row) * r(row)`, where `l` and `r` are linear forms in that row's
+//! decisions. A square has no right form and multiplies `left` by itself.
 struct EvaluatedProductGroup {
 	//! The group's sign times its weight, 0 on a row the group does not read.
 	CoefficientColumn weight;
@@ -350,14 +351,15 @@ struct NotEqualClause {
 	vector<double> excluded;
 };
 
-//! A clause with terms of degree 2: its linear part, and the product groups a row's data rows are read from. The
-//! evaluated product groups are per data row, so the clause lists the data rows of each row it emits:
-//! rows[row_begin[e] .. row_begin[e + 1]).
+//! A clause with terms of degree 2: its linear part, and the product groups, evaluated on each row the clause keeps.
+//! The clause lists the kept rows of each row it emits, by their place in the product groups' columns:
+//! rows[row_begin[e] .. row_begin[e + 1]), and `data_rows` gives the data row at each place.
 struct QuadraticClause {
 	EvaluatedConstraint row;
 	vector<EvaluatedProductGroup> products;
 	vector<idx_t> row_begin;
 	vector<idx_t> rows;
+	vector<idx_t> data_rows;
 };
 
 //! Maps result rows to the classes of a key scope: a `per K:` decision's or a helper's

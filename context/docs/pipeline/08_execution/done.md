@@ -866,24 +866,36 @@ enumeration is maintained by hand — see
 Each term's coefficient expression is transformed, read window by window from the one
 pass (§1a), and cast to `double` via `DefaultCastAs(LogicalType::DOUBLE)` —
 **one conversion, on the result of the complete typed expression**, which is what
-keeps a data cast's SQL semantics intact. Values accumulate into
-`row_coefficients[term_idx]` indexed by global row.
+keeps a data cast's SQL semantics intact.
 
 Data-only LHS terms carry `INVALID_INDEX`. For aggregate constraints those fixed
 coefficients are still evaluated per active row; their row or group sum is the record's constant, which the model
 builder subtracts from the RHS.
 
-### The records stage 06 reads
+### A clause is read over the rows it keeps
 
-The columns above are the emitter's own (`EvaluatedClauseColumns`: `row_coefficients`, `rhs_values`, the admitted
-ends and `row_group_ids`). `DecideModelEmitter::Route` turns them into the clause stage 06 receives, in one place:
-`DecideClauseRowSets` lists the data rows of each row the clause emits (a counting sort by group for an aggregate
-clause, the kept rows for a per-row one), and `DecideWriteClauseRecords` writes a record per row
-(`ClauseRecords`, `../06_model_formulation/done.md` § The rows a clause emits). The same sets give an aggregate `<>`
-its excluded values and a quadratic clause the data rows of its products. The columns are freed with the clause, so
-40 clauses over 2,000,000 rows that each keep 2,000 peak at 1.2 GB where the columns held to the end peaked at
-2.9 GB (`context/opa_rewrite/repro/clauses_times_rows.sql`). A per-row clause pays for the copy: 4 clauses over
-500,000 rows spend 40 ms more in `execution.tree_model` and 30 ms less in implied bounds and the builder.
+`DecideModelEmitter::Keep` lists the rows a clause's root reached, each once and in row order, with the entry of the
+root's container that holds it (a row routed to a root twice is read at the entry that reached it last). A row's
+**place** is its position in that list. Everything the emitter evaluates for the clause is as long as the list, never
+as long as the input: a reducer's filter masks, the group of each row, the coefficient columns of an aggregate
+clause. One scratch vector as long as the input (`place_of_row`) maps a data row to its place while the clause is
+read and is cleared after it (`Unplace`), so no clause allocates by input length.
+
+- **A per-row clause** (`Rows`) writes its records straight from the root's entries: one record per kept row, its
+  terms, bound and admitted ends read from the entry's values, with no column between.
+- **An aggregate clause** (`Groups`) reads each term into a column over the kept rows (`EvaluatedClauseColumns`:
+  `row_coefficients`, `rhs_values`, the admitted ends, `row_group_ids`), then `DecideClauseRowSets` lists the places
+  of each group by a counting sort and `DecideWriteClauseRecords` writes one record per group, turning places back
+  into data rows. The same sets give an aggregate `<>` its excluded values and a quadratic clause the data rows of
+  its products.
+- **A clause that keeps no row emits no row** (D68), aggregate or per-row.
+
+The records are `ClauseRecords` (`../06_model_formulation/done.md` § The rows a clause emits). Measured on
+`context/opa_rewrite/repro/clauses_times_rows.sql` (40 clauses over 2,000,000 rows, each keeping 2,000) against
+columns as long as the input: `execution.tree_model` 25 ms against 534 ms, implied bounds 0 ms against 181 ms, peak
+memory 1.03 GB against 2.78 GB. A clause that keeps every row gains nothing from places and pays for its records:
+`y <= v` alone over 1,000,000 rows spends 103 ms in `execution.tree_model` against 53 ms, and 66 ms against 82 ms in
+implied bounds and the builder's clause rows.
 
 ### RHS
 
@@ -899,7 +911,7 @@ expression for it.
 
 ### `when`, `by` and `per` → `row_group_ids`
 
-One per-row vector assigns each row to a row of the clause, or excludes it. The clause's
+One vector over the kept rows assigns each to a row of the clause, or excludes it. The clause's
 `when` is read first (in the descent); every map is built over the kept rows only, with ids
 dense in key-value order. A row with NULL in a written key column is in no group of that
 key (`DecideKeyNullMode::NO_GROUP`, D5); it stays in the groups of every other key the

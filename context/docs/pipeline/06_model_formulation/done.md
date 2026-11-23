@@ -258,14 +258,16 @@ kept row, a member of an easy MIN/MAX, or under `per K:` a class's first kept ro
 its bound; the values it admits when it bounds one decision; its group, which names it and its class set; and its
 first data row. Every reader of a clause reads the records: implied bounds, the Big-M and range walks
 (`DecideRowSignedRange`, `DecideRowTermRange`), `<>`, ABS, the lifted floors, the diagnosis and the builder. None
-reads an array as long as the input or regroups one. The emitter writes the records in one place
-(`DecideWriteClauseRecords`, stage 08).
+reads an array as long as the input or regroups one. The emitter writes them (`DecideModelEmitter::Rows` for a
+per-row clause, `DecideWriteClauseRecords` for an aggregate one; `../08_execution/done.md` § A clause is read over the
+rows it keeps).
 
 The builder states one `ModelConstraint` per record: the terms resolved to solver columns (`ClauseEmittedRows`), and
 the bound less the record's constant and the constants of the inlined helpers the row reads.
 
-A quadratic clause's linear part is read the same way; its product groups are evaluated per data row, so the clause
-lists the data rows of each row it emits (`QuadraticClause::rows`).
+A quadratic clause's linear part is read the same way; its product groups are evaluated over the rows the clause
+keeps, so the clause lists, for each row it emits, the places its products are read at (`QuadraticClause::rows`) and
+the data rows they stand for (`data_rows`).
 
 **A row that bounds one decision goes into its column box instead** (`TryFoldPerRowBound`).
 When the clause is a bound on one decision (`x <= cap`, `2 * x >= lo`, `cap * x <= 10`,

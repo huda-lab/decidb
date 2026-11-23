@@ -334,6 +334,10 @@ ClauseRowSets DecideClauseRowSets(const EvaluatedClauseColumns &evaluated, idx_t
 		return sets;
 	}
 	if (groups.empty()) {
+		// A clause that keeps no row holds no instance (D68).
+		if (num_rows == 0) {
+			return sets;
+		}
 		sets.rows.resize(num_rows);
 		std::iota(sets.rows.begin(), sets.rows.end(), idx_t(0));
 		sets.begin.push_back(num_rows);
@@ -366,7 +370,7 @@ ClauseRowSets DecideClauseRowSets(const EvaluatedClauseColumns &evaluated, idx_t
 	return sets;
 }
 
-void DecideWriteClauseRecords(EvaluatedClauseColumns &evaluated, const ClauseRowSets &sets,
+void DecideWriteClauseRecords(EvaluatedClauseColumns &evaluated, const ClauseRowSets &sets, const vector<idx_t> &rows,
                               const DecideClauseRef &written) {
 	auto &records = evaluated.records;
 	const idx_t count = sets.groups.size();
@@ -388,21 +392,20 @@ void DecideWriteClauseRecords(EvaluatedClauseColumns &evaluated, const ClauseRow
 					AddCoefficient(records.constants[e], coefficient, written);
 				} else if (coefficient != 0.0) {
 					records.variables.push_back(variable);
-					records.rows.push_back(sets.rows[k]);
+					records.rows.push_back(rows[sets.rows[k]]);
 					records.coefficients.push_back(coefficient);
 				}
 			}
 		}
 		records.term_begin.push_back(records.variables.size());
-		// A group's bound is one value on its rows (RewriteRhsAggregates), read on its first; a clause over no row
-		// reads the bound's first value.
-		const idx_t first = begin < end ? sets.rows[begin] : 0;
+		// A group's bound is one value on its rows (RewriteRhsAggregates), read on its first.
+		const idx_t first = sets.rows[begin];
 #ifdef DEBUG
 		for (idx_t k = begin; evaluated.comparison_type != ExpressionType::COMPARE_NOTEQUAL && k < end; k++) {
 			D_ASSERT(evaluated.rhs_values.Get(sets.rows[k]) == evaluated.rhs_values.Get(first));
 		}
 #endif
-		records.data_rows.push_back(first);
+		records.data_rows.push_back(rows[first]);
 		records.bounds.push_back(evaluated.rhs_values.Get(first));
 		if (admits) {
 			records.admitted_lower.push_back(evaluated.admitted_lower.Get(first));
@@ -468,9 +471,8 @@ bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, bool diag
 }
 
 vector<idx_t> DecideKeptGroups(const DecideKeyGroups &groups, idx_t num_rows,
-                               const std::function<bool(idx_t)> &row_filter, const vector<bool> *read_rows,
-                               vector<idx_t> &out_row_group_ids, idx_t &out_num_groups,
-                               const std::function<bool(idx_t)> *loose_row_filter,
+                               const std::function<bool(idx_t)> &row_filter, vector<idx_t> &out_row_group_ids,
+                               idx_t &out_num_groups, const std::function<bool(idx_t)> *loose_row_filter,
                                vector<idx_t> *out_loose_row_group_ids) {
 	// The call's kept groups, renumbered densely in key-value order.
 	out_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
@@ -483,7 +485,7 @@ vector<idx_t> DecideKeptGroups(const DecideKeyGroups &groups, idx_t num_rows,
 		return kept_groups;
 	}
 	auto reads = [&](idx_t r) {
-		return (!read_rows || (*read_rows)[r]) && groups.row_group_ids[r] != DConstants::INVALID_INDEX;
+		return groups.row_group_ids[r] != DConstants::INVALID_INDEX;
 	};
 	vector<idx_t> remap(groups.num_groups, DConstants::INVALID_INDEX);
 	for (idx_t r = 0; r < num_rows; r++) {
@@ -522,35 +524,34 @@ vector<idx_t> DecideKeptGroups(const DecideKeyGroups &groups, idx_t num_rows,
 	return kept_groups;
 }
 
-vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_rows, const vector<bool> &scoped_kept,
-                               bool has_local_filters, const vector<bool> &local_row_active,
-                               const DecideKeyGroups *groups, const vector<idx_t> &class_of_row,
-                               vector<idx_t> *kept_row_group_ids, EvaluatedClauseColumns &evaluated,
-                               idx_t &grouped_instances) {
+vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_rows, bool has_local_filters,
+                               const vector<bool> &local_row_active, const DecideKeyGroups *groups,
+                               const vector<idx_t> &class_of_row, vector<idx_t> *kept_row_group_ids,
+                               EvaluatedClauseColumns &evaluated, idx_t &grouped_instances) {
 	// A reducer's members are the rows its own `when` keeps -- a MIN/MAX reads them as members -- while every kept row
 	// of a group bounds it. A `<>` emits every kept row, since each one's bound is excluded.
 	bool every_kept_row = constraint.comparison_type == ExpressionType::COMPARE_NOTEQUAL;
 	std::function<bool(idx_t)> emitted = [&](idx_t row) {
-		return scoped_kept[row] && (every_kept_row || !has_local_filters || local_row_active[row]);
+		return every_kept_row || !has_local_filters || local_row_active[row];
 	};
-	std::function<bool(idx_t)> kept = [&](idx_t row) {
-		return scoped_kept[row];
+	std::function<bool(idx_t)> kept = [](idx_t) {
+		return true;
 	};
 	vector<idx_t> kept_groups;
 	if (groups) {
-		kept_groups = DecideKeptGroups(*groups, num_rows, emitted, &scoped_kept, evaluated.row_group_ids,
-		                               evaluated.num_groups, kept_row_group_ids ? &kept : nullptr, kept_row_group_ids);
+		kept_groups = DecideKeptGroups(*groups, num_rows, emitted, evaluated.row_group_ids, evaluated.num_groups,
+		                               kept_row_group_ids ? &kept : nullptr, kept_row_group_ids);
 		vector<bool> held(groups->num_groups, false);
 		grouped_instances = 0;
 		for (idx_t row = 0; row < num_rows; row++) {
 			const idx_t group = groups->row_group_ids[row];
-			if (scoped_kept[row] && group != DConstants::INVALID_INDEX && !held[group]) {
+			if (group != DConstants::INVALID_INDEX && !held[group]) {
 				held[group] = true;
 				grouped_instances++;
 			}
 		}
 	} else {
-		grouped_instances = std::find(scoped_kept.begin(), scoped_kept.end(), true) != scoped_kept.end();
+		grouped_instances = num_rows > 0;
 	}
 	if (!groups && (constraint.scope.when || has_local_filters)) {
 		evaluated.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
@@ -570,7 +571,7 @@ vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_row
 		vector<bool> classed(groups ? groups->num_groups : 1, false);
 		std::set<idx_t> classes, reaching_a_group;
 		for (idx_t row = 0; row < num_rows; row++) {
-			if (!scoped_kept[row] || class_of_row[row] == DConstants::INVALID_INDEX) {
+			if (class_of_row[row] == DConstants::INVALID_INDEX) {
 				continue;
 			}
 			classes.insert(class_of_row[row]);
@@ -664,7 +665,7 @@ bool HoistAvgIntoNotEqualBound(const DecideConstraint &constraint, vector<TermFi
 	return true;
 }
 
-vector<idx_t> DecideGroupClassSets(const DecideClauseScope &scope, idx_t num_rows, const vector<bool> &kept_rows,
+vector<idx_t> DecideGroupClassSets(const DecideClauseScope &scope, const vector<idx_t> &rows,
                                    const vector<idx_t> &kept_row_group, idx_t groups,
                                    const std::function<void(vector<idx_t> &, vector<GroupName> &)> &classes,
                                    vector<SolverInput::ClassSet> &class_sets) {
@@ -678,8 +679,8 @@ vector<idx_t> DecideGroupClassSets(const DecideClauseScope &scope, idx_t num_row
 	}
 	const bool one_group = kept_row_group.empty();
 	vector<vector<idx_t>> rows_of(groups);
-	for (idx_t row = 0; row < num_rows; row++) {
-		idx_t group = one_group ? (kept_rows[row] ? idx_t(0) : DConstants::INVALID_INDEX) : kept_row_group[row];
+	for (idx_t row = 0; row < rows.size(); row++) {
+		idx_t group = one_group ? idx_t(0) : kept_row_group[row];
 		if (group != DConstants::INVALID_INDEX && group < groups) {
 			rows_of[group].push_back(row);
 		}
@@ -706,7 +707,9 @@ vector<idx_t> DecideGroupClassSets(const DecideClauseScope &scope, idx_t num_row
 				}
 			}
 		} else {
-			set.rows = std::move(rows_of[group]);
+			for (auto row : rows_of[group]) {
+				set.rows.push_back(rows[row]);
+			}
 		}
 		group_class_set[group] = class_sets.size();
 		class_sets.push_back(std::move(set));
@@ -715,7 +718,7 @@ vector<idx_t> DecideGroupClassSets(const DecideClauseScope &scope, idx_t num_row
 }
 
 void DecideOneRowPerVariant(const vector<idx_t> &variant_of, const vector<idx_t> &class_of_row, idx_t num_variants,
-                            idx_t num_classes, const vector<vector<bool>> &absent_reads, idx_t defined_var,
+                            idx_t num_classes, const std::function<bool(idx_t)> &defines_at_no_value,
                             vector<idx_t> &row_group_ids, vector<idx_t> &class_of, vector<idx_t> &first_rows,
                             vector<idx_t> &variants_per_class) {
 	const idx_t num_rows = variant_of.size();
@@ -723,12 +726,8 @@ void DecideOneRowPerVariant(const vector<idx_t> &variant_of, const vector<idx_t>
 	class_of.assign(num_variants, DConstants::INVALID_INDEX);
 	first_rows.assign(num_variants, DConstants::INVALID_INDEX);
 	variants_per_class.assign(num_classes, 0);
-	// An auxiliary has no value on a row whose reads have none (D88), so its definition stands on a row
-	// where it has one, if any: a row that comes first must not leave it undefined for the rest.
-	const auto defines_at_no_value = [&](idx_t row) {
-		const auto var = defined_var;
-		return var < absent_reads.size() && !absent_reads[var].empty() && absent_reads[var][row];
-	};
+	// An auxiliary has no value on a row whose reads have none (D88, `defines_at_no_value`), so its definition stands
+	// on a row where it has one, if any: a row that comes first must not leave it undefined for the rest.
 	for (idx_t row = 0; row < num_rows; row++) {
 		auto id = variant_of[row];
 		if (id == DConstants::INVALID_INDEX) {
@@ -965,7 +964,7 @@ string DecideFrameDifference(const DecideSignatureField &field, const DecideFram
 }
 
 void TakeTightestFrameBound(ExpressionType comparison, const string &written, optional_idx place,
-                            const vector<bool> &kept, const vector<bool> &bound_null, const vector<idx_t> &kept_groups,
+                            const vector<bool> &bound_null, const vector<idx_t> &kept_groups,
                             const vector<idx_t> &instances, idx_t num_groups, const vector<GroupName> &group_names,
                             const vector<SolverInput::KeyValues> &key_values, vector<double> &rhs,
                             vector<bool> &null_rows) {
@@ -990,9 +989,9 @@ void TakeTightestFrameBound(ExpressionType comparison, const string &written, op
 	vector<double> least(groups, std::numeric_limits<double>::infinity());
 	vector<double> greatest(groups, -std::numeric_limits<double>::infinity());
 	vector<bool> has_value(groups, false);
-	for (idx_t row = 0; row < kept.size(); row++) {
+	for (idx_t row = 0; row < bound_null.size(); row++) {
 		const idx_t group = group_of(row);
-		if (!kept[row] || bound_null[row] || group == DConstants::INVALID_INDEX) {
+		if (bound_null[row] || group == DConstants::INVALID_INDEX) {
 			continue;
 		}
 		least[group] = MinValue(least[group], rhs[row]);
@@ -1022,9 +1021,9 @@ void TakeTightestFrameBound(ExpressionType comparison, const string &written, op
 		}
 		throw InvalidInputException(message, Exception::InitializeExtraInfo(place));
 	};
-	for (idx_t row = 0; row < kept.size(); row++) {
+	for (idx_t row = 0; row < bound_null.size(); row++) {
 		const idx_t group = group_of(row);
-		if (!kept[row] || group == DConstants::INVALID_INDEX) {
+		if (group == DConstants::INVALID_INDEX) {
 			continue;
 		}
 		if (!has_value[group]) {

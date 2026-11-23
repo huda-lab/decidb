@@ -4,30 +4,27 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
 `decisions.md`. How to work and the checks: [`../direct_solve/framework/todo.md`](../direct_solve/framework/todo.md)
 § How to work any task in these todo files.
 
-## MODEL-4 — An aggregate clause's root writes one record per group
+## MODEL-4 — An aggregate root writes its records with no column between, and a helper read is written as its members
 
-- **Problem.** `DecideModelEmitter::Groups` allocates six vectors as long as the input per clause and a coefficient
-  column per term (`repro/clauses_times_rows.sql`: 44 ms to 638 ms from 1 clause to 40).
-- **Change.** A root E of an aggregate clause writes its records (`ClauseRecords`) from its container, which holds
-  the rows its `when` kept; an F's rows are written the same way. A quadratic clause's product groups become terms
-  of its records, so `QuadraticClause::rows` goes. A read of a helper whose form is `WRITTEN_IN`, or of a MIN or
-  MAX group of one member, is written as the members (R43, R44), so `WriteHelpersIn`, `SolverInput::inlined_helpers`
-  and `written_in`, `DecideVarScope::INLINED` and the second `VarIndexer::Build` are deleted with the tests that only
-  reached them. Evaluation stays vectorized (R23). `DecideClauseRowSets` is deleted for an aggregate clause.
-- **Done when.** Model goldens identical; `./test/decide/run_tests.sh -k "scope or anr or when or per"`;
-  `context/opa_rewrite/repro/clauses_times_rows.sql` under `DECIDB_PROFILE=1`: `execution.tree_model` and peak
-  memory at 40 clauses no higher than at `2b948c6b44`.
-
-## MODEL-5 — A per-row clause's root writes one record per kept row
-
-- **Problem.** A per-row clause is evaluated into columns as long as the input, which `DecideWriteClauseRecords`
-  copies into its records (40 ms for 4 clauses over 500,000 rows).
-- **Change.** A per-row root writes a record per kept row. `EvaluatedClauseColumns`, `DecideClauseRowSets` and
-  `DecideWriteClauseRecords` are deleted, with the row loops of `decide_value_extraction.cpp` no reader is left for.
-- **Needs.** MODEL-4.
+- **Problem.** An aggregate clause is read into columns over its kept rows (`EvaluatedClauseColumns`), sorted into
+  groups (`DecideClauseRowSets`) and copied into records (`DecideWriteClauseRecords`); a per-row clause writes its
+  records directly. A helper the plan writes in is declared, given a column, and removed again in stage 06
+  (`WriteHelpersIn`), which lays the columns out a second time.
+- **Change.** A root E of an aggregate clause writes one record per group from its container, as `Rows` does per
+  kept row; `EvaluatedClauseColumns`, `DecideClauseRowSets` and `DecideWriteClauseRecords` are deleted with the row
+  loops of `decide_value_extraction.cpp` no reader is left for. A quadratic clause's product groups become terms of
+  its records, so `QuadraticClause::rows` and `data_rows` go. A read of a helper whose form is `WRITTEN_IN`, or of a
+  MIN or MAX group of one member, is written as the members (R43, R44), so `WriteHelpersIn`,
+  `SolverInput::inlined_helpers` and `written_in`, `DecideVarScope::INLINED` and the second `VarIndexer::Build` are
+  deleted with the tests that only reached them. The floors and implied bounds that read a written-in helper's
+  column before it is removed (`PhysicalDecide`, `assembly.inline_helpers`) need a reading over its members first.
+  Evaluation stays vectorized (R23).
 - **Done when.** No file under `src/` names `row_group_ids` or `row_coefficients`; model goldens identical;
-  `./test/decide/run_tests.sh -k "per_row or bound or domain or diagnose"`; `build/release/test/unittest "[decidb]"`;
-  `context/opa_rewrite/tools/ab_bench.py` against `2b948c6b44`.
+  `./test/decide/run_tests.sh -k "scope or anr or when or per or bound or domain or diagnose"`;
+  `build/release/test/unittest "[decidb]"`; `context/opa_rewrite/repro/clauses_times_rows.sql` under
+  `DECIDB_PROFILE=1` no slower and no larger than the figures of `08_execution/done.md` § A clause is read over the
+  rows it keeps; `y <= v` alone over 1,000,000 rows no slower than 85 ms across `execution.tree_model`, implied
+  bounds and the builder's clause rows.
 
 ## MODEL-6 — Terms are split from the finished nodes
 
@@ -38,7 +35,6 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   term half reads lowered bodies: `LowerFrames` and its overloads, `RecordFallbackColumns`, one of
   `Translate`/`TranslateTree`, one of `FrameColumn`/`FrameRead` and the four agreement errors are deleted, and each
   order of the sizing note's § 4 that moves is inspected in its goldens.
-- **Needs.** MODEL-5.
 - **Done when.** `./test/decide/run_tests.sh -k "one_pass_tree or frame or anr or error"`;
   `build/release/test/unittest "[decidb]"`; lizard over the three construction files beside the figures of the
   Phase 5 hand-over.

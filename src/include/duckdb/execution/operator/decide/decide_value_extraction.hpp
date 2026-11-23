@@ -117,11 +117,12 @@ bool CountsOnce(const DecideTerm &term);
 void CountTupleTermsOnce(const vector<DecideTerm> &terms, vector<CoefficientColumn> &coefficients,
                          const vector<bool> *kept, idx_t num_rows);
 
-//! A clause as the emitter evaluates it over the input's rows, before its records are written
-//! (DecideWriteClauseRecords): each term's coefficient and the bound on every row, and each row's group.
+//! A clause as the emitter evaluates it over the rows it keeps, before its records are written
+//! (DecideWriteClauseRecords): each term's coefficient and the bound on every kept row, and each one's group. A row is
+//! numbered by its place among the kept rows, in the input's order, so no column is as long as the input.
 struct EvaluatedClauseColumns : EvaluatedConstraint {
 	vector<CoefficientColumn> row_coefficients; // [term_idx] = coefficient column for that term
-	CoefficientColumn rhs_values;               // RHS column (logical size = num_rows)
+	CoefficientColumn rhs_values;               // RHS column (logical size = the kept rows)
 	//! A per-row bound on one decision: the values it admits on each row (ClauseRecords::admitted_lower). Logical
 	//! size 0 for any other constraint.
 	CoefficientColumn admitted_lower;
@@ -134,8 +135,9 @@ struct EvaluatedClauseColumns : EvaluatedConstraint {
 	idx_t num_groups = 0; // 0 = ungrouped, >0 = number of distinct groups
 };
 
-//! The data rows of each row a clause emits, rows[begin[e] .. begin[e + 1]), and its group: a group of an aggregate
-//! clause that holds a row (all rows, in the one row of a clause of no groups), a kept row of a per-row clause.
+//! The kept rows of each row a clause emits, by place, rows[begin[e] .. begin[e + 1]), and its group: a group of an
+//! aggregate clause that holds a row (all kept rows, in the one row of a clause of no groups), a row of a per-row
+//! clause that its group keeps.
 struct ClauseRowSets {
 	vector<idx_t> begin {0};
 	vector<idx_t> rows;
@@ -144,9 +146,10 @@ struct ClauseRowSets {
 ClauseRowSets DecideClauseRowSets(const EvaluatedClauseColumns &evaluated, idx_t num_rows);
 
 //! Writes the record of each row `evaluated` emits (EvaluatedConstraint::records) from its columns: the one place the
-//! rows stage 06 reads are made. A row's terms are listed term by term, each over the row's data rows. `written`
-//! names the clause when the left side's constant grows past a DOUBLE (AddCoefficient).
-void DecideWriteClauseRecords(EvaluatedClauseColumns &evaluated, const ClauseRowSets &sets,
+//! rows stage 06 reads are made. A row's terms are listed term by term, each over the row's kept rows, which `rows`
+//! gives the data row of, by place. `written` names the clause when the left side's constant grows past a DOUBLE
+//! (AddCoefficient).
+void DecideWriteClauseRecords(EvaluatedClauseColumns &evaluated, const ClauseRowSets &sets, const vector<idx_t> &rows,
                               const DecideClauseRef &written);
 
 //! The objective's product groups outside its reducers (`MAXIMIZE sum(x) + s * u`), counted on its first kept row as
@@ -199,29 +202,27 @@ struct DecideKeyGroups {
 	idx_t num_groups;
 };
 
-//! The rows `read_rows` holds (every row when null) and `row_filter` keeps, numbered by their group of `groups`, the
+//! The rows `row_filter` keeps, numbered by their group of `groups`, the
 //! groups renumbered densely in key-value order; INVALID_INDEX on every other row. Returns the kept groups, as
 //! `groups` numbers them. The optional second map is over the same numbering but the looser `loose_row_filter`: a
 //! group no strict row reached emits no constraint, so its rows stay out.
 vector<idx_t> DecideKeptGroups(const DecideKeyGroups &groups, idx_t num_rows,
-                               const std::function<bool(idx_t)> &row_filter, const vector<bool> *read_rows,
-                               vector<idx_t> &out_row_group_ids, idx_t &out_num_groups,
-                               const std::function<bool(idx_t)> *loose_row_filter = nullptr,
+                               const std::function<bool(idx_t)> &row_filter, vector<idx_t> &out_row_group_ids,
+                               idx_t &out_num_groups, const std::function<bool(idx_t)> *loose_row_filter = nullptr,
                                vector<idx_t> *out_loose_row_group_ids = nullptr);
 
 //! The rows of a clause in the grouped shape (the aggregate shape, an easy MIN/MAX; language/guide.md §6.4): its kept
-//! rows `scoped_kept` grouped by its `by` key's `groups` (null with no key), a group emitting the rows a reducer reads
+//! rows grouped by its `by` key's `groups` (null with no key), a group emitting the rows a reducer reads
 //! (`local_row_active`, with `has_local_filters`), or, under `<>`, every kept row. A `per K:` that names classes holds
 //! once per class (`class_of_row`: a row's class, INVALID_INDEX for a row in none), so with no kept row in a class
 //! there is none. Writes `evaluated`'s row groups, `kept_row_group_ids` (when given: every kept row of an emitted
 //! group) and the instances the clause holds before any with no value is skipped (D90): the groups a class reaches,
 //! and one for each class whose rows reach none (a NULL `by` key), which has no value. Returns the groups of `groups`
 //! it keeps, which its names name.
-vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_rows, const vector<bool> &scoped_kept,
-                               bool has_local_filters, const vector<bool> &local_row_active,
-                               const DecideKeyGroups *groups, const vector<idx_t> &class_of_row,
-                               vector<idx_t> *kept_row_group_ids, EvaluatedClauseColumns &evaluated,
-                               idx_t &grouped_instances);
+vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_rows, bool has_local_filters,
+                               const vector<bool> &local_row_active, const DecideKeyGroups *groups,
+                               const vector<idx_t> &class_of_row, vector<idx_t> *kept_row_group_ids,
+                               EvaluatedClauseColumns &evaluated, idx_t &grouped_instances);
 
 //! AVG denominator scaling, shared by the constraint and objective sides: a linear term's coefficient, or a product
 //! group's weight, which multiplies the whole product. The rows a term reads are its filter: a clause's `when` is
@@ -252,7 +253,7 @@ bool HoistAvgIntoNotEqualBound(const DecideConstraint &constraint, vector<TermFi
 //! group names the group by its key (`group_names`, whose values `key_values` reads), at `place` in the query (invalid
 //! for none).
 void TakeTightestFrameBound(ExpressionType comparison, const string &written, optional_idx place,
-                            const vector<bool> &kept, const vector<bool> &bound_null, const vector<idx_t> &kept_groups,
+                            const vector<bool> &bound_null, const vector<idx_t> &kept_groups,
                             const vector<idx_t> &instances, idx_t num_groups, const vector<GroupName> &group_names,
                             const vector<SolverInput::KeyValues> &key_values, vector<double> &rhs,
                             vector<bool> &null_rows);
@@ -263,7 +264,7 @@ void TakeTightestFrameBound(ExpressionType comparison, const string &written, op
 //! kept rows, appended to `class_sets` and referenced from the result. `kept_row_group` maps each kept row to its
 //! group; empty when the clause has one implicit group, which then holds every kept row. `classes` reads K: each kept
 //! row's class (INVALID_INDEX in none) and each class's name.
-vector<idx_t> DecideGroupClassSets(const DecideClauseScope &scope, idx_t num_rows, const vector<bool> &kept_rows,
+vector<idx_t> DecideGroupClassSets(const DecideClauseScope &scope, const vector<idx_t> &rows,
                                    const vector<idx_t> &kept_row_group, idx_t groups,
                                    const std::function<void(vector<idx_t> &, vector<GroupName> &)> &classes,
                                    vector<SolverInput::ClassSet> &class_sets);
@@ -271,11 +272,11 @@ vector<idx_t> DecideGroupClassSets(const DecideClauseScope &scope, idx_t num_row
 //! The row each variant of a clause in the per-row shape under `per K:` stands on (D70): `variant_of` numbers each
 //! kept row's variant, INVALID_INDEX on every other row, and `class_of_row` its class of K. A variant's rows agree on
 //! every field the clause reads, so its first stands for them, unless the auxiliary the clause defines
-//! (`defined_var`) has no value there and has one at a later row of the variant: its definition stands on a row where
-//! it has one, if any, so a row that comes first does not leave it undefined for the rest (D88, `absent_reads`).
+//! has no value there (`defines_at_no_value`) and has one at a later row of the variant: its definition stands on a
+//! row where it has one, if any, so a row that comes first does not leave it undefined for the rest (D88).
 //! Writes `row_group_ids` (one row per variant), each variant's class and row, and each class's count of variants.
 void DecideOneRowPerVariant(const vector<idx_t> &variant_of, const vector<idx_t> &class_of_row, idx_t num_variants,
-                            idx_t num_classes, const vector<vector<bool>> &absent_reads, idx_t defined_var,
+                            idx_t num_classes, const std::function<bool(idx_t)> &defines_at_no_value,
                             vector<idx_t> &row_group_ids, vector<idx_t> &class_of, vector<idx_t> &first_rows,
                             vector<idx_t> &variants_per_class);
 

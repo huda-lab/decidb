@@ -15,10 +15,16 @@ namespace duckdb {
 
 class DecideGlobalSinkState;
 
-//! One clause as the emitter reads it: the row, and what only some kinds of clause carry. `Constraints` routes it to
-//! the list of its kind (Route), so a row never says what kind it is.
+//! One clause as the emitter reads it: the row, with the record of each row it emits (ClauseRecords), and what only
+//! some kinds of clause carry. `Constraints` routes it to the list of its kind (Route), so a row never says what kind
+//! it is.
 struct EmittedClause {
 	EvaluatedClauseColumns row;
+	//! The rows the clause keeps, in the input's order: `row`'s columns hold one value for each, by its place here.
+	vector<idx_t> rows;
+	//! The kept rows of each row the clause emits, by place: what an aggregate clause's records are written from, and
+	//! where a row's product groups are read.
+	ClauseRowSets sets;
 	//! A grouped `<>` row's NULL bounds, which exclude no value (NotEqualClause::excluded).
 	vector<bool> no_exclusion;
 	//! A `<>` whose AVG scales its bound by its group's size (NotEqualClause::excluded).
@@ -28,11 +34,11 @@ struct EmittedClause {
 };
 
 //! The variants of a signature over the rows a node holds (language/guide.md §7.1, D70), numbered by value, and the
-//! classes of its key, numbered by the key's values: each row's, INVALID_INDEX for a row the node does not
+//! classes of its key, numbered by the key's values: each entry's of the node, INVALID_INDEX for one the node does not
 //! hold in a class.
 struct DecideVariants {
-	vector<idx_t> of_row;
-	vector<idx_t> class_of_row;
+	vector<idx_t> of_entry;
+	vector<idx_t> class_of_entry;
 	idx_t count = 0;
 	idx_t num_classes = 0;
 };
@@ -135,28 +141,38 @@ private:
 	vector<SolverInput::KeyValues> &key_values;
 	const DecideSourceNames &names;
 	idx_t num_rows;
+	//! The place of each row the clause at hand keeps among its kept rows (Place), INVALID_INDEX for every other row:
+	//! how a row another node holds is read into the clause's columns, which are as long as its kept rows. One vector
+	//! for every clause, set and cleared on the kept rows alone, so a clause costs what it keeps.
+	vector<idx_t> place_of_row;
+	//! How many rows the clause at hand keeps.
+	idx_t placed = 0;
 	//! Per value-link node, its helper's members, read once where its classes are (HelperMapping), which ValueLinks
 	//! lists.
 	vector<LinkMembers> link_members;
 
+	//! The rows the clause of `root` keeps, in the input's order, each with the entry standing for it, and numbered by
+	//! its place among them (place_of_row); `rows` takes them. Unplace clears the numbering once the clause is read.
+	vector<pair<idx_t, idx_t>> Keep(idx_t root, vector<idx_t> &rows);
+	void Unplace(const vector<idx_t> &rows);
 	//! Each clause's root by its place in stage 05's lists (DecideBody::clause_index).
 	vector<idx_t> ClauseRoots() const;
 	//! A clause in the per-row shape: one model row per kept row of its root, or under `per K:` one per variant of
-	//! each class among them (Classes).
+	//! each class among them (Classes). Its records are written from the root's entries, with no column between.
 	EmittedClause Rows(idx_t root, bool counted);
 	//! Puts an evaluated clause in the list of its kind: a folded bound's among the repair model's rows, a `<>` in
 	//! `evaluated_not_equals`, one with terms of degree 2 in `evaluated_quadratics`, any other in
 	//! `evaluated_constraints`.
-	//! The clause stage 06 receives: `columns`' facts, and the record of each row it emits (DecideWriteClauseRecords).
-	EvaluatedConstraint Records(EvaluatedClauseColumns &columns, const ClauseRowSets &sets);
+	//! `clause` as a message refers to it, for a sum past a DOUBLE.
+	DecideClauseRef Written(const DecideConstraint &clause) const;
 	void Route(EmittedClause &&clause, bool folded);
 	//! One of an ABS F node's two envelope rows, evaluated by the existing row evaluator, which supplies the scoped
 	//! instances, into the node's record (DecideGlobalSinkState::evaluated_abs_links).
 	void AbsEnvelope(idx_t function, idx_t root, bool counted);
-	//! The model rows of a clause in the per-row shape under `per K:` (DecideClauseScope::ONE_ROW_PER_CLASS), its
-	//! kept rows those its entries `tested` marks stand for: one per variant of each class of K, at its first row with
-	//! a value (D88), numbered and named by value as Variants does, and the classes each stands for under DIAGNOSE.
-	void Classes(idx_t root, const vector<bool> &tested, EvaluatedClauseColumns &evaluated);
+	//! The model rows of a clause in the per-row shape under `per K:` (DecideClauseScope::ONE_ROW_PER_CLASS): one per
+	//! variant of each class of K, at its first row with a value (D88), numbered and named by value as Variants does,
+	//! and the classes each stands for under DIAGNOSE.
+	void Classes(idx_t root, const vector<pair<idx_t, idx_t>> &rows, EmittedClause &clause);
 	//! The variants of `signature` (null: none, so its key's classes) over the rows `node` holds, its instances, in
 	//! the numbering of DecideVariants; with `by_row` false only how many there are.
 	DecideVariants Variants(idx_t node, const DecideSignature *signature, bool by_row = true) const;
@@ -171,12 +187,14 @@ private:
 	//! its frames by their keys.
 	DecideVariantDifference ObjectiveDifference(idx_t root, const vector<idx_t> &surviving) const;
 	//! The names of `root`'s variants, by their class's values and their own, read at their first rows as written
-	//! (DecideBody::names, DecideNameVariants).
-	vector<GroupName> NameVariants(idx_t root, const DecideSignature &signature, const vector<idx_t> &class_of,
-	                               const vector<idx_t> &first_rows, const vector<idx_t> &variants_per_class);
-	//! Each row `root` holds in a class of its `per K:` key, its class, numbered by K's values, and each class's
-	//! name, which the class sets read.
-	void KeyClasses(idx_t root, vector<idx_t> &class_ids, vector<GroupName> &class_names);
+	//! (DecideBody::names, DecideNameVariants), each at its place among the root's rows.
+	vector<GroupName> NameVariants(idx_t root, const DecideSignature &signature, const vector<pair<idx_t, idx_t>> &rows,
+	                               const vector<idx_t> &class_of, const vector<idx_t> &first_places,
+	                               const vector<idx_t> &variants_per_class);
+	//! Each row `root` holds, by place, its class of the root's `per K:` key, numbered by K's values (INVALID_INDEX in
+	//! none), and each class's name, which the class sets read.
+	void KeyClasses(idx_t root, const vector<pair<idx_t, idx_t>> &rows, vector<idx_t> &class_ids,
+	                vector<GroupName> &class_names);
 	//! A relation-qualified reducer's scope: the variants of its operand over the rows the reducer reads.
 	KeyedMapping SignatureMapping(idx_t scope);
 	//! The rows at which each auxiliary has no value (D88): a row its definition keeps where what the definition reads
@@ -197,7 +215,8 @@ private:
 	//! A grouped clause's bound on each of `rows` (its kept rows and their root's entries), a NULL one marking its row
 	//! in `null_rows`; for a tightest frame bound (D85) the rows where it bounds nothing instead, which are returned
 	//! (TakeTightestFrameBound): empty for any other bound, and for one the whole clause shares (DescribeBound).
-	vector<bool> GroupBound(idx_t root, const DecideEntryRows &rows, vector<bool> &null_rows, EmittedClause &clause);
+	vector<bool> GroupBound(idx_t root, const vector<pair<idx_t, idx_t>> &rows, vector<bool> &null_rows,
+	                        EmittedClause &clause);
 	//! A bound on one decision: the values it admits on each row its term is read on, which the model builder folds
 	//! into the decision's column.
 	void Admit(const DecideBody &body, EvaluatedClauseColumns &evaluated);
@@ -210,7 +229,8 @@ private:
 	void CheckDomain(idx_t root, const EvaluatedClauseColumns &evaluated);
 	//! A clause in the grouped shape, the aggregate shape or a MIN or MAX: one model row per group of its `by` key, its
 	//! kept rows grouped as GroupRowsByShape groups them, or one per member of an easy MIN or MAX; its instances
-	//! `counted` unless it is a folded bound's, which only a repair model emits.
+	//! `counted` unless it is a folded bound's, which only a repair model emits. Its terms are read into columns as
+	//! long as its kept rows, which its records are written from (DecideWriteClauseRecords).
 	EmittedClause Groups(idx_t root, bool counted);
 	//! A clause's product groups (EmittedClause::products), once its rows are grouped: each group's weight
 	//! and its forms' coefficients on the rows its site's members stand for, its weight 0 on every other row and
@@ -235,9 +255,8 @@ private:
 	//! group's filter, and the rows some reducer's filter keeps (`active`, every row with a part that
 	//! keeps every kept row), and the rows where a term's coefficient is NULL (`null_rows`). Returns whether some
 	//! filter keeps fewer than the kept rows.
-	bool ReadGroupedTerms(idx_t root, const DecideEntryRows &rows, const vector<bool> &kept,
-	                      EvaluatedClauseColumns &evaluated, vector<TermFilterState> &filters, vector<bool> &active,
-	                      vector<bool> &null_rows);
+	bool ReadGroupedTerms(idx_t root, const vector<pair<idx_t, idx_t>> &rows, EvaluatedClauseColumns &evaluated,
+	                      vector<TermFilterState> &filters, vector<bool> &active, vector<bool> &null_rows);
 	//! The rows a term in a reducer is read on, each with the entry of its site `site` standing for it: of the entries
 	//! `reads` marks, every row each stands for, but a relation-qualified reducer's term its entry's first row alone,
 	//! the first of its class (language/guide.md §5.1).
@@ -254,8 +273,9 @@ private:
 	void ForEachTermRead(idx_t site, const vector<bool> &reads, idx_t qualifier_scope,
 	                     const vector<bool> &selected_rows, F &&read) const;
 	//! A reducer's filter of a part of a grouped clause (a term or a product group), its site `site`: the rows the
-	//! part is read on (ReadRows, ReadEntriesOf), each passed to `read(row, entry)`, and every row its members stand
-	//! for (`members`), which decide whether the filter keeps fewer than the clause.
+	//! part is read on (ReadRows, ReadEntriesOf), each passed to `read(place, row, entry)`, and every row its members
+	//! stand for (`members`), which decide whether the filter keeps fewer than the clause. Both are by the place of a
+	//! row the clause keeps; a row it does not keep is passed over.
 	template <class F>
 	void Filter(idx_t site, idx_t qualifier_scope, const vector<bool> &reads, const vector<bool> &selected_rows,
 	            TermFilterState &filter, vector<bool> &members, F &&read);
@@ -264,7 +284,7 @@ private:
 	//! A term beside a grouped clause's reducers, on each of `rows` (the kept rows and their root's entries), a NULL
 	//! coefficient marking its row (`null_rows`).
 	void ReadBesideReducers(idx_t root, const DecideTerm &term, const DecideTermSite &site, idx_t program,
-	                        const DecideEntryRows &rows, CoefficientColumn &column, vector<bool> &null_rows);
+	                        const vector<pair<idx_t, idx_t>> &rows, CoefficientColumn &column, vector<bool> &null_rows);
 	//! A term in a reducer, on each member of the G it ranges over: an entry of its operand, which the reducer's `when`
 	//! routed and its member tests keep, a kept row in no group among them, since the term is computed on every kept
 	//! row; a NULL coefficient marks its row (`null_rows`). Returns the rows its filter keeps.
