@@ -24,7 +24,7 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
   keeping the 0 (`DirectStaticFloor`), and the clause's own bound column gives the value. A decision with a lower bound
   written, or a `BOOL`, keeps its floor. A lower bound from a column only intersects with the default. The solver and
   direct solve read which clauses are folded into the variable from the same classifier
-  (`DirectIRConstraint::variable_bound`), which clauses replace the default under a `when` from the same predicate
+  (`DirectClause::variable_bound`), which clauses replace the default under a `when` from the same predicate
   (`DecideSingletonRow::LiftsDefaultFloor`), and combine the folded values with one function (`DecideFoldSingletonRow`),
   so they cannot disagree. R1 reads its box through the same reader and static floor. A bound of magnitude 1e20 or more is no bound, as on the solver, including a written -1e30 and a
   literal `-inf` floor. An infinite data value is no bound in the open direction (`x <= cap` with `cap = +inf`) and
@@ -133,7 +133,7 @@ is built (constant columns propagated, DuckDB's expression rewriter over it).
 | `test_direct_user_facing.py` | The plan over NOT NULL columns holds no check the statistics prove false; each infinite static end is absent from the plan's `LEAST` or `GREATEST` and each finite one present, and a NaN upper end still raises with no static end to clamp it; a 200-byte unused payload column stays out of both reads; a computed column that can raise is not pruned; a NaN in a constraint coefficient says "constraint coefficient" and in the objective "objective coefficient"; every NULL and NaN error reads as the solver's, compared in full |
 | `test_error_infeasible.py` | The solver's rejection of a bound against the built-in domain quotes the clause as typed for a non-negative decision (`x <= -1 cannot hold ... non-negative`, strict `x < 0`); for a `BOOL` (`x >= 2`, `x > 1`, `x > 1.5`) it is the usual infeasible error |
 | Five tests pinned to the solver path | `test_canonicalize_idempotence.py` (three cases) and `test_implied_bounds.py` (two cases) inspect the solver's model dump. Direct solve builds no model, so they run with `DECIDB_TEST_DIRECT_SOLVE=off` on purpose. |
-| C++ `[decidb]` | `variable_bound` over 19 spellings, the IR for every objective spelling, A1's applicability condition and its declines, S1 and A1 never both applying, and the rule driver choosing the right real rule for each shape |
+| C++ `[decidb]` | `variable_bound` over 19 spellings, the objective reader on every objective spelling, A1's applicability condition and its declines, S1 and A1 never both applying, and the rule driver choosing the right real rule for each shape |
 
 ## Performance
 

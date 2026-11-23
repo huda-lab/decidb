@@ -18,7 +18,7 @@ different scope:
   and a group with a negative cap can never be met; both raise before the first row leaves.
 - **Nesting proved from the text.** The levels must form a chain, each inside the next: the coarser level's `by` key
   is a subset of the finer one's (compared as sets, `DirectKeyWithin`), and the coarser has no `when` or the same one.
-  The IR carries no functional dependencies and the rule is chosen once, when the plan is built, so the data is never
+  The rule reads no functional dependencies and the rule is chosen once, when the plan is built, so the data is never
   consulted: `by (department)` beside `by (division)` declines even when every department lies in one division.
 - **`per` on any level.** The levels need not share a `per`, so the definition's example runs as written (`per` on
   the two finer clauses, none on the global one). A `per` does not group the sum (D6); it only decides which groups

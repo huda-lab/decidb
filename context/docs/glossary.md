@@ -23,13 +23,13 @@ Conventions that apply to every row:
 | direct solve | A rule-based rewrite of a DECIDE query into a relational plan that computes the optimum: a problem-specific algorithm, expressed as a plan transformation | Operations research (specialized algorithms); query optimizers (rule-based rewrite) | `decide_direct_solve`, `EXPLAIN` key prefix `Direct solve`, `Direct*` identifiers, `direct_solve/` |
 | problem class | A problem with a known specialized algorithm; one rule implements one class | Optimization texts | `rules/<id>_<slug>/` |
 
-### Intermediate representation (front end)
+### Readers (what a rule reads)
 
 | Name | Standard idea | Source | Covers |
 |---|---|---|---|
-| IR | Intermediate representation: a neutral form of the program that later passes read instead of the source tree | Compiler texts (front end, IR, back end) | `DirectIR`, `DirectIRDecision`, `DirectIRConstraint`, `DirectIRObjective`, `DirectIRScope`, `FindDirectIRInput`; variables `ir`, `ir_node`; test helpers `QueryIR`, `IRQuery`; `direct_ir.cpp`; `direct_solve/architecture/ir.md` |
-| front end | The pass that reads the source tree and builds the IR; the only code that knows `LogicalDecide`'s layout | Compiler texts | `DirectFrontEnd` |
-| conservative analysis | An analysis that reports only what it can prove, and "not proved" for anything else, so a wrong rewrite cannot follow from it | Static analysis (soundness) | `DirectAnalysisStatus` with `PROVED` / `NOT_PROVED`; `MarkNotProved` |
+| readers | Shared functions a rule calls on demand to read one part of the bound DECIDE operator, as DuckDB's optimizer rules read the `LogicalOperator` they match | Query optimizers (rules over the logical plan); DuckDB | `DirectReadClauses`, `DirectReadObjective`, `DirectReadKey`, `DirectDomainOf`, `DirectRender`, `DirectPlace`; `DirectClause`, `DirectObjective`, `DirectPart`, `DirectKeyElement`, `DirectDomain`; `direct_clause_reader.cpp`; test helpers `ReadPlan`, `ReadQuery`; `direct_solve/architecture/readers.md` |
+| source facts | What the plan below the DECIDE node declares: the two sides of a cross product, NOT NULL columns, table keys | none (plain word) | `DirectSourceFacts`, `direct_source_facts.cpp` |
+| conservative analysis | An analysis that reads only what it can read exactly and refuses anything else, so a wrong rewrite cannot follow from it | Static analysis (soundness) | a reader's `false` return, on which the rule declines |
 | reducer | An aggregate function (`SUM`, `AVG`, `MIN`, `MAX`, `COUNT`) applied over DECIDE variables; DECIDE's name for it, so it is never confused with a SQL aggregate over data | DeciDB term | `DirectReducer`, the S1 rule's `Reducer`, `ContainsReducer`, `ReadReducer`, `DecideBinder::BindAggregate`, `RhsBoundRewriter::MakeReducerColumn`, `testing/coverage.md#a-reducers-own-relation-key` |
 | singleton-row bound | A constraint on one variable, folded into that variable's bounds before the model is built | Presolve (Andersen & Andersen 1995; Achterberg et al. 2020) | `FoldSingletonRows`, `DecideFoldSingletonRow`, `DecideReadSingletonRow`, `DecideSingletonRow`, `DecideWrittenBox`, `FoldSingletonRowsInExpression`, `singleton_row_boxes`, `user_singleton_row_bounds`, `BoundDecideClause::folded_bound`, phase `optimizer.fold_singleton_rows` |
 | fixed variable | A decision whose value the problem fixes before optimizing | Optimization texts | `ProveFixedVariables`, `FixedTerms`, `SourceFixedValue`, `SourceBooleanFixedValue` |
@@ -59,7 +59,7 @@ pattern step and the condition step are one, because a DECIDE query has a single
 |---|---|---|---|
 | plan fragments | Free functions that each return one plan fragment | GoF Factory Method (function form) | `direct_plan_fragments.{hpp,cpp}` |
 | runtime checks | Predicates that raise an error while the plan runs, and their messages | none (plain word) | `direct_runtime_checks.{hpp,cpp}` |
-| bound reader | Reads each decision's static box and per-row bound clauses from the IR | none (plain word) | `direct_bound_reader.{hpp,cpp}` |
+| bound reader | Reads each decision's static box and per-row bound clauses from the clauses the clause reader reads | none (plain word) | `direct_bound_reader.{hpp,cpp}` |
 | expression builder | A small fluent helper that builds bound expressions | Fowler (Expression Builder) | `ExpressionBuilder`, `ExprPtr` |
 | pipeline breaker | A blocking operator that reads every input row before it emits one; S1's rank window is one, and validates the inputs the solver path would reject as it reads them | DuckDB, HyPer (pipeline breakers) | `validated_columns`, `pipelined` |
 | verify, then stream | A one-row verdict over every input row that gates a second, streamed read, so every row is checked before one is released and none is held | PostgreSQL (InitPlan), DuckDB (uncorrelated scalar subquery) | `DirectAllRowsValid`, `DirectSourceReader::Gate` |
@@ -104,7 +104,7 @@ value. Classes without code take the name in docs only until their code exists.
 | differential oracle test | The same case run on an independent oracle, the solver path and the direct path; all must agree | Differential testing (McKeeman 1998); test oracles | `test_direct_<id>_<slug>.py` per rule; `_direct_differential.py` |
 | conformance suite | One suite every rule must pass, fed by a fixture per rule | Conformance testing | `test_direct_rule_conformance.py`; `_direct_rule_fixtures.py` |
 | test matrix | The checks run under every setting combination | Standard | `test/decide/run_direct_matrix.sh` |
-| C++ regressions | Unit tests of the IR and the rule driver | none | `test_decidb_direct_ir.cpp`, `test_decidb_direct_rule_driver.cpp` |
+| C++ regressions | Unit tests of the readers and the rule driver | none | `test_decidb_direct_readers.cpp`, `test_decidb_direct_rule_driver.cpp` |
 
 ### Names that do not follow the glossary
 
@@ -122,4 +122,4 @@ A few names stay as they are because renaming them would break something or beca
   measurement commands in `direct_solve/rules/s1_uniform_matroid/done.md` use them.
 - **Other meanings.** DuckDB's aggregate-state `Absorb`; "pin" (a test pins `require`) and "boundary" in their
   everyday senses; "near miss" (a testing term); a cache "miss"; "proof" and "prove" in the mathematical sense and in
-  the `Prove*` helpers that certify one part of the IR; the variable name `calc` for an `ExpressionBuilder`.
+  the `Prove*` helpers that certify one part of a rule's condition; the variable name `calc` for an `ExpressionBuilder`.

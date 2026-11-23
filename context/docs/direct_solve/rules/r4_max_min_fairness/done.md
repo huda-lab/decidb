@@ -71,8 +71,9 @@ each key's amount is computed once, and the second read joins each row to its ke
 materialization: the plan carries 1 row per key, not 1 per source row, through the level computation. The stage-by-stage layout is the comment above
 `PlanBuilder` in `src/optimizer/decide/direct/r4_max_min_fairness_rule.cpp`.
 
-Recognition reads only the IR. A weight that folds to a constant is a literal the plan builds with; a weight read from
-the data has its sign handled inside the same aggregate pass, so no plan-time read of the data is needed.
+Recognition reads only the bound operator. A weight that folds to a constant is a literal the plan builds with; a
+weight read from the data has its sign handled inside the same aggregate pass, so no plan-time read of the data is
+needed.
 
 ## Verified by
 

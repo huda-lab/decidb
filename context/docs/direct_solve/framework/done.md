@@ -9,26 +9,27 @@ assertion, ASan or UBSan report. It is the baseline for every direct-solve task 
 ## What it does
 
 - **Setting and fallback.** The modes are in [policy.md](../architecture/policy.md). `ChooseDecideAnswer`
-  (`decide_answer_choice.cpp`; Strategy selection with fallback) offers the IR to the rules after the bound-side
-  rewrite and chooses a solver, lazily, only when none applies. A forced backend is `ForcedSolverName()` (empty is
-  unset). With the DECIDE optimizer off, every mode refuses the query (`../../pipeline/05_optimizer/done.md`).
-- **IR** ([ir.md](../architecture/ir.md)). The IR holds decision domains and scopes, each constraint with its reducer,
-  the reducer's own `when` and `by` key (`DirectPart::by`, grouped on `DecideKeyElement::Grouping()`, the collated
-  expression), qualifier, factor, the clause's `when`, right side (with its `reduction` when the bound-side rewrite
-  left it raw), a `per K:` in front of an aggregate clause (`per_class` and `classes`: D6, the whole total bounded once
-  per class and variant, D70, which the group's tightest bound covers), the objective, and the row checks the plan must
-  run (`row_checks`: the bound-side rewrite's value checks). A key element that is NULL puts its
-  row in no group (D5), except a relation column, where NULL is a value. Building the IR never throws; what it cannot
-  model is not proved (`DirectIR::status` for the whole IR). An objective reducer with a `by` key carries a signature,
-  which the front end does not prove, so no rule is offered one and no rule checks an objective part's `by`. No IR
-  node is kept that no rule reads.
+  (`decide_answer_choice.cpp`; Strategy selection with fallback) offers the bound operator to the rules after the
+  bound-side rewrite and chooses a solver, lazily, only when none applies. A forced backend is `ForcedSolverName()`
+  (empty is unset). With the DECIDE optimizer off, every mode refuses the query (`../../pipeline/05_optimizer/done.md`).
+- **Readers** ([readers.md](../architecture/readers.md)). A rule reads the bound operator's own fields, as an
+  optimizer rule reads the operator it matches: the decisions, their domains (`DirectDomainOf`) and scopes, the keys,
+  each clause's scope, and the bound-side rewrite's value checks (`LogicalDecide::value_checks`), which the rule driver
+  plans as row checks. Shared readers in `direct_clause_reader.cpp` make two readings on demand, for the rule that
+  wants them. `DirectReadClauses` reads each clause as a `DirectClause`: its left side as `DirectPart`s, each with its
+  reducer, the reducer's own `when` and `by` key (`DirectPart::by`, grouped on `DecideKeyElement::Grouping()`, the
+  collated expression), qualifier and factor; the clause's `when` and right side; and the key of a `per K:` in front of
+  an aggregate clause (`classes`: D6, the whole total bounded once per class and variant, D70, which the group's
+  tightest bound covers). `DirectReadObjective` reads the objective's parts. A key element that is NULL puts its row in
+  no group (D5), except a relation column, where NULL is a value. A reader never throws. It is a conservative
+  analysis: it returns false for what no rule's plan reads, and a rule declines when a reader it calls returns false.
+  An objective reducer with a `by` key carries a signature, and the objective reader returns false for an objective
+  with one (D72), so no rule checks an objective part's `by`.
 - **Rule interface.** `CheckCondition`, `Apply` and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that
   checks the slot map. Rules are listed in `direct_registry.cpp`; a test seam replaces the list per connection. The
-  rule driver first checks that the front end read the whole IR (`DirectIRIsReadable`: every
-  constraint and the objective proved, a finite offset); an IR that fails is offered to no rule, so each
-  rule checks only what concerns its own class. Otherwise the driver takes the first rule whose CheckCondition
-  applies; a debug build runs the rest and asserts that none applies (disjoint rules:
-  [rules.md](../architecture/rules.md)).
+  rule driver offers the bound operator to every rule, with no whole-query check of its own; each rule calls the
+  readers it needs. The driver takes the first rule whose CheckCondition applies; a debug build runs the rest and
+  asserts that none applies (disjoint rules: [rules.md](../architecture/rules.md)).
 - **Result adapter** ([result_adapter.md](../architecture/result_adapter.md)). It serializes, prunes outputs only when
   skipping is proved safe, and always keeps the rule's validated columns live. What a rule hands it (a child, a slot
   map that fits the DECIDE outputs, the validated columns and the source row id) is checked in release builds and a
@@ -224,7 +225,7 @@ assertion, ASan or UBSan report. It is the baseline for every direct-solve task 
   differently. Its header
   defines `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for every direct-solve file.
   - **Per-row bounds on a decision.** A per-row bound is read by the solver path's own classifier
-    (`DecideReadSingletonRow`, stored on the IR node as `singleton_row` and `bound`), so direct solve admits the
+    (`DecideReadSingletonRow`, stored on the `DirectClause` as `singleton_row` and `bound`), so direct solve admits the
     values the solver admits, as DuckDB evaluates the comparison (D64). A per-row constraint is read as a bound only
     when the classifier read it as a bound on one decision (`singleton_row`). `DirectReadBounds` folds
     `variable_bound`s into each decision's static box (default `[0, inf)`, a BOOL kept in `{0, 1}`, ends of magnitude
@@ -347,8 +348,8 @@ assertion, ASan or UBSan report. It is the baseline for every direct-solve task 
   nonthrowing BOOLEAN over source columns: a `when` the plan evaluates on every row), `DirectHasColumnReference`,
   `DirectRemapSourceReferences` (re-points source columns at a projection over the source), `DirectIsWholeNumbered` (an
   `INT` or `BOOL` decision), `DecideIsLowerBound` and `DecideIsUpperBound` (which comparisons bound a count from below
-  and from above), `DirectPartFactor`, `DIRECT_CONSTANT`, `DIRECT_FINITE_CONSTANT`, `DirectIRConstraint::PlainSum` and
-  `DirectPart::IsPlainSum` answer "may a rule use this value" once for all rules. `DirectIRConstraint::Membership` gives
+  and from above), `DirectPartFactor`, `DIRECT_CONSTANT`, `DIRECT_FINITE_CONSTANT`, `DirectClause::PlainSum` and
+  `DirectPart::IsPlainSum` answer "may a rule use this value" once for all rules. `DirectClause::Membership` gives
   the rows an aggregate constraint covers: its sum's own `when` or the clause's `when`; with both, the rules decline
   (the solver reads both).
 - **One evaluate-to-DOUBLE function.** `TryEvaluateFoldableDouble(context, expr, out, flags)` (`decide_cast_policy.hpp`)
@@ -397,19 +398,21 @@ assertion, ASan or UBSan report. It is the baseline for every direct-solve task 
     source row id, one block of the read. A side table leaves a recomputable source recomputed. Output row order and the
     choice among equal optima are not guaranteed. Tests: `test_rhs_aggregate_window.py`, `test_bound_side_tables.py`.
 - **NULL values.** A NULL is skipped where it is read, as on the solver path (deck p. 50). A reducer's NULL summand
-  arrives as the tests `DecideCanonicalizer::SkipNullData` added to its filter; the IR moves them out of `part.filter`
-  into the part's tests, and `GuardCoefficients` reads a coefficient as 0 on a row they fail, so the SUM adds nothing
-  for it: every coefficient, a square's weight and the implicit 1 of a term with no coefficient among them, each tagged
-  as a guard so a rule that needs the constant reads through it (`DecideUnguarded`). The guarded coefficients include
-  the terms inside an ABS; a product inside an ABS has no coefficient of its own, and the front end declines it. A NULL
+  arrives as the tests `DecideCanonicalizer::SkipNullData` added to its filter; the clause reader moves them out of
+  `part.filter` into the part's tests, and `GuardCoefficients` reads a coefficient as 0 on a row they fail, so the SUM
+  adds nothing for it: every coefficient, a square's weight and the implicit 1 of a term with no coefficient among
+  them, each wrapped in a `BoundDecideNullGuardExpression` (a Decorator over the CASE) so a rule that needs the
+  constant reads through it (`DecideUnguarded`). The guarded coefficients include the terms inside an ABS; a product
+  inside an ABS has no coefficient of its own, and the clause reader declines it. A NULL
   limit or per-row bound is open: S1's `SourceLimit` reads it as no limit, R1's limits pass over it through
   `MIN`/`MAX`/`LEAST`/`GREATEST`, and `DirectRowBoundMessage` and the singleton-row box (`AdmittedInterval`) give the
-  instance no bound. The driver strips every tag from the operators above the source (`StripTagsAbove`), and an
+  instance no bound. The driver unwraps every NULL guard and strips every tag from the operators above the source
+  (`StripTagsAbove`), and an
   aggregate built from a reducer (`DirectAggregateOf`, for a side table, on either path) drops the reducer's alias,
   which carries its tags, so EXPLAIN never prints one.
 - **Number messages.** Both paths raise one text, `DecideInvalidValueMessage` (`decide_value_messages.hpp`), from the
-  value's `DecideValueRole` and its text as written: the cut query text, or `DirectIR::render` where none was cut
-  (`NULL_GUARD_TAG` keeps a NULL guard out of the text), with the caret on the value
+  value's `DecideValueRole` and its text as written: the cut query text, or `DirectRender` where none was cut (a
+  render prints the coefficient a NULL guard holds, not the guard), with the caret on the value
   (`DecideInvalidValueError`; a plan raises through `__internal_decide_invalid_value`). It names no row: a row's place
   in the input depends on the scan.
   - A coefficient DeciDB computes (like terms merged, a reducer's factor or divisor applied) has no place of its own,
@@ -528,20 +531,21 @@ rank window or a verified, streamed plan) and run on the same two central files.
   `test_case_simplification_error`, `test_nop_arithmetic_float`, `test_not_distinct_from_to_equal`
   (`test/sql/optimizer/expression/`) and `test_left_join_perfect_hash` (`test/sql/join/left_outer/`), and
   `test/common/test_decidb_perfect_hash_join.cpp` (which join types the executor takes).
-- C++: `test_decidb_direct_ir.cpp` (every IR node kind and not-proved parts: a per-row term the splitter cannot read, an
-  order-0 norm in a reducer, and a norm marker of an order it does not expect, each as a not-proved part, not an
-  exception),
+- C++: `test_decidb_direct_readers.cpp` (every reading the readers give and each shape they decline: a per-row term the
+  splitter cannot read, an order-0 norm in a reducer, and a norm marker of an order it does not expect, each a reader
+  returning false, not an exception),
   `test_decidb_direct_rule_driver.cpp` (stub rules: one rule applying, fallback when no rule applies, a rule that
-  applies beside one that does not, two rules applying as an internal error, an IR the front end could not read offered
-  to no rule, mismatched slot, a shared plan fragment handed an input that does not fit, each way a substitute can
-  misfit the adapter (no child, a missing prunable flag, a slot, validated column or row id slot beyond the child), a
+  applies beside one that does not, two rules applying as an internal error, no registered rule applying to a query
+  whose clause or objective its readers decline, mismatched slot, a shared plan fragment handed an input that does not
+  fit, each way a substitute can misfit the adapter (no child, a missing prunable flag, a slot, validated column or row
+  id slot beyond the child), a
   pipelined check and a gated verdict under `LIMIT 1` and `COUNT(*)`), `test_decidb_direct_decline.cpp` (each decline
-  branch of the seven rules' `CheckCondition` and of `DirectIRIsReadable`, tested on the IR: a probe rule installed
-  through the rule driver's test seam receives the IR the driver reads from a small query that is only planned, edits it
-  for the few shapes SQL cannot write, and asks the rule whether it applies; each case reaches an arm no other case of
-  its rule reaches, and each rule has forms that apply). The IR comes from a query rather than from a hand-built struct
-  because a hand-built IR has no resolved source columns, so the source-column checks would pass without checking
-  anything.
+  branch of the seven rules' `CheckCondition`, tested on the bound operator: a probe rule installed through the rule
+  driver's test seam receives the operator the driver offers for a small query that is only planned, edits its bound
+  clause for the few shapes SQL cannot write, and asks the rule whether it applies; after an edit the probe raises, so
+  the edited operator is never planned. Each case reaches an arm no other case of its rule reaches, and each rule has
+  forms that apply). The operator comes from a query rather than from a hand-built struct because a hand-built one has
+  no resolved source columns, so the source-column checks would pass without checking anything.
 - Python: `test_direct_rule_conformance.py` (one `RuleFixture` per rule: schema, all-rows read,
   serializer, prepared plans, near misses, `off`, forced backend, `DIAGNOSE` and an empty source) and the
   parent-context rows of `test_direct_s1_uniform_matroid.py`. With A1's domain check disabled,
@@ -570,9 +574,8 @@ rank window or a verified, streamed plan) and run on the same two central files.
   `coverage_report.py compare OLD NEW` lists the arms OLD reaches and NEW does not (exit 1 when there are any) and the
   reverse, matching an arm by file, function, condition text and its occurrence in the function, so lines that move are
   not read as lost. Arms no test reaches, kept on purpose, each a check of what another component promises:
-  - **The binder's promise that a key, a scope condition and a group-bound input read only the source:**
-    `DirectReferencesOnlySource` in `CheckablePredicate`, and the checkability tests of a row, a filter and a value
-    (`direct_ir.cpp`); the same
+  - **The binder's promise that a key and a group-bound input read only the source:**
+    `DirectReferencesOnlySource` in `DirectReadKey` (`direct_clause_reader.cpp`); the same
     test of a group-bound input (`direct_plan_fragments.cpp`); and `ref.depth == 0` in `DirectReferencesOnlySource`
     (`direct_expression.cpp`), which every caller's determinism check rules out but the function's contract promises
     on its own. A `per` key cannot be an expression, a `when` or `by` reading a decision is refused earlier, and an
@@ -590,10 +593,10 @@ rank window or a verified, streamed plan) and run on the same two central files.
     (the binder casts a reducer's argument to DOUBLE, so SUM, AVG, MIN, MAX and COUNT bind none);
     `DirectReplaceColumns` on a column outside the ones replaced; `DirectIsFiniteWhereKept` on no values; and
     `DirectReadAbsTerm` on a term that is not an `ABS` (A2 promises one).
-  The keyed S1 and R1 plans run from queries in the S1 and R1 suites, and from an IR against the solver with
+  The keyed S1 and R1 plans run from queries in the S1 and R1 suites, and from C++ queries against the solver with
   NULL-key rows (`test/common/ test_decidb_direct_decline.cpp`, "keyed plans"). Every other check follows one policy: a
   query reaches it and a test runs it; a check on what a rule hands the engine raises in release builds and a stub-rule
-  C++ test reaches it; a check on a plan, IR or setting the engine builds itself, in the same file, is a `D_ASSERT`,
+  C++ test reaches it; a check on a plan or setting the engine builds itself, in the same file, is a `D_ASSERT`,
   which debug builds run; code no query reaches is deleted. Branch coverage shows which branches a test runs, not
   whether its assertion would catch a wrong value there. One change no query can tell apart: `inclusive <= 0.0`
   against `< 0.0` for a lower bound in `DirectInclusiveRows` (a bound of exactly 0 gives capacity 0 either way).

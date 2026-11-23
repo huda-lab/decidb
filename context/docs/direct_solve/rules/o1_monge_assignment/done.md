@@ -16,8 +16,8 @@ AND per r: SUM(x) by (r) = 1
 MINIMIZE SUM(POWER(l.position - r.position, 2) * x);
 ```
 
-- **The source.** DECIDE's own child is a cross product (the IR's `cross_product`). A `WHERE` on one side is admitted:
-  filter pushdown has placed it inside that side.
+- **The source.** DECIDE's own child is a cross product (`DirectSourceFacts::left` and `right`). A `WHERE` on one
+  side is admitted: filter pushdown has placed it inside that side.
 - **The decision.** One `BOOL` per row, with no `per` of its own.
 - **The constraints.** Exactly two, each `per K: SUM(x) by (K) = 1` with no `when`, the same key on `per` and `by`,
   every element of the key a column of one side (`per l`, `per l.id`), and the two keys on different sides. A key
@@ -33,10 +33,11 @@ MINIMIZE SUM(POWER(l.position - r.position, 2) * x);
     `k > 0`.
 
   `a` is a numeric column of one side and `b` of the other, in either order, with casts looked through.
-- **The positions.** `a` and `b` are declared `NOT NULL` on the tables their sides scan directly (the IR's `not_null`).
+- **The positions.** `a` and `b` are declared `NOT NULL` on the tables their sides scan directly
+  (`DirectSourceFacts::not_null`).
 - **The key determines the position.** Rows that agree on a side's key agree on its position: the key holds the
-  position column, or it holds a key of the position's table (the IR's `keys`). So `per l.id` answers when `id` is a
-  key of the table `l` scans, and its classes are `per l`'s.
+  position column, or it holds a key of the position's table (`DirectSourceFacts::keys`). So `per l.id` answers when
+  `id` is a key of the table `l` scans, and its classes are `per l`'s.
 
 A table's keys are its UNIQUE constraints, the PRIMARY KEY included, whose columns the scan reads and the table
 declares all `NOT NULL`. UNIQUE lets NULLs repeat, and DuckDB declares a PRIMARY KEY's columns `NOT NULL`, so the
@@ -117,8 +118,8 @@ on these shapes is in [todo.md](todo.md).
   absolute value written `@`).
 - Error text: `test_o1_monge_infeasible_error_is_the_solvers_error_word_for_word` in `test_direct_user_facing.py`.
 - C++: `O1AppliesShapes` and `O1DeclineShapes` in `test/common/test_decidb_direct_decline.cpp`, one decline per
-  `CheckCondition` branch, and the partition test against every other rule; the IR's `cross_product`, `not_null` and
-  `keys` in `test_decidb_direct_ir.cpp`.
+  `CheckCondition` branch, and the partition test against every other rule; the source facts' two sides, `not_null` and
+  `keys` in `test_decidb_direct_readers.cpp`.
 - Join order: `test_a_parent_filter_stays_above_a_decide_over_a_join` in `test_nested_decide.py`.
 
 ## Performance

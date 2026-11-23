@@ -155,10 +155,9 @@ different reasons:
 
 `ClassifyDecideModel(const DecideModelShape &)` (`decide_solver_capabilities.hpp`) is the one classifier of a model's
 shape into the class a backend must take. `DecideModelShape::AddTerm(objective, square, weight_sign, decisions)` fills
-it, and three readers do: the gate from the prepared groups (`ReadPreparedModelShape`, which `DeriveDecideModelClass`
-classifies), direct solve into `DirectIR::model_shape` from its IR's split terms (`../07_solver/done.md` §1), and
-the built model (`SolverModel::ModelClass`) from its matrix. An integral column and a coupled Q matter only beside a
-quadratic objective: a MILP with quadratic rows is QCQP, not MIQP.
+it, and two readers do: the gate from the prepared groups (`ReadPreparedModelShape`, which `DeriveDecideModelClass`
+classifies), and the built model (`SolverModel::ModelClass`) from its matrix. An integral column and a coupled Q
+matter only beside a quadratic objective: a MILP with quadratic rows is QCQP, not MIQP.
 
 `DeriveDecideModelClass` is a *prediction* of what `SolverModel::ModelClass()` will
 report once the rows are in, and it must never predict less. Where it cannot be exact
@@ -480,9 +479,9 @@ section. An operand that still holds a square or a product of decisions is refus
 `NotImplementedException`, *"ABS over a product or a power of decisions is not supported"*. The test is
 `RequireLinearOperand`, which asks `DecideTermSplitter::IsLinear` and which `RewriteNotEqual` calls too. The refusal
 stands because the rows of an ABS state its operand as a linear form (`AbsEnvelope` in the emitter asserts the
-envelope holds no product), so a product there needs a route of its own. The direct front end guards the terms inside
-an ABS as it guards a part's terms (`GuardCoefficients` recurses into `term.inner`); a term of degree 2 there has no
-coefficient of its own and the front end declines it (`HasUnknownTerm`), so the solver path refuses it here.
+envelope holds no product), so a product there needs a route of its own. The direct clause reader guards the terms
+inside an ABS as it guards a part's terms (`GuardCoefficients` recurses into `term.inner`); a term of degree 2 there has
+no coefficient of its own and the clause reader declines it (`HasUnknownTerm`), so the solver path refuses it here.
 
 A product is kept where it fits the one constraint path and refused elsewhere.
 

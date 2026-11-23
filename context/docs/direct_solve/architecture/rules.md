@@ -19,13 +19,13 @@ for production use. If any required condition cannot be proved, the query stays 
 has a `Summary()`, the fixed line `EXPLAIN` shows for it.
 
 - **CheckCondition** checks the shape first, then certifies every constraint, objective part, decision, runtime value
-  check and output. It returns the applicability condition `Apply` reads, or nothing. A not-proved IR node means the
-  rule does not apply; it is not an error. Shape and certification are one step because a DECIDE query offers each
-  rule a single node, so a separate cheap pattern step (as in Cascades, where one pattern is tried on many subtrees)
-  saves nothing.
+  check and output. It returns the applicability condition `Apply` reads, or nothing. A reader that returns false
+  means the rule does not apply; it is not an error. Shape and certification are one step because a DECIDE query
+  offers each rule a single node, so a separate cheap pattern step (as in Cascades, where one pattern is tried on many
+  subtrees) saves nothing.
 - **Rules are disjoint.** The rule driver runs CheckCondition for every rule, and the rules are told apart by the
-  IR they require: S1 needs a `SUM(x)` count bound, A1 forbids any aggregate constraint. At most one rule applies to a
-  query. Two that apply are a bug in the rules: a debug build asserts after the first match that no later rule
+  shape they require: S1 needs a `SUM(x)` count bound, A1 forbids any aggregate constraint. At most one rule applies
+  to a query. Two that apply are a bug in the rules: a debug build asserts after the first match that no later rule
   applies, and a release build takes the first, so a user never sees an internal error for it. The rule driver test
   covers both with stub rules.
 - **Apply** builds the substitute, a relational plan. An unexpected failure here is an internal error, never a silent
@@ -38,10 +38,12 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
    is `RULE_NAME`, the upper-cased `<ID>_<SLUG>`. Declare `Make<Id><Slug>Rule()` (`MakeS1UniformMatroidRule()`) in
    `direct_rules.hpp`, which declares every rule's factory, and list the file in the folder's `CMakeLists.txt`.
 2. Register it with one line in `direct_registry.cpp`. No other engine file changes.
-3. Read only the IR (`direct_rule.hpp`). The driver offers a rule only an IR that `DirectIRIsReadable` accepts, so a
-   rule does not re-check the IR's statuses or offset; any other not-proved node is a decline. The objective's parts
+3. Read the bound operator `CheckCondition` receives, as any optimizer rule reads the operator it matches: its own
+   fields, and the shared readers in `direct_rule.hpp` for a clause's left side (`DirectReadClauses`), the objective
+   (`DirectReadObjective`), a key (`DirectReadKey`) and the source plan's facts (`DirectSourceFacts`). Call a reader
+   only when the rule needs its reading. A reader that returns false is a decline (`readers.md`). The objective's parts
    are a minimization, so a rule reads the direction from each part's sign. The rule must be
-   disjoint from every registered rule: it requires an IR property that rules proving a nearby shape forbid.
+   disjoint from every registered rule: it requires a property that rules proving a nearby shape forbid.
 4. Use the shared predicates in `direct_expression.cpp` to decide whether a coefficient or bound is admissible
    (`DirectProveValue`), and take plan fragments, runtime checks and bound and term reading from the shared files
    (`direct_plan_fragments.cpp`, `direct_runtime_checks.cpp`, `direct_bound_reader.cpp`); `../framework/done.md`
@@ -101,11 +103,11 @@ A rule exists to be a light shortcut. Before adding code to a rule or to the sha
 - **Is the proof short?** If admitting a shape needs a long proof, a new range argument or a parity check against
   solver quirks, decline the shape. The solver handles it correctly, only more slowly. A decline is cheap and a bug
   in a proof is a wrong answer.
-- **Does a value's sign decide the plan?** Recognition reads only the IR, never the data, so a declined query pays
-  about 0.14 ms whatever its size. A sign read from the data that could change the kind of problem (a negative factor
-  on a square makes it non-convex) declines at plan time. One that only changes values in the same pass is handled in
-  the plan, every sign exactly: the plan cannot hand a query back to the solver once it runs. R4's weights are the
-  second kind.
+- **Does a value's sign decide the plan?** Recognition reads only the bound operator, never the data, so a declined
+  query pays about 0.14 ms whatever its size. A sign read from the data that could change the kind of problem (a
+  negative factor on a square makes it non-convex) declines at plan time. One that only changes values in the same
+  pass is handled in the plan, every sign exactly: the plan cannot hand a query back to the solver once it runs. R4's
+  weights are the second kind.
 - **Does a second rule need it?** Keep helpers inside the rule until a second rule uses them, then move them to the
   shared files (plan fragments, runtime checks, bound reader).
 - **Is the test proportionate?** One test per behavior. Do not pin an incidental detail, such as which of two errors
@@ -134,11 +136,11 @@ test, adding one is a task in that rule's `todo.md`.
    (bad data) go in the error table, where `off` and `require` must both fail (the choice among several errors need not
    match; a NULL or NaN message must), and values the oracle cannot hold (infinities, 2^53) go
    in the boundary table, where direct is compared with the solver only. Add the shape inside parent queries too.
-3. **C++ cases** (`test/common/`) for the rule's applicability condition and for the IR it relies on. Each decline
-   branch of `CheckCondition` gets a case in `test_decidb_direct_decline.cpp`, which hands the rule the IR of a small
-   planned query; `make decide-coverage` shows each new case reaching an arm no other case of the rule reaches. The
-   rule adds one row to `EveryRuleWithItsShapes` there (its applying shapes, keyed shapes included): one test runs every
-   rule against every other rule's shapes, and fails when a registered rule has no row.
+3. **C++ cases** (`test/common/`) for the rule's applicability condition and for the readers it relies on. Each
+   decline branch of `CheckCondition` gets a case in `test_decidb_direct_decline.cpp`, which hands the rule the bound
+   operator of a small planned query; `make decide-coverage` shows each new case reaching an arm no other case of the
+   rule reaches. The rule adds one row to `EveryRuleWithItsShapes` there (its applying shapes, keyed shapes included):
+   one test runs every rule against every other rule's shapes, and fails when a registered rule has no row.
 
 The checks to run after any change are in [../framework/todo.md](../framework/todo.md) § How to work any task;
 `test/decide/run_direct_matrix.sh` runs them all, and its exit code is 0 only when no check fails.

@@ -11,8 +11,8 @@ Example: `SUM(x) <= 1 MAXIMIZE SUM(score * x)` is "pick the best row". The plan 
 
 ```text
 bound, canonical LogicalDecide
-   -> IR             the front end reads the problem into one form    (ir.md)
-   -> CheckCondition each rule checks its applicability condition     (rules.md)
+   -> CheckCondition each rule reads the operator, calling the readers  (readers.md)
+                     it needs, and checks its applicability condition (rules.md)
         no rule applies: the solver path runs as before
         two rules apply: a rule bug; debug asserts, release takes the first
    -> Apply          build the substitute, a relational plan
@@ -50,14 +50,16 @@ each mode does: [policy.md](policy.md).
 
 Names follow [the glossary](../../glossary.md).
 
-- **Front end and IR** (compiler practice). The front end reads `LogicalDecide` once into an intermediate
-  representation. Rules read only the IR, so no rule depends on the bound tree's layout.
-- **Conservative analysis.** The IR records "not proved" for anything it cannot read exactly, and no rule applies on
-  a "not proved" input.
+- **Rules over the bound operator, with shared readers** (query-optimizer practice). A rule reads `LogicalDecide`'s
+  own fields, as DuckDB's optimizer rules read the `LogicalOperator` they match. What several rules read the same way
+  (a clause's left side and the objective as additive parts, a key, the facts of the source plan) is a shared reader
+  function the rule calls on demand (`readers.md`).
+- **Conservative analysis.** A reader returns false for anything it cannot read exactly, and a rule declines when a
+  reader it calls returns false.
 - **Strategy.** Each rule implements one interface: check its applicability condition, then apply its substitute.
 - **Registry and Factory Method.** One registry lists the rules; each rule has a factory function.
-- **Template Method.** The rule driver runs the same steps for every rule: build the IR, offer it to each rule, accept
-  at most one, apply it, wrap the substitute.
+- **Template Method.** The rule driver runs the same steps for every rule: offer the operator to each rule, accept at
+  most one, apply it, wrap the substitute.
 - **Transformation rules** (Volcano, Cascades). A rule replaces the DECIDE node with an equivalent relational plan.
 - **Canonicalization after lowering** (compiler practice: MLIR's canonicalize, LLVM's InstCombine). Rules build their
   expressions in general form. One pass over the finished plan propagates the columns that hold a constant and runs
@@ -77,7 +79,7 @@ Names follow [the glossary](../../glossary.md).
   wide columns are fetched by row id after the plan has chosen its rows.
 
 **Departure from Cascades: rules are disjoint, not chosen by cost.** Cascades lets several rules apply and keeps the
-cheapest plan. Here, rules are told apart by the IR they require, so two rules applying to one query is a bug in the
+cheapest plan. Here, rules are told apart by the shape they require, so two rules applying to one query is a bug in the
 rules: a debug build asserts that none does, and a release build takes the first rule that applies (`rules.md`).
 
 ## Code
@@ -85,5 +87,5 @@ rules: a debug build asserts that none does, and a release build takes the first
 `src/optimizer/decide/direct/`, headers in `src/include/duckdb/optimizer/decide/direct/`. Start with
 `direct_rule_driver.cpp` (the flow above), then `s1_uniform_matroid_rule.cpp` (a rule built on a window) and
 `a1_separable_box_rule.cpp` (a rule built on a chain of projections, verified then streamed). The rest of the folder is
-named for what it does: IR, plan fragments, runtime checks, bound reader, result adapter, expression predicates,
+named for what it does: readers, plan fragments, runtime checks, bound reader, result adapter, expression predicates,
 registry.

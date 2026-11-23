@@ -808,8 +808,8 @@ looked into: its absence is its helper's.
   never refuses;
 - refuse a term for its algebra: that is the shape check (§3.11);
 - evaluate data, reducers, `when` conditions, `per` classes or `by` groups;
-- use a fact of the plan or the catalog (a key, a NOT NULL, a statistic): the direct IR front end reads those from
-  the scans of the optimized plan;
+- use a fact of the plan or the catalog (a key, a NOT NULL, a statistic): direct solve reads those from the scans of
+  the optimized plan (`DirectSourceFacts`);
 - choose a solver formulation.
 
 Expression association is fixed by the stage-01 grammar; this stage never

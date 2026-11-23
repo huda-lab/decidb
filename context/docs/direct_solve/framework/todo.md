@@ -1,7 +1,7 @@
 # Shared engine — open work
 
-The engine is everything that is not one problem class: IR, rule driver, plan fragments, runtime checks, bound reader,
-result adapter, policy.
+The engine is everything that is not one problem class: readers, rule driver, plan fragments, runtime checks, bound
+reader, result adapter, policy.
 What exists today is in `done.md`. Direct solve declines each language construct it cannot yet model; the
 solver path answers those queries, so none of them is wrong, only slower.
 

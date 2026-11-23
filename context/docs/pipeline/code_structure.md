@@ -81,7 +81,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `planner/decide/decide_cast_policy.cpp` | 04 | Cast unwrapping |
 | `optimizer/decide/decide_optimizer.cpp` | 05 | The pass dispatcher and the helpers the passes share |
 | `optimizer/decide/decide_rewrite_rhs_bounds.cpp` | 05 | `RewriteRhsAggregates`: a data-only reducer on a bound's right side becomes a placeholder column, recorded for the path to build as a side table (`direct_bound_tables.cpp`); runs before the other passes |
-| `optimizer/decide/direct/` | 05 | Direct solve: the IR, the rules (S1, A1, R1, N1, A2), and the plan fragments that replace the DECIDE node; `../direct_solve/README.md` |
+| `optimizer/decide/direct/` | 05 | Direct solve: the readers, the rules (S1, A1, R1, N1, A2), and the plan fragments that replace the DECIDE node; `../direct_solve/README.md` |
 | `optimizer/decide/decide_rewrite_norm_in.cpp` | 05 | `norm` and DECIDE-variable `IN` |
 | `optimizer/decide/decide_rewrite_notequal_avg.cpp` | 05 | `<>` indicators and AVG→SUM |
 | `optimizer/decide/decide_rewrite_abs.cpp` | 05 | `RewriteAbs`: which ABS is exact, and the record stage 06 and the tree read |

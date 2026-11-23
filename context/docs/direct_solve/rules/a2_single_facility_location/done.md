@@ -9,8 +9,8 @@ One `REAL` decision shared by many rows, query-wide (`per ():`) or keyed (`per k
 
 - **The key.** One problem per class of the key. A row whose column element of the key is NULL is in no class: it has
   no decision, its `c` is NULL, and nothing on it enters the objective, as on the solver path. An element that stands
-  for a relation (`per D:`) takes NULL as a value of its own. The IR carries the key as `DirectKeyElement`s
-  (`DirectIRKeyedScope::key`, read by the same `ReadKey` as a `by` key), and the plan partitions by it through
+  for a relation (`per D:`) takes NULL as a value of its own. The rule reads the keyed scope's key as
+  `DirectKeyElement`s (`DirectReadKey`, the same reader as for a `by` key), and the plan partitions by it through
   `DirectProjectScope`.
 - **The interval.** Per class, the decision's box (the default floor of 0 or a written constant lower bound, and a
   constant upper bound) tightened by every bound clause: `MAX` of each clause's lower ends and `MIN` of its upper ends
@@ -112,7 +112,7 @@ on these shapes is in [todo.md](todo.md).
 | Shape | Why |
 |---|---|
 | `SUM(w * ABS(c - v))` with `w` read from the data | The median is optimal only for nonnegative weights, and the plan is chosen before any weight is read. |
-| `norm(c - v, 0)` | The L0 loss: its proof is long for a rare loss, and the IR marks it not proved. |
+| `norm(c - v, 0)` | The L0 loss: its proof is long for a rare loss, and the objective reader declines it. |
 | `MAXIMIZE` of an `ABS` maximum, `MAX(w * ABS(...))` with a weight read from the data or not positive | Not the midpoint. |
 | A linear term or a per-row constant beside the loss, a second loss term, a second part | Not one loss. |
 | `MINIMIZE -SUM(ABS(...))` and other concave absolute losses | Not convex, and not the median. |
@@ -148,7 +148,7 @@ on these shapes is in [todo.md](todo.md).
   weights, the unbounded error).
 - C++: `A2AppliesShapes` and `A2DeclineShapes` in `test/common/test_decidb_direct_decline.cpp`, one decline per
   `CheckCondition` branch, and the partition test against every other rule; the keyed scope's key and the guarded
-  square weight in `test_decidb_direct_ir.cpp`.
+  square weight in `test_decidb_direct_readers.cpp`.
 
 ## Performance
 

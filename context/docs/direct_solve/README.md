@@ -59,7 +59,7 @@ started.
 | [O2](rules/o2_monge_transportation/) | Monge transportation problem | Prototype | Not started |
 | [D1](rules/d1_block_decomposition/) | Block-diagonal decomposition | Exact | Not started |
 
-The shared engine (IR, rule driver, plan fragments, runtime checks, bound reader, result adapter) is in [framework/](framework/).
+The shared engine (readers, rule driver, plan fragments, runtime checks, bound reader, result adapter) is in [framework/](framework/).
 
 ## How these docs are kept
 
