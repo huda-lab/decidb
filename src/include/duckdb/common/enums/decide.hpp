@@ -166,7 +166,7 @@ inline bool IsRelaxableForElastic(ConstraintKind kind) {
 //!                    the reported edit is the max overshoot, not the sum.
 enum class ElasticShape : uint8_t { UNSET, PER_ROW_DATA, SHARED_SCALAR };
 
-//! DECIDE encodes two facts of a node in the `alias` of bound expressions (NULL_GUARD_TAG, FRAME_COLUMN_TAG). More
+//! DECIDE encodes one fact of a node in the `alias` of bound expressions (NULL_GUARD_TAG). More
 //! than one tag can apply to the same node, so tags are **concatenated** and matched by search, never by equality.
 //! Every tag opens and closes with `__`, which is what makes concatenation unambiguous.
 inline void AddDecideTag(string &alias, const string &tag) {
@@ -179,7 +179,7 @@ inline bool HasDecideTag(const string &alias, const string &tag) {
 }
 
 //! Remove every DECIDE tag from an alias, leaving whatever ordinary alias it was appended
-//! to: "cost__frame_column____null_guard__" yields "cost", and an alias that was
+//! to: "cost__null_guard__" yields "cost", and an alias that was
 //! nothing but tags yields "".
 //!
 //! Tags are only ever appended (`AddDecideTag`), so they are always a suffix, and each one
@@ -205,10 +205,6 @@ inline string StripDecideTags(const string &alias) {
 //! On the COALESCE or CASE that reads a NULL coefficient as 0 (DecideOptimizer's DropNullObjectiveTerms, the direct
 //! IR's GuardCoefficients): the query never wrote it, so a render prints the value it guards.
 static constexpr const char *NULL_GUARD_TAG = "__null_guard__";
-
-//! On a reference to a frame column (DecideFrameReads::columns): its name is the frame as written, which a
-//! message prints as it stands, not as an identifier.
-static constexpr const char *FRAME_COLUMN_TAG = "__frame_column__";
 
 //! What a helper definition is: the construct a rewrite kept and gave a helper decision.
 enum class DecideHelperKind : uint8_t {
@@ -279,9 +275,8 @@ static constexpr const char *VALUE_LINK_NAME_PREFIX = "__value_";
 
 //! Every DECIDE tag above, the one list DecideNameContainsTag reads. A constant added above is added here.
 static constexpr const char *DECIDE_TAGS[] = {
-    NULL_GUARD_TAG,           FRAME_COLUMN_TAG,         L0_AUTO_INDICATOR_NAME_PREFIX,
-    L0_INDICATOR_NAME_PREFIX, IN_INDICATOR_NAME_PREFIX, ABS_AUX_NAME_PREFIX,
-    BILINEAR_AUX_NAME_PREFIX, BODY_NAME_PREFIX,         VALUE_LINK_NAME_PREFIX};
+    NULL_GUARD_TAG,      L0_AUTO_INDICATOR_NAME_PREFIX, L0_INDICATOR_NAME_PREFIX, IN_INDICATOR_NAME_PREFIX,
+    ABS_AUX_NAME_PREFIX, BILINEAR_AUX_NAME_PREFIX,      BODY_NAME_PREFIX,         VALUE_LINK_NAME_PREFIX};
 
 //! True when a name a user wrote contains a DECIDE tag, in any letter case. The tags travel in expression aliases and
 //! are found by search (HasDecideTag), so such a name is read as the tag. Until the tags are gone (R20) DECIDE refuses

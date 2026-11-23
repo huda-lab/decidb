@@ -76,6 +76,8 @@ struct RenderContext {
 	//! The body of a BETWEEN half being rendered: it carries the BETWEEN's location, but is half of its value, so it is
 	//! not quoted by that span. Null for any other render.
 	const Expression *between_half = nullptr;
+	//! DecideSourceNames::source_columns.
+	idx_t source_columns = DConstants::INVALID_INDEX;
 };
 } // namespace
 
@@ -86,6 +88,7 @@ static RenderContext ContextOf(const DecideSourceNames &names) {
 	ctx.aux_labels = names.aux_labels;
 	ctx.written = names.written;
 	ctx.frames = names.frames;
+	ctx.source_columns = names.source_columns;
 	return ctx;
 }
 
@@ -416,11 +419,13 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 		break;
 	}
 	case ExpressionClass::BOUND_REF: {
-		// A column the physical plan resolved to a chunk position keeps its name as alias; a frame column's name is
-		// the frame as written.
+		// A column the physical plan resolved to a chunk position keeps its name as alias; a column the tree computes
+		// (a frame column) is named by the frame as written.
 		auto name = StripDecideTags(expr.GetAlias());
 		if (!name.empty()) {
-			return HasDecideTag(expr.GetAlias(), FRAME_COLUMN_TAG) ? name : KeywordHelper::WriteOptionallyQuoted(name);
+			return expr.Cast<BoundReferenceExpression>().index < ctx.source_columns
+			           ? KeywordHelper::WriteOptionallyQuoted(name)
+			           : name;
 		}
 		break;
 	}

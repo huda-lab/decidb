@@ -233,9 +233,7 @@ private:
 	//! The chunk column holding `value` read the way `kind` says for frame `frame`.
 	unique_ptr<Expression> FrameColumnRef(DecideFrameColumn::Kind kind, idx_t frame, const Expression *value) {
 		auto slot = FrameColumnSlot(kind, frame, value);
-		auto name = op.bound.frames[frame].spelling;
-		AddDecideTag(name, FRAME_COLUMN_TAG);
-		return make_uniq<BoundReferenceExpression>(std::move(name), frame_reads.columns[slot].type,
+		return make_uniq<BoundReferenceExpression>(op.bound.frames[frame].spelling, frame_reads.columns[slot].type,
 		                                           frame_reads.column_base + slot);
 	}
 
@@ -437,9 +435,7 @@ private:
 			columns.push_back(std::move(column));
 			slot = frame_aggregate_slots.emplace(index, columns.size() - 1).first;
 		}
-		auto name = op.frame_aggregates[index].text;
-		AddDecideTag(name, FRAME_COLUMN_TAG);
-		auto column = make_uniq<BoundReferenceExpression>(std::move(name), marker.return_type,
+		auto column = make_uniq<BoundReferenceExpression>(op.frame_aggregates[index].text, marker.return_type,
 		                                                  frame_reads.column_base + slot->second);
 		// It equals the reducer in value, so a message quotes it as the reducer was written (the location rule).
 		DecideReplaces(*column, marker);

@@ -75,8 +75,10 @@ PhysicalDecide::PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardin
 }
 
 DecideSourceNames PhysicalDecide::Names() const {
-	return DecidePlanNames(display.source_text, tree->keyed_scopes, tree->keys, display.decide_index,
-	                       display.aux_var_expressions, tree->frames);
+	auto names = DecidePlanNames(display.source_text, tree->keyed_scopes, tree->keys, display.decide_index,
+	                             display.aux_var_expressions, tree->frames);
+	names.source_columns = tree->input_column_count;
+	return names;
 }
 
 string PhysicalDecide::WrittenClause(idx_t source_clause_id) const {

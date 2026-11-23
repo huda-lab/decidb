@@ -94,6 +94,10 @@ struct DecideSourceNames {
 	//! The frame selectors (LogicalDecide::frames): a frame marker the render does not quote prints its spelling
 	//! (DecideFrameSpec::spelling). Null prints the marker's aggregate.
 	const vector<DecideFrameSpec> *frames = nullptr;
+	//! How many columns the source has, where the render reads a physical plan (DecideTree::input_column_count): a
+	//! chunk reference below it is a source column and prints as an identifier; one past it is a column the tree
+	//! computes (a frame column), whose name is its text as written.
+	idx_t source_columns = DConstants::INVALID_INDEX;
 };
 
 //! The names a plan and the rewrites render with: the clause registries, the auxiliary labels and the frames. They
