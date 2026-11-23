@@ -204,7 +204,7 @@ def test_a_keyed_decision_beside_a_reducer(decidb_cli, scope_solver):
             ("depotID",),
             lambda r: r["capacity"],
             ("depotID",),
-            0,
+            len(DEPOTS),
             id="data-under-the-by-key",
         ),
         pytest.param("sum(ship) by (D.depotID) <= 30 * open", ("depotID",), lambda r: 30, PER_ROW, 0, id="constant"),
@@ -213,7 +213,7 @@ def test_a_keyed_decision_beside_a_reducer(decidb_cli, scope_solver):
             ("depotID",),
             lambda r: r["capacity"],
             PER_ROW,
-            0,
+            len(DEPOTS),
             id="data-per-row",
         ),
         pytest.param(
@@ -234,10 +234,9 @@ def test_a_term_beside_a_reducer_is_one_row_per_group_when_the_by_key_determines
     group: its decision is keyed by the `by` key and its data is a constant. Data the clause's
     `per` does not hold by construction may take several values in a class, each a variant
     (D70), so it takes a helper decision per group, as data read per row, a `per` finer than
-    the `by` key and a `by` the decision's key does not determine do. A depot's sum is written
-    into the clause's rows where they lie within the depot (no column), and keeps its column
-    under a `per` finer than the depot, whose every class would hold the depot's members. The
-    answer is the same either way."""
+    the `by` key and a `by` the decision's key does not determine do. Such a helper keeps its
+    column: a class the data splits into variants would hold the depot's members once per
+    variant. The answer is the same either way."""
     cli = request.getfixturevalue(cli_fixture).with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
     sql = f"""
         SELECT shipmentID, ship, open {from_clause()}

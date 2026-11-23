@@ -82,10 +82,14 @@ TEST_CASE("A lone SUM is written into the one clause whose rows lie within its g
 	DuckDB db(nullptr);
 	Connection con(db);
 	REQUIRE_NO_FAIL(con.Query("SET decide_direct_solve='off'"));
-	// The facility-location link: a row per group, which data may split into variants.
-	auto link = HelperForms(con, "x(REAL), per t.g: b(BOOL) SUCH THAT x <= 5 AND per t.g: sum(x) by (t.g) <= t.w * b "
-	                             "MAXIMIZE sum(x)");
-	REQUIRE(FormOf(link, "sum(x) by (t.g)") == DecideHelperForm::WRITTEN_IN);
+	// Data the class key does not hold makes a row per value: the group's members would stand in each. (With none,
+	// the facility-location link is an aggregate clause and has no helper.)
+	auto per_value = HelperForms(con, "x(REAL), per t.g: b(BOOL) SUCH THAT x <= 5 AND "
+	                                  "per t.g: sum(x) by (t.g) <= t.w * b MAXIMIZE sum(x)");
+	REQUIRE(FormOf(per_value, "sum(x) by (t.g)") == DecideHelperForm::VARIABLE);
+	auto no_class =
+	    HelperForms(con, "x(REAL), per (): y(REAL) SUCH THAT x <= 5 AND sum(x) by (t.g) <= t.w * y MAXIMIZE sum(x)");
+	REQUIRE(FormOf(no_class, "sum(x) by (t.g)") == DecideHelperForm::VARIABLE);
 	// A decision read per row makes a row per input row: the group's members would stand in each.
 	auto per_row = HelperForms(con, "x(REAL) SUCH THAT x <= 5 AND x <= 0.5 * sum(x) by (t.g) + 1 MAXIMIZE sum(x)");
 	REQUIRE(FormOf(per_row, "sum(x) by (t.g)") == DecideHelperForm::VARIABLE);
@@ -99,12 +103,12 @@ TEST_CASE("A lone SUM is written into the one clause whose rows lie within its g
 	REQUIRE(FormOf(crossed, "sum(x) by (t.g)") == DecideHelperForm::VARIABLE);
 	REQUIRE(FormOf(crossed, "sum(x) by (t.h)") == DecideHelperForm::VARIABLE);
 	// A clause's classes finer than the groups read each group once per class.
-	auto finer = HelperForms(con, "x(REAL), per t.g: b(BOOL) SUCH THAT x <= 5 AND per t.id: sum(x) by (t.g) <= t.w * b "
-	                              "MAXIMIZE sum(x)");
+	auto finer =
+	    HelperForms(con, "x(REAL) SUCH THAT x <= 5 AND per t.id: sum(x) by (t.g) + sum(x) <= 9 MAXIMIZE sum(x)");
 	REQUIRE(FormOf(finer, "sum(x) by (t.g)") == DecideHelperForm::VARIABLE);
 	// Two clauses read it.
-	auto twice = HelperForms(con, "x(REAL), per t.g: b(BOOL) SUCH THAT x <= 5 AND per t.g: sum(x) by (t.g) <= t.w * b "
-	                              "AND per t.g: sum(x) by (t.g) <= 2 * t.w * b + 1 MAXIMIZE sum(x)");
+	auto twice = HelperForms(con, "x(REAL) SUCH THAT x <= 5 AND sum(x) by (t.g) + sum(x) <= 9 AND "
+	                              "sum(x) by (t.g) + 2 * sum(x) <= 12 MAXIMIZE sum(x)");
 	REQUIRE(FormOf(twice, "sum(x) by (t.g)") == DecideHelperForm::VARIABLE);
 }
 

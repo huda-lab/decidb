@@ -81,10 +81,11 @@ void DecideOptimizer::ChooseHelperForms(LogicalDecide &decide) {
 	auto &context = optimizer.context;
 	const BooleanDecisions booleans {decide.decide_index, decide.bound.is_boolean_var};
 	DecideCanonicalizer canonicalizer(context, decide.decide_index, decide.bound);
-	// Whether each row `clause` states of `body` reads one group of `helper`: the objective is one row, and a clause is
-	// a row per class and per value of what it reads (its variant signature, D70). Its classes and every key it reads
-	// by must be held by the helper's key, so a group is never read from outside it; a decision read per row makes a
-	// row per input row. Data may still split a class into variants, each of which then holds the group's members.
+	// Whether `clause` states of `body` at most one row for each group of `helper`: the objective is one row, and a
+	// clause is a row per class and per value of what it reads (its variant signature, D70). Its classes and every key
+	// it reads by must be held by the helper's key, so a group is never read from outside it. A decision read per row
+	// makes a row per input row, and data its class key does not hold a row per value: either reads a group once per
+	// row, and written in the group's members would be stated once per row.
 	auto rows_within = [&](const BoundDecideClause *clause, const Expression &body,
 	                       const DecideReducerValueDefinition &helper) {
 		if (!clause) {
@@ -112,7 +113,7 @@ void DecideOptimizer::ChooseHelperForms(LogicalDecide &decide) {
 		for (auto &field : fields) {
 			switch (field.kind) {
 			case DecideSignatureFieldKind::VALUE:
-				break;
+				return false;
 			case DecideSignatureFieldKind::DECISION: {
 				auto &scope = decide.bound.variable_scopes[field.decision];
 				if (scope.IsGlobal()) {

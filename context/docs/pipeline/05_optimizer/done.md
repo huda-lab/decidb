@@ -277,13 +277,16 @@ a `<>`, a row that is not linear, a bound on one decision (which may fold into t
 on both sides, or a second helper. A one-sided ABS states its operand in two rows, so it counts as two readers. A
 range of a whole timeline is one instance that every row of the timeline reads, so it keeps its column.
 
-A clause's rows lie within a helper's groups when no row of the clause reads a group twice over: the objective, or a
-clause whose `per` key is among the helper's `by` keys and whose row signature (`CollectSignatureFields`) names no
-per-row decision, no frame and no `by` key outside the helper's. A signature's data fields are not read: a class that
-the data splits into variants holds its group's members once per variant, as a nest's rows do. The rule is measured
-on the link of a facility-location model, `per g: sum(x) by (g) <= budget * open` over 200,000 rows: the solve takes
-37 ms written in and 98 ms with a column per group at 100 groups, 700 ms and 1,145 ms at 20,000, 6.7 s and 10.1 s at
-100,000. A per-row clause (`x <= share * sum(x) by (g)`) reads each group once per member, so its helper keeps the
+A clause's rows lie within a helper's groups when it states at most one row for each group, by construction: the
+objective, or a clause whose `per` key is among the helper's `by` keys and whose row signature
+(`CollectSignatureFields`) names no per-row decision, no frame, no `by` key outside the helper's, and no data its
+class key does not hold. Such data makes a row per value (D70), and each row would hold the group's members:
+`sum(x) by (g) <= cap * y` over 8,000 rows in 4 groups is 15,820 nonzeros with a column per group and 7.8 million
+written in. So the link of a facility-location model keyed by a column, `per g: sum(x) by (g) <= budget * open`, keeps
+its helper's column, since `budget` may differ within a class of `g`. Keyed by the relation that holds the budget
+(`per G: sum(x) by (G) <= G.budget * open`), the key holds `budget`, the clause is an aggregate clause, and no helper
+is made.
+A per-row clause (`x <= share * sum(x) by (g)`) reads each group once per member, so its helper keeps the
 column: N rows of two entries, not N rows of a group's members.
 
 The pass states the form in the plan: the rewrite account of a `WRITTEN_IN` helper becomes
