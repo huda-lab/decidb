@@ -49,14 +49,13 @@ enum class NECollapse : uint8_t {
 
 //! Classify one row of a `<>` constraint. Only called for an integer-valued LHS and an integer `K`, so a half-unit
 //! tolerance cleanly separates "can reach K" from "cannot".
-static NECollapse ClassifyNERow(const EvaluatedConstraint &ec, idx_t row, const vector<double> &lower_bounds,
-                                const vector<double> &upper_bounds, const InstanceBox &floors,
-                                const DecideClauseRef &written) {
-	auto range = DecideRowSignedRange(ec, row, lower_bounds, upper_bounds, DConstants::INVALID_INDEX, &floors);
+static NECollapse ClassifyNERow(const EvaluatedConstraint &ec, idx_t e, const vector<double> &lower_bounds,
+                                const vector<double> &upper_bounds, const InstanceBox &floors) {
+	auto range = DecideRowSignedRange(ec, e, lower_bounds, upper_bounds, DConstants::INVALID_INDEX, &floors);
 	double lo = range.Lo();
 	double hi = range.Hi();
-	// K is finite: LinearizeNotEqual drops a clause whose bound is not whole (an infinite one included) before this.
-	double k = DecideRowEffectiveBound(ec, row, written);
+	// K is finite: a row whose bound is not whole (an infinite one included) is no row of the clause.
+	double k = ec.records.EffectiveBound(e);
 	if (hi < k - 0.5 || lo > k + 0.5) {
 		return NECollapse::ALWAYS_TRUE;
 	}
@@ -69,24 +68,23 @@ static NECollapse ClassifyNERow(const EvaluatedConstraint &ec, idx_t row, const 
 	return NECollapse::DISJUNCTION;
 }
 
-//! The collapse verdict for a whole constraint, or DISJUNCTION if its active rows do not
-//! agree on one.
+//! The collapse verdict for a whole constraint, or DISJUNCTION if its rows do not agree on one.
 //!
 //! Per-row `<>` shares one EvaluatedConstraint across every row, so a per-row verdict
-//! would mean splitting it into up to three constraints carrying complementary row masks.
-//! Rows disagree only when their bounds or their RHS vary across rows, which is not the
-//! shape the collapse exists to serve — a uniform `x <> 0` or `SUM(x) <> 0` yields one
-//! verdict for every row. So a mixed constraint keeps the Big-M pair, unsplit.
-static NECollapse ClassifyNEConstraint(const EvaluatedConstraint &ec, idx_t num_rows,
-                                       const vector<double> &lower_bounds, const vector<double> &upper_bounds,
-                                       const InstanceBox &floors, const DecideClauseRef &written) {
+//! would mean splitting it into up to three constraints. Rows disagree only when their
+//! bounds or their RHS vary across rows, which is not the shape the collapse exists to
+//! serve — a uniform `x <> 0` or `SUM(x) <> 0` yields one verdict for every row. So a
+//! mixed constraint keeps the Big-M pair, unsplit. A row whose bound is not a whole number
+//! excludes nothing (NEIsIntegerValuedRhs) and has no verdict.
+static NECollapse ClassifyNEConstraint(const EvaluatedConstraint &ec, const vector<double> &lower_bounds,
+                                       const vector<double> &upper_bounds, const InstanceBox &floors) {
 	bool seen = false;
-	NECollapse verdict = NECollapse::DISJUNCTION;
-	for (idx_t r = 0; r < num_rows; r++) {
-		if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
+	NECollapse verdict = NECollapse::ALWAYS_TRUE;
+	for (idx_t e = 0; e < ec.records.Count(); e++) {
+		if (!NEIsIntegerValuedRhs(ec.records.bounds[e])) {
 			continue;
 		}
-		NECollapse row_verdict = ClassifyNERow(ec, r, lower_bounds, upper_bounds, floors, written);
+		NECollapse row_verdict = ClassifyNERow(ec, e, lower_bounds, upper_bounds, floors);
 		if (!seen) {
 			verdict = row_verdict;
 			seen = true;
@@ -94,7 +92,7 @@ static NECollapse ClassifyNEConstraint(const EvaluatedConstraint &ec, idx_t num_
 			return NECollapse::DISJUNCTION;
 		}
 	}
-	return seen ? verdict : NECollapse::DISJUNCTION;
+	return verdict;
 }
 
 //! The clause a `<>` came from, quoted as written, naming every binary it allocates so a
@@ -119,24 +117,19 @@ static string NotEqualClauseLabel(const SolverInput &input, const EvaluatedConst
 //! nothing at all.
 static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer, const EvaluatedConstraint &ec,
                              NECollapse collapse, const string &label) {
-	const idx_t num_rows = input.num_rows;
-	bool has_groups = !ec.row_group_ids.empty();
-	for (idx_t r = 0; r < num_rows; r++) {
-		if (has_groups && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
-			continue; // masked out by `when` or its group, or a non-integer bound on this row
+	auto &records = ec.records;
+	for (idx_t e = 0; e < records.Count(); e++) {
+		double k = records.bounds[e];
+		if (!NEIsIntegerValuedRhs(k)) {
+			continue; // a bound that is not a whole number: every integer LHS differs from it
 		}
-		double k = ec.rhs_values.Get(r);
 
 		// A per-row clause holds no data-only term: its data is on the bound side already.
 		vector<int> indices;
 		vector<double> coefficients;
-		for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
-			double coef = ec.row_coefficients[t].Get(r);
-			if (coef == 0.0) {
-				continue;
-			}
-			indices.push_back(static_cast<int>(indexer.Get(ec.variable_indices[t], r)));
-			coefficients.push_back(coef);
+		for (idx_t t = records.term_begin[e]; t < records.term_begin[e + 1]; t++) {
+			indices.push_back(static_cast<int>(indexer.Get(records.variables[t], records.rows[t])));
+			coefficients.push_back(records.coefficients[t]);
 		}
 
 		// Each row's disjunction gets its own binary, allocated HERE — by the pass that
@@ -154,7 +147,7 @@ static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer, cons
 			rc.provenance.shape = ElasticShape::PER_ROW_DATA;
 			rc.provenance.origin = ec.provenance.origin;
 			rc.provenance.indicator_col = z_col;
-			rc.StampGroup(ec, has_groups ? ec.row_group_ids[r] : DConstants::INVALID_INDEX);
+			rc.StampGroup(ec, records.groups[e]);
 		};
 
 		if (collapse != NECollapse::DISJUNCTION) {
@@ -175,12 +168,12 @@ static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer, cons
 		// only repair a `<>` has.
 		// The row's terms are taken by value so the half that no longer needs them can
 		// hand them straight over: only the first half copies.
-		auto emit = [&](vector<int> row_indices, vector<double> row_coefficients, int binval, char sense, double rhs) {
+		auto emit = [&](vector<int> row_indices, vector<double> row_values, int binval, char sense, double rhs) {
 			SolverInput::IndicatorConstraintSpec ic;
 			ic.binary_column = static_cast<int>(z_col);
 			ic.binary_value = binval;
 			ic.row.indices = std::move(row_indices);
-			ic.row.coefficients = std::move(row_coefficients);
+			ic.row.coefficients = std::move(row_values);
 			ic.row.sense = sense;
 			ic.row.rhs = rhs;
 			stamp(ic.row);
@@ -198,7 +191,6 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
                                     const vector<string> &var_names);
 
 void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names) {
-	const idx_t num_rows = input.num_rows;
 
 	// The aggregate spelling is collected on this walk and finished below: it needs one
 	// global binary per GROUP, which the per-row loop has no notion of.
@@ -215,45 +207,13 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer, const vect
 			continue;
 		}
 
-		// Per-row NE: expand inline with the row-scoped indicator variable.
+		// Per-row NE. With an integer LHS (the bind-time type gate) a bound that is not a whole number is a tautology,
+		// so such a row is passed over, and a clause of such rows alone emits nothing.
 		//
-		// Integer-valued RHS guard. If RHS is uniform and non-integer, every row's
-		// `LHS <> K` is a tautology — drop the whole constraint. If RHS varies per
-		// row (e.g. correlated subquery), mask out only the non-integer rows by
-		// marking them INVALID_INDEX in row_group_ids so the model builder skips
-		// them. The remaining rows still get the real Big-M pair.
-		if (ec.rhs_values.IsUniform()) {
-			if (!NEIsIntegerValuedRhs(ec.rhs_values.UniformValue())) {
-				continue; // drop ec entirely (tautology)
-			}
-		} else {
-			// Build/extend a mask. row_group_ids may be empty (no `when`, no groups); in that
-			// case materialize one initialised to group 0 so individual rows can be
-			// excluded by setting INVALID_INDEX.
-			if (ec.row_group_ids.empty()) {
-				ec.row_group_ids.assign(num_rows, 0);
-				ec.num_groups = 1;
-			}
-			idx_t dropped = 0;
-			for (idx_t r = 0; r < num_rows; r++) {
-				if (ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
-					continue;
-				}
-				if (!NEIsIntegerValuedRhs(ec.rhs_values.Get(r))) {
-					ec.row_group_ids[r] = DConstants::INVALID_INDEX;
-					dropped++;
-				}
-			}
-			if (dropped == num_rows) {
-				continue; // every row is a tautology — drop the constraint
-			}
-		}
-
 		// Range collapse, decided before anything is emitted. When the LHS cannot reach
 		// the far side of K, one disjunct is dead and the clause is a plain inequality.
-		NECollapse collapse = ClassifyNEConstraint(ec, num_rows, input.rigid_lower_bounds, input.rigid_upper_bounds,
-		                                           InstanceBox {input, indexer},
-		                                           DecideWrittenClause(input, ec.provenance.origin.source_clause_id));
+		NECollapse collapse =
+		    ClassifyNEConstraint(ec, input.rigid_lower_bounds, input.rigid_upper_bounds, InstanceBox {input, indexer});
 		if (collapse == NECollapse::ALWAYS_TRUE) {
 			continue; // excludes nothing reachable — drop, like the tautology case
 		}
@@ -276,12 +236,10 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 	if (deferred_aggregate.empty()) {
 		return;
 	}
-	const idx_t num_rows = input.num_rows;
-
 	const InstanceBox floors {input, var_indexer};
 	for (auto *clause : deferred_aggregate) {
 		const auto &ec = clause->row;
-		bool has_groups = !ec.row_group_ids.empty();
+		auto &records = ec.records;
 		const auto written = DecideWrittenClause(input, ec.provenance.origin.source_clause_id);
 		// The group's LHS, one row the clause emits (ClauseEmittedRows): a group of a grouped clause, the whole
 		// clause for an ungrouped one.
@@ -291,56 +249,11 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 		// onto every global z this `ec` allocates so the removal dial can label the edit.
 		string ne_label = NotEqualClauseLabel(input, ec);
 
-		// Build group → rows mapping. For grouped constraints reuse the CSR index
-		// already attached to ec; for ungrouped, materialize the trivial
-		// single-group CSR locally.
-		idx_t num_groups_to_process = 1;
-		vector<idx_t> ungrouped_offsets;
-		vector<idx_t> ungrouped_flat;
-		const vector<idx_t> *offsets_ptr = nullptr;
-		const vector<idx_t> *flat_ptr = nullptr;
-		if (has_groups) {
-			flat_ptr = &ClauseRows(ec);
-			num_groups_to_process = ec.num_groups;
-			offsets_ptr = &ec.group_offsets;
-		} else {
-			ungrouped_offsets = {0, num_rows};
-			ungrouped_flat.resize(num_rows);
-			for (idx_t r = 0; r < num_rows; r++) {
-				ungrouped_flat[r] = r;
-			}
-			offsets_ptr = &ungrouped_offsets;
-			flat_ptr = &ungrouped_flat;
-		}
-		const auto &offsets = *offsets_ptr;
-		const auto &flat_rows = *flat_ptr;
-
-		for (idx_t g = 0; g < num_groups_to_process; g++) {
-			idx_t g_begin = offsets[g];
-			idx_t g_end = offsets[g + 1];
-			idx_t g_size = g_end - g_begin;
-
-			// The fixed (decision-free) part of the LHS does not depend on which
-			// excluded value is being stated, so it is computed once per group.
-			double fixed_offset = SumFixedAggregateLhsOffset(ec, &flat_rows, g_begin, g_end, written);
-
-			// Every value this group's bound takes, deduplicated. `ReduceAggregate-
-			// RhsPerGroup` (physical_decide.cpp) leaves a `<>` bound exactly as it
-			// arrived when it varies, rather than collapsing it to one value the way
-			// it does for `<=`/`>=` — standing decision 3: a `<>` bound does not
-			// collapse, every excluded value is kept. The common case (a uniform
-			// bound, or no groups at all) yields exactly one value here and this loop
-			// runs once, identically to before this supported more than one.
-			vector<double> distinct_rhs;
-			for (idx_t k = g_begin; k < g_end; k++) {
-				if (!clause->no_exclusion.empty() && clause->no_exclusion[flat_rows[k]]) {
-					continue;
-				}
-				double raw = ec.rhs_values.Get(flat_rows[k]);
-				if (std::find(distinct_rhs.begin(), distinct_rhs.end(), raw) == distinct_rhs.end()) {
-					distinct_rhs.push_back(raw);
-				}
-			}
+		for (idx_t g = 0; g < records.Count(); g++) {
+			// Every value this group's bound takes (NotEqualClause::excluded): a `<>` bound does not collapse,
+			// every excluded value is kept. The common case (a uniform bound, or no groups at all) is one value.
+			const idx_t excluded_begin = clause->excluded_begin[g];
+			const idx_t excluded_end = clause->excluded_begin[g + 1];
 
 			// Range collapse, per group. Same reasoning as the per-row path, over the
 			// group's summed interval: each row of a group contributes its own solver
@@ -349,18 +262,14 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 			// are already emitted independently — each gets the encoding its own range
 			// earns. Neither the range nor the LHS accumulation below depends on which
 			// excluded value is being tested, so both are computed once per group and
-			// reused for every value in `distinct_rhs`.
+			// reused for every excluded value.
 			// A term beside the reducers enters the group's row once: execution kept its coefficient on one row of
 			// the group (CountOnce), so the per-row ranges count it once too.
 			// The clause is linear: stage 05 refuses a `<>` over a product (RewriteNotEqual).
-			double grp_lo = 0.0;
-			double grp_hi = 0.0;
-			for (idx_t k = g_begin; k < g_end; k++) {
-				auto range = DecideRowSignedRange(ec, flat_rows[k], input.rigid_lower_bounds, input.rigid_upper_bounds,
-				                                  DConstants::INVALID_INDEX, &floors);
-				grp_lo += range.Lo(); // -inf is absorbing, and only ever accumulates here
-				grp_hi += range.Hi();
-			}
+			auto range = DecideRowSignedRange(ec, g, input.rigid_lower_bounds, input.rigid_upper_bounds,
+			                                  DConstants::INVALID_INDEX, &floors);
+			double grp_lo = range.Lo();
+			double grp_hi = range.Hi();
 
 			// The group's LHS as a snapshot, copied for every excluded value's disjunction below (only the last
 			// consumes it by move).
@@ -369,14 +278,9 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 			vector<int> group_indices(emitted.columns.begin() + row_begin, emitted.columns.begin() + row_end);
 			vector<double> group_coefs(emitted.values.begin() + row_begin, emitted.values.begin() + row_end);
 
-			for (idx_t vi = 0; vi < distinct_rhs.size(); vi++) {
-				// Base (unscaled) value. For AVG(x) <> K we store the original K in
-				// rhs_values and multiply by the group size here.
-				double rhs = distinct_rhs[vi];
-				if (clause->avg_rhs_scale) {
-					rhs *= static_cast<double>(g_size);
-				}
-				rhs -= fixed_offset;
+			for (idx_t vi = excluded_begin; vi < excluded_end; vi++) {
+				// The value less the fixed (decision-free) part of the LHS, which is the group's whatever the value.
+				double rhs = clause->excluded[vi] - records.constants[g];
 
 				// Integer-RHS guard: with integer LHS (the bind-time type gate) and a non-integer K,
 				// `LHS <> K` is a tautology for this value — every integer LHS
@@ -414,7 +318,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 				// Copy the group's LHS snapshot for every value but the last, which
 				// consumes it by move — the same by-value handoff the per-row twin
 				// above uses between its two halves.
-				bool last_value = (vi + 1 == distinct_rhs.size());
+				bool last_value = vi + 1 == excluded_end;
 				vector<int> indices = last_value ? std::move(group_indices) : group_indices;
 				vector<double> coefs = last_value ? std::move(group_coefs) : group_coefs;
 
@@ -423,7 +327,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 					rc.provenance.kind = ConstraintKind::USER_MECHANISM;
 					rc.provenance.origin = ec.provenance.origin;
 					rc.provenance.indicator_col = z_idx;
-					rc.StampGroup(ec, has_groups ? g : DConstants::INVALID_INDEX);
+					rc.StampGroup(ec, records.groups[g]);
 					rc.provenance.is_aggregate = true;
 				};
 

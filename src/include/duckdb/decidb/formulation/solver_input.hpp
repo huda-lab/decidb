@@ -159,8 +159,8 @@ struct GroupName {
 
 //! The rows a clause emits, in compressed sparse row form: row e's decision terms are the solver columns
 //! columns[offsets[e], offsets[e + 1]) with the coefficients at the same positions of `values`. An aggregate clause
-//! emits one row per group (one in all when it has no groups), a per-row clause one per data row, empty where the row
-//! is excluded. A copy of a clause starts without them: a rewrite that copies a clause may change the copy.
+//! emits one row per group that holds a row (one in all when it has no groups), a per-row clause one per kept row
+//! (ClauseRecords). A copy of a clause starts without them: a rewrite that copies a clause may change the copy.
 struct EmittedRows {
 	vector<idx_t> offsets;
 	vector<int> columns;
@@ -261,14 +261,44 @@ struct ConstraintProvenance {
 };
 
 //! Represents an evaluated constraint ready for the solver
-struct EvaluatedConstraint {
-	vector<idx_t> variable_indices;             // Which variable for each term
-	vector<CoefficientColumn> row_coefficients; // [term_idx] = coefficient column for that term
-	CoefficientColumn rhs_values;               // RHS column (logical size = num_rows)
+//! The rows a clause emits, one record each: an aggregate clause's groups that hold a row, in the order of their
+//! numbers (one row in all for a clause of no groups), a per-row clause's kept rows. Row e reads decision
+//! `variables[t]` at data row `rows[t]`, times `coefficients[t]`, for t in [term_begin[e], term_begin[e + 1]), as a
+//! helper's members are listed (ReducerValueLinkSpec::members): a term per data row its group holds, none where the
+//! coefficient is 0. The model builder resolves them to solver columns (ClauseEmittedRows).
+struct ClauseRecords {
+	vector<idx_t> term_begin {0};
+	vector<idx_t> variables;
+	vector<idx_t> rows;
+	vector<double> coefficients;
+	//! The part of the row's left side that reads no decision, which the builder moves to its bound.
+	vector<double> constants;
+	//! The row's right side, one value: the bound-side rewrite leaves a group one (RewriteRhsAggregates).
+	vector<double> bounds;
 	//! A per-row bound on one decision: the values it admits on each row (DecideConstraint::admitted_lower and
-	//! admitted_upper), ±infinity on an open side. Logical size 0 for any other constraint.
-	CoefficientColumn admitted_lower;
-	CoefficientColumn admitted_upper;
+	//! admitted_upper), ±infinity on an open side. Empty for any other clause.
+	vector<double> admitted_lower;
+	vector<double> admitted_upper;
+	//! The group the row sits in, which names it (EvaluatedConstraint::NameOf) and its class set: a `by` group, a
+	//! class, or INVALID_INDEX for a clause of no groups.
+	vector<idx_t> groups;
+	//! The first data row the record stands for: a per-row clause's row.
+	vector<idx_t> data_rows;
+
+	idx_t Count() const {
+		return bounds.size();
+	}
+	//! The bound the row imposes on its decisions: its right side less the constant part of its left.
+	double EffectiveBound(idx_t e) const {
+		return bounds[e] - constants[e];
+	}
+};
+
+struct EvaluatedConstraint {
+	//! The decision of each term of the clause, INVALID_INDEX for a term that reads none.
+	vector<idx_t> variable_indices;
+	//! The rows the clause emits.
+	ClauseRecords records;
 	//! The decision whose default floor of 0 this bound replaces on the rows its clause keeps
 	//! (DecideConstraint::lifted_floor), or INVALID_INDEX. ResolveLiftedFloors reads it.
 	idx_t lifted_floor = DConstants::INVALID_INDEX;
@@ -285,13 +315,7 @@ struct EvaluatedConstraint {
 	//! each row it states under DIAGNOSE and completes it with what only it knows (the group's key and name, the class
 	//! set, the LHS offset and the data row); outside DIAGNOSE it copies the source clause only.
 	ConstraintProvenance provenance;
-	//! Row→group mapping: the clause's `by` groups, classes or kept rows.
-	//! Empty = all rows in one implicit group (fast path: no `when`, no key)
-	//! DConstants::INVALID_INDEX = row excluded (dropped by the `when`, or outside its group)
-	//! 0..K-1 = group assignment
-	vector<idx_t> row_group_ids;
-	idx_t num_groups = 0; // 0 = ungrouped, >0 = number of distinct groups
-	//! The name of each group (size num_groups when the clause's groups have a key; empty
+	//! The name of each group (by group number, when the clause's groups have a key; empty
 	//! otherwise), so infeasible diagnosis can identify which group an edit belongs to.
 	//! A row of group g carries NameOf(g), so diagnosis can name the group its finding sits in.
 	vector<GroupName> group_names;
@@ -301,15 +325,6 @@ struct EvaluatedConstraint {
 	//! clause, whose one row stands for its class. An expanded diagnosis reports the row
 	//! once per class. Empty otherwise.
 	vector<idx_t> group_class_set;
-
-	//! CSR-style group→rows index, computed lazily by ClauseRows().
-	//! group_offsets has size num_groups + 1 when populated; empty otherwise.
-	//! Group g's active rows occupy [group_offsets[g], group_offsets[g+1]) in group_row_ids.
-	//! Empty groups have group_offsets[g] == group_offsets[g+1].
-	//! Built once and reused across implied-bound propagation, the aggregate `<>` expansion
-	//! and the model builder to avoid repeated O(num_rows) reconstructions.
-	mutable vector<idx_t> group_offsets;
-	mutable vector<idx_t> group_row_ids;
 
 	//! The decision terms of each row the clause emits, as solver columns and coefficients (ClauseEmittedRows): built
 	//! once, by the first pass to read them, and taken by the model builder, the last. Empty until then.
@@ -327,28 +342,23 @@ struct EvaluatedConstraint {
 //! `<>`, and `row.provenance.origin.source_clause_id` names it.
 struct NotEqualClause {
 	EvaluatedConstraint row;
-	//! A grouped `<>` row whose bound is NULL: still a member of its group's sum, it excludes no value
-	//! (language/guide.md §6.4). Empty for any other clause.
-	vector<bool> no_exclusion;
-	//! AVG(x) <> K path: original LHS was AVG; instead of dividing LHS coefficients by the
-	//! AVG denominator (which would produce fractional coefficients and trip the NE
-	//! integer-step guard), we keep LHS as SUM and multiply the per-group RHS by group size
-	//! inside the deferred NE expansion.
-	bool avg_rhs_scale = false;
+	//! An aggregate `<>`: the values row e excludes, excluded[excluded_begin[e] .. excluded_begin[e + 1]), each once.
+	//! A `<>` bound does not collapse to one value as a `<=` bound does: every value a group's rows give is excluded,
+	//! none for a row whose bound is NULL (language/guide.md §6.4), and an AVG's is its bound times the group's size,
+	//! its terms kept as sums. Empty for a per-row clause, whose row excludes its bound.
+	vector<idx_t> excluded_begin;
+	vector<double> excluded;
 };
 
-//! A clause with terms of degree 2: the row, which holds its linear terms, and the product groups, every one added to
-//! the Q of the quadratic row the model builder states. Its list is a block of its own in the model
-//! (`SolverModel::quadratic_constraints`), as a backend states quadratic rows apart from linear ones.
+//! A clause with terms of degree 2: its linear part, and the product groups a row's data rows are read from. The
+//! evaluated product groups are per data row, so the clause lists the data rows of each row it emits:
+//! rows[row_begin[e] .. row_begin[e + 1]).
 struct QuadraticClause {
 	EvaluatedConstraint row;
 	vector<EvaluatedProductGroup> products;
+	vector<idx_t> row_begin;
+	vector<idx_t> rows;
 };
-
-//! Sum decision-free LHS terms over a row range: the fixed part of the row a clause emits for those rows. `written`
-//! names the clause when the sum grows past a DOUBLE (AddCoefficient).
-double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint, const vector<idx_t> *rows, idx_t begin,
-                                  idx_t end, const DecideClauseRef &written);
 
 //! Maps result rows to the classes of a key scope: a `per K:` decision's or a helper's
 //! value is shared by every result row of its class.
@@ -717,8 +727,9 @@ struct SolverInput {
 		double rhs;
 		//! The row's provenance, which the model builder copies onto the model's row (StampProvenance), and a clause's
 		//! rows state in full: a per-row clause emitted through `EvaluatedConstraint` gets its group and
-		//! `indicator_col` from its `row_group_ids` / `group_names`; a clause emitted in flat columns has to state them
-		//! (StampGroup), so that changing a row's SHAPE never changes what diagnosis calls it. `indicator_col` is the
+		//! `indicator_col` from its records' `groups` / `group_names`; a clause emitted in flat columns has to state
+		//! them (StampGroup), so that changing a row's SHAPE never changes what diagnosis calls it. `indicator_col` is
+		//! the
 		//! `<>` disjunction binary the row belongs to; the DROP group the origin names independently groups all its
 		//! descendants. A row no clause owns is STRUCTURAL.
 		ConstraintProvenance provenance = ConstraintProvenance::Structural();

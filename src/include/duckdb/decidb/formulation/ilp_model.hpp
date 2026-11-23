@@ -495,28 +495,10 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer, const 
                                                const vector<bool> &var_is_aux,
                                                const vector<string> &global_var_labels = {});
 
-//! Build CSR group→rows index from a per-row group_id array.
-//!   row_group_ids[r] in [0..num_groups) → row r belongs to that group
-//!   row_group_ids[r] == DConstants::INVALID_INDEX → row r is excluded
-//! Output:
-//!   offsets has size num_groups + 1; group g's rows live in
-//!   [offsets[g], offsets[g+1]) of flat_rows. Empty groups are still represented
-//!   (offsets[g] == offsets[g+1]).
-//! Both outputs are cleared if row_group_ids is empty (ungrouped fast path).
-void BuildGroupCSR(const vector<idx_t> &row_group_ids, idx_t num_groups, vector<idx_t> &offsets,
-                   vector<idx_t> &flat_rows);
-
-//! The data rows each row of a grouped aggregate clause sums, kept on `ec`: group g's row sums rows
-//! [group_offsets[g], group_offsets[g + 1]) of the returned list. Built from row_group_ids on the first call
-//! (BuildGroupCSR), so implied-bound propagation, the aggregate `<>` expansion and the model builder share one list.
-//! row_group_ids is final by then: the passes after implied bounds that change a clause's rows (a MIN/MAX rewrite, a
-//! per-row `<>` mask) change only clauses implied bounds passes over.
-const vector<idx_t> &ClauseRows(const EvaluatedConstraint &ec);
-
 //! The decision terms of every row `ec` emits (EmittedRows), kept on `ec`: each solver column's coefficient summed over
-//! the row's data rows (ClauseRows for a grouped aggregate). Built on the first call, so implied-bound propagation, the
-//! aggregate `<>` expansion and the model builder read one matrix; the builder, the last reader, takes it. Its rows
-//! are final by the first call, as ClauseRows' are. An inlined helper reads its members there (D89), from `input`.
+//! the row's terms (ClauseRecords). Built on the first call, so implied-bound propagation, the aggregate `<>`
+//! expansion and the model builder read one matrix; the builder, the last reader, takes it. An inlined helper reads
+//! its members there (D89), from `input`.
 //! `written` names the clause when a sum grows past a DOUBLE. Built against one column space: laid out again
 //! (WriteHelpersIn), it is built anew.
 const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const SolverInput &input, const VarIndexer &indexer,

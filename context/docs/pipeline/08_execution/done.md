@@ -870,8 +870,20 @@ keeps a data cast's SQL semantics intact. Values accumulate into
 `row_coefficients[term_idx]` indexed by global row.
 
 Data-only LHS terms carry `INVALID_INDEX`. For aggregate constraints those fixed
-coefficients are still evaluated per active row; the model builder subtracts their
-row or group sum from the RHS.
+coefficients are still evaluated per active row; their row or group sum is the record's constant, which the model
+builder subtracts from the RHS.
+
+### The records stage 06 reads
+
+The columns above are the emitter's own (`EvaluatedClauseColumns`: `row_coefficients`, `rhs_values`, the admitted
+ends and `row_group_ids`). `DecideModelEmitter::Route` turns them into the clause stage 06 receives, in one place:
+`DecideClauseRowSets` lists the data rows of each row the clause emits (a counting sort by group for an aggregate
+clause, the kept rows for a per-row one), and `DecideWriteClauseRecords` writes a record per row
+(`ClauseRecords`, `../06_model_formulation/done.md` § The rows a clause emits). The same sets give an aggregate `<>`
+its excluded values and a quadratic clause the data rows of its products. The columns are freed with the clause, so
+40 clauses over 2,000,000 rows that each keep 2,000 peak at 1.2 GB where the columns held to the end peaked at
+2.9 GB (`context/opa_rewrite/repro/clauses_times_rows.sql`). A per-row clause pays for the copy: 4 clauses over
+500,000 rows spend 40 ms more in `execution.tree_model` and 30 ms less in implied bounds and the builder.
 
 ### RHS
 
@@ -1026,7 +1038,7 @@ Every coefficient and RHS value is checked after evaluation:
 - **NULL** → the value is skipped (deck p. 50). In a constraint, `ExtractDoubleColumn`
   marks the row in `null_rows` and `DecideAbsence::SkipNullInstances` cuts the instance the row
   reaches: the row of a row constraint, the group of a grouped one (`INVALID_INDEX` in
-  `row_group_ids`, which the model builder already skips). A reducer never meets a NULL
+  `row_group_ids`, so the clause emits no row for it). A reducer never meets a NULL
   summand: `SkipNullData` tested it in the reducer's filter. The objective never meets
   one: `DropNullObjectiveTerms` read it as 0 in stage 05, so a NULL there is an
   internal error.

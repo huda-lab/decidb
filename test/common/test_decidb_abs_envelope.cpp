@@ -1,4 +1,5 @@
 #include "catch.hpp"
+#include "decidb_clause_records.hpp"
 
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
@@ -20,9 +21,17 @@ constexpr idx_t ABS_ROWS = 3;
 EvaluatedConstraint EnvelopeRow(bool positive, bool aggregate) {
 	EvaluatedConstraint ec;
 	ec.variable_indices = {1, 0};
-	ec.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, ABS_ROWS));
-	ec.row_coefficients.push_back(CoefficientColumn::MakeScalar(positive ? -1.0 : 1.0, ABS_ROWS));
-	ec.rhs_values = CoefficientColumn::MakeScalar(0.0, ABS_ROWS);
+	duckdb::vector<RecordTerm> all;
+	for (idx_t row = 0; row < ABS_ROWS; row++) {
+		duckdb::vector<RecordTerm> terms {RecordTerm {1, row, 1.0}, RecordTerm {0, row, positive ? -1.0 : 1.0}};
+		if (!aggregate) {
+			AddRecord(ec, terms, 0.0);
+		}
+		all.insert(all.end(), terms.begin(), terms.end());
+	}
+	if (aggregate) {
+		AddRecord(ec, all, 0.0);
+	}
 	ec.comparison_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
 	ec.defined_var = 1;
 	ec.lhs_is_aggregate = aggregate;
@@ -65,9 +74,9 @@ TEST_CASE("DeciDB ABS rows are stated from the envelope rows", "[decidb][formula
 		EmitAbsEnvelopes(input);
 		REQUIRE(input.constraints.size() == 2);
 		// `a >= x` and `a >= -x`; the link keeps `a >= x`, which the rows of an exact ABS are read from.
-		CHECK(input.constraints[0].row_coefficients[1].Get(0) == -1.0);
-		CHECK(input.constraints[1].row_coefficients[1].Get(0) == 1.0);
-		CHECK(input.abs_links[0].operand.row_coefficients[1].Get(0) == -1.0);
+		CHECK(input.constraints[0].records.coefficients[1] == -1.0);
+		CHECK(input.constraints[1].records.coefficients[1] == 1.0);
+		CHECK(input.abs_links[0].operand.records.coefficients[1] == -1.0);
 	}
 
 	SECTION("an envelope row that holds an aggregate is an internal error") {

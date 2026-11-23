@@ -4,36 +4,26 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
 `decisions.md`. How to work and the checks: [`../direct_solve/framework/todo.md`](../direct_solve/framework/todo.md)
 § How to work any task in these todo files.
 
-## MODEL-3 — Stage 06 reads a clause through its emitted rows
-
-- **Problem.** The readers of an evaluated clause (`<>`, ABS, Big-M, implied bounds, absence, the builder) read
-  `row_group_ids` and `row_coefficients`, arrays as long as the input, and regroup them.
-- **Change.** `EvaluatedConstraint` holds one record per emitted row: its decision terms (`EmittedRows`), bound,
-  name, class set and data row. Every stage 06 reader reads the record. The emitter still fills it from its row
-  arrays, in one place. No model changes.
-- **Done when.** No file under `src/decidb/` names `row_group_ids` or `row_coefficients`; model goldens identical;
-  `./test/decide/run_tests.sh -k "not_equal or abs or minmax or bigm or implied or diagnose"`;
-  `build/release/test/unittest "[decidb]"`.
-
 ## MODEL-4 — An aggregate clause's root writes one record per group
 
 - **Problem.** `DecideModelEmitter::Groups` allocates six vectors as long as the input per clause and a coefficient
   column per term (`repro/clauses_times_rows.sql`: 44 ms to 638 ms from 1 clause to 40).
-- **Change.** A root E of an aggregate clause writes MODEL-3's record from its container, which holds the rows its
-  `when` kept; an F's rows are written the same way. A read of a helper whose form is `WRITTEN_IN`, or of a MIN or
+- **Change.** A root E of an aggregate clause writes its records (`ClauseRecords`) from its container, which holds
+  the rows its `when` kept; an F's rows are written the same way. A quadratic clause's product groups become terms
+  of its records, so `QuadraticClause::rows` goes. A read of a helper whose form is `WRITTEN_IN`, or of a MIN or
   MAX group of one member, is written as the members (R43, R44), so `WriteHelpersIn`, `SolverInput::inlined_helpers`
   and `written_in`, `DecideVarScope::INLINED` and the second `VarIndexer::Build` are deleted with the tests that only
-  reached them. Evaluation stays vectorized (R23). `ClauseRows` and `ClauseEmittedRows`' regrouping are deleted.
-- **Needs.** MODEL-3.
+  reached them. Evaluation stays vectorized (R23). `DecideClauseRowSets` is deleted for an aggregate clause.
 - **Done when.** Model goldens identical; `./test/decide/run_tests.sh -k "scope or anr or when or per"`;
   `context/opa_rewrite/repro/clauses_times_rows.sql` under `DECIDB_PROFILE=1`: `execution.tree_model` and peak
   memory at 40 clauses no higher than at `2b948c6b44`.
 
 ## MODEL-5 — A per-row clause's root writes one record per kept row
 
-- **Problem.** A per-row clause emits a row per input row with the excluded ones marked.
-- **Change.** A per-row root writes a record per kept row. `row_group_ids` and `row_coefficients` are deleted, with
-  the row loops of `decide_value_extraction.cpp` no reader is left for.
+- **Problem.** A per-row clause is evaluated into columns as long as the input, which `DecideWriteClauseRecords`
+  copies into its records (40 ms for 4 clauses over 500,000 rows).
+- **Change.** A per-row root writes a record per kept row. `EvaluatedClauseColumns`, `DecideClauseRowSets` and
+  `DecideWriteClauseRecords` are deleted, with the row loops of `decide_value_extraction.cpp` no reader is left for.
 - **Needs.** MODEL-4.
 - **Done when.** No file under `src/` names `row_group_ids` or `row_coefficients`; model goldens identical;
   `./test/decide/run_tests.sh -k "per_row or bound or domain or diagnose"`; `build/release/test/unittest "[decidb]"`;

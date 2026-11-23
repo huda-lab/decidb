@@ -811,7 +811,7 @@ All oracle-verified unless noted:
 | AVG | `when` + `per` | ✓ |
 | AVG (inner) | SUM / MAX / MIN (outer) in the two-level objective | ✓ |
 | AVG | bilinear constraint | ✓ |
-| AVG | `<>` (NE Big-M) | ✓ (denominator hoisted to RHS at execution time; LHS stays integer-valued SUM — see `NotEqualClause::avg_rhs_scale`) |
+| AVG | `<>` (NE Big-M) | ✓ (denominator hoisted to RHS at execution time; LHS stays integer-valued SUM — see `NotEqualClause::excluded`) |
 | AVG | keyed decision | ✓ (`test_keyed_scope.py::test_keyed_with_avg`) |
 
 ## ABS

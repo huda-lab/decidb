@@ -1,4 +1,5 @@
 #include "catch.hpp"
+#include "decidb_clause_records.hpp"
 
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
@@ -62,9 +63,9 @@ ReducerValueLinkSpec SumOfX(DecideHelperForm form) {
 EvaluatedConstraint XLessH() {
 	EvaluatedConstraint ec;
 	ec.variable_indices = {0, 1};
-	ec.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, ROWS));
-	ec.row_coefficients.push_back(CoefficientColumn::MakeScalar(-1.0, ROWS));
-	ec.rhs_values = CoefficientColumn::MakeScalar(10.0, ROWS);
+	for (idx_t row = 0; row < ROWS; row++) {
+		AddRecord(ec, {RecordTerm {0, row, 1.0}, RecordTerm {1, row, -1.0}}, 10.0);
+	}
 	ec.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
 	return ec;
 }

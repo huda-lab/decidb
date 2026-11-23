@@ -334,7 +334,7 @@ DecideCanonicalizer::Placement DecideCanonicalizer::Classify(const Expression &e
 		return Placement::LEFT;
 	}
 	// Everything decision-free is a bound, including a data-only reducer. The left
-	// side has no aggregate evaluator -- SumFixedAggregateLhsOffset merely SUMS a term's
+	// side has no aggregate evaluator -- DecideWriteClauseRecords merely SUMS a term's
 	// column over the group, which is why only SUM and AVG could ever be hoisted
 	// there and MIN/MAX/COUNT were refused. A reducer on the right is any DuckDB
 	// aggregate over its groups (RewriteRhsAggregates), so that is where it belongs.

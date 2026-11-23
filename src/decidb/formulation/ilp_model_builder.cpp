@@ -13,22 +13,6 @@
 
 namespace duckdb {
 
-double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint, const vector<idx_t> *rows, idx_t begin,
-                                  idx_t end, const DecideClauseRef &written) {
-	double offset = 0.0;
-	for (idx_t term_idx = 0; term_idx < constraint.variable_indices.size(); term_idx++) {
-		if (constraint.variable_indices[term_idx] != DConstants::INVALID_INDEX) {
-			continue;
-		}
-		auto &column = constraint.row_coefficients[term_idx];
-		for (idx_t k = begin; k < end; k++) {
-			idx_t row = rows ? (*rows)[k] : k;
-			AddCoefficient(offset, column.Get(row), written);
-		}
-	}
-	return offset;
-}
-
 DecideClauseRef DecideWrittenClause(const SolverInput &input, idx_t source_clause_id) {
 	return source_clause_id < input.constraint_sources.size()
 	           ? DecideClauseRefOf(input.constraint_sources, input.source_text, source_clause_id)
@@ -254,72 +238,6 @@ VarIndexer VarIndexer::Build(const SolverInput &input) {
 	return idx;
 }
 
-#ifdef DEBUG
-//! The shape contract a reduced constraint's RHS must satisfy by the time it reaches
-//! this file: one value per group. The optimizer's bound-side window rewrite
-//! (DecideOptimizer::RewriteRhsAggregates) establishes it, which is why the per-row
-//! checks that used to live at the emission sites are gone. Debug-only — a regression here is a wrong model, not a bad
-//! query, so it should fail loudly in development rather than produce a user-facing error.
-static bool RhsIsConstantWithinGroups(const EvaluatedConstraint &ec) {
-	if (ec.rhs_values.IsUniform() || ec.rhs_values.Empty()) {
-		return true;
-	}
-	const bool has_groups = !ec.row_group_ids.empty();
-	std::unordered_map<idx_t, double> first_seen;
-	for (idx_t row = 0; row < ec.rhs_values.Size(); row++) {
-		idx_t g = has_groups ? ec.row_group_ids[row] : 0;
-		if (g == DConstants::INVALID_INDEX) {
-			continue;
-		}
-		auto it = first_seen.find(g);
-		if (it == first_seen.end()) {
-			first_seen.emplace(g, ec.rhs_values.Get(row));
-		} else if (it->second != ec.rhs_values.Get(row)) {
-			return false;
-		}
-	}
-	return true;
-}
-#endif
-
-void BuildGroupCSR(const vector<idx_t> &row_group_ids, idx_t num_groups, vector<idx_t> &offsets,
-                   vector<idx_t> &flat_rows) {
-	if (num_groups == 0) {
-		offsets.clear();
-		flat_rows.clear();
-		return;
-	}
-	offsets.assign(num_groups + 1, 0);
-	// First pass: count rows per group
-	for (idx_t r = 0; r < row_group_ids.size(); r++) {
-		idx_t gid = row_group_ids[r];
-		if (gid == DConstants::INVALID_INDEX)
-			continue;
-		offsets[gid + 1]++;
-	}
-	// Prefix sum
-	for (idx_t g = 0; g < num_groups; g++) {
-		offsets[g + 1] += offsets[g];
-	}
-	// Second pass: scatter rows into their group bucket using a tmp cursor
-	flat_rows.assign(offsets[num_groups], 0);
-	vector<idx_t> cursor = offsets;
-	for (idx_t r = 0; r < row_group_ids.size(); r++) {
-		idx_t gid = row_group_ids[r];
-		if (gid == DConstants::INVALID_INDEX)
-			continue;
-		flat_rows[cursor[gid]++] = r;
-	}
-}
-
-const vector<idx_t> &ClauseRows(const EvaluatedConstraint &ec) {
-	D_ASSERT(!ec.row_group_ids.empty());
-	if (ec.group_offsets.empty()) {
-		BuildGroupCSR(ec.row_group_ids, ec.num_groups, ec.group_offsets, ec.group_row_ids);
-	}
-	return ec.group_row_ids;
-}
-
 //! Whether each decision term of `ec` has solver columns of its own: every term names a different decision, and each
 //! is row-scoped. Then no two (term, data row) pairs share a column, and a row's terms are read without summing them.
 static bool TermsHaveTheirOwnColumns(const EvaluatedConstraint &ec, const VarIndexer &indexer) {
@@ -385,57 +303,22 @@ static double ForEachTermColumn(const SolverInput &input, const VarIndexer &inde
 	return constant;
 }
 
-//! Calls `add(column, coefficient)` for each decision term of one row a clause emits: each term's nonzero coefficient
-//! on the rows [begin, end) of `rows` (row k itself when `rows` is null), an inlined helper's members in its place. A
-//! term beside the reducers counts once: execution kept its coefficient on one row (CountOnce). Returns the constant
-//! the row's terms carry: the inlined helpers' (ForEachTermColumn).
-template <class ADD>
-static double ForEachClauseRowTerm(const EvaluatedConstraint &ec, const SolverInput &input, const VarIndexer &indexer,
-                                   const vector<idx_t> *rows, idx_t begin, idx_t end, ADD &&add) {
-	double constant = 0.0;
-	for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
-		idx_t decide_var_idx = ec.variable_indices[term_idx];
-		if (decide_var_idx == DConstants::INVALID_INDEX) {
-			continue;
-		}
-		auto &col = ec.row_coefficients[term_idx];
-		for (idx_t k = begin; k < end; k++) {
-			idx_t row = rows ? (*rows)[k] : k;
-			double coeff = col.Get(row);
-			if (coeff != 0.0) {
-				constant += ForEachTermColumn(input, indexer, decide_var_idx, row, coeff, false, add);
-			}
-		}
-	}
-	return constant;
-}
-
 const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const SolverInput &input, const VarIndexer &indexer,
                                      const DecideClauseRef &written) {
 	auto &out = ec.emitted_rows;
 	if (!out.offsets.empty()) {
 		return out;
 	}
-	const idx_t num_rows = indexer.num_rows;
-	// The data rows of each emitted row: a grouped aggregate's group (ClauseRows), all rows for an ungrouped one, the
-	// row itself for a per-row clause.
-	const vector<idx_t> *rows = nullptr;
-	idx_t num_emitted = num_rows;
-	if (ec.lhs_is_aggregate && !ec.row_group_ids.empty()) {
-		rows = &ClauseRows(ec);
-		num_emitted = ec.num_groups;
-	} else if (ec.lhs_is_aggregate) {
-		num_emitted = 1;
-	}
+	auto &records = ec.records;
+	const idx_t num_emitted = records.Count();
 	// Terms with columns of their own are copied; any other row sums its terms per column first.
 	bool own_columns = TermsHaveTheirOwnColumns(ec, indexer);
 	SparseCoeffAccumulator accum;
 	if (own_columns) {
-		out.columns.reserve(ec.variable_indices.size() * num_rows);
-		out.values.reserve(ec.variable_indices.size() * num_rows);
+		out.columns.reserve(records.variables.size());
+		out.values.reserve(records.variables.size());
 	} else {
-		accum.BeginForDecisions(indexer, ec.variable_indices.size() * (num_rows / std::max<idx_t>(num_emitted, 1)),
-		                        written);
+		accum.BeginForDecisions(indexer, records.variables.size() / std::max<idx_t>(num_emitted, 1), written);
 	}
 	auto copy = [&](int column, double coeff) {
 		out.columns.push_back(column);
@@ -448,14 +331,14 @@ const EmittedRows &ClauseEmittedRows(const EvaluatedConstraint &ec, const Solver
 	out.offsets.push_back(0);
 	out.constants.assign(num_emitted, 0.0);
 	for (idx_t e = 0; e < num_emitted; e++) {
-		idx_t begin = rows ? ec.group_offsets[e] : (ec.lhs_is_aggregate ? 0 : e);
-		idx_t end = rows ? ec.group_offsets[e + 1] : (ec.lhs_is_aggregate ? num_rows : e + 1);
-		bool excluded =
-		    !ec.lhs_is_aggregate && !ec.row_group_ids.empty() && ec.row_group_ids[e] == DConstants::INVALID_INDEX;
-		if (!excluded && own_columns) {
-			out.constants[e] = ForEachClauseRowTerm(ec, input, indexer, rows, begin, end, copy);
-		} else if (!excluded) {
-			out.constants[e] = ForEachClauseRowTerm(ec, input, indexer, rows, begin, end, sum);
+		// An inlined helper's members stand in its place, and the constant they carry is the row's (ForEachTermColumn).
+		for (idx_t t = records.term_begin[e]; t < records.term_begin[e + 1]; t++) {
+			out.constants[e] += own_columns ? ForEachTermColumn(input, indexer, records.variables[t], records.rows[t],
+			                                                    records.coefficients[t], false, copy)
+			                                : ForEachTermColumn(input, indexer, records.variables[t], records.rows[t],
+			                                                    records.coefficients[t], false, sum);
+		}
+		if (!own_columns) {
 			accum.Flush(out.columns, out.values);
 		}
 		out.offsets.push_back(out.columns.size());
@@ -872,12 +755,12 @@ static void BuildModelClauseRows(SolverModel &model, SolverInput &input, const V
 	// A coefficient of 0 on a row (`cap * x <= -1e-10` where `cap` is 0) leaves the comparison of a constant, which
 	// holds for every value or for none. DuckDB's comparison says which (the admitted ends are all or nothing), not
 	// the builder's tolerance, under diagnosis too; a row that fails is kept for ProvesInfeasible.
-	auto TryFoldPerRowBound = [&](const EvaluatedConstraint &ec, idx_t row, ModelConstraint &constr) -> bool {
-		if (ec.admitted_lower.logical_size == 0) {
+	auto TryFoldPerRowBound = [&](const EvaluatedConstraint &ec, idx_t e, ModelConstraint &constr) -> bool {
+		if (ec.records.admitted_lower.empty()) {
 			return false;
 		}
-		double lower = ec.admitted_lower[row];
-		double upper = ec.admitted_upper[row];
+		double lower = ec.records.admitted_lower[e];
+		double upper = ec.records.admitted_upper[e];
 		if (constr.indices.empty()) {
 			constr.constant_fails = lower > upper;
 			if (constr.constant_fails) {
@@ -901,110 +784,35 @@ static void BuildModelClauseRows(SolverModel &model, SolverInput &input, const V
 
 	phase.Next("model.clause_rows");
 	for (auto &eval_const : input.constraints) {
-		bool is_aggregate = eval_const.lhs_is_aggregate;
-		bool has_groups = !eval_const.row_group_ids.empty();
 		const auto written = DecideWrittenClause(input, eval_const.provenance.origin.source_clause_id);
+		auto &records = eval_const.records;
 
 		// The rows the clause emits, read once (ClauseEmittedRows). The builder is their last reader, so it takes them
 		// from the clause, and they are freed with this iteration.
 		ClauseEmittedRows(eval_const, input, indexer, written);
 		auto emitted = std::move(eval_const.emitted_rows);
-		auto copy_emitted_row = [&](idx_t e, ModelConstraint &constr) {
+		for (idx_t e = 0; e < records.Count(); e++) {
+			ModelConstraint constr;
+			constr.provenance = ClauseProvenance(input, eval_const);
 			auto begin = NumericCast<int64_t>(emitted.offsets[e]);
 			auto end = NumericCast<int64_t>(emitted.offsets[e + 1]);
 			constr.indices.assign(emitted.columns.begin() + begin, emitted.columns.begin() + end);
 			constr.coefficients.assign(emitted.values.begin() + begin, emitted.values.begin() + end);
-		};
-
-		if (is_aggregate) {
-			if (!has_groups) {
-				// No `when`, no groups: one constraint summing all rows, the clause's one emitted row.
-				ModelConstraint constr;
-				constr.provenance = ClauseProvenance(input, eval_const);
-				constr.indices = std::move(emitted.columns);
-				constr.coefficients = std::move(emitted.values);
-
-				// One value for the whole constraint: the optimizer's bound-side
-				// window rewrite reduced a row-varying bound to the tightest one on
-				// every kept row (RewriteRhsAggregates). No per-row check is needed here.
-				D_ASSERT(RhsIsConstantWithinGroups(eval_const));
-				double rhs = eval_const.rhs_values.Get(0);
-				// The fixed terms, and the constants of the inlined helpers the row reads.
-				double lhs_offset =
-				    SumFixedAggregateLhsOffset(eval_const, nullptr, 0, num_rows, written) + emitted.constants[0];
-				rhs -= lhs_offset;
-				ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_offset);
-				// F2 site 1: aggregate, ungrouped.
-				StampConstraintProvenance(input, constr.provenance, eval_const, DConstants::INVALID_INDEX, lhs_offset);
-				PushNormalizedConstraint(model, std::move(constr));
-
-			} else {
-				// A `when` and/or groups: one constraint per group, the group's emitted row.
-				auto &flat_rows = ClauseRows(eval_const);
-				auto &offsets = eval_const.group_offsets;
-
-				// Each group's bound is read from one of its own rows below; the
-				// physical operator guarantees it is constant within the group.
-				D_ASSERT(RhsIsConstantWithinGroups(eval_const));
-
-				for (idx_t g = 0; g < eval_const.num_groups; g++) {
-					idx_t g_begin = offsets[g];
-					idx_t g_end = offsets[g + 1];
-					if (g_begin == g_end) {
-						continue;
-					}
-					ModelConstraint constr;
-					constr.provenance = ClauseProvenance(input, eval_const);
-					copy_emitted_row(g, constr);
-
-					// Read this group's own bound. The guard above still proves every
-					// row agrees, so today this equals Get(0); once the RHS carries one
-					// value per group it is what lets each group see its own bound.
-					// Row 0 would be wrong twice over: it may belong to another group,
-					// and it may be excluded by WHEN.
-					double group_lhs_offset =
-					    SumFixedAggregateLhsOffset(eval_const, &flat_rows, g_begin, g_end, written) +
-					    emitted.constants[g];
-					double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]) - group_lhs_offset;
-					ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, group_lhs_offset);
-					// F2 site 2: grouped aggregate (`by` and/or `when`).
-					StampConstraintProvenance(input, constr.provenance, eval_const, g, group_lhs_offset);
-					PushNormalizedConstraint(model, std::move(constr));
-				}
+			// What the left side holds beside its decisions moves to the bound, not dropped: its terms that read no
+			// decision (the `+ 3` of `x + 3 <= K`, the `c` of `SUM(x + c) >= K`) and the constants of the inlined
+			// helpers the row reads.
+			double lhs_offset = records.constants[e] + emitted.constants[e];
+			ApplyComparisonSense(constr, eval_const.comparison_type, records.bounds[e] - lhs_offset, lhs_offset);
+			// F2: the group is stamped so a diagnosis over a grouped clause names the group its failure sits in
+			// (CollectUnreachableClauses reports one finding per clause, group and row). A per-row row stands for its
+			// data row: a scoped easy MIN/MAX's member row for its `by` group's classes, a `per K:` clause's row for
+			// its class, any other for the row itself.
+			StampConstraintProvenance(input, constr.provenance, eval_const, records.groups[e], lhs_offset,
+			                          eval_const.lhs_is_aggregate ? DConstants::INVALID_INDEX : records.data_rows[e]);
+			if (!eval_const.lhs_is_aggregate && TryFoldPerRowBound(eval_const, e, constr)) {
+				continue;
 			}
-
-		} else {
-			// PER-ROW CONSTRAINT: one constraint per row, the row's emitted row
-			for (idx_t row = 0; row < num_rows; row++) {
-				// Skip rows excluded by `when` (row_group_ids with INVALID_INDEX)
-				if (has_groups && eval_const.row_group_ids[row] == DConstants::INVALID_INDEX) {
-					continue;
-				}
-				ModelConstraint constr;
-				constr.provenance = ClauseProvenance(input, eval_const);
-				copy_emitted_row(row, constr);
-				// LHS terms that don't reference a DECIDE variable (row-varying
-				// data or constants, e.g., the `+3` in `x + 3 <= K` or the `col`
-				// in `x - col <= K`) must move to RHS, not be dropped. The
-				// symbolic normalizer only canonicalizes aggregate constraints;
-				// per-row LHS arrives here with constant/data terms still attached.
-				double rhs_adjustment =
-				    SumFixedAggregateLhsOffset(eval_const, nullptr, row, row + 1, written) + emitted.constants[row];
-
-				double rhs = eval_const.rhs_values[row] - rhs_adjustment;
-				ApplyComparisonSense(constr, eval_const.comparison_type, rhs, rhs_adjustment);
-				// F2 site 3: per-row. The group label is stamped here for the same reason the aggregate sites stamp
-				// it: a diagnosis over a grouped clause has to name the group its failure sits in, not just the
-				// clause (CollectUnreachableClauses reports one finding per clause, group and row).
-				idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
-				// A scoped easy MIN/MAX's member row stands for its `by` group's classes, a
-				// `per K:` clause's row for its class; any other per-row row for its data row.
-				StampConstraintProvenance(input, constr.provenance, eval_const, row_group_key, rhs_adjustment, row);
-				if (TryFoldPerRowBound(eval_const, row, constr)) {
-					continue;
-				}
-				PushNormalizedConstraint(model, std::move(constr));
-			}
+			PushNormalizedConstraint(model, std::move(constr));
 		}
 	}
 
@@ -1014,39 +822,29 @@ static void BuildModelClauseRows(SolverModel &model, SolverInput &input, const V
 	// Helper: build QuadraticConstraint from one set of rows (aggregate or per-row).
 	// lhs_constant: out, the constant part of the LHS folded into the bound (the linear
 	// path's `lhs_offset`), for the stamp call. written: the clause, for a sum past a DOUBLE.
-	auto BuildQuadraticConstraint = [&](const QuadraticClause &clause, const vector<idx_t> &row_set, double rhs,
-	                                    double &lhs_constant,
+	auto BuildQuadraticConstraint = [&](const QuadraticClause &clause, idx_t e, double &lhs_constant,
 	                                    const DecideClauseRef &written) -> SolverModel::QuadraticConstraint {
 		const auto &ec = clause.row;
 		SolverModel::QuadraticConstraint qc;
 		qc.provenance = ClauseProvenance(input, ec);
 		std::unordered_map<int, double> linear_accum;
 		std::unordered_map<uint64_t, double> q_accum;
-		double rhs_adjustment = 0.0;
+		auto &records = ec.records;
+		double rhs_adjustment = records.constants[e];
 
 		// Linear terms from the constraint LHS
-		for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
-			idx_t decide_var_idx = ec.variable_indices[term_idx];
-			if (decide_var_idx != DConstants::INVALID_INDEX) {
-				for (idx_t row : row_set) {
-					double coeff = ec.row_coefficients[term_idx][row];
-					int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
-					AddCoefficient(linear_accum[var_idx], coeff, written);
-				}
-			} else {
-				for (idx_t row : row_set) {
-					AddCoefficient(rhs_adjustment, ec.row_coefficients[term_idx].Get(row), written);
-				}
-			}
+		for (idx_t t = records.term_begin[e]; t < records.term_begin[e + 1]; t++) {
+			int var_idx = static_cast<int>(indexer.Get(records.variables[t], records.rows[t]));
+			AddCoefficient(linear_accum[var_idx], records.coefficients[t], written);
 		}
 
 		// Product groups: each adds its rank-one update to Q, its cross terms to the linear part,
 		// and its constant to the RHS (AddProductGroupRow). GRBaddqconstr reads x^T Q x with no
 		// 1/2 factor, which is the monomial convention Q is held in.
 		for (auto &group : clause.products) {
-			for (idx_t row : row_set) {
+			for (idx_t k = clause.row_begin[e]; k < clause.row_begin[e + 1]; k++) {
 				AddProductGroupRow(
-				    group, row, indexer, q_accum,
+				    group, clause.rows[k], indexer, q_accum,
 				    [&](int flat_idx, double value) { AddCoefficient(linear_accum[flat_idx], value, written); },
 				    rhs_adjustment, written);
 			}
@@ -1069,7 +867,7 @@ static void BuildModelClauseRows(SolverModel &model, SolverInput &input, const V
 		}
 
 		// RHS and sense (move constant terms to RHS). A strict `< K` / `> K` steps the bound as the linear path does.
-		double adjusted_rhs = rhs - rhs_adjustment;
+		double adjusted_rhs = records.bounds[e] - rhs_adjustment;
 		qc.rhs = adjusted_rhs;
 		lhs_constant = rhs_adjustment;
 		switch (ec.comparison_type) {
@@ -1085,12 +883,12 @@ static void BuildModelClauseRows(SolverModel &model, SolverInput &input, const V
 		case ExpressionType::COMPARE_LESSTHAN:
 			qc.sense = '<';
 			qc.rhs = DecideStrictBound(false, adjusted_rhs);
-			remember_typed_k(qc.provenance, rhs);
+			remember_typed_k(qc.provenance, records.bounds[e]);
 			break;
 		case ExpressionType::COMPARE_GREATERTHAN:
 			qc.sense = '>';
 			qc.rhs = DecideStrictBound(true, adjusted_rhs);
-			remember_typed_k(qc.provenance, rhs);
+			remember_typed_k(qc.provenance, records.bounds[e]);
 			break;
 		default:
 			throw InternalException("Unsupported comparison type in ILP model builder (quadratic)");
@@ -1101,63 +899,15 @@ static void BuildModelClauseRows(SolverModel &model, SolverInput &input, const V
 	phase.Next("model.quadratic_constraints");
 	for (auto &quadratic : input.quadratics) {
 		auto &eval_const = quadratic.row;
-		bool is_aggregate = eval_const.lhs_is_aggregate;
-		bool has_groups = !eval_const.row_group_ids.empty();
 		const auto written = DecideWrittenClause(input, eval_const.provenance.origin.source_clause_id);
-
-		if (is_aggregate) {
-			double rhs = eval_const.rhs_values.Get(0);
-
-			// Before the RHS was reduced per group this path read row 0's value for
-			// every group with no check at all, so a row-varying bound was silently
-			// wrong here rather than refused. Now the invariant holds by construction.
-			D_ASSERT(RhsIsConstantWithinGroups(eval_const));
-
-			if (!has_groups) {
-				// Single aggregate: all rows
-				vector<idx_t> all_rows(num_rows);
-				std::iota(all_rows.begin(), all_rows.end(), 0);
-				double lhs_constant;
-				auto qc = BuildQuadraticConstraint(quadratic, all_rows, rhs, lhs_constant, written);
-				// F2 site 4: quadratic aggregate, ungrouped.
-				StampConstraintProvenance(input, qc.provenance, eval_const, DConstants::INVALID_INDEX, lhs_constant);
-				model.quadratic_constraints.push_back(std::move(qc));
-			} else {
-				// Groups: one QuadraticConstraint per group, reuse CSR
-				auto &flat_rows = ClauseRows(eval_const);
-				auto &offsets = eval_const.group_offsets;
-				for (idx_t g = 0; g < eval_const.num_groups; g++) {
-					idx_t g_begin = offsets[g];
-					idx_t g_end = offsets[g + 1];
-					if (g_begin == g_end) {
-						continue;
-					}
-					vector<idx_t> group_rows_slice(flat_rows.begin() + g_begin, flat_rows.begin() + g_end);
-					// This group's own bound — see the linear grouped path for why row 0
-					// is the wrong row to read once the RHS varies by group.
-					double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]);
-					double lhs_constant;
-					auto qc = BuildQuadraticConstraint(quadratic, group_rows_slice, group_rhs, lhs_constant, written);
-					// F2 site 5: grouped quadratic aggregate.
-					StampConstraintProvenance(input, qc.provenance, eval_const, g, lhs_constant);
-					model.quadratic_constraints.push_back(std::move(qc));
-				}
-			}
-		} else {
-			// Per-row: each row gets its own QuadraticConstraint
-			for (idx_t row = 0; row < num_rows; row++) {
-				if (has_groups && eval_const.row_group_ids[row] == DConstants::INVALID_INDEX) {
-					continue;
-				}
-				vector<idx_t> single_row {row};
-				double rhs = eval_const.rhs_values.Get(row);
-				double lhs_constant;
-				auto qc = BuildQuadraticConstraint(quadratic, single_row, rhs, lhs_constant, written);
-				// F2 site 6: quadratic per-row.
-				idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
-				StampConstraintProvenance(input, qc.provenance, eval_const, row_group_key, lhs_constant, row);
-				model.quadratic_constraints.push_back(std::move(qc));
-			}
+		// One QuadraticConstraint per row the clause emits, stamped as a linear row is.
+		for (idx_t e = 0; e < eval_const.records.Count(); e++) {
+			double lhs_constant;
+			auto qc = BuildQuadraticConstraint(quadratic, e, lhs_constant, written);
+			StampConstraintProvenance(input, qc.provenance, eval_const, eval_const.records.groups[e], lhs_constant,
+			                          eval_const.lhs_is_aggregate ? DConstants::INVALID_INDEX
+			                                                      : eval_const.records.data_rows[e]);
+			model.quadratic_constraints.push_back(std::move(qc));
 		}
 	}
 
@@ -1214,19 +964,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
 	phase.Next("model.constraints");
 
-	// Rough upper-bound on total model.constraints rows to avoid repeated
-	// vector reallocation — aggregate w/o groups contributes 1, aggregate w/
-	// groups contributes num_groups, per-row contributes num_rows. Plus any
-	// raw global constraints appended after the main loop.
+	// The rows the clauses emit, and the raw rows appended after them, reserved once.
 	{
 		idx_t est_rows = input.global_constraints.size();
 		for (auto &ec : input.constraints) {
-			if (ec.lhs_is_aggregate) {
-				bool ec_has_groups = !ec.row_group_ids.empty();
-				est_rows += ec_has_groups ? std::max<idx_t>(ec.num_groups, 1) : 1;
-			} else {
-				est_rows += num_rows;
-			}
+			est_rows += ec.records.Count();
 		}
 		model.constraints.reserve(model.constraints.size() + est_rows);
 	}

@@ -273,8 +273,8 @@ interleaved runs beside other work (load 8-18, single spans swing up to 3x).
   lineitem, 1M rows, A1 with a bound read from a reducer, medians of 5, off → on: a parent that returns every column
   (CTAS) 251 ms / 503 MiB → 96 ms / 509 MiB; a parent that reads one string, 36 ms / 170 MiB → 42 ms / 159 MiB (the
   second scan and its join).
-- **A grouped clause's row lists are built once** (`ClauseRows`), for implied bounds and the builder: Q1 model build
-  about 15 ms lower than building them twice.
+- **A clause's rows are written once** (`DecideWriteClauseRecords`), for implied bounds and the builder: Q1 model
+  build about 15 ms lower than regrouping its rows twice.
 - **Group keys are formatted when printed.** A row carries a group number, and the key text is formatted only for a
   finding that prints it. A key is not formatted when its data is read, nor copied into each model row.
 - **Peak memory on Q3 and Q10** is inside Gurobi's solve, after DeciDB hands over the model; the stages before it hold

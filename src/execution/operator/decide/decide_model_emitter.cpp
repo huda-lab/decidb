@@ -594,16 +594,47 @@ void DecideModelEmitter::Constraints() {
 	}
 }
 
+EvaluatedConstraint DecideModelEmitter::Records(EvaluatedClauseColumns &columns, const ClauseRowSets &sets) {
+	DecideWriteClauseRecords(columns, sets,
+	                         DecideClauseRefOf(op.display.constraint_sources, op.display.source_text,
+	                                           columns.provenance.origin.source_clause_id));
+	EvaluatedConstraint &row = columns;
+	return std::move(row);
+}
+
 void DecideModelEmitter::Route(EmittedClause &&clause, bool folded) {
+	auto sets = DecideClauseRowSets(clause.row, num_rows);
+	auto row = Records(clause.row, sets);
 	if (folded) {
-		gstate.evaluated_singleton_row_constraints.push_back(std::move(clause.row));
-	} else if (clause.row.comparison_type == ExpressionType::COMPARE_NOTEQUAL) {
-		gstate.evaluated_not_equals.push_back(
-		    {std::move(clause.row), std::move(clause.no_exclusion), clause.avg_rhs_scale});
+		gstate.evaluated_singleton_row_constraints.push_back(std::move(row));
+	} else if (row.comparison_type == ExpressionType::COMPARE_NOTEQUAL) {
+		NotEqualClause not_equal;
+		// An aggregate `<>` excludes every value its group's rows give, each once; an AVG's terms stay sums, so its
+		// values are scaled by the group's size instead (KeepAvgAsSumUnderNotEqual).
+		for (idx_t e = 0; row.lhs_is_aggregate && e < sets.groups.size(); e++) {
+			const auto first = NumericCast<int64_t>(not_equal.excluded.size());
+			const double scale = clause.avg_rhs_scale ? static_cast<double>(sets.begin[e + 1] - sets.begin[e]) : 1.0;
+			not_equal.excluded_begin.push_back(not_equal.excluded.size());
+			for (idx_t k = sets.begin[e]; k < sets.begin[e + 1]; k++) {
+				const idx_t data_row = sets.rows[k];
+				if (!clause.no_exclusion.empty() && clause.no_exclusion[data_row]) {
+					continue;
+				}
+				const double value = clause.row.rhs_values.Get(data_row) * scale;
+				if (std::find(not_equal.excluded.begin() + first, not_equal.excluded.end(), value) ==
+				    not_equal.excluded.end()) {
+					not_equal.excluded.push_back(value);
+				}
+			}
+		}
+		not_equal.excluded_begin.push_back(not_equal.excluded.size());
+		not_equal.row = std::move(row);
+		gstate.evaluated_not_equals.push_back(std::move(not_equal));
 	} else if (!clause.products.empty()) {
-		gstate.evaluated_quadratics.push_back({std::move(clause.row), std::move(clause.products)});
+		gstate.evaluated_quadratics.push_back(
+		    {std::move(row), std::move(clause.products), std::move(sets.begin), std::move(sets.rows)});
 	} else {
-		gstate.evaluated_constraints.push_back(std::move(clause.row));
+		gstate.evaluated_constraints.push_back(std::move(row));
 	}
 }
 
@@ -632,7 +663,8 @@ void DecideModelEmitter::AbsEnvelope(idx_t function, idx_t root, bool counted) {
 	// built fresh, never the easy half of a MIN/MAX: it is one row per routed instance of the F edge's scope.
 	auto envelope = Rows(root, counted);
 	D_ASSERT(envelope.products.empty());
-	(root == envelopes[DecideAbsDefinition::NEGATED_ROW] ? link->negated : link->operand) = std::move(envelope.row);
+	(root == envelopes[DecideAbsDefinition::NEGATED_ROW] ? link->negated : link->operand) =
+	    Records(envelope.row, DecideClauseRowSets(envelope.row, num_rows));
 }
 
 EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
@@ -711,7 +743,7 @@ EmittedClause DecideModelEmitter::Rows(idx_t root, bool counted) {
 	return result;
 }
 
-void DecideModelEmitter::CheckDomain(idx_t root, const EvaluatedConstraint &evaluated) {
+void DecideModelEmitter::CheckDomain(idx_t root, const EvaluatedClauseColumns &evaluated) {
 	auto &clause = *tree.nodes[root]->compiled.clause;
 	// The box check keeps only a lowered floor of an IN's bounds, which diagnosis drops as one clause.
 	if (clause.origin.removal_group_id != DConstants::INVALID_INDEX || !clause.admitted_lower->IsFoldable() ||
@@ -751,7 +783,7 @@ void DecideModelEmitter::CheckDomain(idx_t root, const EvaluatedConstraint &eval
 	}
 }
 
-void DecideModelEmitter::Classes(idx_t root, const vector<bool> &tested, EvaluatedConstraint &evaluated) {
+void DecideModelEmitter::Classes(idx_t root, const vector<bool> &tested, EvaluatedClauseColumns &evaluated) {
 	auto &clause = *tree.nodes[root]->compiled.clause;
 	const auto signature =
 	    clause.scope.signature == DConstants::INVALID_INDEX ? nullptr : &tree.signatures[clause.scope.signature];
@@ -1037,7 +1069,7 @@ idx_t DecideModelEmitter::ByReducer(idx_t root) const {
 }
 
 bool DecideModelEmitter::ReadGroupedTerms(idx_t root, const DecideEntryRows &rows, const vector<bool> &kept,
-                                          EvaluatedConstraint &evaluated, vector<TermFilterState> &filters,
+                                          EvaluatedClauseColumns &evaluated, vector<TermFilterState> &filters,
                                           vector<bool> &active, vector<bool> &null_rows) {
 	auto &node = *tree.nodes[root];
 	auto &body = node.compiled;
@@ -1268,7 +1300,7 @@ vector<bool> DecideModelEmitter::GroupBound(idx_t root, const DecideEntryRows &r
 	return bound_null;
 }
 
-void DecideModelEmitter::Admit(const DecideBody &body, EvaluatedConstraint &evaluated) {
+void DecideModelEmitter::Admit(const DecideBody &body, EvaluatedClauseColumns &evaluated) {
 	// Computed on the members of its term's site, the entries its member tests keep: an easy MIN's or MAX's on its
 	// reducer's members alone, whose filter the descent routed. A row no member stands on emits no model row, so what
 	// it would admit is never read. An end is never NULL: a NULL coefficient or bound admits every value, and every
@@ -1341,7 +1373,7 @@ void DecideModelEmitter::Polynomial(idx_t root, const vector<TermFilterState> &f
 	}
 }
 
-void DecideModelEmitter::Name(idx_t by, const vector<idx_t> &kept_groups, EvaluatedConstraint &evaluated) {
+void DecideModelEmitter::Name(idx_t by, const vector<idx_t> &kept_groups, EvaluatedClauseColumns &evaluated) {
 	// Each group is named by its key's values, which the solver input reads by its rank.
 	const auto values = key_values.size();
 	key_values.push_back(DecideGroupKeyValues(tree, descent, by));

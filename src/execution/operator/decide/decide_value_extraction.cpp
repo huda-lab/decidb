@@ -28,6 +28,7 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <numeric>
 #include <set>
 #include <unordered_map>
 
@@ -290,7 +291,7 @@ vector<idx_t> FirstRowOfEachGroup(const vector<idx_t> &row_group_ids, idx_t num_
 	return rows;
 }
 
-void CountTupleTermsOncePerGroup(const vector<DecideTerm> &terms, idx_t num_rows, EvaluatedConstraint &evaluated) {
+void CountTupleTermsOncePerGroup(const vector<DecideTerm> &terms, idx_t num_rows, EvaluatedClauseColumns &evaluated) {
 	auto counted = FirstRowOfEachGroup(evaluated.row_group_ids, evaluated.num_groups, num_rows);
 	for (idx_t term_idx = 0; term_idx < terms.size(); term_idx++) {
 		if (CountsOnce(terms[term_idx])) {
@@ -318,9 +319,101 @@ idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t
 	return count;
 }
 
-EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constraint, idx_t repair_group_id,
-                                                  const std::function<idx_t(const DecideTerm &)> &read_variable) {
-	EvaluatedConstraint evaluated;
+ClauseRowSets DecideClauseRowSets(const EvaluatedClauseColumns &evaluated, idx_t num_rows) {
+	ClauseRowSets sets;
+	auto &groups = evaluated.row_group_ids;
+	if (!evaluated.lhs_is_aggregate) {
+		for (idx_t row = 0; row < num_rows; row++) {
+			if (!groups.empty() && groups[row] == DConstants::INVALID_INDEX) {
+				continue;
+			}
+			sets.rows.push_back(row);
+			sets.begin.push_back(sets.rows.size());
+			sets.groups.push_back(groups.empty() ? DConstants::INVALID_INDEX : groups[row]);
+		}
+		return sets;
+	}
+	if (groups.empty()) {
+		sets.rows.resize(num_rows);
+		std::iota(sets.rows.begin(), sets.rows.end(), idx_t(0));
+		sets.begin.push_back(num_rows);
+		sets.groups.push_back(DConstants::INVALID_INDEX);
+		return sets;
+	}
+	// A counting sort of the kept rows by group, then the groups that hold a row.
+	vector<idx_t> offsets(evaluated.num_groups + 1, 0);
+	for (auto group : groups) {
+		if (group != DConstants::INVALID_INDEX) {
+			offsets[group + 1]++;
+		}
+	}
+	for (idx_t group = 0; group < evaluated.num_groups; group++) {
+		offsets[group + 1] += offsets[group];
+	}
+	sets.rows.resize(offsets[evaluated.num_groups]);
+	auto cursor = offsets;
+	for (idx_t row = 0; row < groups.size(); row++) {
+		if (groups[row] != DConstants::INVALID_INDEX) {
+			sets.rows[cursor[groups[row]]++] = row;
+		}
+	}
+	for (idx_t group = 0; group < evaluated.num_groups; group++) {
+		if (offsets[group + 1] > offsets[group]) {
+			sets.begin.push_back(offsets[group + 1]);
+			sets.groups.push_back(group);
+		}
+	}
+	return sets;
+}
+
+void DecideWriteClauseRecords(EvaluatedClauseColumns &evaluated, const ClauseRowSets &sets,
+                              const DecideClauseRef &written) {
+	auto &records = evaluated.records;
+	const idx_t count = sets.groups.size();
+	const bool admits = evaluated.admitted_lower.logical_size != 0;
+	records.groups = sets.groups;
+	records.constants.assign(count, 0.0);
+	records.bounds.reserve(count);
+	records.data_rows.reserve(count);
+	records.term_begin.reserve(count + 1);
+	for (idx_t e = 0; e < count; e++) {
+		const idx_t begin = sets.begin[e];
+		const idx_t end = sets.begin[e + 1];
+		for (idx_t t = 0; t < evaluated.variable_indices.size(); t++) {
+			auto &column = evaluated.row_coefficients[t];
+			const idx_t variable = evaluated.variable_indices[t];
+			for (idx_t k = begin; k < end; k++) {
+				const double coefficient = column.Get(sets.rows[k]);
+				if (variable == DConstants::INVALID_INDEX) {
+					AddCoefficient(records.constants[e], coefficient, written);
+				} else if (coefficient != 0.0) {
+					records.variables.push_back(variable);
+					records.rows.push_back(sets.rows[k]);
+					records.coefficients.push_back(coefficient);
+				}
+			}
+		}
+		records.term_begin.push_back(records.variables.size());
+		// A group's bound is one value on its rows (RewriteRhsAggregates), read on its first; a clause over no row
+		// reads the bound's first value.
+		const idx_t first = begin < end ? sets.rows[begin] : 0;
+#ifdef DEBUG
+		for (idx_t k = begin; evaluated.comparison_type != ExpressionType::COMPARE_NOTEQUAL && k < end; k++) {
+			D_ASSERT(evaluated.rhs_values.Get(sets.rows[k]) == evaluated.rhs_values.Get(first));
+		}
+#endif
+		records.data_rows.push_back(first);
+		records.bounds.push_back(evaluated.rhs_values.Get(first));
+		if (admits) {
+			records.admitted_lower.push_back(evaluated.admitted_lower.Get(first));
+			records.admitted_upper.push_back(evaluated.admitted_upper.Get(first));
+		}
+	}
+}
+
+EvaluatedClauseColumns InitializeEvaluatedConstraint(const DecideConstraint &constraint, idx_t repair_group_id,
+                                                     const std::function<idx_t(const DecideTerm &)> &read_variable) {
+	EvaluatedClauseColumns evaluated;
 	evaluated.comparison_type = constraint.comparison_type;
 	evaluated.provenance.origin = constraint.origin;
 	evaluated.provenance.origin.repair_group_id = repair_group_id;
@@ -343,7 +436,7 @@ EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constr
 bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, bool diagnose,
                    const DecideSourceText &source_text, const vector<ConstraintSourceInfo> &constraint_sources,
                    const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> &keys,
-                   EvaluatedConstraint &evaluated) {
+                   EvaluatedClauseColumns &evaluated) {
 	if (constraint.rhs_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
 		auto &const_expr = constraint.rhs_expr->Cast<BoundConstantExpression>();
 		double rhs_constant = const_expr.value.GetValue<double>();
@@ -432,7 +525,7 @@ vector<idx_t> DecideKeptGroups(const DecideKeyGroups &groups, idx_t num_rows,
 vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_rows, const vector<bool> &scoped_kept,
                                bool has_local_filters, const vector<bool> &local_row_active,
                                const DecideKeyGroups *groups, const vector<idx_t> &class_of_row,
-                               vector<idx_t> *kept_row_group_ids, EvaluatedConstraint &evaluated,
+                               vector<idx_t> *kept_row_group_ids, EvaluatedClauseColumns &evaluated,
                                idx_t &grouped_instances) {
 	// A reducer's members are the rows its own `when` keeps -- a MIN/MAX reads them as members -- while every kept row
 	// of a group bounds it. A `<>` emits every kept row, since each one's bound is excluded.
@@ -546,7 +639,7 @@ void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<bool> &f
 }
 
 void ScaleAvgTerms(const DecideConstraint &constraint, const vector<TermFilterState> &filters, idx_t num_rows,
-                   EvaluatedConstraint &evaluated) {
+                   EvaluatedClauseColumns &evaluated) {
 	for (idx_t term_idx = 0; term_idx < constraint.lhs_terms.size(); term_idx++) {
 		if (filters[term_idx].avg_scale) {
 			ScaleAvgRows(evaluated.row_coefficients[term_idx], filters[term_idx].has_filter, filters[term_idx].mask,

@@ -122,7 +122,8 @@ executed over the buffer, and cast once to `double`:
 - objective: `[-100, -60, -120]`, the term's sign applied
 
 No `when`, `per` or `by`, so `row_group_ids` stays empty and `num_groups` is 0 — the
-fast path. Nothing is NULL, NaN or infinite.
+fast path. Nothing is NULL, NaN or infinite. The clause emits one row, whose record holds the three terms
+`(x, row, weight)` and the bound 50.
 
 ## Stage 06 — Model formulation
 

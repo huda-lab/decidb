@@ -79,11 +79,19 @@ void FormulateModel(SolverInput &input, const FormulationBox &box, VarIndexer &v
 				// the remaining (inner) terms + RHS, then set the indicator coeff = +M.
 				// The link is normalized to `M*z - inner >= rhs`, so the indicator
 				// coefficient is positive.
-				ec.row_coefficients[z_term].AssignScalar(num_rows, 0.0);
-				double M = DecideTightPerRowBigM(ec, box, num_rows, decide_var_names, InstanceBox {input, var_indexer},
+				const idx_t z = ec.variable_indices[z_term];
+				auto set_indicator = [&](double value) {
+					for (idx_t t = 0; t < ec.records.variables.size(); t++) {
+						if (ec.records.variables[t] == z) {
+							ec.records.coefficients[t] = value;
+						}
+					}
+				};
+				set_indicator(0.0);
+				double M = DecideTightPerRowBigM(ec, box, decide_var_names, InstanceBox {input, var_indexer},
 				                                 DecideWrittenClause(input, ec.provenance.origin.source_clause_id),
 				                                 "norm(e, 0)");
-				ec.row_coefficients[z_term].AssignScalar(num_rows, M);
+				set_indicator(M);
 			}
 		}
 	}

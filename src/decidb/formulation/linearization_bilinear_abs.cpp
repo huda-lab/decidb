@@ -171,7 +171,7 @@ namespace {
 //! point another row may exclude, and it is kept so that a repair stays representable. A
 //! looser M is valid in any case — it only ever slackens the deactivated
 //! arm of a disjunction — whereas a too-small one cuts off legal answers.
-static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t num_rows) {
+static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx) {
 	double demanded = 0.0;
 	// The common shape, and the one B3 was reported against: `ABS(x) >= 5` is a simple
 	// `var OP const` comparison over the auxiliary, so stage 05 folds it into the
@@ -183,14 +183,7 @@ static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t nu
 		if (ec.defined_var == aux_idx) {
 			return; // the definitional pair: it states what the auxiliary IS, not what was asked of it
 		}
-		idx_t term = DConstants::INVALID_INDEX;
-		for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
-			if (ec.variable_indices[t] == aux_idx) {
-				term = t;
-				break;
-			}
-		}
-		if (term == DConstants::INVALID_INDEX) {
+		if (std::find(ec.variable_indices.begin(), ec.variable_indices.end(), aux_idx) == ec.variable_indices.end()) {
 			return;
 		}
 		bool pushes_up = ec.comparison_type == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
@@ -199,16 +192,9 @@ static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t nu
 		bool pushes_down = ec.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
 		                   ec.comparison_type == ExpressionType::COMPARE_LESSTHAN ||
 		                   ec.comparison_type == ExpressionType::COMPARE_EQUAL;
-		const auto written = DecideWrittenClause(input, ec.provenance.origin.source_clause_id);
-		for (idx_t r = 0; r < num_rows; r++) {
-			if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
-				continue; // row excluded by `when` or its group: this clause asks nothing here
-			}
-			double a = ec.row_coefficients[term].Get(r);
-			if (std::abs(a) < 1e-15) {
-				continue;
-			}
-			double k = DecideRowEffectiveBound(ec, r, written);
+		auto &records = ec.records;
+		for (idx_t e = 0; e < records.Count(); e++) {
+			double k = records.EffectiveBound(e);
 			if (!std::isfinite(k)) {
 				continue;
 			}
@@ -216,53 +202,50 @@ static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t nu
 			// The auxiliary has to cover the worst `S` the box allows, and only an
 			// UPWARD demand matters here: this raises a ceiling, and an ABS auxiliary
 			// is non-negative and floored by its own definitional pair.
-			auto range = DecideRowSignedRange(ec, r, input.lower_bounds, input.upper_bounds, aux_idx);
+			auto range = DecideRowSignedRange(ec, e, input.lower_bounds, input.upper_bounds, aux_idx);
 			double lo = range.Lo();
 			double hi = range.Hi();
-			if (a > 0.0 && pushes_up && std::isfinite(lo)) {
-				demanded = MaxValue<double>(demanded, (k - lo) / a);
-			} else if (a < 0.0 && pushes_down && std::isfinite(hi)) {
-				demanded = MaxValue<double>(demanded, (k - hi) / a);
+			for (idx_t t = records.term_begin[e]; t < records.term_begin[e + 1]; t++) {
+				double a = records.coefficients[t];
+				if (records.variables[t] != aux_idx || std::abs(a) < 1e-15) {
+					continue;
+				}
+				if (a > 0.0 && pushes_up && std::isfinite(lo)) {
+					demanded = MaxValue<double>(demanded, (k - lo) / a);
+				} else if (a < 0.0 && pushes_down && std::isfinite(hi)) {
+					demanded = MaxValue<double>(demanded, (k - hi) / a);
+				}
 			}
 		}
 	});
 	return demanded;
 }
 
-//! Whether the ABS is read on row `r`: the `when` of its clause and its group keep the row.
-bool AbsReadsRow(const EvaluatedConstraint &operand, idx_t r) {
-	return operand.row_group_ids.empty() || operand.row_group_ids[r] != DConstants::INVALID_INDEX;
-}
-
-//! The expression inside the ABS on row `r`, as the operand row `aux + sum_{t != aux} c_t x_t >= k` states it:
+//! The expression inside the ABS on row `e` the operand emits (a row the `when` of its clause and its group keep), as
+//! the operand row `aux + sum_{t != aux} c_t x_t >= k` states it:
 //!   inner_r = k - sum_{t != aux} c_t[r] * x_t
 //! `columns` and `coefficients` are the sum's terms, each column once (two terms may land on one column -- a frame read
 //! selecting the row itself (`abs(x - at(last: x) over (...))` at the last period) -- and a row states a column once,
 //! or the solver refuses it), and `k` is the bound with the operand row's constant terms moved across (a frame's `else`
 //! read as data is a term of no decision). Both arms read the argument here and only state it differently.
-double ReadAbsArgument(const AbsLinkSpec &link, const VarIndexer &indexer, idx_t r, const DecideClauseRef &written,
+double ReadAbsArgument(const AbsLinkSpec &link, const VarIndexer &indexer, idx_t e, const DecideClauseRef &written,
                        SparseCoeffAccumulator &argument, vector<int> &columns, vector<double> &coefficients) {
-	const auto &operand = link.operand;
-	argument.BeginSparse(operand.variable_indices.size(), written);
-	for (idx_t t = 0; t < operand.variable_indices.size(); t++) {
-		idx_t v = operand.variable_indices[t];
-		if (v == DConstants::INVALID_INDEX || v == link.aux_idx) {
-			continue;
-		}
-		double coef = operand.row_coefficients[t].Get(r);
-		if (coef != 0.0) {
-			argument.Add(static_cast<int>(indexer.Get(v, r)), coef);
+	const auto &records = link.operand.records;
+	argument.BeginSparse(records.term_begin[e + 1] - records.term_begin[e], written);
+	for (idx_t t = records.term_begin[e]; t < records.term_begin[e + 1]; t++) {
+		if (records.variables[t] != link.aux_idx) {
+			argument.Add(static_cast<int>(indexer.Get(records.variables[t], records.rows[t])), records.coefficients[t]);
 		}
 	}
 	argument.Flush(columns, coefficients);
-	return DecideRowEffectiveBound(operand, r, written);
+	return records.EffectiveBound(e);
 }
 
 //! The row's provenance, which every row of an ABS carries as the clause it was written in does.
-void StampAbsRow(SolverInput::RawConstraint &row, const EvaluatedConstraint &operand, idx_t r) {
+void StampAbsRow(SolverInput::RawConstraint &row, const EvaluatedConstraint &operand, idx_t e) {
 	row.provenance.kind = ConstraintKind::STRUCTURAL;
 	row.provenance.origin = operand.provenance.origin;
-	row.StampGroup(operand, operand.row_group_ids.empty() ? DConstants::INVALID_INDEX : operand.row_group_ids[r]);
+	row.StampGroup(operand, operand.records.groups[e]);
 }
 
 //! The lowered form: a sign indicator `y` per instance of the auxiliary and two Big-M rows that pin `aux = |inner|`
@@ -281,14 +264,11 @@ void ExpandAbs(SolverInput &input, const VarIndexer &indexer, const AbsLinkSpec 
 	const double relax_neg = 2.0 * std::max(0.0, -link.inner_lo); // A1
 	const double relax_pos = 2.0 * std::max(0.0, link.inner_hi);  // A2
 	SparseCoeffAccumulator argument;
-	for (idx_t r = 0; r < input.num_rows; r++) {
-		if (!AbsReadsRow(operand, r)) {
-			continue;
-		}
+	for (idx_t e = 0; e < operand.records.Count(); e++) {
 		vector<int> columns;
 		vector<double> coefficients;
-		const double k = ReadAbsArgument(link, indexer, r, written, argument, columns, coefficients);
-		const int aux = static_cast<int>(indexer.Get(link.aux_idx, r));
+		const double k = ReadAbsArgument(link, indexer, e, written, argument, columns, coefficients);
+		const int aux = static_cast<int>(indexer.Get(link.aux_idx, operand.records.data_rows[e]));
 		const int sign = static_cast<int>(AddGlobalBinaryAux(input, indexer, 0.0, link.label));
 
 		// `aux + sum c x + A1 * y <= k + A1`, which is `aux - inner <= A1 * (1 - y)`.
@@ -301,7 +281,7 @@ void ExpandAbs(SolverInput &input, const VarIndexer &indexer, const AbsLinkSpec 
 		pin_inner.coefficients.push_back(relax_neg);
 		pin_inner.sense = '<';
 		pin_inner.rhs = k + relax_neg;
-		StampAbsRow(pin_inner, operand, r);
+		StampAbsRow(pin_inner, operand, e);
 		input.global_constraints.push_back(std::move(pin_inner));
 
 		// `aux - sum c x - A2 * y <= -k`, which is `aux + inner <= A2 * y`.
@@ -316,7 +296,7 @@ void ExpandAbs(SolverInput &input, const VarIndexer &indexer, const AbsLinkSpec 
 		pin_negated.coefficients.push_back(-relax_pos);
 		pin_negated.sense = '<';
 		pin_negated.rhs = -k;
-		StampAbsRow(pin_negated, operand, r);
+		StampAbsRow(pin_negated, operand, e);
 		input.global_constraints.push_back(std::move(pin_negated));
 	}
 }
@@ -331,10 +311,7 @@ void StateAbsNatively(SolverInput &input, const VarIndexer &indexer, const Insta
 	const auto &operand = link.operand;
 	const auto written = DecideWrittenClause(input, operand.provenance.origin.source_clause_id);
 	SparseCoeffAccumulator argument;
-	for (idx_t r = 0; r < input.num_rows; r++) {
-		if (!AbsReadsRow(operand, r)) {
-			continue; // row excluded by `when` or its group: no ABS to express here
-		}
+	for (idx_t e = 0; e < operand.records.Count(); e++) {
 		// `t = inner`, boxed by THIS ROW's own reach -- the same per-row walk native MIN/MAX boxes its argument
 		// columns with, rather than one table-wide magnitude reused for every row. The wider box is not free: a slack
 		// continuous column costs the root LP relaxation, and the ABS interval is the cover over rows, so every row but
@@ -343,10 +320,10 @@ void StateAbsNatively(SolverInput &input, const VarIndexer &indexer, const Insta
 		// The bracket is read off the operand row exactly as the link row below states it, and negating the variable
 		// walk swaps its two ends. Skipping the auxiliary is what makes this the range of the expression rather than
 		// of the row.
-		auto vars = DecideRowSignedRange(operand, r, input.lower_bounds, input.upper_bounds, link.aux_idx, &instances);
+		auto vars = DecideRowSignedRange(operand, e, input.lower_bounds, input.upper_bounds, link.aux_idx, &instances);
 		vector<int> columns;
 		vector<double> coefficients;
-		const double k = ReadAbsArgument(link, indexer, r, written, argument, columns, coefficients);
+		const double k = ReadAbsArgument(link, indexer, e, written, argument, columns, coefficients);
 		// Each end on its own. A row open on one side still contributes its closed side, and a row whose contributors
 		// are all bounded gets a real box even when some other row's are not -- which the one interval could not
 		// express, being one number for the whole link. Free only where nothing at all is derivable, which is
@@ -380,7 +357,7 @@ void StateAbsNatively(SolverInput &input, const VarIndexer &indexer, const Insta
 
 		GeneralConstraintSpec gc;
 		gc.kind = GeneralConstraintKind::ABS;
-		gc.result_column = static_cast<int>(indexer.Get(link.aux_idx, r));
+		gc.result_column = static_cast<int>(indexer.Get(link.aux_idx, operand.records.data_rows[e]));
 		gc.argument_columns.push_back(static_cast<int>(t_idx));
 		gc.provenance.origin = operand.provenance.origin;
 		input.general_constraints.push_back(std::move(gc));
@@ -416,7 +393,6 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
 	if (input.abs_links.empty()) {
 		return;
 	}
-	const idx_t num_rows = input.num_rows;
 	// A helper among the members is read at its own instance's reach, as the model builder boxes its column.
 	const InstanceBox instances {input, indexer, /*reach=*/true};
 
@@ -434,15 +410,15 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
 		double hi = 0.0;
 		bool seen_row = false;
 		const auto written = DecideWrittenClause(input, c1.provenance.origin.source_clause_id);
-		for (idx_t r = 0; r < num_rows; r++) {
+		for (idx_t e = 0; e < c1.records.Count(); e++) {
 			// The link's bound carries the constant part of the expression the user wrote inside ABS, with C1's
 			// constant terms moved across, where a frame's `else` read as data stands. It is finite: an infinity there
 			// is a data problem, which defeats the native path too (|inf| is still inf), and RewriteAbs refuses it
 			// where it reads the argument, whichever path follows; a constant term past a DOUBLE is refused as it is
 			// moved (AddCoefficient).
-			double link_rhs = DecideRowEffectiveBound(c1, r, written);
+			double link_rhs = c1.records.EffectiveBound(e);
 			D_ASSERT(std::isfinite(link_rhs));
-			auto vars = DecideRowSignedRange(c1, r, input.lower_bounds, input.upper_bounds, link.aux_idx, &instances);
+			auto vars = DecideRowSignedRange(c1, e, input.lower_bounds, input.upper_bounds, link.aux_idx, &instances);
 			if (vars.lo_open || vars.hi_open) {
 				abs_unbounded = true;
 				continue;
@@ -479,7 +455,7 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
 		// be met as written. `aux = |inner|` holds a demand of D by `inner` at +D or -D,
 		// so the interval grows to cover both.
 		double reach = std::max(std::abs(lo), std::abs(hi));
-		double demanded = DemandedAuxReach(input, link.aux_idx, num_rows);
+		double demanded = DemandedAuxReach(input, link.aux_idx);
 		if (demanded > reach) {
 			lo = std::min(lo, -demanded);
 			hi = std::max(hi, demanded);

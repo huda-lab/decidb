@@ -227,26 +227,20 @@ static void OpenElasticColumnBox(SolverInput &input) {
 	// its own.
 	vector<double> row_demand(input.num_decide_vars, 0.0);
 	input.ForEachClauseRow([&](const EvaluatedConstraint &ec) {
-		for (idx_t r = 0; r < input.num_rows; r++) {
-			if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
-				continue;
-			}
-			double rhs = ec.rhs_values.IsUniform() ? ec.rhs_values.UniformValue() : ec.rhs_values.Get(r);
+		auto &records = ec.records;
+		for (idx_t e = 0; e < records.Count(); e++) {
+			double rhs = records.bounds[e];
 			if (!std::isfinite(rhs) || rhs == 0.0) {
 				continue;
 			}
-			for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
-				idx_t v = ec.variable_indices[t];
-				if (v == DConstants::INVALID_INDEX) {
-					continue;
-				}
-				double coef = std::abs(ec.row_coefficients[t].Get(r));
+			for (idx_t t = records.term_begin[e]; t < records.term_begin[e + 1]; t++) {
+				double coef = std::abs(records.coefficients[t]);
 				if (coef <= NEGLIGIBLE_COEFFICIENT) {
 					continue;
 				}
 				double demand = std::abs(rhs) / coef;
 				if (std::isfinite(demand)) {
-					row_demand[v] = std::max(row_demand[v], demand);
+					row_demand[records.variables[t]] = std::max(row_demand[records.variables[t]], demand);
 				}
 			}
 		}

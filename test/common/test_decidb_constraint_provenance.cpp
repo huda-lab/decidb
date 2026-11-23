@@ -1,4 +1,5 @@
 #include "catch.hpp"
+#include "decidb_clause_records.hpp"
 
 #include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/decidb/formulation/solver_input.hpp"
@@ -8,6 +9,7 @@
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "test_helpers.hpp"
 
+#include <algorithm>
 #include <utility>
 
 using namespace duckdb;
@@ -28,15 +30,24 @@ SolverInput MakeBaseInput(idx_t num_rows, idx_t num_vars, bool diagnose = true) 
 	return input;
 }
 
-// SUM over rows of (x[v0] + x[v1] + ...) <= rhs. Aggregate, ungrouped by default. Every clause the model builder reads
-// arrives numbered (the emitter numbers it), so the fixture is clause 0.
-EvaluatedConstraint MakeAggregate(const duckdb::vector<idx_t> &vars, idx_t num_rows, double rhs) {
+// SUM over rows of (x[v0] + x[v1] + ...) <= rhs. Aggregate: one row per group of `row_groups`, one in all for none.
+// Every clause the model builder reads arrives numbered (the emitter numbers it), so the fixture is clause 0.
+EvaluatedConstraint MakeAggregate(const duckdb::vector<idx_t> &vars, idx_t num_rows, double rhs,
+                                  const duckdb::vector<idx_t> &row_groups = {}) {
 	EvaluatedConstraint ec;
 	ec.variable_indices = vars;
-	for (idx_t i = 0; i < vars.size(); i++) {
-		ec.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));
+	const idx_t num_groups = row_groups.empty() ? 1 : *std::max_element(row_groups.begin(), row_groups.end()) + 1;
+	for (idx_t group = 0; group < num_groups; group++) {
+		duckdb::vector<RecordTerm> terms;
+		for (idx_t var : vars) {
+			for (idx_t row = 0; row < num_rows; row++) {
+				if (row_groups.empty() || row_groups[row] == group) {
+					terms.emplace_back(var, row, 1.0);
+				}
+			}
+		}
+		AddRecord(ec, terms, rhs, row_groups.empty() ? DConstants::INVALID_INDEX : group);
 	}
-	ec.rhs_values = CoefficientColumn::MakeScalar(rhs, num_rows);
 	ec.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
 	ec.lhs_is_aggregate = true;
 	ec.provenance.origin.repair_group_id = 0;
@@ -48,8 +59,9 @@ EvaluatedConstraint MakeAggregate(const duckdb::vector<idx_t> &vars, idx_t num_r
 EvaluatedConstraint MakePerRow(idx_t var, idx_t num_rows, double rhs) {
 	EvaluatedConstraint ec;
 	ec.variable_indices = {var};
-	ec.row_coefficients.push_back(CoefficientColumn::MakeScalar(1.0, num_rows));
-	ec.rhs_values = CoefficientColumn::MakeScalar(rhs, num_rows);
+	for (idx_t row = 0; row < num_rows; row++) {
+		AddRecord(ec, {RecordTerm {var, row, 1.0}}, rhs);
+	}
 	ec.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
 	ec.lhs_is_aggregate = false;
 	ec.provenance.origin.repair_group_id = 0;
@@ -80,9 +92,7 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 
 	SECTION("aggregate + PER stamps one row per group with distinct group keys") {
 		SolverInput input = MakeBaseInput(4, 2);
-		EvaluatedConstraint ec = MakeAggregate({0, 1}, 4, 10.0);
-		ec.row_group_ids = {0, 0, 1, 1};
-		ec.num_groups = 2;
+		EvaluatedConstraint ec = MakeAggregate({0, 1}, 4, 10.0, {0, 0, 1, 1});
 		input.constraints.push_back(std::move(ec));
 
 		SolverModel model = BuildModel(input);
@@ -217,10 +227,10 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		CHECK(model.general_constraints[0].provenance.origin.repair_group_id == 13);
 	}
 
-	SECTION("a fixed aggregate LHS offset sums every row") {
+	SECTION("the constant of a row's left side moves to its bound") {
 		SolverInput valid = MakeBaseInput(2, 1);
-		EvaluatedConstraint ec = MakeAggregate({0, DConstants::INVALID_INDEX}, 2, 10.0);
-		ec.row_coefficients[1] = CoefficientColumn::MakeScalar(3.0, 2);
+		EvaluatedConstraint ec = MakeAggregate({0}, 2, 10.0);
+		ec.records.constants[0] = 6.0;
 		valid.constraints.push_back(std::move(ec));
 
 		SolverModel model = BuildModel(valid);

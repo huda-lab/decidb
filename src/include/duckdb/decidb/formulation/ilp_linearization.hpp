@@ -31,16 +31,14 @@
 
 namespace duckdb {
 
-//! Worst-case absolute contribution of row `r`'s decision variables:
-//! sum over terms of |coef[t][r]| * max(|lb|,|ub|). Constant terms
-//! (var == INVALID_INDEX, folded into the RHS by callers) are skipped. If any
+//! Worst-case absolute contribution of the decisions of row `e` of `records`:
+//! sum over its terms of |coef| * max(|lb|,|ub|). If any
 //! contributing variable lacks a finite bound, `has_unbounded` is set and that term
 //! is omitted — the caller must then REFUSE, not substitute a constant. There is no
 //! fixed Big-M anywhere in DeciDB: a constant the true range exceeds does not fail,
 //! it silently cuts the feasible region and returns a confidently wrong answer.
-double DecideRowTermRange(const vector<idx_t> &variable_indices, const vector<CoefficientColumn> &row_coefficients,
-                          idx_t row, const vector<double> &lower_bounds, const vector<double> &upper_bounds,
-                          bool &has_unbounded, const InstanceBox &instances);
+double DecideRowTermRange(const ClauseRecords &records, idx_t e, const vector<double> &lower_bounds,
+                          const vector<double> &upper_bounds, bool &has_unbounded, const InstanceBox &instances);
 
 //! Tight scalar Big-M for a per-row indicator constraint: the maximum over
 //! active rows of |rhs[r]| + (worst-case row contribution), plus a 1-unit margin
@@ -59,9 +57,8 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices, const vector<Co
 //! column after this returns does not make the constant conservative; it makes it a cap.
 //! `instances` gives each row's instance its own box (InstanceBox), so an instance the default floor of 0 holds on is
 //! sized from 0 and not from a lowered instance's floor.
-double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox &box, idx_t num_rows,
-                             const vector<string> &var_names, const InstanceBox &instances,
-                             const DecideClauseRef &written, const char *construct);
+double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox &box, const vector<string> &var_names,
+                             const InstanceBox &instances, const DecideClauseRef &written, const char *construct);
 
 //! The instances of a decision whose default floor of 0 a constant lower bound under a `when` replaces (a constraint's
 //! `lifted_floor`). A constant lower bound replaces the default floor on the instances whose rows it keeps; a decision

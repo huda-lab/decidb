@@ -28,17 +28,14 @@ void ResolveLiftedFloors(SolverInput &input, const VarIndexer &indexer, const ve
 		if (var == DConstants::INVALID_INDEX || boxes[var].lower_written) {
 			continue;
 		}
-		for (idx_t row = 0; row < input.num_rows; row++) {
-			// The rows the clause keeps are the ones that become a model row; no row_group_ids means every row.
-			if (!ec.row_group_ids.empty() && ec.row_group_ids[row] == DConstants::INVALID_INDEX) {
-				continue;
-			}
+		// The rows the clause keeps are the ones that become a model row.
+		for (idx_t e = 0; e < ec.records.Count(); e++) {
 			if (lowered[var].empty()) {
 				lowered[var].assign(indexer.NumInstances(var), INF);
 			}
 			// A floor of "no bound" (-infinity) is the solver's open end, as an unconditional one writes it (D41).
-			double floor = std::max(ec.admitted_lower[row], -DECIDE_SOLVER_INFINITY);
-			auto &instance_floor = lowered[var][indexer.InstanceOf(var, row)];
+			double floor = std::max(ec.records.admitted_lower[e], -DECIDE_SOLVER_INFINITY);
+			auto &instance_floor = lowered[var][indexer.InstanceOf(var, ec.records.data_rows[e])];
 			// Every clause that keeps the instance applies to it, so the tightest floor is the instance's.
 			instance_floor = instance_floor == INF ? floor : std::max(instance_floor, floor);
 		}

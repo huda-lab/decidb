@@ -117,6 +117,38 @@ bool CountsOnce(const DecideTerm &term);
 void CountTupleTermsOnce(const vector<DecideTerm> &terms, vector<CoefficientColumn> &coefficients,
                          const vector<bool> *kept, idx_t num_rows);
 
+//! A clause as the emitter evaluates it over the input's rows, before its records are written
+//! (DecideWriteClauseRecords): each term's coefficient and the bound on every row, and each row's group.
+struct EvaluatedClauseColumns : EvaluatedConstraint {
+	vector<CoefficientColumn> row_coefficients; // [term_idx] = coefficient column for that term
+	CoefficientColumn rhs_values;               // RHS column (logical size = num_rows)
+	//! A per-row bound on one decision: the values it admits on each row (ClauseRecords::admitted_lower). Logical
+	//! size 0 for any other constraint.
+	CoefficientColumn admitted_lower;
+	CoefficientColumn admitted_upper;
+	//! Row→group mapping: the clause's `by` groups, classes or kept rows.
+	//! Empty = all rows in one implicit group (fast path: no `when`, no key)
+	//! DConstants::INVALID_INDEX = row excluded (dropped by the `when`, or outside its group)
+	//! 0..K-1 = group assignment
+	vector<idx_t> row_group_ids;
+	idx_t num_groups = 0; // 0 = ungrouped, >0 = number of distinct groups
+};
+
+//! The data rows of each row a clause emits, rows[begin[e] .. begin[e + 1]), and its group: a group of an aggregate
+//! clause that holds a row (all rows, in the one row of a clause of no groups), a kept row of a per-row clause.
+struct ClauseRowSets {
+	vector<idx_t> begin {0};
+	vector<idx_t> rows;
+	vector<idx_t> groups;
+};
+ClauseRowSets DecideClauseRowSets(const EvaluatedClauseColumns &evaluated, idx_t num_rows);
+
+//! Writes the record of each row `evaluated` emits (EvaluatedConstraint::records) from its columns: the one place the
+//! rows stage 06 reads are made. A row's terms are listed term by term, each over the row's data rows. `written`
+//! names the clause when the left side's constant grows past a DOUBLE (AddCoefficient).
+void DecideWriteClauseRecords(EvaluatedClauseColumns &evaluated, const ClauseRowSets &sets,
+                              const DecideClauseRef &written);
+
 //! The objective's product groups outside its reducers (`MAXIMIZE sum(x) + s * u`), counted on its first kept row as
 //! a linear term there is: their weight; one inside a reducer sums over its rows.
 void CountProductsOnce(const vector<DecideProductGroup> &groups, vector<EvaluatedProductGroup> &evaluated,
@@ -127,7 +159,7 @@ void CountProductsOnce(const vector<DecideProductGroup> &groups, vector<Evaluate
 vector<idx_t> FirstRowOfEachGroup(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t num_rows);
 
 //! A clause's terms outside its reducers in the aggregate shape, counted on the first row of each of its groups.
-void CountTupleTermsOncePerGroup(const vector<DecideTerm> &terms, idx_t num_rows, EvaluatedConstraint &evaluated);
+void CountTupleTermsOncePerGroup(const vector<DecideTerm> &terms, idx_t num_rows, EvaluatedClauseColumns &evaluated);
 
 //! The instances `row_group_ids` names: in the aggregate shape each group a row stands in, else each row in a group.
 //! Empty is every row in one group.
@@ -135,8 +167,8 @@ idx_t CountInstances(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t
 
 //! A clause's evaluation before its rows are read (EvaluatedConstraint): its facts, its repair group, and each term's
 //! decision as a row reads it (`read_variable`, DecideGlobalSinkState::ReadVariable).
-EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constraint, idx_t repair_group_id,
-                                                  const std::function<idx_t(const DecideTerm &)> &read_variable);
+EvaluatedClauseColumns InitializeEvaluatedConstraint(const DecideConstraint &constraint, idx_t repair_group_id,
+                                                     const std::function<idx_t(const DecideTerm &)> &read_variable);
 
 //! How a repair names `constraint`'s bound (ConstraintProvenance::rhs_label of the row's record, under DIAGNOSE only:
 //! `diagnose`), whether one editable value stands for it on every row, and a constant's value there. A constant
@@ -146,7 +178,7 @@ EvaluatedConstraint InitializeEvaluatedConstraint(const DecideConstraint &constr
 bool DescribeBound(const DecideConstraint &constraint, idx_t num_rows, bool diagnose,
                    const DecideSourceText &source_text, const vector<ConstraintSourceInfo> &constraint_sources,
                    const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> &keys,
-                   EvaluatedConstraint &evaluated);
+                   EvaluatedClauseColumns &evaluated);
 
 //! Per-term filter state for a reducer's own `when` (constraint terms, product groups, and their objective-side
 //! equivalents all share this shape).
@@ -188,7 +220,7 @@ vector<idx_t> DecideKeptGroups(const DecideKeyGroups &groups, idx_t num_rows,
 vector<idx_t> GroupRowsByShape(const DecideConstraint &constraint, idx_t num_rows, const vector<bool> &scoped_kept,
                                bool has_local_filters, const vector<bool> &local_row_active,
                                const DecideKeyGroups *groups, const vector<idx_t> &class_of_row,
-                               vector<idx_t> *kept_row_group_ids, EvaluatedConstraint &evaluated,
+                               vector<idx_t> *kept_row_group_ids, EvaluatedClauseColumns &evaluated,
                                idx_t &grouped_instances);
 
 //! AVG denominator scaling, shared by the constraint and objective sides: a linear term's coefficient, or a product
@@ -199,11 +231,11 @@ void ScaleAvgRows(CoefficientColumn &col, bool has_filter, const vector<bool> &f
 
 //! Each AVG term of `constraint` divided by the rows its filter reads in its group (ScaleAvgRows).
 void ScaleAvgTerms(const DecideConstraint &constraint, const vector<TermFilterState> &filters, idx_t num_rows,
-                   EvaluatedConstraint &evaluated);
+                   EvaluatedClauseColumns &evaluated);
 
 //! An AVG under `<>`: dividing its terms by their group's count gives fractional coefficients, which the `<>`
 //! expansion's integer step refuses. So a left side of linear terms that are all AVG keeps them as sums, and the
-//! bound is multiplied by each group's count instead (NotEqualClause::avg_rhs_scale, which this returns): `filters`
+//! bound is multiplied by each group's count instead (NotEqualClause::excluded; this returns whether it is): `filters`
 //! then scale nothing. A mixed left side keeps the division, which may still be refused.
 bool HoistAvgIntoNotEqualBound(const DecideConstraint &constraint, vector<TermFilterState> &filters);
 

@@ -48,8 +48,9 @@ SignedRowRange MemberRange(const ReducerValueMembers &members, idx_t member, con
 	const idx_t begin = members.member_begin[member];
 	return SignedRowRange::Of(
 	    members.member_begin[member + 1] - begin, [&](idx_t t) { return members.variables[begin + t]; },
-	    [&](idx_t t) { return members.coefficients[begin + t]; }, [&](idx_t v) { return input.lower_bounds[v]; },
-	    [&](idx_t v) { return input.upper_bounds[v]; });
+	    [&](idx_t t) { return members.coefficients[begin + t]; },
+	    [&](idx_t t) { return input.lower_bounds[members.variables[begin + t]]; },
+	    [&](idx_t t) { return input.upper_bounds[members.variables[begin + t]]; });
 }
 
 //! The reach of member `member`, its constant included.

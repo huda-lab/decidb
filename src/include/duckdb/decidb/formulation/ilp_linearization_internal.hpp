@@ -27,14 +27,6 @@ idx_t AddGlobalContinuousAux(SolverInput &input, const VarIndexer &indexer, cons
 idx_t AddGlobalBinaryAux(SolverInput &input, const VarIndexer &indexer, double obj_coeff,
                          const string &label = string());
 
-//! The constant part of one row's LHS: the terms whose variable index is fixed. `written` names the clause when the
-//! sum grows past a DOUBLE (AddCoefficient).
-double DecideRowFixedLhsOffset(const vector<idx_t> &variable_indices, const vector<CoefficientColumn> &row_coefficients,
-                               idx_t row, const DecideClauseRef &written);
-
-//! One row's RHS with its fixed LHS offset already moved across.
-double DecideRowEffectiveBound(const EvaluatedConstraint &ec, idx_t row, const DecideClauseRef &written);
-
 //! One row's expression bracketed against every contributing variable's box, each end on its own: the one walk behind
 //! every signed range, the constraint side's (DecideRowSignedRange) and every MIN/MAX auxiliary's.
 //!
@@ -64,7 +56,7 @@ struct SignedRowRange {
 	}
 
 	//! The bracket of a row of `term_count` terms. `variable_at(t)` and `coefficient_at(t)` read term `t`, a term with
-	//! no column is a constant, and `lower_of(v)` / `upper_of(v)` read a variable's box.
+	//! no column is a constant, and `lower_of(t)` / `upper_of(t)` read the box of term `t`'s variable.
 	template <class VARIABLE_AT, class COEFFICIENT_AT, class LOWER_OF, class UPPER_OF>
 	static SignedRowRange Of(idx_t term_count, VARIABLE_AT variable_at, COEFFICIENT_AT coefficient_at,
 	                         LOWER_OF lower_of, UPPER_OF upper_of) {
@@ -80,8 +72,8 @@ struct SignedRowRange {
 				out.hi += c;
 				continue;
 			}
-			double lb = lower_of(v);
-			double ub = upper_of(v);
+			double lb = lower_of(t);
+			double ub = upper_of(t);
 			// A negative coefficient swaps which end of the variable's box feeds which end of the term, so an open
 			// ceiling on `v` can open the term's FLOOR: sign has to be respected before blaming a side.
 			bool lb_open = DecideIsOpenBelow(lb);
@@ -108,7 +100,7 @@ struct SignedRowRange {
 	}
 };
 
-//! Signed reachable interval of the variable part of `ec`'s LHS on `row`, as opposed to
+//! Signed reachable interval of the decision terms of row `e` that `ec` emits, as opposed to
 //! `DecideRowTermRange`, which returns an unsigned magnitude because a Big-M only has to
 //! dominate one. A collapse needs to know which side of `K` the range lies on, so the
 //! coefficient sign has to be respected rather than taken through `abs`.
@@ -123,7 +115,7 @@ struct SignedRowRange {
 //! `instances`, when given, reads each instance's box (InstanceBox) instead of the decision's: a lowered decision keeps
 //! its default floor of 0 on the instances it was not lowered on, and a formulation view also reads a helper's reach.
 //! A reader of the rigid box passes the rigid view.
-SignedRowRange DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row, const vector<double> &lower_bounds,
+SignedRowRange DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t e, const vector<double> &lower_bounds,
                                     const vector<double> &upper_bounds, idx_t skip_idx = DConstants::INVALID_INDEX,
                                     const InstanceBox *instances = nullptr);
 

@@ -28,18 +28,16 @@ using namespace decide_linearize; // NOLINT: internal DECIDE linearization helpe
 // the actual variable bounds and per-row coefficient data instead of a fixed
 // constant, mirroring the long-standing ABS-maximize path.
 
-double DecideRowTermRange(const vector<idx_t> &variable_indices, const vector<CoefficientColumn> &row_coefficients,
-                          idx_t row, const vector<double> &lower_bounds, const vector<double> &upper_bounds,
-                          bool &has_unbounded, const InstanceBox &instances) {
+double DecideRowTermRange(const ClauseRecords &records, idx_t e, const vector<double> &lower_bounds,
+                          const vector<double> &upper_bounds, bool &has_unbounded, const InstanceBox &instances) {
 	double sum = 0.0;
-	for (idx_t t = 0; t < variable_indices.size(); t++) {
-		idx_t v = variable_indices[t]; // a per-row clause holds no data-only term: its data is on the bound side
-		double coef = std::abs(row_coefficients[t].Get(row));
+	for (idx_t t = records.term_begin[e]; t < records.term_begin[e + 1]; t++) {
+		double coef = std::abs(records.coefficients[t]);
 		if (coef < 1e-15) {
 			continue;
 		}
-		double lb = instances.LowerOfRow(v, row, lower_bounds);
-		double ub = instances.UpperOfRow(v, row, upper_bounds);
+		double lb = instances.LowerOfRow(records.variables[t], records.rows[t], lower_bounds);
+		double ub = instances.UpperOfRow(records.variables[t], records.rows[t], upper_bounds);
 		if (DecideIsOpenAbove(ub) || DecideIsOpenBelow(lb)) {
 			has_unbounded = true;
 			continue;
@@ -49,27 +47,7 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices, const vector<Co
 	return sum;
 }
 
-double decide_linearize::DecideRowFixedLhsOffset(const vector<idx_t> &variable_indices,
-                                                 const vector<CoefficientColumn> &row_coefficients, idx_t row,
-                                                 const DecideClauseRef &written) {
-	double offset = 0.0;
-	for (idx_t t = 0; t < variable_indices.size(); t++) {
-		if (variable_indices[t] == DConstants::INVALID_INDEX) {
-			AddCoefficient(offset, row_coefficients[t].Get(row), written);
-		}
-	}
-	return offset;
-}
-
-//! The bound a row actually imposes: its right-hand side less the constant part of
-//! its left-hand side. This is the value a Big-M has to dominate, so it is also the
-//! value a caller must classify before asking for an M over it.
-double decide_linearize::DecideRowEffectiveBound(const EvaluatedConstraint &ec, idx_t row,
-                                                 const DecideClauseRef &written) {
-	return ec.rhs_values.Get(row) - DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, row, written);
-}
-
-//! Signed reachable interval of the variable part of `ec`'s LHS on `row`, as opposed to
+//! Signed reachable interval of the decision terms of row `e` that `ec` emits, as opposed to
 //! `DecideRowTermRange`, which returns an unsigned magnitude because a Big-M only has to
 //! dominate one. A collapse needs to know which side of `K` the range lies on, so the
 //! coefficient sign has to be respected rather than taken through `abs`.
@@ -82,20 +60,28 @@ double decide_linearize::DecideRowEffectiveBound(const EvaluatedConstraint &ec, 
 //!
 //! `lower_bounds` / `upper_bounds` must be the rigid box: see
 //! `SolverInput::rigid_lower_bounds`.
-SignedRowRange decide_linearize::DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row,
+SignedRowRange decide_linearize::DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t e,
                                                       const vector<double> &lower_bounds,
                                                       const vector<double> &upper_bounds, idx_t skip_idx,
                                                       const InstanceBox *instances) {
-	auto &variables = ec.variable_indices;
+	auto &records = ec.records;
+	const idx_t begin = records.term_begin[e];
+	auto variable = [&](idx_t t) {
+		return records.variables[begin + t];
+	};
+	auto row = [&](idx_t t) {
+		return records.rows[begin + t];
+	};
 	return SignedRowRange::Of(
-	    variables.size(), [&](idx_t t) { return variables[t]; },
-	    // A constant term is accounted for by DecideRowEffectiveBound, and `skip_idx` is left out: both read as zero.
+	    records.term_begin[e + 1] - begin, variable,
+	    // The row's constant is its bound's (ClauseRecords::EffectiveBound), and `skip_idx` is left out: read as zero.
+	    [&](idx_t t) { return variable(t) == skip_idx ? 0.0 : records.coefficients[begin + t]; },
 	    [&](idx_t t) {
-		    idx_t v = variables[t];
-		    return v == DConstants::INVALID_INDEX || v == skip_idx ? 0.0 : ec.row_coefficients[t].Get(row);
+		    return instances ? instances->LowerOfRow(variable(t), row(t), lower_bounds) : lower_bounds[variable(t)];
 	    },
-	    [&](idx_t v) { return instances ? instances->LowerOfRow(v, row, lower_bounds) : lower_bounds[v]; },
-	    [&](idx_t v) { return instances ? instances->UpperOfRow(v, row, upper_bounds) : upper_bounds[v]; });
+	    [&](idx_t t) {
+		    return instances ? instances->UpperOfRow(variable(t), row(t), upper_bounds) : upper_bounds[variable(t)];
+	    });
 }
 
 //! Refuse a Big-M linearization that has no finite M, naming the column that has no finite bound.
@@ -147,25 +133,21 @@ idx_t decide_linearize::FindUnboundedContributor(const EvaluatedConstraint &ec, 
 	return DConstants::INVALID_INDEX;
 }
 
-double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox &box, idx_t num_rows,
-                             const vector<string> &var_names, const InstanceBox &instances,
-                             const DecideClauseRef &written, const char *construct) {
+double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox &box, const vector<string> &var_names,
+                             const InstanceBox &instances, const DecideClauseRef &written, const char *construct) {
 	const vector<double> &lower_bounds = box.lower;
 	const vector<double> &upper_bounds = box.upper;
 	bool has_unbounded = false;
 	double M = 0.0;
-	for (idx_t r = 0; r < num_rows; r++) {
-		if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
-			continue;
-		}
-		double rhs = DecideRowEffectiveBound(ec, r, written);
+	for (idx_t e = 0; e < ec.records.Count(); e++) {
+		double rhs = ec.records.EffectiveBound(e);
 		// Finite: the only rows asking for an M here are the links of a count of nonzeros, whose bound is the
 		// constant of the norm's argument, and RewriteAbs refuses that where it reads the argument (a NaN, an
 		// infinity, or finite values whose sum passes a DOUBLE).
 		D_ASSERT(std::isfinite(rhs));
 		double rhs_mag = std::abs(rhs);
-		double range = rhs_mag + DecideRowTermRange(ec.variable_indices, ec.row_coefficients, r, lower_bounds,
-		                                            upper_bounds, has_unbounded, instances);
+		double range =
+		    rhs_mag + DecideRowTermRange(ec.records, e, lower_bounds, upper_bounds, has_unbounded, instances);
 		M = std::max(M, range);
 	}
 	// Refuse before finishing the constant: an open contributor means there is no M
@@ -220,18 +202,15 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
 			continue;
 		}
 		const auto written = DecideWrittenClause(input, ec.provenance.origin.source_clause_id);
-		// Row e the clause emits, read as the model builder emits it (ClauseEmittedRows), over the data rows
-		// [begin, end) of `rows` (row k itself for none). A solver column's coefficient is the sum of its terms over
-		// the row's data rows, so a decision that stands in several rows of a group, or one counted once beside the
-		// reducers, is bounded by what the row says about its instance. The row's bound is the clause's less its fixed
-		// terms, as the builder states it.
+		// Each row the clause emits, read as the model builder emits it (ClauseEmittedRows). A solver column's
+		// coefficient is the sum of its terms over the row's data rows, so a decision that stands in several rows of a
+		// group, or one counted once beside the reducers, is bounded by what the row says about its instance. The
+		// row's bound is the clause's less its fixed terms, as the builder states it. A per-row clause emits its kept
+		// rows only: an excluded row's class's first row bounds the same instance.
 		auto &emitted = ClauseEmittedRows(ec, input, indexer, written);
-		auto bound_row = [&](idx_t e, const vector<idx_t> *rows, idx_t begin, idx_t end) {
-			if (begin == end) {
-				return; // an empty group, or no data rows
-			}
-			idx_t first_row = rows ? (*rows)[begin] : begin;
-			double k = ec.rhs_values.Get(first_row) - SumFixedAggregateLhsOffset(ec, rows, begin, end, written);
+		auto &records = ec.records;
+		for (idx_t e = 0; nonneg && e < records.Count(); e++) {
+			double k = records.EffectiveBound(e);
 			for (idx_t i = emitted.offsets[e]; i < emitted.offsets[e + 1]; i++) {
 				double a = emitted.values[i];
 				if (a < -1e-15) {
@@ -243,29 +222,13 @@ void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer,
 				}
 				// A bound on one decision caps it at the greatest value it admits (stage 08), which the quotient
 				// may miss: `0.1 * x <= 0.3` admits 3, while 0.3 / 0.1 is just below 3.
-				double bound = ec.admitted_upper.logical_size ? ec.admitted_upper.Get(first_row) : k / a;
+				double bound = records.admitted_upper.empty() ? k / a : records.admitted_upper[e];
 				auto column = emitted.columns[i];
 				if (std::isnan(column_bound[column])) {
 					touched.push_back(column);
 					column_bound[column] = bound;
 				} else {
 					column_bound[column] = std::min(column_bound[column], bound);
-				}
-			}
-		};
-		// The rows the clause emits: one per group of a grouped aggregate (ClauseRows), one of all rows for an
-		// ungrouped one, one per kept row of a per-row clause.
-		if (ec.lhs_is_aggregate && !ec.row_group_ids.empty()) {
-			auto &rows = ClauseRows(ec);
-			for (idx_t g = 0; nonneg && g < ec.num_groups; g++) {
-				bound_row(g, &rows, ec.group_offsets[g], ec.group_offsets[g + 1]);
-			}
-		} else if (ec.lhs_is_aggregate) {
-			bound_row(0, nullptr, 0, num_rows);
-		} else {
-			for (idx_t r = 0; nonneg && r < num_rows; r++) {
-				if (ec.row_group_ids.empty() || ec.row_group_ids[r] != DConstants::INVALID_INDEX) {
-					bound_row(r, nullptr, r, r + 1); // an excluded row's class's first row bounds the same instance
 				}
 			}
 		}

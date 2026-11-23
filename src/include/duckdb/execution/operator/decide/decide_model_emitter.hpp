@@ -18,10 +18,10 @@ class DecideGlobalSinkState;
 //! One clause as the emitter reads it: the row, and what only some kinds of clause carry. `Constraints` routes it to
 //! the list of its kind (Route), so a row never says what kind it is.
 struct EmittedClause {
-	EvaluatedConstraint row;
-	//! A grouped `<>` row's NULL bounds (NotEqualClause::no_exclusion).
+	EvaluatedClauseColumns row;
+	//! A grouped `<>` row's NULL bounds, which exclude no value (NotEqualClause::excluded).
 	vector<bool> no_exclusion;
-	//! A `<>` whose AVG scales its bound (NotEqualClause::avg_rhs_scale).
+	//! A `<>` whose AVG scales its bound by its group's size (NotEqualClause::excluded).
 	bool avg_rhs_scale = false;
 	//! The terms of degree 2 (QuadraticClause::products).
 	vector<EvaluatedProductGroup> products;
@@ -147,6 +147,8 @@ private:
 	//! Puts an evaluated clause in the list of its kind: a folded bound's among the repair model's rows, a `<>` in
 	//! `evaluated_not_equals`, one with terms of degree 2 in `evaluated_quadratics`, any other in
 	//! `evaluated_constraints`.
+	//! The clause stage 06 receives: `columns`' facts, and the record of each row it emits (DecideWriteClauseRecords).
+	EvaluatedConstraint Records(EvaluatedClauseColumns &columns, const ClauseRowSets &sets);
 	void Route(EmittedClause &&clause, bool folded);
 	//! One of an ABS F node's two envelope rows, evaluated by the existing row evaluator, which supplies the scoped
 	//! instances, into the node's record (DecideGlobalSinkState::evaluated_abs_links).
@@ -154,7 +156,7 @@ private:
 	//! The model rows of a clause in the per-row shape under `per K:` (DecideClauseScope::ONE_ROW_PER_CLASS), its
 	//! kept rows those its entries `tested` marks stand for: one per variant of each class of K, at its first row with
 	//! a value (D88), numbered and named by value as Variants does, and the classes each stands for under DIAGNOSE.
-	void Classes(idx_t root, const vector<bool> &tested, EvaluatedConstraint &evaluated);
+	void Classes(idx_t root, const vector<bool> &tested, EvaluatedClauseColumns &evaluated);
 	//! The variants of `signature` (null: none, so its key's classes) over the rows `node` holds, its instances, in
 	//! the numbering of DecideVariants; with `by_row` false only how many there are.
 	DecideVariants Variants(idx_t node, const DecideSignature *signature, bool by_row = true) const;
@@ -198,14 +200,14 @@ private:
 	vector<bool> GroupBound(idx_t root, const DecideEntryRows &rows, vector<bool> &null_rows, EmittedClause &clause);
 	//! A bound on one decision: the values it admits on each row its term is read on, which the model builder folds
 	//! into the decision's column.
-	void Admit(const DecideBody &body, EvaluatedConstraint &evaluated);
+	void Admit(const DecideBody &body, EvaluatedClauseColumns &evaluated);
 	//! The domain check on each row a per-row bound on one decision writes (the instances `evaluated` keeps, an easy
 	//! MIN's or MAX's members among them): a bound the decision's type cannot hold (`per g: x <= -1` on a BOOL or a
 	//! non-negative INT) is an error pointing at the clause, as for a bound folded into the decision's box
 	//! (DecideRefuseDomain). Only a bound written as a constant is checked, and its box takes the lowest floor any
 	//! clause lowers the decision to (DecideTree::domains), so a clause the solve could satisfy is never
 	//! refused.
-	void CheckDomain(idx_t root, const EvaluatedConstraint &evaluated);
+	void CheckDomain(idx_t root, const EvaluatedClauseColumns &evaluated);
 	//! A clause in the grouped shape, the aggregate shape or a MIN or MAX: one model row per group of its `by` key, its
 	//! kept rows grouped as GroupRowsByShape groups them, or one per member of an easy MIN or MAX; its instances
 	//! `counted` unless it is a folded bound's, which only a repair model emits.
@@ -234,7 +236,7 @@ private:
 	//! keeps every kept row), and the rows where a term's coefficient is NULL (`null_rows`). Returns whether some
 	//! filter keeps fewer than the kept rows.
 	bool ReadGroupedTerms(idx_t root, const DecideEntryRows &rows, const vector<bool> &kept,
-	                      EvaluatedConstraint &evaluated, vector<TermFilterState> &filters, vector<bool> &active,
+	                      EvaluatedClauseColumns &evaluated, vector<TermFilterState> &filters, vector<bool> &active,
 	                      vector<bool> &null_rows);
 	//! The rows a term in a reducer is read on, each with the entry of its site `site` standing for it: of the entries
 	//! `reads` marks, every row each stands for, but a relation-qualified reducer's term its entry's first row alone,
@@ -271,7 +273,7 @@ private:
 	//! The grouped root's G of its `by` key.
 	idx_t ByReducer(idx_t root) const;
 	//! Each of `kept_groups`, groups of the G `by`, named by its key's values.
-	void Name(idx_t by, const vector<idx_t> &kept_groups, EvaluatedConstraint &evaluated);
+	void Name(idx_t by, const vector<idx_t> &kept_groups, EvaluatedClauseColumns &evaluated);
 };
 
 //! The declared keyed scopes' mappings from the descent's classes, numbered by value, with the rows in no class in one

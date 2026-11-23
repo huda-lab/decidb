@@ -62,7 +62,7 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   whole-numbered side and is dropped: per row for each row whose `K` is fractional, per group for `AVG(x) <> K` when
   `K·n_g` is fractional. When `K` varies inside a group, `ExpandAggregateNotEqual` (`linearization_not_equal.cpp`)
   gives each distinct value its own binary and Big-M pair against the same left side. For `AVG(x) <> K` the left side
-  stays an integer `SUM` and the right is scaled (`NotEqualClause::avg_rhs_scale`). The integer tolerance is `1e-9`.
+  stays an integer `SUM` and the right is scaled (`NotEqualClause::excluded`). The integer tolerance is `1e-9`.
 - **`MIN`/`MAX` beside other terms.** An additive side may mix `MIN`/`MAX` terms with `SUM`/`AVG`
   (`sum(x * v) + max(x * v) <= 20`). The `SUM` and `AVG` stay in the clause's row. Each `MIN`/`MAX` is a helper decision
   whose definition holds on the side the clause pushes it (`ExtremumPushOf`): signs thread through subtraction, so a

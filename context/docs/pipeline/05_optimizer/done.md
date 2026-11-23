@@ -1277,7 +1277,7 @@ because they dominate everything above:
 - **`when` filtering** — stage 08. Nothing is computed on a row a `when` drops: a
   reducer reads only the rows its clause's `when` and its own keep, a per-row clause
   emits no row there, and the objective's `when` folds into every term's filter. A
-  dropped row gets `INVALID_INDEX` in `row_group_ids`, so it falls out of every group.
+  dropped row is in no group, so no row the clause emits reads it.
 
 Backend selection (Gurobi preferred, HiGHS fallback) and the shared time limit are
 stage 07.

@@ -195,10 +195,11 @@ Each `EvaluatedConstraint` becomes one or more `ModelConstraint`s.
 Execution puts each clause row in the list of its kind (`DecideModelEmitter::Route`, `../08_execution/done.md`), and
 each reader of `SolverInput` reads the lists it needs, without a test for the kind of a row:
 
-- **`constraints`** holds every linear row: a clause's, a per-row bound (Path 3), an ABS envelope (§9 ABS), and under
+- **`constraints`** holds every linear row: a clause's, a per-row bound, an ABS envelope (§9 ABS), and under
   `DIAGNOSE` an elastic folded row (a bound the optimizer folded into the column box, kept for the repair model).
-- **`not_equals`** (`NotEqualClause`) holds a `<>`: its row, the rows of a grouped `<>` whose bound is NULL
-  (`no_exclusion`: members of the group's sum that exclude no value) and whether it is an `AVG` (`avg_rhs_scale`). It
+- **`not_equals`** (`NotEqualClause`) holds a `<>`: its row and, for an aggregate one, the values each of its rows
+  excludes (`excluded`: every value the group's rows give, each once, none for a row whose bound is NULL, an `AVG`'s
+  times the group's size). It
   waits there until `LinearizeNotEqual` expands it into conditional rows and binaries, and is empty after. A `<>` is a
   pseudo-operation, and the expansion legalizes it before the model is built, as LLVM's LegalizeDAG does before
   instruction selection. The kind is the list, and the comparison's own `COMPARE_NOTEQUAL`, so the clause carries no
@@ -248,23 +249,23 @@ rows' data. The rule has one owner, so a writer cannot leave the builder a term 
 count it reads from elsewhere. `TermsHaveTheirOwnColumns()`
 sends a query-wide term to the accumulator, since its one column would collide with itself. See `../../language/functions.md` ("Query-wide decisions").
 
-### Path 1 — aggregate, ungrouped
+### The rows a clause emits
 
-One `ModelConstraint` summing over all rows. RHS is `rhs_values[0]`, then fixed
-LHS aggregate terms (`variable_index == INVALID_INDEX`) are summed over all rows
-and subtracted.
+A clause reaches stage 06 as one record per row it emits (`EvaluatedConstraint::records`, `ClauseRecords`): an
+aggregate clause's groups that hold a row (one row in all for a clause of no groups), a per-row clause's kept rows (a
+kept row, a member of an easy MIN/MAX, or under `per K:` a class's first kept row). A record holds the row's terms as
+`(decision, data row, coefficient)`, the form a helper's members are listed in; the constant part of its left side;
+its bound; the values it admits when it bounds one decision; its group, which names it and its class set; and its
+first data row. Every reader of a clause reads the records: implied bounds, the Big-M and range walks
+(`DecideRowSignedRange`, `DecideRowTermRange`), `<>`, ABS, the lifted floors, the diagnosis and the builder. None
+reads an array as long as the input or regroups one. The emitter writes the records in one place
+(`DecideWriteClauseRecords`, stage 08).
 
-### Path 2 — aggregate, grouped (a `when`, a reducer's own `when`, or a `by` key)
+The builder states one `ModelConstraint` per record: the terms resolved to solver columns (`ClauseEmittedRows`), and
+the bound less the record's constant and the constants of the inlined helpers the row reads.
 
-The group's rows come from `ClauseRows` (built once and kept on the clause, `INVALID_INDEX`
-rows skipped), and one `ModelConstraint` is emitted per non-empty group. Only that group's rows
-contribute; fixed LHS terms are summed over that group's rows and subtracted.
-
-### Path 3 — per-row
-
-One `ModelConstraint` per row of the clause's row map (`row_group_ids`): a kept row, a
-member of an easy MIN/MAX, or under `per K:` a class's first kept row; every other row is
-skipped. RHS is `rhs_values[row]`; fixed LHS terms are subtracted one row at a time.
+A quadratic clause's linear part is read the same way; its product groups are evaluated per data row, so the clause
+lists the data rows of each row it emits (`QuadraticClause::rows`).
 
 **A row that bounds one decision goes into its column box instead** (`TryFoldPerRowBound`).
 When the clause is a bound on one decision (`x <= cap`, `2 * x >= lo`, `cap * x <= 10`,
@@ -517,10 +518,9 @@ into bounded ones, which is what makes a finite and tight Big-M possible. Only
 provably-implied bounds are applied, so the feasible region and the optimum are
 unchanged. A bound below the column's floor is applied too: the box is empty, which
 proves the model infeasible, and the solver says so (the model builder closes one under
-the floor by rounding alone). The pass reads a grouped aggregate's instances from the row lists the builder
-emits from (`ClauseRows`: one row per group, built once and kept on the clause, also read
-by the `<>` expansion), so a bound and the rows it is derived from cannot disagree;
-ungrouped and per-row clauses are read in place.
+the floor by rounding alone). The pass reads each clause's rows as the builder
+emits them (`ClauseEmittedRows`, also read by the `<>` expansion), so a bound and the rows it is derived from
+cannot disagree.
 
 `a_r` is the variable's **combined** coefficient at that row. A variable can hold
 several additive terms of one constraint (`2*ship + 3*ship <= 10`, or two reducers
@@ -535,8 +535,8 @@ The pass is a single sweep, not a fixpoint: a bound derived for one variable is
 not fed back to tighten others in the same pass. That is sound and only leaves
 tightness on the table for chained implications.
 
-A row outside `row_group_ids` normally means "not constrained", which disqualifies the
-clause.
+A row the clause does not emit is not constrained, so a decision is bounded only when a row the clause emits
+bounds each of its instances.
 
 ### The formulation box
 
@@ -864,8 +864,8 @@ Two guards run before anything is emitted:
   wrongly exclude `floor(K)` and `ceil(K)`. An infinite `K` is the same case for the
   same reason.
 
-A per-row spelling with a row-varying bound masks only its non-integer rows, via
-`row_group_ids`, instead of dropping the whole constraint.
+A per-row spelling with a row-varying bound passes over only its non-integer rows, instead of dropping the whole
+constraint.
 
 **The binary is allocated where the disjunction is written**, one global per emitted
 instance, and labelled with its clause as written (`QuoteWrittenClause`, by the clause's
@@ -1063,7 +1063,7 @@ nothing at all is derivable — which is exactly the query the native form exist
 answer.
 
 **The argument is read whole.** `k` is C1's bound with its constant terms moved across
-(`DecideRowEffectiveBound`), in phase 1's interval and in the row `t = inner` alike (`ReadAbsArgument`, which both
+(`ClauseRecords::EffectiveBound`), in phase 1's interval and in the row `t = inner` alike (`ReadAbsArgument`, which both
 forms read): a frame's `else` read as data (`abs(x - at(previous else 50: x) over (...))`) is a term of
 no decision, and read off the bound alone it was left out -- `|x1 - 50|` read as `|x1|`.
 The argument's columns are summed per column before the row is written: a frame read
@@ -1220,5 +1220,4 @@ Each is a guard a stage boundary or a typed read needs:
   column-box finiteness check in `SolverModel::Build`, the one place an infinite box from any rewrite is refused (a
   MIN/MAX auxiliary's reach is coefficient times box, so `b * y` with `b = 1e308` passes a DOUBLE).
 - **Typed reads.** A coefficient label read back as an optional weight label and as a number (`strtod` accepts `""`,
-  `inf`, `nan`); an empty `row_group_ids` meaning every row is kept (`ResolveLiftedFloors`); an empty group's first row
-  in `DecidePropagateImpliedBounds`.
+  `inf`, `nan`).
