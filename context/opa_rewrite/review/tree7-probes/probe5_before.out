@@ -1,0 +1,94 @@
+
+┌─────────────────────────────┐
+│┌───────────────────────────┐│
+││       Physical Plan       ││
+│└───────────────────────────┘│
+└─────────────────────────────┘
+┌───────────────────────────┐
+│         PROJECTION        │
+│    ────────────────────   │
+│             id            │
+│             b             │
+│             x             │
+│                           │
+│          ~5 Rows          │
+└─────────────┬─────────────┘
+┌─────────────┴─────────────┐
+│           DECIDE          │
+│    ────────────────────   │
+│         Variables:        │
+│             b             │
+│             x             │
+│                           │
+│         Objective:        │
+│ MINIMIZE sum(abs(x - 2 * w│
+│        )) + max(x)        │
+│      ↳ max(x) becomes a   │
+│       helper decision     │
+│   ↳ abs(x - 2 * w) becomes│
+│      a helper decision    │
+│   ↳ abs(x - 2 * w) - x >= │
+│          -(2 * w)         │
+│   ↳ abs(x - 2 * w) + x >= │
+│            2 * w          │
+│                           │
+│        Constraints:       │
+│           x >= 0          │
+│           x <= 5          │
+│abs(sum(x) by (g) - 4) <= 2│
+│   ↳ sum(x) by (g) becomes │
+│    a helper decision per  │
+│            group          │
+│   ↳ abs(sum(x) by (g) - 4)│
+│  becomes a helper decision│
+│   ↳ abs(sum(x) by (g) - 4)│
+│    - sum(x) by (g) >= -4  │
+│   ↳ abs(sum(x) by (g) - 4)│
+│    + sum(x) by (g) >= 4   │
+│    sum(abs(x - w)) <= 9   │
+│    ↳ abs(x - w) becomes a │
+│       helper decision     │
+│    ↳ abs(x - w) - x >= -w │
+│    ↳ abs(x - w) + x >= w  │
+│ abs(max(x * b) - min(x)) <│
+│            = 3            │
+│     ↳ (x * b) becomes a   │
+│       helper decision     │
+│    ↳ max(x * b) becomes a │
+│       helper decision     │
+│      ↳ min(x) becomes a   │
+│       helper decision     │
+│   ↳ abs(max(x * b) - min(x│
+│    )) becomes a helper    │
+│          decision         │
+│   ↳ abs(max(x * b) - min(x│
+│ )) - max(x * b) + min(x) >│
+│            = 0            │
+│   ↳ abs(max(x * b) - min(x│
+│ )) + max(x * b) - min(x) >│
+│            = 0            │
+│        sum(x) >= 2        │
+│   sum(b * x) by (g) >= 1  │
+│     ↳ (b * x) becomes a   │
+│       helper decision     │
+│                           │
+│          ~5 Rows          │
+└─────────────┬─────────────┘
+┌─────────────┴─────────────┐
+│         SEQ_SCAN          │
+│    ────────────────────   │
+│          Table: t         │
+│   Type: Sequential Scan   │
+│                           │
+│          ~5 Rows          │
+└───────────────────────────┘
+┌───────┬───────┬───────┐
+│  id   │   b   │   x   │
+│ int32 │ int32 │ int64 │
+├───────┼───────┼───────┤
+│     1 │     0 │     3 │
+│     2 │     1 │     3 │
+│     3 │     0 │     3 │
+│     4 │     1 │     3 │
+│     5 │     1 │     2 │
+└───────┴───────┴───────┘

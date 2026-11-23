@@ -1,0 +1,89 @@
+
+┌─────────────────────────────┐
+│┌───────────────────────────┐│
+││       Physical Plan       ││
+│└───────────────────────────┘│
+└─────────────────────────────┘
+┌───────────────────────────┐
+│         PROJECTION        │
+│    ────────────────────   │
+│             id            │
+│             x             │
+│             y             │
+│                           │
+│          ~4 Rows          │
+└─────────────┬─────────────┘
+┌─────────────┴─────────────┐
+│           DECIDE          │
+│    ────────────────────   │
+│         Variables:        │
+│             x             │
+│             y             │
+│                           │
+│         Objective:        │
+│ MINIMIZE sum(abs(y - w)) +│
+│           sum(x)          │
+│    ↳ abs(y - w) becomes a │
+│       helper decision     │
+│    ↳ abs(x - w) becomes a │
+│       helper decision     │
+│    ↳ abs(y - w) - y >= -w │
+│    ↳ abs(y - w) + y >= w  │
+│    ↳ abs(x - w) - x >= -w │
+│    ↳ abs(x - w) + x >= w  │
+│                           │
+│        Constraints:       │
+│          x <= 10          │
+│          x >= -10         │
+│           y <= 5          │
+│          y >= -5          │
+│    norm(x - w, 0) <= 3    │
+│   ↳ norm(x - w, 0) becomes│
+│  a helper decision per row│
+│    ↳ abs(x - w) becomes a │
+│       helper decision     │
+│    ↳ sum(x - w <> 0) <= 3 │
+│   ↳ M * (x - w <> 0) - x >│
+│            = -w           │
+│   ↳ M * (x - w <> 0) + x >│
+│            = w            │
+│        ↳ abs(x - w) -     │
+│  decide_l0_tolerance * (x │
+│       - w <> 0) >= 0      │
+│    ↳ abs(x - w) - x >= -w │
+│    ↳ abs(x - w) + x >= w  │
+│ sum(abs(x - w)) by (g) + y│
+│            <= 20          │
+│   ↳ sum(abs(x - w)) by (g)│
+│  becomes a helper decision│
+│          per group        │
+│ max(abs(y) * abs(y)) <= 30│
+│   ≡ max(power(abs(y), 2)) │
+│           <= 30           │
+│   ↳ max(power(abs(y), 2)) │
+│   becomes a bound on each │
+│           member          │
+│      ↳ abs(y) becomes a   │
+│       helper decision     │
+│      ↳ abs(y) - y >= 0    │
+│      ↳ abs(y) + y >= 0    │
+│                           │
+│          ~4 Rows          │
+└─────────────┬─────────────┘
+┌─────────────┴─────────────┐
+│         SEQ_SCAN          │
+│    ────────────────────   │
+│          Table: t         │
+│   Type: Sequential Scan   │
+│                           │
+│          ~4 Rows          │
+└───────────────────────────┘
+┌───────┬───────┬────────┐
+│  id   │   x   │   y    │
+│ int32 │ int64 │ double │
+├───────┼───────┼────────┤
+│     1 │   -10 │    3.0 │
+│     2 │     3 │    5.0 │
+│     3 │     2 │    2.0 │
+│     4 │   -10 │    3.0 │
+└───────┴───────┴────────┘

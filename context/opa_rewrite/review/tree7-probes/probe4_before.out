@@ -1,0 +1,99 @@
+
+┌─────────────────────────────┐
+│┌───────────────────────────┐│
+││       Physical Plan       ││
+│└───────────────────────────┘│
+└─────────────────────────────┘
+┌───────────────────────────┐
+│         PROJECTION        │
+│    ────────────────────   │
+│             id            │
+│             x             │
+│             y             │
+│                           │
+│          ~6 Rows          │
+└─────────────┬─────────────┘
+┌─────────────┴─────────────┐
+│           DECIDE          │
+│    ────────────────────   │
+│         Variables:        │
+│             x             │
+│             y             │
+│                           │
+│         Objective:        │
+│  MAXIMIZE sum(w * x + y)  │
+│                           │
+│        Constraints:       │
+│           x >= 0          │
+│           x <= 6          │
+│           y >= 0          │
+│           y <= 6          │
+│ abs(x - at(previous else 0│
+│ : x) over (t.period within│
+│        (t.g))) <= 2       │
+│    ↳ abs(x - at(previous  │
+│  else 0: x) over (t.period│
+│   within t.g)) becomes a  │
+│       helper decision     │
+│    ↳ abs(x - at(previous  │
+│  else 0: x) over (t.period│
+│    within t.g)) - x + at  │
+│ (previous else 0: x) over │
+│ (t.period within t.g) >= 0│
+│    ↳ abs(x - at(previous  │
+│  else 0: x) over (t.period│
+│    within t.g)) + x - at  │
+│ (previous else 0: x) over │
+│ (t.period within t.g) >= 0│
+│  max(from 1 previous to 1 │
+│   next: x) over (t.period │
+│     within (t.g)) <= 5    │
+│    ↳ max(from previous to │
+│   next: x) over (t.period │
+│    within t.g) becomes a  │
+│     helper decision per   │
+│          position         │
+│  sum(abs(y - at(previous  │
+│  else 1: y) over (t.period│
+│  within (t.g)))) by (g) <=│
+│              4            │
+│    ↳ abs(y - at(previous  │
+│  else 1: y) over (t.period│
+│   within t.g)) becomes a  │
+│       helper decision     │
+│    ↳ abs(y - at(previous  │
+│  else 1: y) over (t.period│
+│    within t.g)) - y + at  │
+│ (previous else 1: y) over │
+│ (t.period within t.g) >= 0│
+│    ↳ abs(y - at(previous  │
+│  else 1: y) over (t.period│
+│    within t.g)) + y - at  │
+│ (previous else 1: y) over │
+│ (t.period within t.g) >= 0│
+│    x + y <= coalesce(at   │
+│  (previous: t.w) over (t  │
+│ .period within (t.g)), 3) │
+│            + 4            │
+│                           │
+│          ~6 Rows          │
+└─────────────┬─────────────┘
+┌─────────────┴─────────────┐
+│         SEQ_SCAN          │
+│    ────────────────────   │
+│          Table: t         │
+│   Type: Sequential Scan   │
+│                           │
+│          ~6 Rows          │
+└───────────────────────────┘
+┌───────┬───────┬───────┐
+│  id   │   x   │   y   │
+│ int32 │ int64 │ int64 │
+├───────┼───────┼───────┤
+│     1 │     2 │     3 │
+│     2 │     4 │     2 │
+│     3 │     5 │     2 │
+│     4 │     2 │     4 │
+│     5 │     4 │     4 │
+│     6 │     2 │     4 │
+└───────┴───────┴───────┘

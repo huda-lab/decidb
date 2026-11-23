@@ -1,0 +1,126 @@
+=== DECIDB MODEL DUMP ===
+sense: minimize
+num_vars: 39
+num_rows: 74
+num_qrows: 4
+num_genconstrs: 1
+num_indconstrs: 0
+col 0: lb=0 ub=1 int=1 bin=1 obj=0
+col 1: lb=0 ub=5 int=1 bin=0 obj=-2
+col 2: lb=0 ub=5 int=1 bin=0 obj=-1
+col 3: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 4: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 5: lb=0 ub=4.5 int=1 bin=0 obj=0
+col 6: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 7: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 8: lb=-1e+30 ub=1e+30 int=1 bin=0 obj=0
+col 9: lb=0 ub=1 int=1 bin=1 obj=0
+col 10: lb=0 ub=5 int=1 bin=0 obj=-3
+col 11: lb=0 ub=5 int=1 bin=0 obj=-1
+col 12: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 13: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 14: lb=0 ub=4.5 int=1 bin=0 obj=0
+col 15: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 16: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 17: lb=-1e+30 ub=1e+30 int=1 bin=0 obj=0
+col 18: lb=0 ub=1 int=1 bin=1 obj=0
+col 19: lb=0 ub=5 int=1 bin=0 obj=-1.5
+col 20: lb=0 ub=5 int=1 bin=0 obj=-1
+col 21: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 22: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 23: lb=0 ub=4.5 int=1 bin=0 obj=0
+col 24: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 25: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 26: lb=-1e+30 ub=1e+30 int=1 bin=0 obj=0
+col 27: lb=0 ub=1 int=1 bin=1 obj=0
+col 28: lb=0 ub=5 int=1 bin=0 obj=-4
+col 29: lb=0 ub=5 int=1 bin=0 obj=-1
+col 30: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 31: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 32: lb=0 ub=4.5 int=1 bin=0 obj=0
+col 33: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 34: lb=0 ub=1e+30 int=1 bin=0 obj=0
+col 35: lb=-1e+30 ub=1e+30 int=1 bin=0 obj=0
+col 36: lb=0 ub=5 int=1 bin=0 obj=1
+col 37: lb=12 ub=1e+30 int=1 bin=0 obj=0
+col 38: lb=0 ub=5 int=1 bin=0 obj=0
+row 0: sense=> rhs=0 nnz=2 | 4:-1 38:1
+row 1: sense=> rhs=0 nnz=2 | 13:-1 38:1
+row 2: sense=> rhs=0 nnz=2 | 22:-1 38:1
+row 3: sense=> rhs=0 nnz=2 | 31:-1 38:1
+row 4: sense=> rhs=0 nnz=2 | 3:-1 36:1
+row 5: sense=> rhs=0 nnz=2 | 12:-1 36:1
+row 6: sense=> rhs=0 nnz=2 | 21:-1 36:1
+row 7: sense=> rhs=0 nnz=2 | 30:-1 36:1
+row 8: sense=< rhs=0 nnz=2 | 0:-5 3:1
+row 9: sense=> rhs=-5 nnz=3 | 0:-5 2:-1 3:1
+row 10: sense=< rhs=0 nnz=2 | 2:-1 3:1
+row 11: sense=< rhs=0 nnz=2 | 9:-5 12:1
+row 12: sense=> rhs=-5 nnz=3 | 9:-5 11:-1 12:1
+row 13: sense=< rhs=0 nnz=2 | 11:-1 12:1
+row 14: sense=< rhs=0 nnz=2 | 18:-5 21:1
+row 15: sense=> rhs=-5 nnz=3 | 18:-5 20:-1 21:1
+row 16: sense=< rhs=0 nnz=2 | 20:-1 21:1
+row 17: sense=< rhs=0 nnz=2 | 27:-5 30:1
+row 18: sense=> rhs=-5 nnz=3 | 27:-5 29:-1 30:1
+row 19: sense=< rhs=0 nnz=2 | 29:-1 30:1
+row 20: sense=< rhs=0 nnz=2 | 0:-5 4:1
+row 21: sense=> rhs=-5 nnz=3 | 0:-5 1:-1 4:1
+row 22: sense=< rhs=0 nnz=2 | 1:-1 4:1
+row 23: sense=< rhs=0 nnz=2 | 9:-5 13:1
+row 24: sense=> rhs=-5 nnz=3 | 9:-5 10:-1 13:1
+row 25: sense=< rhs=0 nnz=2 | 10:-1 13:1
+row 26: sense=< rhs=0 nnz=2 | 18:-5 22:1
+row 27: sense=> rhs=-5 nnz=3 | 18:-5 19:-1 22:1
+row 28: sense=< rhs=0 nnz=2 | 19:-1 22:1
+row 29: sense=< rhs=0 nnz=2 | 27:-5 31:1
+row 30: sense=> rhs=-5 nnz=3 | 27:-5 28:-1 31:1
+row 31: sense=< rhs=0 nnz=2 | 28:-1 31:1
+row 32: sense=< rhs=0 nnz=2 | 0:-5 5:1
+row 33: sense=> rhs=-5 nnz=3 | 0:-5 2:-1 5:1
+row 34: sense=< rhs=0 nnz=2 | 2:-1 5:1
+row 35: sense=< rhs=0 nnz=2 | 9:-5 14:1
+row 36: sense=> rhs=-5 nnz=3 | 9:-5 11:-1 14:1
+row 37: sense=< rhs=0 nnz=2 | 11:-1 14:1
+row 38: sense=< rhs=0 nnz=2 | 18:-5 23:1
+row 39: sense=> rhs=-5 nnz=3 | 18:-5 20:-1 23:1
+row 40: sense=< rhs=0 nnz=2 | 20:-1 23:1
+row 41: sense=< rhs=0 nnz=2 | 27:-5 32:1
+row 42: sense=> rhs=-5 nnz=3 | 27:-5 29:-1 32:1
+row 43: sense=< rhs=0 nnz=2 | 29:-1 32:1
+row 44: sense=< rhs=0 nnz=2 | 0:-5 6:1
+row 45: sense=> rhs=-5 nnz=3 | 0:-5 1:-1 6:1
+row 46: sense=< rhs=0 nnz=2 | 1:-1 6:1
+row 47: sense=< rhs=0 nnz=2 | 9:-5 15:1
+row 48: sense=> rhs=-5 nnz=3 | 9:-5 10:-1 15:1
+row 49: sense=< rhs=0 nnz=2 | 10:-1 15:1
+row 50: sense=< rhs=0 nnz=2 | 18:-5 24:1
+row 51: sense=> rhs=-5 nnz=3 | 18:-5 19:-1 24:1
+row 52: sense=< rhs=0 nnz=2 | 19:-1 24:1
+row 53: sense=< rhs=0 nnz=2 | 27:-5 33:1
+row 54: sense=> rhs=-5 nnz=3 | 27:-5 28:-1 33:1
+row 55: sense=< rhs=0 nnz=2 | 28:-1 33:1
+row 56: sense=< rhs=0 nnz=2 | 0:-5 7:1
+row 57: sense=> rhs=-5 nnz=3 | 0:-5 2:-1 7:1
+row 58: sense=< rhs=0 nnz=2 | 2:-1 7:1
+row 59: sense=< rhs=0 nnz=2 | 9:-5 16:1
+row 60: sense=> rhs=-5 nnz=3 | 9:-5 11:-1 16:1
+row 61: sense=< rhs=0 nnz=2 | 11:-1 16:1
+row 62: sense=< rhs=0 nnz=2 | 18:-5 25:1
+row 63: sense=> rhs=-5 nnz=3 | 18:-5 20:-1 25:1
+row 64: sense=< rhs=0 nnz=2 | 20:-1 25:1
+row 65: sense=< rhs=0 nnz=2 | 27:-5 34:1
+row 66: sense=> rhs=-5 nnz=3 | 27:-5 29:-1 34:1
+row 67: sense=< rhs=0 nnz=2 | 29:-1 34:1
+row 68: sense=< rhs=9 nnz=5 | 5:2 14:2 23:2 32:2 38:1
+row 69: sense=> rhs=0 nnz=2 | 6:1 7:1
+row 70: sense=> rhs=0 nnz=2 | 15:1 16:1
+row 71: sense=> rhs=0 nnz=2 | 24:1 25:1
+row 72: sense=> rhs=0 nnz=2 | 33:1 34:1
+row 73: sense=> rhs=2 nnz=4 | 0:1 9:1 18:1 27:1
+qrow 0: sense=< rhs=2 | 1:-2 2:-1 8:1 | 2,1:-1
+qrow 1: sense=< rhs=2 | 10:-2 11:-1 17:1 | 11,10:-1
+qrow 2: sense=< rhs=2 | 19:-2 20:-1 26:1 | 20,19:-1
+qrow 3: sense=< rhs=2 | 28:-2 29:-1 35:1 | 29,28:-1
+gen 0: kind=max res=37 args=8,17,26,35
+=== END MODEL DUMP ===

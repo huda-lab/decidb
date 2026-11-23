@@ -38,6 +38,12 @@ recommendation; nobody settles one silently. Rulings about a single task live wi
 | R24 | A scope (`when`, `per`) is a record inside a clause or a reducer node, not a node of its own (2026-11-22) |
 | R25 | A thing several places read is a record in a table, and a node names it by a typed index: keys, frames, and one table of helper definitions that owns each helper's body (2026-11-22) |
 | R26 | A written clause's shape and variant signature are stored once by the canonicalizer and never recomputed. Bound reduction records the fact it relied on, and a debug build checks that record after each pass (2026-11-22) |
+| R27 | A departure from the design stays when the built form is the better architecture: cleaner and more elegant code, no bloat, simpler, fewer ways to go wrong. It is brought to the owner when it is made, and the design is edited only after he rules (2026-11-23) |
+| R28 | A frame is its own expression class, `BoundDecideFrameExpression`, holding a frame index and its payload; the frame's reducer lives in its `DecideFrameSpec` alone (2026-11-23) |
+| R29 | R26 reworded: a clause's shape has one writer, the canonicalizing boundary, which sets it each time it canonicalizes the clause; no reader recomputes it (2026-11-23) |
+| R30 | Helper rows print in the order the helpers are made, one table read by one loop; a stored plan of a query mixing helper kinds pins it (2026-11-23) |
+| R31 | A reducer body has two readings, what its node reads and its coefficient algebra, by two readers; a clause's atoms are handed from one to the other with their nodes, and nothing joins them by address. Whether terms are split from the finished nodes is ruled after it is sized (2026-11-23) |
+| R32 | `when c: (a and b)` binds one constraint per comparison, each under the `when`. Phase 5 runs focused tests per task, `make decide-test` at the end of each queue group, and every other suite once at the end (2026-11-23) |
 
 ## Open decisions
 
