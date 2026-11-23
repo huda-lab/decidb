@@ -13,11 +13,9 @@ the owner rules first.
 # Phase 5 — The parser builds the tree
 
 ## 5.4 The tree (one lane)
-- [ ] TREE-25 Terms split from the finished nodes (decision) — pipeline/todo.md § TREE-25
 
 ## 5.5 Parser, direct rules, tags (one lane)
-- [ ] TREE-26 The parser's reducer node and its call (decision) — pipeline/todo.md § TREE-26
-- [ ] TREE-8 Direct rules read `BoundDecide` (decision) — pipeline/todo.md § TREE-8
+- [ ] TREE-8 Direct rules read `BoundDecide` — pipeline/todo.md § TREE-8
 - [ ] TREE-9 The tag machinery goes — pipeline/todo.md § TREE-9 (needs: TREE-8)
 
 ## 5.6 Proof (needs: 5.5) (one lane)

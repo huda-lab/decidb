@@ -48,6 +48,11 @@ recommendation; nobody settles one silently. Rulings about a single task live wi
 | R34 | A member's NULL test stays a marker node, `BoundDecideNullTestExpression`, inside the reducer's rows. The rows are copied into about ten other row predicates (term filters, an ABS helper's rows, a definition's `when`, a direct part), and the tree tells a test from a written condition in each; a field on the reducer would make each carrier a pair, and a carrier that dropped the tests would read NULL rows with no error (2026-11-23) |
 | R35 | The objective nest `sum(per K: inner(e) by (G))` stays as written. The tree lowers it, and the linear form reads it as terms (`decide_rewrite::ReadNestInPlace`). No copy of the nest is kept and the reducer has no `retained` field (2026-11-23) |
 | R36 | `written_name` stays a display field. The binder spells each function one way (`RespellDecideAliases`), so the name it was written under is the one fact left. The query text has no name for a node canonicalization builds, and leaving aliases unrenamed would make every name check test an alias set (2026-11-23) |
+| R37 | Terms are split from the clause in Phase 5: a reducer body keeps its two readings (R31). Whether terms are split from the finished nodes is decided with the model contract in ARCH-2, which reads `review/TREE-25-sizing.md` (2026-11-23) |
+| R38 | The parsed reducer's `call` stays a `ParsedExpression`: a scope may stand in any call, and the binder refuses one that is no reducer with the text as written (2026-11-23) |
+| R39 | The NULL guard is a decorator class around the guarded value, as the member NULL test is (R34); `NULL_GUARD_TAG` goes (2026-11-23) |
+| R40 | The direct rules' decline tests edit the operator. An arm no tree can reach is deleted with its case (2026-11-23) |
+| R41 | A whole-query fact a direct rule declines on (a frame, a keyed scope with a signature, a non-finite objective offset) is read by the reader that meets it; the driver holds no gate (2026-11-23) |
 
 ## Open decisions
 

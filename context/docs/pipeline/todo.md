@@ -28,47 +28,12 @@ every one of them:
 - **Tests** (R32): focused tests in each task's **Done when**; `make decide-test` once at the end of each queue
   group; every other suite in TREE-28.
 
-## TREE-25 — Terms split from the finished nodes
-
-- **Decision needed.** After TREE-7 a reducer body is still read twice (reads, then algebra). One form reads a
-  clause once: the term half splits the lowered nodes instead of the clause. It would remove the four internal
-  errors of the frame registry's two dialects (`decide_linear_form.cpp:370`, `decide_tree_compile.cpp:372,377,398`),
-  the `Translate`/`TranslateTree` pair and `LowerFrames`. It needs a tree-aware leaf in the shared splitter and
-  touches message text and frame-column slots. It is not sized.
-- **Options.** (1) Build it. (2) Keep two readings, stated in design.md § 3.2.4 as two analyses.
-- **Recommendation.** Size it first: the task opens with a note (what goes, what the shared splitter gains, each
-  order that moves) and the owner rules on it.
-- **Done when.** The owner rules on the note; under option 1 the note's own Done-when holds.
-
-## TREE-26 — The parser's reducer node and its call
-
-- **Decision needed.** `DecideReducerExpression::call` is a `ParsedExpression`. The grammar lets a scope or a `by`
-  stand in any call, and three call shapes do not parse to a `FunctionExpression` (`ifnull(...)` is an operator,
-  `if(...)` a CASE). The binder refuses each with the text as written (`when or per inside 'ifnull(when id > 1: x,
-  0)', which is not a reducer`). One site casts the call (`decide_binder.cpp:354`).
-- **Options.** (1) Hold a `FunctionExpression` by type: the transformer refuses the other shapes with a parser
-  error, which moves those errors from the binder and changes their class and text. (2) Keep the call a
-  `ParsedExpression`; the node prints its scope after the call's name as today.
-- **Recommendation.** 2. Option 1 removes one cast and adds a second place that refuses a misplaced scope.
-- **Done when.** The owner rules; under option 1 no binder casts a reducer's call and
-  `./test/decide/run_tests.sh -k "parse or syntax or when or between or scope"` passes.
-
 ## TREE-8 — Direct rules read `BoundDecide`
 
-- **Decision needed.** The approved design is `review/TREE-8-design.md`; its section "TREE-8 — form" raises three
-  points the owner rules on before any code.
-- **Options.**
-  1. *The NULL guard's home.* A field beside the coefficient does not hold: like-term collection merges two guarded
-     coefficients into one, and five readers have only the expression. (a) No marker: the guard is stated as a
-     member test in the term's `when` (`c IS NOT NULL`), as a reducer's NULL test is. Terms with different tests
-     then stop merging, so the model's terms and its dumps change; it is not a like-for-like move. (b) A decorator
-     class around the guarded value, `BoundDecideNullGuardExpression`, as the member NULL test is one (R34).
-  2. *The decline tests* (`test_decidb_direct_decline.cpp`, 22 cases, about 76 edits of the IR). (a) Edits move to
-     the operator; the 41 that set a derived part are settled one at a time, and an arm no tree can reach is
-     deleted with its case. (b) A way to hand a rule edited parts, kept for tests.
-  3. *Three whole-query facts* (a frame present, a keyed scope with a signature, a non-finite objective offset).
-     (a) Each in the reader that meets it. (b) A two-line whole-query test in the driver.
-- **Recommendation.** 1b, 2a, 3a. 1b follows R34: the same carriers hold only the expression.
+- **Problem.** `DirectIR` is a second representation the nine direct rules read (R17). The design is
+  `review/TREE-8-design.md`; its three open points are ruled: the NULL guard is a decorator class (R39), the decline
+  tests edit the operator and an unreachable arm goes with its case (R40), each whole-query fact is read by the
+  reader that meets it (R41).
 - **Change.** R17: each rule reads the clauses and nodes; `DirectIR` and `DirectFrontEnd` go; `NULL_GUARD_TAG` and
   its two writers go.
 - **Needs.** TREE-20.
@@ -94,7 +59,7 @@ every one of them:
 - **Change.** design.md § 3 and § 3.5 match the code cell by cell; § 3.9's acceptance list is checked line by
   line. The stage docs (01 to 05, 08's planning part, `code_structure.md`, the glossary) describe the tree in the
   present tense. `direct_solve/architecture/ir.md` is the readers' contract.
-- **Needs.** TREE-9, TREE-25.
+- **Needs.** TREE-9.
 - **Done when.** Every name design.md § 3 gives is found by `grep` in `src/`; § 3.9 holds line by line.
 
 ## TREE-28 — The test pass for the phase
@@ -130,5 +95,7 @@ every one of them:
   chunks, as today. A node writes model rows per group, never per input row, and no array as long as the input is
   built for the model. Check: `context/opa_rewrite/tools/ab_bench.py`, and `repro/clauses_times_rows.sql` no slower
   in evaluation time or peak memory than the build before the phase.
+- **Read first.** `context/opa_rewrite/review/TREE-25-sizing.md` (R37): whether terms are split from the finished
+  nodes is decided here, with the model contract.
 - **Needs.** Phase 5.
 - **Done when.** The owner approves the design and the phase's tasks are on the queue.
