@@ -16,8 +16,9 @@ It contains no solver-specific structures and no execution mechanics.
 
 **`BoundDecide`** (`logical_decide.hpp`) is the bound DECIDE part of a query: the decisions (`variables`,
 `is_boolean_var`, `variable_scopes`), `keys`, `keyed_scopes`, `frames`, `clauses` with their
-`constraint_sources`, `objective`, `sense`, `objective_constant_offset`, `source_text`, `signatures` and
-`computed_values`.
+`constraint_sources`, `objective`, `sense`, `objective_constant_offset`, `source_text`, `signatures`,
+`computed_values`, the objective's texts (`written_objective`, `canonical_objective`,
+`objective_canonical_differs`), `source_columns` and the reducer records (`bound_aggregates`).
 
 `clauses` is a `vector<BoundDecideClause>` (`decide_tree_terms.hpp`), one record per row of SUCH THAT, in written
 order with the rows a rewrite adds after them; `objective` is one more record, with a null `body` when the query
@@ -40,8 +41,8 @@ changes. A record holds
 A fact of a row is a field of its record, so no alias tag carries one and a copy of a comparison's alias copies none.
 The rows a function owns (an L0 indicator's links, an ABS's envelope rows, a body helper's definition) are records
 too, held by their function. The binder fills `BoundSelectNode::decide`, `Binder::PlanDecide` canonicalizes it in place and
-moves it whole into `LogicalDecide::bound`. The operator keeps what is its own beside it: `decide_index`, the
-objective's texts, `source_columns`, `optimized`, the solver choice and the tables the rewrites fill.
+moves it whole into `LogicalDecide::bound`. The operator keeps what is its own beside it: `decide_index`,
+`optimized`, the solver choice and the tables the rewrites fill.
 `BoundDecide::EnumerateExpressions` is the one list of its expressions; subquery planning (`PlanSubqueries`) and
 `LogicalDecide::EnumerateExpressions` both call it.
 
@@ -70,8 +71,9 @@ objective's texts, `source_columns`, `optimized`, the solver choice and the tabl
   `IS NOT NULL`. When the tree is built, a test that `KeepsEveryRow()` is dropped and the others are split from the
   written conditions into `DecideNode::member_tests`, so stage 08 reads no tag and no filter shape to tell them.
 
-**A value read whole is a table entry.** `computed_values` holds each flattened scalar subquery and each reducer over
-data the objective reads as one value (§2), and a read is told by equality with its entry.
+**A value read whole is a table entry.** `computed_values` holds each flattened scalar subquery, and a read is told by
+equality with its entry. A reducer over data read as one value is told by its record (`DecideBoundAggregate` with the
+whole-query key, `IsReadBy`).
 
 **What a rewrite keeps is an entry of one table.** `LogicalDecide::helper_definitions` is the symbol table of the
 constructs the rewrites kept and gave a helper decision (`DecideHelperDefinition`), in the order they were made:

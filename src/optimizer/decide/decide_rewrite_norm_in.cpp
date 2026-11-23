@@ -39,9 +39,7 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 
 void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 	idx_t l0_counter = 0;
-	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.bound.variable_scopes,
-	                                  decide.bound.keyed_scopes, decide.bound.keys, decide.bound.is_boolean_var,
-	                                  decide.bound.computed_values);
+	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.bound);
 
 	// Whether the body in hand had a marker lowered.
 	bool lowered = false;
@@ -139,31 +137,19 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 
 	// Lowering swaps a marker for a `SUM` of indicators under the factor the canonicalizer peeled, so each clause is
 	// lowered where it sits, and one a marker was lowered in goes back through the canonicalizing boundary.
-	vector<BoundDecideClause *> rewritten;
-	decide.EnumerateBodies([&](DecideOwnedBody &body) {
+	decide.RewriteBodies(optimizer.context, [&](DecideOwnedBody &body) {
 		if (body.owner == DecideOwnedBody::Owner::CLAUSE || body.owner == DecideOwnedBody::Owner::OBJECTIVE) {
 			lowered = false;
 			rewrite(body.expr, body.Origin(), body.rows);
-			if (lowered) {
-				rewritten.push_back(body.clause.get());
-			}
+			body.changed = lowered;
 		}
 	});
-	for (auto clause : rewritten) {
-		if (clause == &decide.bound.objective) {
-			decide.SetObjective(optimizer.context, std::move(decide.bound.objective));
-		} else {
-			decide.CanonicalizeClause(optimizer.context, *clause);
-		}
-	}
 }
 
 void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 	vector<BoundDecideClause> generated;
 	idx_t in_counter = 0;
-	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.bound.variable_scopes,
-	                                  decide.bound.keyed_scopes, decide.bound.keys, decide.bound.is_boolean_var,
-	                                  decide.bound.computed_values);
+	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.bound);
 	auto rewrite = [&](BoundDecideClause &clause) {
 		if (clause.body->GetExpressionClass() != ExpressionClass::BOUND_OPERATOR)
 			return;

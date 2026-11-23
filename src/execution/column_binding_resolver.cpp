@@ -147,7 +147,7 @@ void ColumnBindingResolver::VisitOperator(LogicalOperator &op) {
 		}
 		// A bound's data reducer has no column in the input: the tree computes it and replaces every read of its
 		// placeholder with a reference to the result (DecideBoundAggregate::IsReadBy).
-		for (auto &aggregate : decide_op.bound_aggregates) {
+		for (auto &aggregate : decide_op.bound.bound_aggregates) {
 			ignored_bindings.push_back(aggregate.column);
 		}
 

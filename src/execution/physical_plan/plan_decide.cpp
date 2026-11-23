@@ -64,11 +64,11 @@ static vector<string> UserWrittenColumnNames(LogicalDecide &op) {
 	// so the key names no column for it, while the spelling comes from the binder.
 	vector<string> child_userwritten_names(child_bindings.size(), string());
 	for (idx_t i = 0; i < child_bindings.size(); i++) {
-		auto key = DecideSourceColumnKey(*op.children[0], child_bindings[i], op.source_columns);
+		auto key = DecideSourceColumnKey(*op.children[0], child_bindings[i], op.bound.source_columns);
 		if (key.column_index == DConstants::INVALID_INDEX) {
 			continue;
 		}
-		for (const auto &source_column : op.source_columns) {
+		for (const auto &source_column : op.bound.source_columns) {
 			if (source_column.binding == key) {
 				child_userwritten_names[i] = source_column.name;
 				break;
@@ -214,8 +214,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	// for the same reason the constraints are: every rewrite that touches it now
 	// re-enters through LogicalDecide::SetObjective, so a rewrite that breaks the
 	// canonical form should fail loudly rather than reach the extractor.
-	DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes,
-	                                  op.bound.keys, op.bound.is_boolean_var, op.bound.computed_values);
+	DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound);
 	for (auto &clause : op.bound.clauses) {
 		canonicalizer.VerifyCanonical(clause);
 	}
@@ -260,9 +259,9 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	display.clauses = std::move(op.bound.clauses);
 	display.objective = std::move(op.bound.objective);
 	display.constraint_sources = std::move(op.bound.constraint_sources);
-	display.written_objective = std::move(op.written_objective);
-	display.canonical_objective = std::move(op.canonical_objective);
-	display.objective_canonical_differs = op.objective_canonical_differs;
+	display.written_objective = std::move(op.bound.written_objective);
+	display.canonical_objective = std::move(op.bound.canonical_objective);
+	display.objective_canonical_differs = op.bound.objective_canonical_differs;
 	display.source_text = std::move(op.bound.source_text);
 	display.aux_var_expressions = std::move(op.aux_var_expressions);
 	display.rewrite_accounts = std::move(op.rewrite_accounts);

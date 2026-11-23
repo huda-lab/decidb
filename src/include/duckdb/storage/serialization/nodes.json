@@ -1422,13 +1422,6 @@
         "default": "DConstants::INVALID_INDEX"
       },
       {
-        "id": 107,
-        "name": "removal_group_id",
-        "property": "origin.removal_group_id",
-        "type": "idx_t",
-        "default": "DConstants::INVALID_INDEX"
-      },
-      {
         "id": 108,
         "name": "objective",
         "property": "origin.objective",
@@ -1439,36 +1432,6 @@
         "id": 109,
         "name": "between",
         "type": "DecideBetweenHalf"
-      },
-      {
-        "id": 110,
-        "name": "structural",
-        "type": "bool",
-        "default": "false"
-      },
-      {
-        "id": 111,
-        "name": "defines",
-        "type": "idx_t",
-        "default": "DConstants::INVALID_INDEX"
-      },
-      {
-        "id": 112,
-        "name": "minmax_easy",
-        "type": "bool",
-        "default": "false"
-      },
-      {
-        "id": 113,
-        "name": "folded_bound",
-        "type": "bool",
-        "default": "false"
-      },
-      {
-        "id": 114,
-        "name": "folded_clause_rows",
-        "type": "bool",
-        "default": "false"
       },
       {
         "id": 115,
@@ -1484,12 +1447,6 @@
       {
         "id": 117,
         "name": "query_wide_bound",
-        "type": "bool",
-        "default": "false"
-      },
-      {
-        "id": 118,
-        "name": "tightest_frame_bound",
         "type": "bool",
         "default": "false"
       }

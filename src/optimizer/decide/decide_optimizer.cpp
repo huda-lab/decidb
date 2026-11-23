@@ -81,16 +81,16 @@ void DecideOptimizer::VerifyBoundReads(const LogicalDecide &decide) {
 		if (clause.bound_read_shape == CanonicalConstraintClass::INVALID) {
 			continue;
 		}
-		// A clause read in another shape kept its bound as each row holds it, which the aggregate shape's one row per
-		// group cannot state.
-		const bool became_aggregate = clause.shape == CanonicalConstraintClass::AGGREGATE &&
-		                              clause.bound_read_shape != CanonicalConstraintClass::AGGREGATE;
+		// The fact bound reduction relied on: whether the clause is one row per group. Read as one, its bound is its
+		// group's tightest value, which no row of another shape may read as its own; read as another, its bound is as
+		// each row holds it, which one row per group cannot state.
+		const bool read_aggregate = clause.bound_read_shape == CanonicalConstraintClass::AGGREGATE;
+		const bool shape_changed = read_aggregate != (clause.shape == CanonicalConstraintClass::AGGREGATE);
 		// The tightest value of one direction is the loosest of the other; an `=` bound holds one value in each group,
 		// which is the tightest of both.
-		const bool turned = clause.bound_read_shape == CanonicalConstraintClass::AGGREGATE &&
-		                    clause.bound_read_type != ExpressionType::COMPARE_EQUAL &&
+		const bool turned = read_aggregate && clause.bound_read_type != ExpressionType::COMPARE_EQUAL &&
 		                    clause.body->type != clause.bound_read_type;
-		if (became_aggregate || turned) {
+		if (shape_changed || turned) {
 			throw InternalException("DECIDE: a rewrite changed the shape or the direction bound reduction read of '%s'",
 			                        clause.body->ToString());
 		}
@@ -400,9 +400,7 @@ void decide_rewrite::ScopeRowPerClause(ClientContext &context, LogicalDecide &de
 		return;
 	}
 	// The row names its key as the key was first written: only a `per` the user wrote stands in the query.
-	DecideCanonicalizer canonicalizer(context, decide.decide_index, decide.bound.variable_scopes,
-	                                  decide.bound.keyed_scopes, decide.bound.keys, decide.bound.is_boolean_var,
-	                                  decide.bound.computed_values);
+	DecideCanonicalizer canonicalizer(context, decide.decide_index, decide.bound);
 	canonicalizer.frames = &decide.bound.frames;
 	vector<DecideSignatureField> fields;
 	canonicalizer.CollectSignatureFields(*row.body, scope.class_key, fields);

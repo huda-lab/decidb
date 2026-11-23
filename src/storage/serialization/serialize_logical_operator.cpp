@@ -382,13 +382,13 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<vector<KeyedScopeInfo>>(210, "keyed_scopes", bound.keyed_scopes);
 	/* [Deleted] (vector<unique_ptr<Expression>>) "entity_key_expressions" */
 	serializer.WritePropertyWithDefault<vector<ConstraintSourceInfo>>(212, "constraint_sources", bound.constraint_sources);
-	serializer.WritePropertyWithDefault<string>(213, "written_objective", written_objective);
-	serializer.WritePropertyWithDefault<string>(214, "canonical_objective", canonical_objective);
+	serializer.WritePropertyWithDefault<string>(213, "written_objective", bound.written_objective);
+	serializer.WritePropertyWithDefault<string>(214, "canonical_objective", bound.canonical_objective);
 	/* [Deleted] (vector<string>) "source_fragments" */
-	serializer.WritePropertyWithDefault<vector<DecideSourceColumnName>>(216, "source_columns", source_columns);
+	serializer.WritePropertyWithDefault<vector<DecideSourceColumnName>>(216, "source_columns", bound.source_columns);
 	/* [Deleted] (bool) "scoped_objective" */
 	serializer.WritePropertyWithDefault<vector<DecideKey>>(220, "keys", bound.keys);
-	serializer.WritePropertyWithDefault<bool>(221, "objective_canonical_differs", objective_canonical_differs);
+	serializer.WritePropertyWithDefault<bool>(221, "objective_canonical_differs", bound.objective_canonical_differs);
 	serializer.WriteProperty<DecideSourceText>(222, "source_text", bound.source_text);
 	serializer.WritePropertyWithDefault<vector<DecideSignature>>(223, "signatures", bound.signatures);
 	/* [Deleted] (idx_t) "objective_signature" */
@@ -412,13 +412,13 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithDefault<vector<KeyedScopeInfo>>(210, "keyed_scopes", result->bound.keyed_scopes);
 	deserializer.ReadDeletedProperty<vector<unique_ptr<Expression>>>(211, "entity_key_expressions");
 	deserializer.ReadPropertyWithDefault<vector<ConstraintSourceInfo>>(212, "constraint_sources", result->bound.constraint_sources);
-	deserializer.ReadPropertyWithDefault<string>(213, "written_objective", result->written_objective);
-	deserializer.ReadPropertyWithDefault<string>(214, "canonical_objective", result->canonical_objective);
+	deserializer.ReadPropertyWithDefault<string>(213, "written_objective", result->bound.written_objective);
+	deserializer.ReadPropertyWithDefault<string>(214, "canonical_objective", result->bound.canonical_objective);
 	deserializer.ReadDeletedProperty<vector<string>>(215, "source_fragments");
-	deserializer.ReadPropertyWithDefault<vector<DecideSourceColumnName>>(216, "source_columns", result->source_columns);
+	deserializer.ReadPropertyWithDefault<vector<DecideSourceColumnName>>(216, "source_columns", result->bound.source_columns);
 	deserializer.ReadDeletedProperty<bool>(219, "scoped_objective");
 	deserializer.ReadPropertyWithDefault<vector<DecideKey>>(220, "keys", result->bound.keys);
-	deserializer.ReadPropertyWithDefault<bool>(221, "objective_canonical_differs", result->objective_canonical_differs);
+	deserializer.ReadPropertyWithDefault<bool>(221, "objective_canonical_differs", result->bound.objective_canonical_differs);
 	deserializer.ReadProperty<DecideSourceText>(222, "source_text", result->bound.source_text);
 	deserializer.ReadPropertyWithDefault<vector<DecideSignature>>(223, "signatures", result->bound.signatures);
 	deserializer.ReadDeletedProperty<idx_t>(224, "objective_signature");

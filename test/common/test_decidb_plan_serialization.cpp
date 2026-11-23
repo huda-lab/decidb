@@ -632,8 +632,8 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 	// The two halves of the BETWEEN link to each other.
 	REQUIRE(saw_between_halves);
 
-	REQUIRE(after->written_objective == before->written_objective);
-	REQUIRE(after->canonical_objective == before->canonical_objective);
+	REQUIRE(after->bound.written_objective == before->bound.written_objective);
+	REQUIRE(after->bound.canonical_objective == before->bound.canonical_objective);
 	// The clause as the user wrote it, with the span of each expression in it.
 	REQUIRE(before->bound.source_text.HasText());
 	REQUIRE(!before->bound.source_text.spans.empty());
@@ -856,17 +856,17 @@ TEST_CASE("A user's own column names survive a serialization round trip", "[deci
 	                            "MAXIMIZE SUM(pick)");
 	auto *before = FindDecide(*plan);
 	REQUIRE(before != nullptr);
-	REQUIRE(!before->source_columns.empty());
+	REQUIRE(!before->bound.source_columns.empty());
 
 	auto copied = RoundTrip(con, *plan);
 	auto *after = FindDecide(*copied);
 	REQUIRE(after != nullptr);
-	REQUIRE(after->source_columns.size() == before->source_columns.size());
+	REQUIRE(after->bound.source_columns.size() == before->bound.source_columns.size());
 	bool saw_alias = false;
-	for (idx_t i = 0; i < before->source_columns.size(); i++) {
-		REQUIRE(after->source_columns[i].binding == before->source_columns[i].binding);
-		REQUIRE(after->source_columns[i].name == before->source_columns[i].name);
-		saw_alias = saw_alias || after->source_columns[i].name == "lbl";
+	for (idx_t i = 0; i < before->bound.source_columns.size(); i++) {
+		REQUIRE(after->bound.source_columns[i].binding == before->bound.source_columns[i].binding);
+		REQUIRE(after->bound.source_columns[i].name == before->bound.source_columns[i].name);
+		saw_alias = saw_alias || after->bound.source_columns[i].name == "lbl";
 	}
 	// The alias list is the point: `lbl` is written nowhere else in the plan.
 	REQUIRE(saw_alias);

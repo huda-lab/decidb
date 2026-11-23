@@ -258,8 +258,7 @@ void DecideTreeConstruction::PrepareDefinitionFunctions(ClientContext &context, 
 	}
 
 	using Kind = LogicalDecide::RewriteAccount::Kind;
-	DecideCanonicalizer canonicalizer(context, decide_index, decide.bound.variable_scopes, decide.bound.keyed_scopes,
-	                                  decide.bound.keys, decide.bound.is_boolean_var, decide.bound.computed_values);
+	DecideCanonicalizer canonicalizer(context, decide_index, decide.bound);
 	// The placeholders are appended after both walks, so neither walk sees the structural rows registered here.
 	vector<BoundDecideClause> rows;
 	for (idx_t family = 0; family < families.size(); family++) {

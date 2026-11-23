@@ -263,8 +263,7 @@ void LogicalDecide::AddClause(ClientContext &context, BoundDecideClause clause) 
 }
 
 void LogicalDecide::CanonicalizeClause(ClientContext &context, BoundDecideClause &clause) {
-	DecideCanonicalizer canonicalizer(context, decide_index, bound.variable_scopes, bound.keyed_scopes, bound.keys,
-	                                  bound.is_boolean_var, bound.computed_values);
+	DecideCanonicalizer canonicalizer(context, decide_index, bound);
 	vector<BoundDecideClause> canonical;
 	canonical.push_back(std::move(clause));
 	canonicalizer.CanonicalizeClauses(canonical);
@@ -277,8 +276,7 @@ void LogicalDecide::SetObjective(ClientContext &context, BoundDecideClause objec
 		bound.objective = BoundDecideClause();
 		return;
 	}
-	DecideCanonicalizer canonicalizer(context, decide_index, bound.variable_scopes, bound.keyed_scopes, bound.keys,
-	                                  bound.is_boolean_var, bound.computed_values);
+	DecideCanonicalizer canonicalizer(context, decide_index, bound);
 	DecideSourceNames names {bound.source_text, bound.keyed_scopes, bound.keys};
 	canonicalizer.QuoteMessagesWith(names);
 	bound.objective = canonicalizer.CanonicalizeObjective(objective, bound.objective_constant_offset);
@@ -356,7 +354,7 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 	for (auto &check : value_checks) {
 		callback(&check);
 	}
-	for (auto &aggregate : bound_aggregates) {
+	for (auto &aggregate : bound.bound_aggregates) {
 		for (auto &argument : aggregate.arguments) {
 			callback(&argument);
 		}
@@ -434,6 +432,23 @@ static DecideOwnedBody ClauseBody(DecideOwnedBody::Owner owner, idx_t index, Bou
 	return body;
 }
 
+void LogicalDecide::RewriteBodies(ClientContext &context, const std::function<void(DecideOwnedBody &)> &callback) {
+	vector<BoundDecideClause *> changed;
+	EnumerateBodies([&](DecideOwnedBody &body) {
+		callback(body);
+		if (body.changed && body.owner != DecideOwnedBody::Owner::HELPER) {
+			changed.push_back(body.clause.get());
+		}
+	});
+	for (auto clause : changed) {
+		if (clause == &bound.objective) {
+			SetObjective(context, std::move(bound.objective));
+		} else {
+			CanonicalizeClause(context, *clause);
+		}
+	}
+}
+
 void LogicalDecide::EnumerateBodies(const std::function<void(DecideOwnedBody &)> &callback) {
 	using Owner = DecideOwnedBody::Owner;
 	if (bound.objective.body) {
@@ -488,7 +503,7 @@ void LogicalDecide::EnumerateBodies(const std::function<void(DecideOwnedBody &)>
 
 vector<ColumnBinding> LogicalDecide::SourceBindings() {
 	auto result = children[0]->GetColumnBindings();
-	for (auto &aggregate : bound_aggregates) {
+	for (auto &aggregate : bound.bound_aggregates) {
 		result.push_back(aggregate.column);
 	}
 	return result;
@@ -507,9 +522,9 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	                       bound.clauses,
 	                       bound.constraint_sources,
 	                       bound.objective,
-	                       written_objective,
-	                       canonical_objective,
-	                       objective_canonical_differs};
+	                       bound.written_objective,
+	                       bound.canonical_objective,
+	                       bound.objective_canonical_differs};
 	auto result = RenderDecideParams(plan, rewrite_accounts, nullptr);
 	SetParamsEstimatedCardinality(result);
 	return result;

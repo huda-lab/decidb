@@ -21,16 +21,18 @@ decides shape, parses SQL, executes relations, or calls a solver.
 - `src/include/duckdb/optimizer/decide/decide_linear_form.hpp`
 - `src/include/duckdb/planner/decide/decide_tree_terms.hpp` — the term records, held in the tree's nodes
 
-**A pass canonicalizes the clauses and the objective it changes, and no other.** A clause it adds enters through
-`LogicalDecide::AddClause`, one it rewrote where it sits goes back through `LogicalDecide::CanonicalizeClause`, and
-an objective it rewrote through `LogicalDecide::SetObjective`; each re-canonicalizes and re-verifies that one record.
-The canonicalizer's refusals are raised there, at the pass that made the shape: `RewriteRhsAggregates` replaces a
-data reducer by a column of its value, so the objective it changed is canonicalized at once, and a factor that
-varies per row on an objective reducer is refused then. `RewriteNorm` canonicalizes the clauses
-it lowered a marker in; `RewriteScopedReducers` each clause it put a helper in. A pass whose output is
-canonical as it writes it (a range's helper, a product's tag, the relation of an easy extremum's other half, an ABS's
-tag, a folded bound's mark) reinstalls nothing. A debug build verifies every clause when the plan is made
-(`VerifyCanonical`).
+**A pass marks what it changes, and the body walk canonicalizes it** (Template Method, as DuckDB's rules report
+`changes_made`). A rewrite walks the bodies with `LogicalDecide::RewriteBodies` and sets `DecideOwnedBody::changed`
+where it replaces part of a clause's body or of the objective's; when the walk is over, each marked clause goes back
+through `LogicalDecide::CanonicalizeClause` and a marked objective through `LogicalDecide::SetObjective`, which
+re-canonicalize and re-verify that one record and give it its shape. A clause a pass adds enters through
+`LogicalDecide::AddClause`. The canonicalizer's refusals are raised there, at the pass that made the shape:
+`RewriteRhsAggregates` replaces a data reducer by a column of its value, and a factor that varies per row on an
+objective reducer is refused when its walk ends. `RewriteNorm`, `RewriteScopedReducers` and `RewriteFrameRanges` mark
+the same way. A pass that only names a definition on a kept call or sets a clause fact (a product's or an ABS's kept
+call, the relation of an easy extremum's other half, a folded bound's mark) replaces nothing and marks nothing.
+`DefineReducerBodies` names its definitions after its walk, so it reinstalls the objective itself. A debug build
+verifies every clause when the plan is made (`VerifyCanonical`).
 
 ---
 
@@ -180,7 +182,7 @@ short fails loudly instead of handing a backend a model it cannot load.
 Two steps run on each `LogicalDecide` before these passes (`OptimizeSubtree`). First,
 `RewriteRhsAggregates` (`decide_rewrite_rhs_bounds.cpp`) replaces each data-only reducer on
 a bound's right side (`sum(x) <= sum(cap)`) with a placeholder column and records it on the
-node (`LogicalDecide::bound_aggregates`; equal reducers share one). The path that answers the
+node (`BoundDecide::bound_aggregates`; equal reducers share one). The path that answers the
 node builds each record as a side table of the source (`DirectAddBoundTables`, on both paths):
 the same DuckDB aggregate over another read of the source, grouped by the reducer's `by` key
 (under the key's collation, D69) over the rows the clause's `when` keeps, and joined back to
@@ -198,8 +200,8 @@ argument's check refuses an infinity as well as a NaN (`read_as`, `DecideValueRo
 NaN only. The column takes the query location of the reducer it stands for (`DecideReplaces`), so a message
 quotes `max(cap) by (g)` as written and never calls it a column. The guard over it that is NULL outside the
 reducer's groups holds a `BoundDecideNullTestExpression` (`RhsBoundRewriter::InKey`), which settles membership only,
-so a signature reads the value as its key alone; one the objective reads with no `by` is an entry of
-`BoundDecide::computed_values` marked `query_wide`, which the tree reads whole. A frame selector's value
+so a signature reads the value as its key alone; one whose record has the whole-query key is one value for the whole
+query in every clause that reads it (`IsDecideQueryWideValue`), which the tree reads whole. A frame selector's value
 is a column stage 08 computes from the rows it selects, so no side table reads one: a frame in a row-wise bound stays
 in it, read as a column is, so an infinite value is a bound as a column's is (guide §3);
 in a bound of a clause over groups it stays only where it has one value per group -- a
@@ -210,15 +212,15 @@ that hold an instance. A column's tightest value is the group's MIN or MAX in a 
 Bound reduction relies on two facts a later pass can change: the clause's shape, since only the aggregate shape takes
 the group's tightest value, and the comparison's direction, which says which value is the tightest. For a bound that
 may differ within a group it records both on the clause (`bound_read_shape`, `bound_read_type`), and a debug build
-checks them after every pass, in the one place every pass runs (`RunPass`, `DecideOptimizer::VerifyBoundReads`): a
-clause read in another shape is not in the aggregate shape, and a clause read in the aggregate shape keeps its
+checks them after every pass, in the one place every pass runs (`RunPass`, `DecideOptimizer::VerifyBoundReads`). The
+check is the rule: a clause is one row per group exactly when it was read as one, and a clause read as one keeps its
 relation unless that was `=`, whose bound is the tightest of both directions. Nothing else is verified this way.
 An `=` bound's checks are scope checks made before any rule runs: its NaN check, then its `=` check (two values in
 one group, `AddDisagreementCheck`): one check per `by` group, whose message names the group and points at the bound
 (R15), made before any rule can; the NaN check stands with it, so every path raises the same error of the two. Every
 other data bound's NaN check is a scope check too. A check copies the value it reads whole (`NanMessage`,
 `AddAbsValueCheck`): the tree reads a frame by its tag, a reducer by its node and a query-wide value by its entry of
-`computed_values`. The `=` check speaks only
+`computed_values` or its record. The `=` check speaks only
 where each of the clause's reducers with a `when` of its own keeps a row of the group: a group with none holds no
 instance and constrains nothing, so
 its bound is not read (guide §7.4), as a frame's is not. A reducer over data whose argument reads a frame stays a reducer over the rows it

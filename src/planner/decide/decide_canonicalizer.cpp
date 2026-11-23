@@ -151,14 +151,10 @@ static vector<idx_t> DecisionKeys(const vector<DecideVarScopeInfo> &variable_sco
 	return keys;
 }
 
-DecideCanonicalizer::DecideCanonicalizer(ClientContext &context, idx_t decide_index,
-                                         vector<DecideVarScopeInfo> variable_scopes_p,
-                                         const vector<KeyedScopeInfo> &keyed_scopes_p, const vector<DecideKey> &keys_p,
-                                         const vector<bool> &is_boolean,
-                                         const vector<DecideComputedValue> &computed_values_p)
-    : context(context), decide_index(decide_index), variable_scopes(std::move(variable_scopes_p)),
-      decision_keys(DecisionKeys(variable_scopes, keyed_scopes_p)), boolean_decisions(is_boolean),
-      keyed_scopes(keyed_scopes_p), keys(keys_p), computed_values(computed_values_p) {
+DecideCanonicalizer::DecideCanonicalizer(ClientContext &context, idx_t decide_index, const BoundDecide &bound)
+    : context(context), decide_index(decide_index), variable_scopes(bound.variable_scopes),
+      decision_keys(DecisionKeys(variable_scopes, bound.keyed_scopes)), boolean_decisions(bound.is_boolean_var),
+      keyed_scopes(bound.keyed_scopes), keys(bound.keys), bound(bound) {
 }
 
 bool DecideCanonicalizer::ReferencesDecideVar(const Expression &expr) const {
@@ -374,7 +370,7 @@ bool DecideCanonicalizer::IsQueryWideConstant(const Expression &expr) const {
 	// "not one of the reduced relation's own bindings" -- reads identically for
 	// `weight` but silently admits a CORRELATED subquery, which also lands on a fresh
 	// table index yet yields a different value per row.
-	if (IsDecideQueryWideValue(computed_values, expr)) {
+	if (IsDecideQueryWideValue(bound, expr)) {
 		return true;
 	}
 	if (expr.IsFoldable()) {
@@ -435,7 +431,7 @@ static bool KeyHolds(const vector<DecideKey> &keys, idx_t key, const Expression 
 }
 
 idx_t DecideCanonicalizer::ScopeKeyOf(const Expression &expr, idx_t data_key) const {
-	if (IsDecideQueryWideValue(computed_values, expr)) {
+	if (IsDecideQueryWideValue(bound, expr)) {
 		return DConstants::INVALID_INDEX;
 	}
 	if (!ReferencesDecideVar(expr) && KeyHolds(keys, data_key, expr)) {
@@ -466,9 +462,26 @@ idx_t DecideCanonicalizer::ScopeKeyOf(const Expression &expr, idx_t data_key) co
 	return key;
 }
 
+//! Whether `expr` reads a recorded reducer over data (DecideBoundAggregate).
+static bool ReadsRecordedReducer(const BoundDecide &bound, const Expression &expr) {
+	for (auto &record : bound.bound_aggregates) {
+		if (record.IsReadBy(expr)) {
+			return true;
+		}
+	}
+	bool reads = false;
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](const Expression &child) { reads = reads || ReadsRecordedReducer(bound, child); });
+	return reads;
+}
+
 bool DecideCanonicalizer::BoundIsQueryWide(const Expression &body) const {
-	return body.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON &&
-	       IsQueryWideConstant(*body.Cast<BoundComparisonExpression>().right);
+	if (body.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+		return false;
+	}
+	// A reducer over the rows is data however many values it takes: a repair edits it as data, not as a number.
+	auto &right = *body.Cast<BoundComparisonExpression>().right;
+	return IsQueryWideConstant(right) && !ReadsRecordedReducer(bound, right);
 }
 
 //! The norm `aggregate` was written as, with its body, or nullptr when it was not one: a desugared norm keeps the

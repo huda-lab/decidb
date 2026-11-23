@@ -383,6 +383,9 @@ struct DecideOwnedBody {
 	idx_t index;
 	//! The slot that owns the expression, so a rewrite may replace the expression itself.
 	unique_ptr<Expression> &expr;
+	//! Set by a rewrite that replaced part of a clause's body or of the objective's (DuckDB's `changes_made`):
+	//! LogicalDecide::RewriteBodies canonicalizes the record when the pass returns.
+	bool changed = false;
 	//! The sign a term of `expr` must carry, read as a sum from sign +1 (the way a comparison reads as `LHS - RHS`), to
 	//! be pushed down by its owner: +1 under `<=`, `<` and the minimized objective, -1 under `>=` and `>`, and 0 when
 	//! nothing is pushed (`=`, `<>`, a leaf that is no comparison). A definition `t >= q` pushes `q` down, `t <= q` up;
@@ -471,22 +474,6 @@ struct BoundDecide {
 
 	//! Every expression held here, each slot once.
 	void EnumerateExpressions(const std::function<void(unique_ptr<Expression> &expression)> &callback);
-};
-
-class LogicalDecide : public LogicalOperator {
-public:
-	static constexpr const LogicalOperatorType TYPE = LogicalOperatorType::LOGICAL_DECIDE;
-
-public:
-	LogicalDecide(idx_t decide_index, BoundDecide bound);
-
-	LogicalDecide();
-
-	// The table index for the new columns
-	idx_t decide_index;
-
-	//! The bound DECIDE part, as the binder made it and as the rewrites change it
-	BoundDecide bound;
 
 	//! The objective as WRITTEN and as CANONICALIZED, the objective's counterpart to
 	//! `constraint_sources`. The objective is one side of a comparison with no relation
@@ -512,6 +499,27 @@ public:
 	//! Each entry keeps the logical binding and its name together. The generated
 	//! serializer carries the record directly.
 	vector<DecideSourceColumnName> source_columns;
+
+	//! The reducers the bounds read from the data, in the order the bound-side rewrite met them. The tree computes each
+	//! on the rows it reads (language/guide.md §6.1); a direct plan builds each as a side table
+	//! (DirectSourceReader::AddSideTable) and empties the list. Never serialized (the optimizer creates it).
+	vector<DecideBoundAggregate> bound_aggregates;
+};
+
+class LogicalDecide : public LogicalOperator {
+public:
+	static constexpr const LogicalOperatorType TYPE = LogicalOperatorType::LOGICAL_DECIDE;
+
+public:
+	LogicalDecide(idx_t decide_index, BoundDecide bound);
+
+	LogicalDecide();
+
+	// The table index for the new columns
+	idx_t decide_index;
+
+	//! The bound DECIDE part, as the binder made it and as the rewrites change it
+	BoundDecide bound;
 
 	//! The `DIAGNOSE` prefix, carried from the statement that was written. True means
 	//! this query was asked to explain its failure: the operator arms the diagnosis
@@ -620,11 +628,6 @@ public:
 	//! plan makes them on the source rows, and the tree evaluates them on the rows it reads.
 	vector<unique_ptr<Expression>> value_checks;
 
-	//! The reducers the bounds read from the data, in the order the bound-side rewrite met them. The tree computes each
-	//! on the rows it reads (language/guide.md §6.1); a direct plan builds each as a side table
-	//! (DirectSourceReader::AddSideTable) and empties the list. Never serialized (the optimizer creates it).
-	vector<DecideBoundAggregate> bound_aggregates;
-
 	//! A reducer over data whose argument reads a frame (language/guide.md §5.6): no side table can read a frame, whose
 	//! values execution computes, so the reducer stays in the tree, naming its entry
 	//! (BoundDecideReducerExpression::frame_aggregate), over the rows it reads (its filter), and stage 05 makes it a
@@ -703,6 +706,10 @@ public:
 	void AddClause(ClientContext &context, BoundDecideClause clause);
 
 	//! Canonicalize `clause`, one of `bound.clauses`, again, in place: for a pass that rewrote its body where it sits.
+	//! EnumerateBodies for a rewrite (Template Method): each clause and the objective the callback marks
+	//! (DecideOwnedBody::changed) goes back through the canonicalizing boundary once, when the walk is over. No pass
+	//! canonicalizes what it changed by itself.
+	void RewriteBodies(ClientContext &context, const std::function<void(DecideOwnedBody &)> &callback);
 	void CanonicalizeClause(ClientContext &context, BoundDecideClause &clause);
 
 	//! Replace the objective, canonicalizing it on the way in. This is the objective's

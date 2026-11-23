@@ -491,8 +491,10 @@ re-canonicalized, so a shape-violation error raised on that second pass quotes w
 
 `BoundIsQueryWide` inspects the complete rebuilt bound each time a clause is canonicalized, and the clause's
 `query_wide_bound` field is set only when every component is query-wide (`IsQueryWideConstant`): a foldable
-expression, an entry of `BoundDecide::computed_values` marked `query_wide` (`IsDecideQueryWideValue`), or a function
-over those. The test is fail-safe: anything not listed is read as row-varying, so a
+expression, an entry of `BoundDecide::computed_values` marked `query_wide` or a recorded reducer with the whole-query
+key (`IsDecideQueryWideValue`), or a function over those. A bound that reads a recorded reducer is never query-wide:
+it is one value where its key is the whole query, so it may scale a reducer, and it is still data, which a repair
+edits as data. The test is fail-safe: anything not listed is read as row-varying, so a
 correlated subquery, which flattens onto a fresh table index while being per-row by construction, is never admitted.
 
 ### 3.9 The objective

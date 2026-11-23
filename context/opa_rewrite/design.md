@@ -110,13 +110,21 @@ own: its body and its scope each have one.
 | `BoundDecideClause` | struct | scope, body (the comparison), origin, and the facts of § 3.3 contract 4 | an AND child, its wrapper tags, `constraint_sources[i]` |
 | `BoundDecideReducerExpression` | `Expression` | its `kind` (`DecideReducerKind`: SUM, AVG, MIN, MAX, COUNT, NORM), set where the node is built and read by every reader; the bound aggregate function DuckDB runs for it, with its bind data (none for a NORM, a norm no definition has replaced, which its `norm` field names with its order and bound; the binder binds a norm's body as a scalar and takes its type from the norm's definition). An AVG is an AVG from the binder to the linear form, which scales its terms (R33). A helper definition (`reducer`), a tree G or range O (`aggregate`), a frame (`DecideFrameSpec::reducer`), a value link and a direct part hold the same enum, `children`, `filter` (its `when` and its members' NULL tests, each a `BoundDecideNullTestExpression`), `by` key index, own `per` scope index, written name, and what the rewrites record (`holds_reducer`). A frame is no reducer | a `BoundAggregateExpression` with `__group_key_`, `__qualified_by_`, `__decide_norm_`, `__written_norm_` tags; `norm` as a SUM with a patched return type |
 | `BoundDecideFrameExpression` | `Expression` | an index into `frames` and its children: the payload, and the key a collated MIN or MAX range compares. A range's reducer is `DecideFrameSpec::reduce`, the bound aggregate over the children's positions, held once in the frames table; a point has none, and no `first` is bound. The node has no `by`, `per`, norm or filter, so a reader that means a reducer tests the reducer class and one that means a frame tests this one (`TryGetDecideFrame`). `DecideFrameFold` builds the executable aggregate from the two where a frame is lowered (R28) | a `BoundDecideReducerExpression` whose alias carries `__frame_<i>__` |
-| `BoundDecide::computed_values` | table of `DecideComputedValue` | a computed value read whole, found by equality with its `value`: whether it is one value for the whole query, and whether it is a flattened subquery. No node wraps the read (R25) | `__query_wide_value__`, `__row_varying_subquery__`, `__bound_reducer__` on a leaf |
+| `BoundDecide::computed_values` | table of `DecideComputedValue` | a computed value read whole, found by equality with its `value`: whether it is one value for the whole query, and whether it is a flattened subquery. It holds the subquery placeholders only. A recorded reducer over data stores nothing here: its record says it (`DecideBoundAggregate`, whole-query `key`, `IsReadBy`), so the fact does not depend on which clause read the reducer first. A bound that reads a record stays data (`query_wide_bound` is false), so a repair edits it as data. No node wraps the read | `__query_wide_value__`, `__row_varying_subquery__`, `__bound_reducer__` on a leaf |
 
 - **Existing types are reused.** A clause's scope is today's `DecideClauseScope` (`decide_tree_terms.hpp:107`) and
   its origin is today's `DecideRowOrigin` (`decide_source_info.hpp:203`), held by the clause from binding on.
   `DecideEnclosingScope`, a pair of pointers to wrapper nodes, goes.
 - **`BoundDecide` is moved whole**: binder → `LogicalDecide` → physical planning. `LogicalDecide` keeps what is the
-  operator's own: `decide_index`, `optimized`, the solver choice, `value_checks`, `bound_aggregates`.
+  operator's own: `decide_index`, `optimized`, the solver choice, `value_checks`. The objective's texts
+  (`written_objective`, `canonical_objective`, `objective_canonical_differs`), `source_columns` and the reducer
+  records (`bound_aggregates`) are members of `BoundDecide`, which is the one argument a `DecideCanonicalizer` is
+  built from.
+- **`constraint_sources` keeps what outlives a rewritten clause.** `between_partner`, `between_upper` and
+  `qualifier` are read by diagnostics after a rewrite has replaced the clause, so the table holds them.
+  `repair_group_id` is a field of the shared `DecideRowOrigin`, read on provenance rows. The clause facts only the
+  optimizer reads (`structural`, `defines`, `minmax_easy`, `folded_bound`, `folded_clause_rows`,
+  `tightest_frame_bound`, `removal_group_id`) are not serialized.
 - **A reducer node keeps what the aggregate binding gives.** [read] `FunctionBinder` picks the overload, the return
   type and the argument casts for a decision reducer too (`decide_binder.cpp:848`), a collated MIN or MAX has two
   arguments (`decide_binder.cpp:1122`), and execution folds a data reducer with the bound function and its bind data
@@ -201,7 +209,7 @@ three steps, where column bindings are final (`plan_decide.cpp:224`):
    | Copy, equality, hash, serialization | `expression.json` | contract 3 |
 
    `BoundDecide` has one `EnumerateExpressions`: decisions, keys, frames, clauses, helper definitions.
-   `LogicalDecide`'s adds its own `value_checks` and `bound_aggregates`. [read] Four DuckDB passes read it (column
+   `LogicalDecide`'s adds its own `value_checks`. [read] Four DuckDB passes read it (column
    binding, column pruning, binding replacement, statistics), and the binder's `PlanSubqueries` lists the same
    fields by hand; it uses the one function. The DECIDE optimizer runs before join ordering and column pruning
    (`optimizer.cpp:147`), so nodes hold column bindings throughout planning. The debug build's

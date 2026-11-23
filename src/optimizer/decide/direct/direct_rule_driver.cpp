@@ -266,7 +266,7 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	// its copy decision once, from the real total. The bounds join every read, and the checks gate every read the rule
 	// takes.
 	DirectSourceReader reader(optimizer, std::move(decide.children[0]),
-	                          condition->source_reads + decide.bound_aggregates.size() + ir.row_checks.size(),
+	                          condition->source_reads + decide.bound.bound_aggregates.size() + ir.row_checks.size(),
 	                          late_materialization.stored_columns);
 	DirectAddBoundTables(optimizer, reader, decide);
 	DirectAddRowChecks(optimizer, reader, ir.row_checks);

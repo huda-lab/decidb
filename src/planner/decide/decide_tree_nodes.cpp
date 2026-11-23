@@ -8,6 +8,8 @@
 //===----------------------------------------------------------------------===//
 #include "duckdb/planner/decide/decide_tree_nodes.hpp"
 
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
+
 #include "duckdb/planner/expression/bound_decide_null_test_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
@@ -48,8 +50,13 @@ unique_ptr<Expression> MakeDecideNullTest(unique_ptr<Expression> value) {
 //===--------------------------------------------------------------------===//
 // A computed value read whole
 //===--------------------------------------------------------------------===//
-bool IsDecideQueryWideValue(const vector<DecideComputedValue> &values, const Expression &expr) {
-	for (auto &known : values) {
+bool IsDecideQueryWideValue(const BoundDecide &bound, const Expression &expr) {
+	for (auto &record : bound.bound_aggregates) {
+		if (record.key == DConstants::INVALID_INDEX && record.IsReadBy(expr)) {
+			return true;
+		}
+	}
+	for (auto &known : bound.computed_values) {
 		if (known.query_wide && Expression::Equals(*known.value, expr)) {
 			return true;
 		}

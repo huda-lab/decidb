@@ -203,8 +203,7 @@ void DecideOptimizer::RewriteFrameRanges(LogicalDecide &decide) {
 		return;
 	}
 	RangeLifter lifter(context, decide);
-	bool lifted_objective = false;
-	decide.EnumerateBodies([&](DecideOwnedBody &body) {
+	decide.RewriteBodies(context, [&](DecideOwnedBody &body) {
 		if (body.owner == Owner::OBJECTIVE) {
 			if (!HoldsRangeOverDecisions(decide, *body.expr)) {
 				return;
@@ -214,7 +213,7 @@ void DecideOptimizer::RewriteFrameRanges(LogicalDecide &decide) {
 			unordered_map<const Expression *, int> signs;
 			CollectRangeSigns(context, decide, body.expr, signs);
 			lifter.Lift(body.expr, ExtremumPush::DOWN, DConstants::INVALID_INDEX, signs);
-			lifted_objective = true;
+			body.changed = true;
 			return;
 		}
 		if (body.owner != Owner::CLAUSE || body.expr->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON ||
@@ -230,10 +229,8 @@ void DecideOptimizer::RewriteFrameRanges(LogicalDecide &decide) {
 		unordered_map<const Expression *, int> signs;
 		CollectRangeSigns(context, decide, comparison.left, signs);
 		lifter.Lift(comparison.left, ExtremumPushOf(comparison.type), body.Origin().source_clause_id, signs);
+		body.changed = true;
 	});
-	if (lifted_objective) {
-		decide.SetObjective(context, std::move(decide.bound.objective));
-	}
 }
 
 } // namespace duckdb

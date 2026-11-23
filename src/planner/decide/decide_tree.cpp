@@ -50,8 +50,7 @@ static unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context
 	facts->was_minmax_easy = clause.minmax_easy;
 	facts->scope = clause.scope.Copy();
 	facts->group_key = clause.group_key;
-	DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes,
-	                                  op.bound.keys, op.bound.is_boolean_var, op.bound.computed_values);
+	DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound);
 	const auto shape = clause.shape;
 	if (shape == CanonicalConstraintClass::INVALID) {
 		throw InternalException("DECIDE constraint reached term extraction with no shape: '%s'", comparison.ToString());
@@ -164,7 +163,7 @@ public:
 		}
 		definition_nodes.assign(op.helper_definitions.size(), DConstants::INVALID_INDEX);
 		frame_nodes.assign(op.bound.frames.size(), DConstants::INVALID_INDEX);
-		record_nodes.assign(op.bound_aggregates.size(), DConstants::INVALID_INDEX);
+		record_nodes.assign(op.bound.bound_aggregates.size(), DConstants::INVALID_INDEX);
 		tree->frame_aggregate_nodes.assign(op.frame_aggregates.size(), DConstants::INVALID_INDEX);
 	}
 
@@ -217,7 +216,7 @@ public:
 			reducer_nodes.clear();
 			node.root = node.objective = true;
 			node.per = DecideTreePer::ONE;
-			node.text = op.written_objective.empty() ? Text(*body) : op.written_objective;
+			node.text = op.bound.written_objective.empty() ? Text(*body) : op.bound.written_objective;
 			Gates(index, condition);
 			node.body = Lower(index, *body);
 			UseSignature(node, op.bound.objective.scope.signature);
@@ -232,7 +231,7 @@ public:
 				AddOrphan(Link(i));
 			}
 		}
-		for (idx_t i = 0; i < op.bound_aggregates.size(); i++) {
+		for (idx_t i = 0; i < op.bound.bound_aggregates.size(); i++) {
 			if (record_nodes[i] == DConstants::INVALID_INDEX) {
 				AddOrphan(Record(i));
 			}
@@ -436,7 +435,7 @@ private:
 		if (source < op.bound.constraint_sources.size()) {
 			return QuoteWrittenClause(op.bound.constraint_sources, source, op.bound.source_text);
 		}
-		return DecideWrittenObjective(op.bound.sense, op.written_objective);
+		return DecideWrittenObjective(op.bound.sense, op.bound.written_objective);
 	}
 
 	unique_ptr<Expression> Resolve(const Expression &expression) const {
@@ -558,7 +557,7 @@ private:
 				auto record = FindRecord(*copy.value);
 				if (record != DConstants::INVALID_INDEX) {
 					copy.kind = DecideSignatureFieldKind::BY_KEY;
-					copy.key = op.bound_aggregates[record].key;
+					copy.key = op.bound.bound_aggregates[record].key;
 					copy.value.reset();
 				} else {
 					copy.value = Resolve(*copy.value);
@@ -616,8 +615,7 @@ private:
 		BoundDecideClause canonical_envelope;
 		const BoundDecideClause *canonical = &clause;
 		if (owned) {
-			DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes,
-			                                  op.bound.keys, op.bound.is_boolean_var, op.bound.computed_values);
+			DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound);
 			canonical_envelope = canonicalizer.CanonicalizeFunctionRow(clause);
 			canonical = &canonical_envelope;
 		}
@@ -657,8 +655,7 @@ private:
 		if (scope.HasPer() && node.key != DConstants::INVALID_INDEX && facts->kind == ConstraintKind::USER_PARAMETER &&
 		    facts->defined_var == DConstants::INVALID_INDEX &&
 		    facts->scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
-			DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound.variable_scopes, op.bound.keyed_scopes,
-			                                  op.bound.keys, op.bound.is_boolean_var, op.bound.computed_values);
+			DecideCanonicalizer canonicalizer(context, op.decide_index, op.bound);
 			node.merges_classes = canonicalizer.MergesClasses(*row, node.key);
 		}
 		if (!scope.HasPer() && facts->scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
@@ -737,8 +734,8 @@ private:
 	}
 
 	idx_t FindRecord(const Expression &expression) const {
-		for (idx_t i = 0; i < op.bound_aggregates.size(); i++) {
-			if (op.bound_aggregates[i].IsReadBy(expression)) {
+		for (idx_t i = 0; i < op.bound.bound_aggregates.size(); i++) {
+			if (op.bound.bound_aggregates[i].IsReadBy(expression)) {
 				return i;
 			}
 		}
@@ -760,7 +757,7 @@ private:
 		if (kept.Is(DecideHelperKind::PRODUCT)) {
 			return Lower(owner, *op.helper_definitions[kept.index]->body, carried);
 		}
-		carried = carried || IsDecideQueryWideValue(op.bound.computed_values, expression) ||
+		carried = carried || IsDecideQueryWideValue(op.bound, expression) ||
 		          expression.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_NULL_TEST;
 		auto record = FindRecord(expression);
 		if (record != DConstants::INVALID_INDEX) {
@@ -948,7 +945,7 @@ private:
 		if (record_nodes[record_index] != DConstants::INVALID_INDEX) {
 			return record_nodes[record_index];
 		}
-		auto &record = op.bound_aggregates[record_index];
+		auto &record = op.bound.bound_aggregates[record_index];
 		auto index = NewNode(DecideNodeKind::REDUCER);
 		record_nodes[record_index] = index;
 		auto &node = *tree->nodes[index];

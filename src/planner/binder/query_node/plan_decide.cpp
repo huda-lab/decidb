@@ -119,9 +119,7 @@ unique_ptr<LogicalOperator> Binder::PlanDecide(BoundSelectNode &statement, uniqu
 	DecideFramePlacement frame_placement {
 	    statement.decide.frames, statement.decide.keys, statement.decide.keyed_scopes, {}};
 	{
-		DecideCanonicalizer canonicalizer(context, statement.decide_index, statement.decide.variable_scopes,
-		                                  statement.decide.keyed_scopes, statement.decide.keys,
-		                                  statement.decide.is_boolean_var, statement.decide.computed_values);
+		DecideCanonicalizer canonicalizer(context, statement.decide_index, statement.decide);
 		canonicalizer.QuoteMessagesWith(message_names);
 		canonicalizer.frames = &statement.decide.frames;
 		// The algebra of every clause, judged once on the one spelling canonicalization wrote.
@@ -190,10 +188,9 @@ unique_ptr<LogicalOperator> Binder::PlanDecide(BoundSelectNode &statement, uniqu
 	}
 
 	statement.decide.signatures = std::move(signatures.signatures);
-	auto decide_op = make_uniq<LogicalDecide>(statement.decide_index, std::move(statement.decide));
-	decide_op->written_objective = std::move(written_objective);
-	decide_op->canonical_objective = std::move(canonical_objective);
-	decide_op->objective_canonical_differs = objective_canonical_differs;
+	statement.decide.written_objective = std::move(written_objective);
+	statement.decide.canonical_objective = std::move(canonical_objective);
+	statement.decide.objective_canonical_differs = objective_canonical_differs;
 	// Capture the user's column names off the BindContext, which is still live here
 	// and is the authority name resolution itself used. Every source kind is covered
 	// uniformly: a base table's catalog names, a `t(a, b, c)` alias list over
@@ -202,9 +199,10 @@ unique_ptr<LogicalOperator> Binder::PlanDecide(BoundSelectNode &statement, uniqu
 	// list — is gone by then, leaving the plan's positional `col0` placeholders.
 	for (auto &binding : bind_context.GetBindingsList()) {
 		for (idx_t i = 0; i < binding->names.size(); i++) {
-			decide_op->source_columns.push_back({ColumnBinding(binding->index, i), binding->names[i]});
+			statement.decide.source_columns.push_back({ColumnBinding(binding->index, i), binding->names[i]});
 		}
 	}
+	auto decide_op = make_uniq<LogicalDecide>(statement.decide_index, std::move(statement.decide));
 	// ABS aux vars, MIN/MAX indicator links and objective types are created by DecideOptimizer (runs after plan
 	// creation)
 	decide_op->AddChild(std::move(root));

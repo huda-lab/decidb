@@ -75,7 +75,7 @@ private:
 	bool ReadsRecordedReducer(const Expression &expr) const {
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 			auto table = expr.Cast<BoundColumnRefExpression>().binding.table_index;
-			for (auto &known : decide.bound_aggregates) {
+			for (auto &known : decide.bound.bound_aggregates) {
 				if (known.column.table_index == table) {
 					return true;
 				}
@@ -127,7 +127,7 @@ private:
 	void AddRecordedKeys(const Expression &expr, vector<ExprPtr> &fields) {
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 			auto table = expr.Cast<BoundColumnRefExpression>().binding.table_index;
-			for (auto &known : decide.bound_aggregates) {
+			for (auto &known : decide.bound.bound_aggregates) {
 				if (known.column.table_index != table) {
 					continue;
 				}
@@ -190,10 +190,10 @@ private:
 
 void DirectAddBoundTables(Optimizer &optimizer, DirectSourceReader &reader, LogicalDecide &decide) {
 	BoundTableBuilder builder(optimizer, reader, decide);
-	for (auto &record : decide.bound_aggregates) {
+	for (auto &record : decide.bound.bound_aggregates) {
 		builder.Add(record);
 	}
-	decide.bound_aggregates.clear();
+	decide.bound.bound_aggregates.clear();
 }
 
 } // namespace duckdb

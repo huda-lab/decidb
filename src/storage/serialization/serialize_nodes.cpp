@@ -110,18 +110,11 @@ void BoundDecideClause::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<idx_t>(104, "signature", scope.signature, DConstants::INVALID_INDEX);
 	serializer.WriteProperty<optional_idx>(105, "per_location", per_location);
 	serializer.WritePropertyWithDefault<idx_t>(106, "source_clause_id", origin.source_clause_id, DConstants::INVALID_INDEX);
-	serializer.WritePropertyWithDefault<idx_t>(107, "removal_group_id", origin.removal_group_id, DConstants::INVALID_INDEX);
 	serializer.WritePropertyWithDefault<bool>(108, "objective", origin.objective, false);
 	serializer.WriteProperty<DecideBetweenHalf>(109, "between", between);
-	serializer.WritePropertyWithDefault<bool>(110, "structural", structural, false);
-	serializer.WritePropertyWithDefault<idx_t>(111, "defines", defines, DConstants::INVALID_INDEX);
-	serializer.WritePropertyWithDefault<bool>(112, "minmax_easy", minmax_easy, false);
-	serializer.WritePropertyWithDefault<bool>(113, "folded_bound", folded_bound, false);
-	serializer.WritePropertyWithDefault<bool>(114, "folded_clause_rows", folded_clause_rows, false);
 	serializer.WriteProperty<CanonicalConstraintClass>(115, "shape", shape);
 	serializer.WritePropertyWithDefault<idx_t>(116, "group_key", group_key, DConstants::INVALID_INDEX);
 	serializer.WritePropertyWithDefault<bool>(117, "query_wide_bound", query_wide_bound, false);
-	serializer.WritePropertyWithDefault<bool>(118, "tightest_frame_bound", tightest_frame_bound, false);
 }
 
 BoundDecideClause BoundDecideClause::Deserialize(Deserializer &deserializer) {
@@ -133,18 +126,11 @@ BoundDecideClause BoundDecideClause::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadPropertyWithExplicitDefault<idx_t>(104, "signature", result.scope.signature, DConstants::INVALID_INDEX);
 	deserializer.ReadProperty<optional_idx>(105, "per_location", result.per_location);
 	deserializer.ReadPropertyWithExplicitDefault<idx_t>(106, "source_clause_id", result.origin.source_clause_id, DConstants::INVALID_INDEX);
-	deserializer.ReadPropertyWithExplicitDefault<idx_t>(107, "removal_group_id", result.origin.removal_group_id, DConstants::INVALID_INDEX);
 	deserializer.ReadPropertyWithExplicitDefault<bool>(108, "objective", result.origin.objective, false);
 	deserializer.ReadProperty<DecideBetweenHalf>(109, "between", result.between);
-	deserializer.ReadPropertyWithExplicitDefault<bool>(110, "structural", result.structural, false);
-	deserializer.ReadPropertyWithExplicitDefault<idx_t>(111, "defines", result.defines, DConstants::INVALID_INDEX);
-	deserializer.ReadPropertyWithExplicitDefault<bool>(112, "minmax_easy", result.minmax_easy, false);
-	deserializer.ReadPropertyWithExplicitDefault<bool>(113, "folded_bound", result.folded_bound, false);
-	deserializer.ReadPropertyWithExplicitDefault<bool>(114, "folded_clause_rows", result.folded_clause_rows, false);
 	deserializer.ReadProperty<CanonicalConstraintClass>(115, "shape", result.shape);
 	deserializer.ReadPropertyWithExplicitDefault<idx_t>(116, "group_key", result.group_key, DConstants::INVALID_INDEX);
 	deserializer.ReadPropertyWithExplicitDefault<bool>(117, "query_wide_bound", result.query_wide_bound, false);
-	deserializer.ReadPropertyWithExplicitDefault<bool>(118, "tightest_frame_bound", result.tightest_frame_bound, false);
 	return result;
 }
 

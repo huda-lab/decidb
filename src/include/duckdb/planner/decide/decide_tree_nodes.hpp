@@ -57,11 +57,9 @@ inline const string &DecideWrittenName(const BoundFunctionExpression &call) {
 //! `weight`. The table holds the fact and DuckDB's passes rebind `value` with the clauses
 //! (BoundDecide::EnumerateExpressions), so a read of the value equals it wherever a rewrite copies it.
 struct DecideComputedValue {
-	//! What a clause reads: the column a flattened scalar subquery became, or the placeholder of a recorded reducer
-	//! (DecideBoundAggregate::column).
+	//! What a clause reads: the column a flattened scalar subquery became.
 	unique_ptr<Expression> value;
-	//! One value for the whole query: an uncorrelated subquery, and an objective's reducer over data with no `by`. A
-	//! correlated subquery is a value per row.
+	//! One value for the whole query: an uncorrelated subquery. A correlated subquery is a value per row.
 	bool query_wide = false;
 	//! A flattened scalar subquery, correlated or not. Its column is the planner's placeholder, not SQL the user can
 	//! edit, so a message about a bound holding one states the evaluated number.
@@ -72,8 +70,11 @@ struct DecideComputedValue {
 	static DecideComputedValue Deserialize(Deserializer &deserializer);
 };
 
-//! Whether `expr` is a computed value that is one value for the whole query.
-bool IsDecideQueryWideValue(const vector<DecideComputedValue> &values, const Expression &expr);
+struct BoundDecide;
+
+//! Whether `expr` reads a value computed once for the whole query: an uncorrelated subquery's column, or the column of
+//! a recorded reducer with no key (DecideBoundAggregate), whichever clause reads it.
+bool IsDecideQueryWideValue(const BoundDecide &bound, const Expression &expr);
 //! Whether `expr` reads a flattened scalar subquery anywhere.
 bool DecideHoldsSubqueryValue(const vector<DecideComputedValue> &values, const Expression &expr);
 

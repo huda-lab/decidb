@@ -70,31 +70,24 @@ public:
 	void Run() {
 		// A clause or an objective a value was replaced in goes back through the canonicalizing boundary: a column
 		// stands where a reducer stood, which the canonicalizer reads as a value of the row.
-		vector<BoundDecideClause *> rewritten;
-		decide.EnumerateBodies([&](DecideOwnedBody &body) {
+		decide.RewriteBodies(optimizer.context, [&](DecideOwnedBody &body) {
 			if (body.owner != DecideOwnedBody::Owner::CLAUSE && body.owner != DecideOwnedBody::Owner::OBJECTIVE) {
 				return;
 			}
-			auto written = body.expr->Copy();
+			replaced = false;
 			if (body.owner == DecideOwnedBody::Owner::CLAUSE) {
 				ReadClause(*body.clause);
 			} else {
 				ReadObjective(body.expr, body.rows);
 			}
-			if (!Expression::Equals(*written, *body.expr)) {
-				rewritten.push_back(body.clause.get());
-			}
+			body.changed = replaced;
 		});
-		for (auto clause : rewritten) {
-			if (clause == &decide.bound.objective) {
-				decide.SetObjective(optimizer.context, std::move(decide.bound.objective));
-			} else {
-				decide.CanonicalizeClause(optimizer.context, *clause);
-			}
-		}
 	}
 
 private:
+	//! Whether the body being read had a part replaced (DecideOwnedBody::changed).
+	mutable bool replaced = false;
+
 	//! A reducer's column and the `by` key it has one value per group of.
 	struct ReducerColumn {
 		ColumnBinding binding;
@@ -104,7 +97,6 @@ private:
 	//! A `per K:` groups no reducer: its clause is read like any other. Its key says which rows are in a class.
 	void ReadClause(BoundDecideClause &clause) {
 		if (clause.body->GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-			in_objective = false;
 			when = clause.scope.when.get();
 			class_key = clause.scope.class_key;
 			auto &comparison = clause.body->Cast<BoundComparisonExpression>();
@@ -118,7 +110,6 @@ private:
 	//! The objective, under its `when c:`: an objective is produced once, so it has no `per` key. Its condition holds
 	//! no reducer.
 	void ReadObjective(unique_ptr<Expression> &expr, const Expression *objective_when) {
-		in_objective = true;
 		when = objective_when;
 		class_key = DConstants::INVALID_INDEX;
 		read_as = DecideValueRole::COEFFICIENT;
@@ -142,6 +133,7 @@ private:
 		auto &reducer = expr->Cast<BoundDecideReducerExpression>();
 		if (reducer.children.empty() || !BoundExpressionReferencesDecide(*reducer.children[0], decide.decide_index)) {
 			expr = MakeReducerColumn(reducer, path ? *path : DecideReducerPath());
+			replaced = true;
 			return;
 		}
 		auto below = path ? path->Below(reducer) : DecideReducerPath().Below(reducer);
@@ -198,6 +190,7 @@ private:
 		}
 		auto tightest = DecideIsUpperBound(comparison.type) ? DecideReducerKind::MIN : DecideReducerKind::MAX;
 		comparison.right = calc.Out(InKey(clause.group_key, RecordOver(tightest, *comparison.right, clause.group_key)));
+		replaced = true;
 		// The bound is replaced by a column of its value, which a message quotes as it quotes the bound.
 		if (location.IsValid()) {
 			comparison.right->SetQueryLocation(location);
@@ -237,6 +230,7 @@ private:
 				auto value = calc.Of(*bound);
 				auto none = calc.Constant(Value(value->return_type));
 				bound = calc.Out(calc.If(calc.IsNull(calc.Of(element.Grouping())), none, value));
+				replaced = true;
 			}
 		}
 	}
@@ -249,6 +243,7 @@ private:
 		}
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
 			expr = MakeReducerColumn(expr->Cast<BoundDecideReducerExpression>(), path);
+			replaced = true;
 			return;
 		}
 		ExpressionIterator::EnumerateChildren(*expr,
@@ -338,15 +333,15 @@ private:
 		if (reads) {
 			record.reads = calc.Out(reads);
 		}
-		for (auto &known : decide.bound_aggregates) {
+		for (auto &known : decide.bound.bound_aggregates) {
 			if (known.Equals(record)) {
 				return known.column;
 			}
 		}
 		record.column = ColumnBinding(optimizer.binder.GenerateTableIndex(),
 		                              DecideKeyElements(decide.bound.keys, record.key).size());
-		decide.bound_aggregates.push_back(std::move(record));
-		return decide.bound_aggregates.back().column;
+		decide.bound.bound_aggregates.push_back(std::move(record));
+		return decide.bound.bound_aggregates.back().column;
 	}
 
 	//! The check of what a reducer reads, which raises for a NaN in it: its argument (or a norm's written body:
@@ -381,15 +376,6 @@ private:
 	                                         ExprPtr column) const {
 		auto result = calc.Out(InKey(key, column));
 		NameAsWritten(*result, reducer);
-		auto &computed_values = decide.bound.computed_values;
-		if (in_objective && key == DConstants::INVALID_INDEX && !IsDecideQueryWideValue(computed_values, *result)) {
-			// The objective is produced once: a reducer over data with no `by` is one value for the whole query, as a
-			// subquery is, so it may scale a reducer there.
-			DecideComputedValue computed;
-			computed.value = result->Copy();
-			computed.query_wide = true;
-			computed_values.push_back(std::move(computed));
-		}
 		return result;
 	}
 
@@ -645,8 +631,6 @@ private:
 	//! What the reducers being rewritten are read as: a bound's value, or a coefficient's inside a reducer over
 	//! decisions.
 	DecideValueRole read_as = DecideValueRole::BOUND;
-	//! The objective is being rewritten, which is produced once.
-	bool in_objective = false;
 	vector<ReducerColumn> reducer_columns;
 };
 

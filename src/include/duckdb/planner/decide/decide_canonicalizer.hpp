@@ -209,9 +209,7 @@ public:
 	//! framing (a deny-list of the relation's own bindings) reads the same for `weight` but silently admits a
 	//! CORRELATED subquery, which also flattens onto a fresh table index while being per-row by construction.
 	//! The canonicalizer reads the three vectors as they are when it asks, so entries added later are seen.
-	DecideCanonicalizer(ClientContext &context, idx_t decide_index, vector<DecideVarScopeInfo> variable_scopes,
-	                    const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> &keys,
-	                    const vector<bool> &is_boolean, const vector<DecideComputedValue> &computed_values);
+	DecideCanonicalizer(ClientContext &context, idx_t decide_index, const BoundDecide &bound);
 
 	//! Canonicalize the clauses of SUCH THAT in place: each body, with its clause's scope; a `when` carries no
 	//! algebra and is only rewritten to the one spelling. With `sources`, it reports in each clause's
@@ -448,9 +446,10 @@ private:
 	//! values in a class (D70); and a value known for the whole query the empty key.
 	idx_t ScopeKeyOf(const Expression &expr, idx_t data_key) const;
 
-	//! Whether `body` is a comparison whose bound is one value for the whole query: every component of the complete
-	//! canonical bound is query-wide (BoundDecideClause::query_wide_bound). Read from the bound each time a clause
-	//! is canonicalized, since a rewrite may have replaced its children.
+	//! Whether `body` is a comparison whose bound is one value the query states for itself: every component of the
+	//! complete canonical bound is query-wide and none is a reducer over the rows, which is data
+	//! (BoundDecideClause::query_wide_bound). Read from the bound each time a clause is canonicalized, since a
+	//! rewrite may have replaced its children.
 	bool BoundIsQueryWide(const Expression &body) const;
 
 	//! The refusal of a decision-bearing `factor` on a reducer: the decision's type when `positive` (the factor without
@@ -543,8 +542,9 @@ private:
 	//! The keyed scopes and keys (LogicalDecide::keyed_scopes, LogicalDecide::keys), read where they are.
 	const vector<KeyedScopeInfo> &keyed_scopes;
 	const vector<DecideKey> &keys;
-	//! The computed values read whole (BoundDecide::computed_values), read where they are.
-	const vector<DecideComputedValue> &computed_values;
+	//! The bound record, read where it is: its computed values and recorded reducers say which values are one for the
+	//! whole query.
+	const BoundDecide &bound;
 
 	//! `expr` as a scope refusal quotes it: the text the user wrote for it, parenthesized where it binds looser than
 	//! the operator it is an operand of (`parent_precedence`, as in RenderDecideSource).

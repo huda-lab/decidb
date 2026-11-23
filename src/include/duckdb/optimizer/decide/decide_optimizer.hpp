@@ -54,8 +54,8 @@ public:
 	unique_ptr<LogicalOperator> Optimize(unique_ptr<LogicalOperator> plan);
 
 	//! Throws InternalException when a clause no longer has what bound reduction relied on
-	//! (BoundDecideClause::bound_read_shape, bound_read_type): one read in another shape is in the aggregate shape, or
-	//! one whose bound is its group's tightest value has another direction. A DEBUG build calls it after every pass.
+	//! (BoundDecideClause::bound_read_shape, bound_read_type): whether it is one row per group, and, for one whose
+	//! bound is its group's tightest value, its direction. A DEBUG build calls it after every pass.
 	static void VerifyBoundReads(const LogicalDecide &decide);
 
 private:

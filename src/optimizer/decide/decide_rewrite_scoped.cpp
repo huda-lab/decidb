@@ -473,7 +473,8 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 
 	// The clauses are rewritten where they sit, the comparisons among them: a placeholder or a bound `IN` is no
 	// clause for a reducer to stand in.
-	auto rewrite_clause = [&](BoundDecideClause &clause) {
+	auto rewrite_clause = [&](DecideOwnedBody &body) {
+		auto &clause = *body.clause;
 		auto &expr = clause.body;
 		auto &scope = clause.scope;
 		if (expr->GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
@@ -567,7 +568,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		// Helpers stand where the reducers were: the clause goes back through the canonicalizing boundary (a helper
 		// under a sign is spelled as a decision is), which gives it the shape of what is left, one row per class or
 		// per group of the reducers it keeps.
-		decide.CanonicalizeClause(optimizer.context, clause);
+		body.changed = true;
 	};
 
 	// The objective is one expression under its sense (`MAXIMIZE b * sum(x)`): a reducer under a Boolean decision
@@ -600,27 +601,20 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 			    (products && site.under_decision)) {
 				ReplaceReducer(helpers, names, booleans, path, Helpers::ClassKeyOf(body.clause->scope),
 				               ExtremumPush::DOWN, DConstants::INVALID_INDEX, site);
+				body.changed = true;
 			}
 		}
 		// Every product in the objective, whatever shape it was read in: a reducer a helper replaced inside a function
 		// or a nest may stand under a Boolean factor without the shape tag.
 		HandProductsToBilinear(body.expr, body.Origin());
 	};
-	// The objective goes back through the canonicalizing boundary when a helper or a product's link replaced a part
-	// of it.
-	bool objective_rewritten = false;
-	decide.EnumerateBodies([&](DecideOwnedBody &body) {
+	decide.RewriteBodies(optimizer.context, [&](DecideOwnedBody &body) {
 		if (body.owner == DecideOwnedBody::Owner::CLAUSE) {
-			rewrite_clause(*body.clause);
+			rewrite_clause(body);
 		} else if (body.owner == DecideOwnedBody::Owner::OBJECTIVE) {
-			auto written = body.expr->Copy();
 			rewrite_objective(body);
-			objective_rewritten = !Expression::Equals(*written, *body.expr);
 		}
 	});
-	if (objective_rewritten) {
-		decide.SetObjective(optimizer.context, std::move(decide.bound.objective));
-	}
 }
 
 } // namespace duckdb

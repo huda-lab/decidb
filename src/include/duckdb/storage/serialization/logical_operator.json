@@ -1027,11 +1027,13 @@
       {
         "id": 213,
         "name": "written_objective",
+        "property": "bound.written_objective",
         "type": "string"
       },
       {
         "id": 214,
         "name": "canonical_objective",
+        "property": "bound.canonical_objective",
         "type": "string"
       },
       {
@@ -1043,6 +1045,7 @@
       {
         "id": 216,
         "name": "source_columns",
+        "property": "bound.source_columns",
         "type": "vector<DecideSourceColumnName>"
       },
       {
@@ -1060,6 +1063,7 @@
       {
         "id": 221,
         "name": "objective_canonical_differs",
+        "property": "bound.objective_canonical_differs",
         "type": "bool"
       },
       {

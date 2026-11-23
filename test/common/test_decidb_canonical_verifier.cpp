@@ -57,13 +57,11 @@ BoundDecideClause Clause(duckdb::unique_ptr<Expression> body) {
 TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifier]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	// The canonicalizer reads the keyed scopes and keys where they are, so they outlive it.
-	duckdb::vector<KeyedScopeInfo> keyed_scopes;
-	duckdb::vector<DecideKey> keys;
-	duckdb::vector<DecideComputedValue> computed_values;
-	DecideCanonicalizer canonicalizer(*con.context, DECIDE_INDEX,
-	                                  {DecideVarScopeInfo::Row(), DecideVarScopeInfo::Row()}, keyed_scopes, keys,
-	                                  duckdb::vector<bool> {false, false}, computed_values);
+	// The canonicalizer reads the bound record where it is, so it outlives it.
+	BoundDecide bound;
+	bound.variable_scopes = {DecideVarScopeInfo::Row(), DecideVarScopeInfo::Row()};
+	bound.is_boolean_var = {false, false};
+	DecideCanonicalizer canonicalizer(*con.context, DECIDE_INDEX, bound);
 	auto canonical_of = [&](BoundDecideClause clause) {
 		duckdb::vector<BoundDecideClause> clauses;
 		clauses.push_back(std::move(clause));
