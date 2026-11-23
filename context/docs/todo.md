@@ -13,8 +13,8 @@ the owner rules first.
 # Phase 5 — The parser builds the tree
 
 ## 5.1 The reducer node (one lane)
-- [ ] TREE-12 Member tests are a reducer field — pipeline/todo.md § TREE-12
-- [ ] TREE-14 The side copy of an inlined reducer (decision) — pipeline/todo.md § TREE-14 (needs: TREE-12)
+- [ ] TREE-12 Member tests: a reducer field, or the marker node (decision) — pipeline/todo.md § TREE-12
+- [ ] TREE-14 The side copy of an inlined reducer (decision) — pipeline/todo.md § TREE-14
 - [ ] TREE-15 The written name's home (decision) — pipeline/todo.md § TREE-15
 
 ## 5.2 The clause record (needs: 5.1) (one lane)

@@ -28,44 +28,57 @@ every one of them:
 - **Tests** (R32): focused tests in each task's **Done when**; `make decide-test` once at the end of each queue
   group; every other suite in TREE-28.
 
-## TREE-12 — Member tests are a reducer field
+## TREE-12 — Member tests: a reducer field, or the marker node (decision)
 
-- **Problem.** A member's NULL test is a marker class, `BoundDecideNullTestExpression`, inside the reducer's filter
-  conjunction. Six readers split it back out (`decide_reducer_path.cpp:62`, `decide_tree.cpp:517,783`,
-  `direct_ir.cpp:230`, `direct_bound_tables.cpp:96`, `decide_source_provenance.cpp:243`,
-  `decide_rewrite_rhs_bounds.cpp:416`). The class also marks the guard around a recorded reducer's value, which
-  the tree reads as "carried". It costs two cases in DuckDB's executor and a serialized class.
-- **Change.** A `member_tests` list beside `filter` on the reducer, as `BoundWindowExpression` keeps its partitions
-  apart from its filter; `ToAggregate` conjoins the two. The guard of a recorded reducer's value is a fact of its
-  `DecideBoundAggregate` record. The class, its executor cases, its serialization and the six splitters go.
-- **Done when.** `BoundDecideNullTestExpression` is named nowhere; `./test/decide/run_tests.sh -k "null or skip or
-  when or filter"`, `build/release/test/unittest "[decidb]"` and
-  `DECIDB_VERIFY_SERIALIZER=1 ./test/decide/run_tests.sh -k "null or skip"` pass; design.md § 3.2.2 and § 3.5 name
-  the field.
+- **Decision needed.** A member's NULL test is a marker class, `BoundDecideNullTestExpression`, inside the reducer's
+  filter conjunction. The filter does not stay on the reducer: it is copied into the linear form's term filters
+  (`decide_linear_form.cpp:794,820,934,954`), an ABS helper's rows (`decide_rewrite_abs.cpp:383`), a definition's
+  `when` (`decide_tree_definition.cpp:180`), a folded row's filter (`decide_singleton_row_folding.cpp:188`), the
+  L0 count (`decide_rewrite_norm_in.cpp:131`), the objective swap's weights (`decide_rewrite_scoped.cpp:386,393`),
+  a record's reads (`decide_rewrite_rhs_bounds.cpp:273,319`) and a direct part (`direct_ir.cpp:320`). The tree tells
+  a test from a written condition in each (`DecideTree` `Gates`: a test is a member test and no signature field).
+- **Options.** (1) A `member_tests` list on the reducer, and a (rows, tests) pair on each of the ten carriers; the
+  class, its two executor cases and its serialization go. A carrier that drops the list reads NULL rows with no
+  error. (2) The marker node stays: one conjunction on every carrier, the reader asks the class. The six splitters
+  stay. `03_logical_plan/done.md` states the reason.
+- **Recommendation.** 2. It is the smaller form with fewer ways to go wrong (R27): option 1 trades one class for ten
+  pairs.
+- **Done when.** The owner rules. Under 1: `BoundDecideNullTestExpression` is named nowhere;
+  `./test/decide/run_tests.sh -k "null or skip or when or filter"`, `build/release/test/unittest "[decidb]"` and
+  `DECIDB_VERIFY_SERIALIZER=1 ./test/decide/run_tests.sh -k "null or skip"` pass. Under 2: this section and its
+  queue line go.
 
-## TREE-14 — The side copy of an inlined reducer
+## TREE-14 — The side copy of an inlined reducer (decision)
 
-- **Decision needed.** `BoundDecideReducerExpression::retained` indexes `LogicalDecide::retained_expressions`, a
-  copy of the nest the reducer replaced (`bound_decide_reducer_expression.hpp:87`, `decide_tree.cpp:770`). The
-  design gives the fact no home: "the reducer keeps its own scope and key". The reason the inlined reducer cannot
-  lower by itself is not traced.
-- **Options.** (1) Trace it and delete the field and the table: the reducer lowers from its own fields. Cost
-  unknown until traced. (2) Keep both, with the reason stated in the stage doc and design.md § 3.5.
-- **Recommendation.** 1. The task opens by tracing why the copy is read and reports the form before any code.
-- **Done when.** The owner rules on the reported form; under option 1 `retained` is named nowhere and
+- **Decision needed.** `InlineSumOfGroupSums` replaces the objective nest `sum(per K: inner(e) by (G))` by a copy
+  of `inner` with the outer's rows, and keeps the nest in `LogicalDecide::retained_expressions`, named by the
+  reducer's `retained` field. Traced: the copy is read because the nest has two readings (R31). The inlined
+  reducer is the term reading: `e` summed over every row, an AVG scaled by its `G` group (`avg_group_key`), so its
+  `by` is `G`. The tree needs the node reading: one value `by ()`, an operand per `K`, the inner G by `G`
+  (`decide_tree.cpp:763-777` lowers the copy and maps the inlined reducer to its G). One reducer node cannot hold
+  both: its `by` is the inner's.
+- **Options.** (1) The nest stays in the objective as written. `InlineSumOfGroupSums` becomes a predicate (the
+  shape test it has), the value rewrite leaves such a nest alone, and the linear form reads through it: the inner
+  body's terms under the joined rows, `avg_group_key` the inner's `by`. `retained`, the table, its serialization
+  field and the tree's branch go. (2) Keep both, with this reason stated in `05_optimizer/done.md` and design.md
+  § 3.5.
+- **Recommendation.** 1. No copy and no field; the two readings are two readers of one expression.
+- **Done when.** The owner rules. Under 1: `retained` is named nowhere and
   `./test/decide/run_tests.sh -k "inline or nested or helper or minmax"` passes.
 
-## TREE-15 — The written name's home
+## TREE-15 — The written name's home (decision)
 
-- **Decision needed.** `written_name` is a field on DuckDB's `FunctionExpression` and `BoundFunctionExpression`,
-  serialized, copied by hand at rebuilds (`decide_product_form.cpp:421`, `decide_term_split.cpp:42`) and passed as
-  a parameter (`decide_canonicalizer.hpp:529,532`).
-- **Options.** (1) The render cuts the name from the query text at the node's location. (2) The binder stops
-  renaming the function, so its own name is the written one. (3) The field stays.
-- **Recommendation.** Size 1 and 2 first and report which needs no copy and no core-class field; 3 only if both
-  cost more states than the field.
-- **Done when.** The owner rules on the reported form; the chosen form is built;
-  `./test/decide/run_tests.sh -k "explain or message or name or render"` passes.
+- **Decision needed.** `written_name` is a field on DuckDB's `FunctionExpression` and `BoundFunctionExpression`
+  and on the reducer, serialized, copied by hand at rebuilds (`decide_product_form.cpp:403`,
+  `decide_term_split.cpp:42`) and passed as a parameter (`decide_canonicalizer.hpp:526,531`).
+- **Options.** (1) The render cuts the name from the query text at the node's location. Sized: a node
+  canonicalization builds has no text (`power(e, 2)` and `abs(e)` of a norm's definition, a rebuilt product), so a
+  second source of the name stays for those. (2) The binder stops renaming aliases to their primary. Sized: about
+  60 checks compare a primary name (`+`, `-`, `*`, `@`, `**`); each would test an alias set. (3) The field stays:
+  the binder spells each function one way (`RespellDecideAliases`), and the one fact left is a display string.
+- **Recommendation.** 3. Options 1 and 2 each have more states than the field.
+- **Done when.** The owner rules. Under 3: this section and its queue line go, and design.md § 3.5 states the
+  reason.
 
 ## TREE-16 — A clause's shape has one writer
 
