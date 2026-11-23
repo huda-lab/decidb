@@ -108,8 +108,8 @@ own: its body and its scope each have one.
 |---|---|---|---|
 | `BoundDecide` | struct | decisions with their scopes, keys, keyed scopes, frames, clauses, the objective clause, sense, constant offset, source text | 13 fields copied one by one from `BoundSelectNode` to `LogicalDecide` |
 | `BoundDecideClause` | struct | scope, body (the comparison), origin, and the facts of § 3.3 contract 4 | an AND child, its wrapper tags, `constraint_sources[i]` |
-| `BoundDecideReducerExpression` | `Expression` | the bound aggregate function with its bind data (none for a norm no definition has replaced, which its `norm` field names with its order and bound), `children`, `filter` (its `when` and its members' NULL tests, each a `BoundDecideNullTestExpression`), `by` key index, own `per` scope index, written name, and what the rewrites record (`count_scale`, `holds_reducer`, `retained`). Every DECIDE aggregate is one, a frame's included, which its `frame` field tells | a `BoundAggregateExpression` with `__group_key_`, `__qualified_by_`, `__decide_norm_`, `__written_norm_` tags; `norm` as a SUM with a patched return type |
-| the `frame` field of `BoundDecideReducerExpression` | a field, not a class | an index into `frames`. A frame's aggregate is a reducer node already (the function, its bind data, its rows, and for a range the reducer's facts), so a frame class would repeat it and owe the class obligations; `TryGetDecideFrame` tests the class and the field | a `BoundDecideReducerExpression` whose alias carries `__frame_<i>__` |
+| `BoundDecideReducerExpression` | `Expression` | the bound aggregate function with its bind data (none for a norm no definition has replaced, which its `norm` field names with its order and bound), `children`, `filter` (its `when` and its members' NULL tests, each a `BoundDecideNullTestExpression`), `by` key index, own `per` scope index, written name, and what the rewrites record (`count_scale`, `holds_reducer`, `retained`). A frame is no reducer | a `BoundAggregateExpression` with `__group_key_`, `__qualified_by_`, `__decide_norm_`, `__written_norm_` tags; `norm` as a SUM with a patched return type |
+| `BoundDecideFrameExpression` | `Expression` | an index into `frames` and its children: the payload, and the key a collated MIN or MAX range compares. A range's reducer is `DecideFrameSpec::reduce`, the bound aggregate over the children's positions, held once in the frames table; a point has none, and no `first` is bound. The node has no `by`, `per`, norm or filter, so a reader that means a reducer tests the reducer class and one that means a frame tests this one (`TryGetDecideFrame`). `DecideFrameFold` builds the executable aggregate from the two where a frame is lowered (R28) | a `BoundDecideReducerExpression` whose alias carries `__frame_<i>__` |
 | `BoundDecide::computed_values` | table of `DecideComputedValue` | a computed value read whole, found by equality with its `value`: whether it is one value for the whole query, and whether it is a flattened subquery. No node wraps the read (R25) | `__query_wide_value__`, `__row_varying_subquery__`, `__bound_reducer__` on a leaf |
 
 - **Existing types are reused.** A clause's scope is today's `DecideClauseScope` (`decide_tree_terms.hpp:107`) and
@@ -231,7 +231,7 @@ three steps, where column bindings are final (`plan_decide.cpp:224`):
 One carrier at a time across every stage (branch by abstraction). Each step has three moves, each its own commit
 with goldens identical: (a) every reader goes through an accessor; (b) the accessor reads a field, and the binder
 or rewrite writes it; (c) the tags are deleted. [read] Much of (a) exists: `EnumerateBodies` (19 calls) hands each
-pass a clause's scope, and `DecideReducerGroupKey` and `TryGetDecideFrame` read a reducer's key and frame.
+pass a clause's scope, and `DecideReducerGroupKey` and `TryGetDecideFrame` read a reducer's key and a frame node's index.
 
 The steps run in order, one at a time: each touches files the next one touches.
 
@@ -283,7 +283,7 @@ goes with the later one.
 | TREE-4 | `QUERY_WIDE_VALUE`, `ROW_VARYING_SUBQUERY`, `BOUND_REDUCER` | an entry of `BoundDecide::computed_values`; the guard around a recorded reducer's value holds a `BoundDecideNullTestExpression` |
 | TREE-4 | `QUERY_WIDE_BOUND` | a clause field |
 | TREE-4 | `WRITTEN_NAME_` | on a reducer: a field. On a scalar call (`@`, `**`): a display field `written_name` on `BoundFunctionExpression`, beside `is_operator` |
-| TREE-5 | `FRAME_`, `FRAME_TIGHTEST_BOUND` | the reducer's `frame` field; the clause field `tightest_frame_bound` |
+| TREE-5 | `FRAME_`, `FRAME_TIGHTEST_BOUND` | the frame node's `frame` field; the clause field `tightest_frame_bound` |
 | TREE-5 | `FRAME_AGGREGATE_` | the data reducer's `frame_aggregate` field, naming its `frame_aggregates` record; the lowered column holds it as `DecideFrameColumn::aggregate` |
 | TREE-6 | `ABS_FUNCTION_`, `ABS_FUNCTION_NEG_`, `BILINEAR_FUNCTION_GROUP_`, `L0_INDICATOR_FUNCTION_`, `DEFINITION_FUNCTION_`, `BODY_DEFINITION`, `L0_AUTO_BOUND`, `L0_WRITTEN_BOUND`, `L0_TOLERANCE` | on a kept call: `BoundFunctionExpression::definition`, a typed reference to its entry of `helper_definitions`. On a row: the clause field `helper_row`; an L0 bound is automatic or written by its definition's `auto_m` |
 | TREE-7 | `FRAME_COLUMN` | nothing: the render of a physical plan reads the source's column count (`DecideSourceNames::source_columns`), and a reference past it, a column the tree computes, prints its name as written |
@@ -400,7 +400,7 @@ Cleaning this code before the phase that replaces it is work done twice.
 |---|---|
 | Each clause was lowered twice at planning, the two joined by expression address; 82 internal cross-checks | Phase 5: the rewrites produce the tree |
 | One AND expression for all clauses, with `when` and `per` as tagged conjunctions | Phase 5: the clause record (ARCH-1) |
-| `norm` bound as a `SUM` with a patched return type; a frame as a tagged aggregate guarded at 28 sites | Phase 5: node classes |
+| `norm` bound as a `SUM` with a patched return type | Phase 5: node classes |
 | `DecideNode` is one struct of 67 fields; `DecideTree::Validate` has complexity 142 | Phase 5: nodes split by kind |
 | The emitter scatters node values into arrays as long as the input; evaluation scales with clauses times rows (`repro/clauses_times_rows.sql`) | Phase 6 |
 | Helpers are created at planning and removed by `InlineReducerValueLinks` (300 lines, complexity 90) | Phase 6 |

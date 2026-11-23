@@ -133,15 +133,13 @@ innermost first, so a definition reads only helpers of definitions before it. Ev
    shared thing is a table named by index (R25), as `keys` and `frames` are. A wrapper node would sit between a
    flattened column and everything that matches a bound by shape (`StripCastsForIdentity`, `UnwrapDecideCasts`,
    `KeyHolds`), each of which would need a look-through, and DuckDB's executor would need a case for it.
-3. *Every DECIDE aggregate, a frame's included, is one `BoundDecideReducerExpression`*, as DuckDB's
-   `BoundWindowExpression` is one class for every window function. One bind path makes them all
-   (`DecideBinder::BindAggregate`; `BindFrameAggregate` for a frame's), and a frame's aggregate carries reducer facts,
-   so a second class would be a two-class case in every function that reads a reducer. The design's
-   `BoundDecideFrameExpression` is therefore the field `frame`: a frame class would hold a frame index over a payload
-   and still need the function, the bind data, the rows and the facts a range's reducer has, and would owe the
-   obligations of a class for them. `TryGetDecideFrame` (`decide_reducer_path.hpp`) is the one test: the class and the
-   field. A frame column is another class, a `BoundReferenceExpression` the lowering makes, so the two are not
-   confused.
+3. *A frame is its own class, `BoundDecideFrameExpression`* (R28): an index into `frames` and its children, the payload
+   and the key a collated MIN or MAX range compares. A frame is a value of the row, so it has no `by`, `per`, norm or
+   `when` to hold, and a reader that means a reducer tests the reducer class alone. A range's reducer is a fact of the
+   frame, so it is held once, in `DecideFrameSpec::reduce`: the bound aggregate over the node's children by position. A
+   point reads one row and has none. `DecideFrameFold` (`decide_reducer_path.hpp`) builds the aggregate execution folds
+   from the two, where a frame is lowered. `TryGetDecideFrame` is the class test. A frame column is another class, a
+   `BoundReferenceExpression` the lowering makes, so the two are not confused.
 4. *A reference to a frame column is told by its position, with no mark*: its name is the frame as written, which a
    message prints as it stands and not as an identifier. The reference is a chunk column DuckDB's executor reads, a
    `BoundReferenceExpression`, which has no field for the fact. A source column's reference, which DuckDB's
@@ -289,7 +287,7 @@ relation-qualified reducer over decisions whose body has a field), and by the ob
 data `value`, a `decision` (an index into `decide_variables`), a `by` key (an index
 into `keys`) or a `frame` (an index into `frames`, D82), with its text. `frames` holds one
 `DecideFrameSpec` per frame selector (`../../language/guide.md` §5.6, property 223),
-indexed by the `frame` field of the aggregate it binds to: its anchors and their
+indexed by the `frame` field of the frame node: its anchors and their
 `k`, `every`, `all`, its fallback and order key, `desc`, `cyclic`, and its `within` key as
 an index into `keys`, and a range's reducer (id 121); then where the canonicalizer placed it (stage 04, ids
 113-120): `rows`, the rows its timelines read (its path's, null for every row), `timeline_key`, the names its

@@ -332,6 +332,10 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 	for (auto &definition : helper_definitions) {
 		if (definition->kind == DecideHelperKind::REDUCER_VALUE) {
 			// The reducer is the helper's definition and no reducer of a clause: a walk reads what it holds.
+			if (definition->Frame() != DConstants::INVALID_INDEX) {
+				callback(&definition->Member());
+				continue;
+			}
 			auto &reducer = definition->Reducer();
 			for (auto &child : reducer.children) {
 				callback(&child);
@@ -367,6 +371,17 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 
 BoundDecideReducerExpression &DecideHelperDefinition::Reducer() const {
 	return body->Cast<BoundDecideReducerExpression>();
+}
+
+idx_t DecideHelperDefinition::Frame() const {
+	return body->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_FRAME
+	           ? body->Cast<BoundDecideFrameExpression>().frame
+	           : DConstants::INVALID_INDEX;
+}
+
+unique_ptr<Expression> &DecideHelperDefinition::Member() const {
+	return Frame() == DConstants::INVALID_INDEX ? Reducer().children[0]
+	                                            : body->Cast<BoundDecideFrameExpression>().children[0];
 }
 
 void LogicalDecide::NameDefinition(Expression &call, idx_t index) {
@@ -453,10 +468,11 @@ void LogicalDecide::EnumerateBodies(const std::function<void(DecideOwnedBody &)>
 		case DecideHelperKind::REDUCER_VALUE: {
 			// A reducer value helper's body belongs to no clause: it is read on the rows its path and its own `when`
 			// keep.
-			auto &reducer = definition.Reducer();
-			DecideOwnedBody body(Owner::HELPER, i, reducer.children[0]);
+			const bool frame = definition.Frame() != DConstants::INVALID_INDEX;
+			DecideOwnedBody body(Owner::HELPER, i, definition.Member());
 			body.push = ValueLinkPush(definition);
-			body.kept_rows = DecideRowsKeptByBoth(definition.when.get(), reducer.filter.get());
+			body.kept_rows =
+			    DecideRowsKeptByBoth(definition.when.get(), frame ? nullptr : definition.Reducer().filter.get());
 			body.rows = body.kept_rows.get();
 			callback(body);
 			break;

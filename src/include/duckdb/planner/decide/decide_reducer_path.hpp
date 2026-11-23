@@ -25,6 +25,7 @@
 #include "duckdb/planner/decide/decide_tree_nodes.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/expression/bound_decide_frame_expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 namespace duckdb {
@@ -55,6 +56,9 @@ idx_t FindOrCreateDecidePathKey(const vector<idx_t> &path_keys, vector<DecideKey
 bool TryGetDecideFrame(const Expression &expr, idx_t &frame);
 //! Whether `expr` holds a frame marker anywhere, itself included.
 bool ContainsDecideFrame(const Expression &expr);
+//! The aggregate that folds a window of `frame`'s range over data: the range's reducer (DecideFrameSpec::reduce) over
+//! what the frame node reads. Null for a frame whose record holds no reducer (a point, a range over decisions).
+unique_ptr<Expression> DecideFrameFold(const DecideFrameSpec &spec, const BoundDecideFrameExpression &frame);
 //! Expression::Equals, with every frame marker the same frame in both: a marker names its frame only by its tag, an
 //! alias, which Equals ignores, so `at(previous: x)` and `at(next: x)` are otherwise one expression. Every DECIDE
 //! comparison of trees that may hold a frame reads this one.

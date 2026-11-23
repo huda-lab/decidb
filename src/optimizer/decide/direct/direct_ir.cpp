@@ -302,11 +302,6 @@ private:
 	}
 
 	void ReadReducer(const BoundDecideReducerExpression &aggregate, DirectPart &part) const {
-		idx_t frame;
-		if (TryGetDecideFrame(aggregate, frame)) {
-			MarkNotProved(part.status); // a frame's marker, no reducer
-			return;
-		}
 		D_ASSERT(aggregate.children.size() == 1);
 		if (!aggregate.function) {
 			// Canonicalization replaced every order but 0 with its definition. Order 0 needs indicator variables, so no

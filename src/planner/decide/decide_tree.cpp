@@ -572,7 +572,7 @@ private:
 				for (auto &link : op.helper_definitions) {
 					if (link->kind == DecideHelperKind::REDUCER_VALUE && copy.decision == link->helper) {
 						copy.decision = DConstants::INVALID_INDEX;
-						const idx_t frame = link->Reducer().frame;
+						const idx_t frame = link->Frame();
 						if (frame == DConstants::INVALID_INDEX) {
 							copy.kind = DecideSignatureFieldKind::BY_KEY;
 							copy.key = link->path_key;
@@ -922,19 +922,18 @@ private:
 			return definition_nodes[link_index];
 		}
 		auto &link = *op.helper_definitions[link_index];
-		auto &reducer = link.Reducer();
-		if (reducer.frame != DConstants::INVALID_INDEX) {
-			auto index = Frame(reducer.frame, nullptr, reducer.children[0].get());
+		if (link.Frame() != DConstants::INVALID_INDEX) {
+			auto index = Frame(link.Frame(), nullptr, link.Member().get());
 			definition_nodes[link_index] = index;
 			auto &node = *tree->nodes[index];
 			node.definition = link_index;
-			node.qualifier_scope = reducer.per;
 			node.decision_value = true;
 			if (link.helper < tree->value_nodes.size()) {
 				tree->value_nodes[link.helper] = index;
 			}
 			return index;
 		}
+		auto &reducer = link.Reducer();
 		auto index = NewNode(DecideNodeKind::REDUCER);
 		definition_nodes[link_index] = index;
 		auto &node = *tree->nodes[index];
@@ -1025,9 +1024,11 @@ private:
 		if (frame.order) {
 			node.over = Resolve(*frame.order);
 		}
-		if (marker && marker->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
-			auto &aggregate = marker->Cast<BoundDecideReducerExpression>();
-			node.function = unique_ptr_cast<Expression, BoundAggregateExpression>(aggregate.ToAggregate());
+		if (marker && marker->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_FRAME) {
+			auto &aggregate = marker->Cast<BoundDecideFrameExpression>();
+			if (auto fold = DecideFrameFold(frame, aggregate)) {
+				node.function = unique_ptr_cast<Expression, BoundAggregateExpression>(std::move(fold));
+			}
 			for (auto &argument : aggregate.children) {
 				node.arguments.push_back(Lower(index, *argument));
 			}

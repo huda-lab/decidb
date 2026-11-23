@@ -2,6 +2,7 @@
 #include "duckdb/planner/decide/decide_tree_nodes.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
+#include "duckdb/planner/expression/bound_decide_frame_expression.hpp"
 #include "duckdb/parser/expression/comparison_expression.hpp"
 #include "duckdb/parser/expression/conjunction_expression.hpp"
 #include "duckdb/parser/expression/decide_frame_expression.hpp"
@@ -997,10 +998,14 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 	// The fallback's own place, which its refusals point at; read before it binds in place.
 	auto fallback_location = frame.fallback ? frame.fallback->GetQueryLocation() : optional_idx();
 
-	// The payload, under the aggregate that reads it at the selected rows: the range's
-	// reducer, else `first`, which reads the one row a point selects.
-	unique_ptr<Expression> result;
+	// What the frame reads at the rows it selects: a point's payload, or what a range's reducer reads, bound as that
+	// reducer over the payload.
+	vector<unique_ptr<Expression>> children;
+	LogicalType value_type;
+	optional_idx location = frame.GetQueryLocation();
+	string alias;
 	if (frame.IsRange()) {
+		unique_ptr<Expression> result;
 		auto name = StringUtil::Lower(frame.reducer);
 		if (!IsDecideAggregateName(name) && name != "count") {
 			throw NotImplementedException(frame, "a range frame reducing with '%s' is not supported", frame.reducer);
@@ -1050,13 +1055,28 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 			auto &argument_type = GetBoundAggregate(*result)->children[0]->return_type;
 			spec.fallback = BoundCastExpression::AddCastToType(context, std::move(fallback), argument_type);
 		}
+		auto *reducer = GetBoundAggregate(*result);
+		if (!reducer || reducer->children.empty() || !reducer->function || reducer->filter) {
+			throw InternalException("DECIDE: a range frame did not bind to a reducer over its payload");
+		}
+		// The frame holds what the reducer reads; its record holds the reducer, over those positions.
+		vector<unique_ptr<Expression>> positions;
+		for (idx_t i = 0; i < reducer->children.size(); i++) {
+			positions.push_back(make_uniq<BoundReferenceExpression>(reducer->children[i]->return_type, i));
+		}
+		spec.reduce = make_uniq<BoundAggregateExpression>(*reducer->function, std::move(positions), nullptr,
+		                                                  std::move(reducer->bind_info), AggregateType::NON_DISTINCT);
+		spec.reduce->return_type = reducer->return_type;
+		value_type = reducer->return_type;
+		alias = reducer->GetAlias();
+		location = reducer->GetQueryLocation();
+		children = std::move(reducer->children);
 	} else {
 		ErrorData payload_error;
 		BindChild(frame.payload, depth, payload_error);
 		if (payload_error.HasError()) {
 			return BindResult(std::move(payload_error));
 		}
-		vector<unique_ptr<Expression>> children;
 		children.push_back(std::move(BoundExpression::GetExpression(*frame.payload)));
 		// The point reads its payload where it selects a row and its fallback where it does
 		// not, so its value takes a type that holds both: `else 0.5` over a whole-numbered
@@ -1075,15 +1095,7 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 			children[0] = BoundCastExpression::AddCastToType(context, std::move(children[0]), common);
 			spec.fallback = BoundCastExpression::AddCastToType(context, std::move(fallback), common);
 		}
-		ErrorData first_error;
-		result = BindFrameAggregate("first", std::move(children[0]), frame, nullptr, first_error);
-		if (!result) {
-			return BindResult(std::move(first_error));
-		}
-	}
-	auto *aggregate = GetBoundAggregate(*result);
-	if (!aggregate || aggregate->children.empty()) {
-		throw InternalException("DECIDE: a frame selector did not bind to an aggregate over its payload");
+		value_type = children[0]->return_type;
 	}
 
 	// The order key binds as plain SQL, as a `when` condition does.
@@ -1112,11 +1124,13 @@ BindResult DecideBinder::BindDecideFrame(DecideFrameExpression &frame, idx_t dep
 	    KeyElements(context, ResolveKey(binder, frame.within, DecisionNames(variables), source_text)),
 	    StringUtil::Join(within_text, ", "), *qualifier_context->keys);
 
-	// The aggregate prints as the frame written: DecideBinder::BindExpression gives it the frame's query location.
+	// The node prints as the frame written: DecideBinder::BindExpression gives it the frame's query location.
 	auto &frames = *qualifier_context->frames;
-	aggregate->frame = frames.size();
+	auto node = make_uniq<BoundDecideFrameExpression>(std::move(value_type), frames.size(), std::move(children));
+	node->SetAlias(alias);
+	node->SetQueryLocation(location);
 	frames.push_back(std::move(spec));
-	return BindResult(std::move(result));
+	return BindResult(std::move(node));
 }
 
 BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {

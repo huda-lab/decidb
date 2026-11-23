@@ -134,7 +134,7 @@ void DecideShapeCheck::CheckFramePart(const Expression &part) const {
 void DecideShapeCheck::CheckFrames(const Expression &expr) const {
 	idx_t frame;
 	if (TryGetDecideFrame(expr, frame)) {
-		CheckFramePart(*expr.Cast<BoundDecideReducerExpression>().children[0]);
+		CheckFramePart(*expr.Cast<BoundDecideFrameExpression>().children[0]);
 		if (frames[frame].fallback) {
 			CheckFramePart(*frames[frame].fallback);
 		}
@@ -203,7 +203,7 @@ static bool IsBoundAvgAggregate(const Expression &expr) {
 		return false;
 	}
 	auto &agg = expr.Cast<BoundDecideReducerExpression>();
-	return agg.function && StringUtil::CIEquals(agg.function->name, "avg") && agg.frame == DConstants::INVALID_INDEX;
+	return agg.function && StringUtil::CIEquals(agg.function->name, "avg");
 }
 
 //! Is `expr` provably whole-numbered from declared types alone?
@@ -232,6 +232,13 @@ static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoi
 		return DecideTypeIsWholeNumbered(cast.return_type) ||
 		       DecideSideIsWholeNumbered(*cast.child, allow_avg_hoist, decide_index, addends_count);
 	}
+	case ExpressionClass::BOUND_DECIDE_FRAME: {
+		// A frame is a value of the row, every addend and its `else` part of it: whole when the type its payload and
+		// `else` share is, and a range's SUM, MIN or MAX of them; an AVG range divides, so its value is no whole type.
+		auto &frame = expr.Cast<BoundDecideFrameExpression>();
+		return frame.children.size() == 1 && DecideTypeIsWholeNumbered(frame.children[0]->return_type) &&
+		       DecideTypeIsWholeNumbered(frame.return_type);
+	}
 	case ExpressionClass::BOUND_DECIDE_REDUCER: {
 		auto &agg = expr.Cast<BoundDecideReducerExpression>();
 		if (!agg.function) {
@@ -239,12 +246,6 @@ static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoi
 			return DecideSideIsWholeNumbered(*agg.children[0], false, decide_index, true);
 		}
 		const auto &name = agg.function->name;
-		// A frame is a value of the row, every addend and its `else` part of it: whole when the type its payload and
-		// `else` share is, and a range's SUM, MIN or MAX of them; an AVG range divides.
-		if (agg.frame != DConstants::INVALID_INDEX) {
-			return !StringUtil::CIEquals(name, "avg") && agg.children.size() == 1 &&
-			       DecideTypeIsWholeNumbered(agg.children[0]->return_type);
-		}
 		const bool extremum = StringUtil::CIEquals(name, "min") || StringUtil::CIEquals(name, "max");
 		if (extremum && agg.children.size() == 1) {
 			return DecideSideIsWholeNumbered(*agg.children[0], false, decide_index, true);

@@ -35,6 +35,7 @@ class BoundConstantExpression;
 class BoundDefaultExpression;
 class BoundDecideNullTestExpression;
 class BoundDecideReducerExpression;
+class BoundDecideFrameExpression;
 class BoundFunctionExpression;
 class BoundOperatorExpression;
 class BoundParameterExpression;

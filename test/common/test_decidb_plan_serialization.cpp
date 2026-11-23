@@ -1061,7 +1061,6 @@ TEST_CASE("A bound DECIDE reducer copies every field and compares by what it com
 	source.count_scale = true;
 	source.holds_reducer = true;
 	source.retained = 3;
-	source.frame = 4;
 	source.frame_aggregate = 5;
 	source.alias = "named";
 	source.query_location = 7;
@@ -1103,7 +1102,6 @@ TEST_CASE("A bound DECIDE reducer copies every field and compares by what it com
 	REQUIRE(changed([&](Reducer &r) { r.count_scale = false; }) == another_fact);
 	REQUIRE(changed([&](Reducer &r) { r.holds_reducer = false; }) == another_fact);
 	REQUIRE(changed([&](Reducer &r) { r.retained = 0; }) == another_fact);
-	REQUIRE(changed([&](Reducer &r) { r.frame = 0; }) == another_fact);
 	REQUIRE(changed([&](Reducer &r) { r.frame_aggregate = 0; }) == another_fact);
 	// The written name and the alias are display only.
 	REQUIRE(changed([&](Reducer &r) { r.written_name = "sum"; }) == display_only);

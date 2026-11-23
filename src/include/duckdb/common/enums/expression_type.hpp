@@ -154,7 +154,9 @@ enum class ExpressionType : uint8_t {
 	// DeciDB: a NULL test a reducer's rows gain beside its written `when`
 	BOUND_DECIDE_NULL_TEST = 235,
 	// DeciDB: a reducer of a DECIDE clause
-	BOUND_DECIDE_REDUCER = 236
+	BOUND_DECIDE_REDUCER = 236,
+	// DeciDB: a frame of a DECIDE clause
+	BOUND_DECIDE_FRAME = 237
 };
 
 //===--------------------------------------------------------------------===//
@@ -213,6 +215,8 @@ enum class ExpressionClass : uint8_t {
 	BOUND_DECIDE_NULL_TEST = 43,
 	// DeciDB: a reducer of a DECIDE clause (BoundDecideReducerExpression)
 	BOUND_DECIDE_REDUCER = 44,
+	// DeciDB: a frame of a DECIDE clause (BoundDecideFrameExpression)
+	BOUND_DECIDE_FRAME = 45,
 	//===--------------------------------------------------------------------===//
 	// Miscellaneous
 	//===--------------------------------------------------------------------===//

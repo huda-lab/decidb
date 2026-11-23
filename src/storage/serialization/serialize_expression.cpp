@@ -48,6 +48,9 @@ unique_ptr<Expression> Expression::Deserialize(Deserializer &deserializer) {
 	case ExpressionClass::BOUND_CONSTANT:
 		result = BoundConstantExpression::Deserialize(deserializer);
 		break;
+	case ExpressionClass::BOUND_DECIDE_FRAME:
+		result = BoundDecideFrameExpression::Deserialize(deserializer);
+		break;
 	case ExpressionClass::BOUND_DECIDE_NULL_TEST:
 		result = BoundDecideNullTestExpression::Deserialize(deserializer);
 		break;
@@ -186,6 +189,21 @@ void BoundConstantExpression::Serialize(Serializer &serializer) const {
 unique_ptr<Expression> BoundConstantExpression::Deserialize(Deserializer &deserializer) {
 	auto value = deserializer.ReadProperty<Value>(200, "value");
 	auto result = duckdb::unique_ptr<BoundConstantExpression>(new BoundConstantExpression(value));
+	return std::move(result);
+}
+
+void BoundDecideFrameExpression::Serialize(Serializer &serializer) const {
+	Expression::Serialize(serializer);
+	serializer.WriteProperty<LogicalType>(200, "return_type", return_type);
+	serializer.WritePropertyWithDefault<idx_t>(201, "frame", frame);
+	serializer.WritePropertyWithDefault<vector<unique_ptr<Expression>>>(202, "children", children);
+}
+
+unique_ptr<Expression> BoundDecideFrameExpression::Deserialize(Deserializer &deserializer) {
+	auto return_type = deserializer.ReadProperty<LogicalType>(200, "return_type");
+	auto frame = deserializer.ReadPropertyWithDefault<idx_t>(201, "frame");
+	auto children = deserializer.ReadPropertyWithDefault<vector<unique_ptr<Expression>>>(202, "children");
+	auto result = duckdb::unique_ptr<BoundDecideFrameExpression>(new BoundDecideFrameExpression(std::move(return_type), frame, std::move(children)));
 	return std::move(result);
 }
 

@@ -7,6 +7,7 @@
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_decide_null_test_expression.hpp"
+#include "duckdb/planner/expression/bound_decide_frame_expression.hpp"
 #include "duckdb/planner/expression/bound_decide_reducer_expression.hpp"
 #include "duckdb/planner/expression/bound_default_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"

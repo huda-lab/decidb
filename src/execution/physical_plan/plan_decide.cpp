@@ -183,8 +183,8 @@ static void NameInputColumns(DecideDisplay &display, const DecideTree &tree, Log
 		if (link->kind != DecideHelperKind::REDUCER_VALUE) {
 			continue;
 		}
-		auto &reducer = link->Reducer();
-		for (auto *expr : {reducer.children[0].get(), reducer.filter.get(), link->when.get()}) {
+		auto *filter = link->Frame() == DConstants::INVALID_INDEX ? link->Reducer().filter.get() : nullptr;
+		for (auto *expr : {link->Member().get(), filter, link->when.get()}) {
 			if (expr) {
 				harvest(*expr);
 			}

@@ -48,8 +48,7 @@ bool decide_rewrite::BilinearReadsBody(const LogicalDecide &decide, const Decide
 		return true;
 	}
 	auto &definition = *decide.helper_definitions[body.index];
-	return definition.kind != DecideHelperKind::REDUCER_VALUE ||
-	       definition.Reducer().frame == DConstants::INVALID_INDEX;
+	return definition.kind != DecideHelperKind::REDUCER_VALUE || definition.Frame() == DConstants::INVALID_INDEX;
 }
 
 void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {

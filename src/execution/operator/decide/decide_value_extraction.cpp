@@ -51,7 +51,8 @@ unique_ptr<Expression> ToChunkReferences(const Expression &expr, ClientContext &
 		auto &colref = expr.Cast<BoundColumnRefExpression>();
 		return make_uniq_base<Expression, BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
 	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER ||
+	    expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_FRAME) {
 		// The operator evaluates row values only. A reducer of data is a column by now (the optimizer's bound-side
 		// window rewrite); one of a decision is a set of terms, never evaluated.
 		throw InternalException("DECIDE: a reducer reached row evaluation: %s", expr.ToString());

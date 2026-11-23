@@ -522,10 +522,10 @@ payload that reads none is refused here, which no layer below would see: the mar
 frame in a `when`, a key or a `by` (`ValidateNoFrame`: *"a frame selector is not allowed in when, per, by, within or an
 order key"*).
 
-`DecideBinder::BindDecideFrame` binds the frame onto the aggregate that reads its payload at the selected rows: the
-range's reducer (`sum`, `avg`, `min`, `max` or `count`), else `first`, which reads the one row a point selects. It
-records a `DecideFrameSpec` (`logical_decide.hpp`) on the clause's frame list, the aggregate (a
-`BoundDecideReducerExpression`, `BindFrameAggregate`) naming the entry by its `frame` field and with the frame as written
+`DecideBinder::BindDecideFrame` binds the frame as a `BoundDecideFrameExpression`: the entry's index and the payload it
+reads at the selected rows. A range's reducer (`sum`, `avg`, `min`, `max` or `count`) is bound once, into the entry's
+`reduce`, over the node's children by position; a point selects one row and binds none. It
+records a `DecideFrameSpec` (`logical_decide.hpp`) on the clause's frame list, with the frame as written
 (its defaults left out) as a source fragment of its own: the anchors and
 their `k`, `every`, `all`, the fallback (a number, *"else ''a'' is not a number"*, whose doubled quote is the text's own plus the sentence's; `else NULL` written, or one
 that folds to NULL, is none, D86), the order key bound as
@@ -543,8 +543,7 @@ with the clause's; the canonicalizer then places every frame after canonicalizin
 `PlaceObjectiveFrames`), and a frame no walk placed is an internal error.
 
 A range's `else` is one of the values its reducer reads, so payload and `else` take one type, as a point's do, and the
-reducer is bound again over it (`BindFrameAggregate`, the catalog aggregate over a bound payload, a point's `first`
-too): `else 0.5` over a whole payload sums decimals, and the `else` takes the type the bound reducer reads, which its
+reducer is bound again over it (`BindFrameAggregate`, the catalog aggregate over a bound payload): `else 0.5` over a whole payload sums decimals, and the `else` takes the type the bound reducer reads, which its
 overload may widen (`sum` of a FLOAT reads a DOUBLE). The range's reducer name is recorded
 (`DecideFrameSpec::reducer`).
 

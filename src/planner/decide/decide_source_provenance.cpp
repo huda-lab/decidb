@@ -313,10 +313,6 @@ static string RenderReducer(const BoundDecideReducerExpression &agg, const strin
 }
 
 static string RenderAggregate(const BoundDecideReducerExpression &agg, const RenderContext &ctx) {
-	// A frame marker is `first(e)` or the range's reducer, which no one wrote: it prints as the frame.
-	if (ctx.frames && agg.frame < ctx.frames->size()) {
-		return (*ctx.frames)[agg.frame].spelling;
-	}
 	string body = agg.children.empty() ? string() : RenderSource(*agg.children[0], ctx);
 	// A norm's definition reads as written, `norm(e, p)`.
 	if (auto written_body = DecideWrittenNormBody(agg)) {
@@ -474,6 +470,14 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 		return RenderFunction(expr.Cast<BoundFunctionExpression>(), ctx, parent_precedence);
 	case ExpressionClass::BOUND_DECIDE_REDUCER:
 		return RenderAggregate(expr.Cast<BoundDecideReducerExpression>(), ctx);
+	case ExpressionClass::BOUND_DECIDE_FRAME: {
+		// A frame prints as its record spells it.
+		const auto frame = expr.Cast<BoundDecideFrameExpression>().frame;
+		if (ctx.frames && frame < ctx.frames->size()) {
+			return (*ctx.frames)[frame].spelling;
+		}
+		break;
+	}
 	default:
 		break;
 	}

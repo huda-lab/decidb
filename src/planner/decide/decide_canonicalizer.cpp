@@ -71,11 +71,9 @@ bool TryMatchScaledAggregate(const Expression &expr, idx_t decide_index, ScaledA
 		return false;
 	}
 
-	// A reducer, not a frame's marker: a frame is a tuple term, scaled as one.
+	// A frame is no reducer: it is a tuple term, scaled as one.
 	auto is_reducer = [&](const Expression &child) {
-		auto *node = UnwrapDecideCasts(child, decide_index);
-		idx_t frame;
-		return node->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER && !TryGetDecideFrame(*node, frame);
+		return UnwrapDecideCasts(child, decide_index)->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER;
 	};
 	idx_t aggregate_child;
 	if (is_div && is_reducer(*func.children[0])) {
@@ -284,7 +282,8 @@ static void CollectAbsentDecisionKeys(const Expression &expr, idx_t decide_index
                                       const vector<DecideVarScopeInfo> &variable_scopes,
                                       const vector<KeyedScopeInfo> &scopes, const vector<DecideKey> &keys,
                                       vector<unique_ptr<Expression>> &out) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER ||
+	    expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_FRAME) {
 		return;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
@@ -308,9 +307,7 @@ static void CollectAbsentDecisionKeys(const Expression &expr, idx_t decide_index
 void DecideCanonicalizer::SkipNullData(Expression &expr, const vector<KeyedScopeInfo> &scopes,
                                        const vector<DecideKey> &keys) const {
 	ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) { SkipNullData(child, scopes, keys); });
-	idx_t frame;
-	if (expr.GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER || !ReferencesDecideVar(expr) ||
-	    TryGetDecideFrame(expr, frame)) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER || !ReferencesDecideVar(expr)) {
 		return;
 	}
 	auto &reducer = expr.Cast<BoundDecideReducerExpression>();
@@ -443,6 +440,7 @@ static bool KeyHolds(const vector<DecideKey> &keys, idx_t key, const Expression 
 	case ExpressionClass::BOUND_COLUMN_REF:
 	case ExpressionClass::BOUND_SUBQUERY:
 	case ExpressionClass::BOUND_DECIDE_REDUCER:
+	case ExpressionClass::BOUND_DECIDE_FRAME:
 		return false;
 	default:
 		break;
@@ -479,8 +477,10 @@ idx_t DecideCanonicalizer::ScopeKeyOf(const Expression &expr, idx_t data_key) co
 		// take several in a class, each a variant of its own (D70).
 		return DECIDE_ROW_KEY;
 	}
-	// A reducer is one value per group of its own `by`: ClassifyScoped reads it as a reducer term, not here.
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
+	// A reducer is one value per group of its own `by`: ClassifyScoped reads it as a reducer term, not here. A frame
+	// is a value of the row.
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER ||
+	    expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_FRAME) {
 		return DECIDE_ROW_KEY;
 	}
 	if (expr.IsFoldable()) {
@@ -1701,6 +1701,9 @@ void DecideCanonicalizer::CollectSignatureFields(const Expression &expr, idx_t k
 		field.frame = frame;
 		field.text = spec.text;
 		add(std::move(field));
+		return;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_FRAME) {
 		return;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {

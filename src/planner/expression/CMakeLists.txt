@@ -11,6 +11,7 @@ add_library_unity(
   bound_conjunction_expression.cpp
   bound_constant_expression.cpp
   bound_decide_null_test_expression.cpp
+  bound_decide_frame_expression.cpp
   bound_decide_reducer_expression.cpp
   bound_expanded_expression.cpp
   bound_function_expression.cpp

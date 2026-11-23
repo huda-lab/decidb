@@ -156,7 +156,7 @@ public:
 			ReplaceWithDecision(context, decide, link.helper, slot);
 			return;
 		}
-		auto &marker = slot->Cast<BoundDecideReducerExpression>();
+		auto &marker = slot->Cast<BoundDecideFrameExpression>();
 		if (marker.children.size() != 1) {
 			throw InternalException("DECIDE: a range frame marker reads no payload: %s", spec.text);
 		}

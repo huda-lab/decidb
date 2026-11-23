@@ -307,6 +307,29 @@
     "constructor": ["return_type", "index"]
   },
   {
+    "class": "BoundDecideFrameExpression",
+    "base": "Expression",
+    "enum": "BOUND_DECIDE_FRAME",
+    "members": [
+      {
+        "id": 200,
+        "name": "return_type",
+        "type": "LogicalType"
+      },
+      {
+        "id": 201,
+        "name": "frame",
+        "type": "idx_t"
+      },
+      {
+        "id": 202,
+        "name": "children",
+        "type": "vector<Expression*>"
+      }
+    ],
+    "constructor": ["return_type", "frame", "children"]
+  },
+  {
     "class": "BoundDecideNullTestExpression",
     "base": "Expression",
     "enum": "BOUND_DECIDE_NULL_TEST",

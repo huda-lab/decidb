@@ -120,6 +120,10 @@ struct DecideFrameSpec {
 	bool range = false;
 	//! A range's reducer, lower case: sum, avg, min, max or count; empty for a point
 	string reducer;
+	//! A range's reducer as the binder bound it over what the frame reads (BoundDecideFrameExpression::children), each
+	//! argument a reference to that child's position: the aggregate execution folds a window of data with. Null for a
+	//! point, and for the range a point becomes (PointsInQuadraticTermsAsRanges), which is over decisions.
+	unique_ptr<Expression> reduce;
 	//! The point, or the range's first end, and its k
 	DecideFrameAnchor from = DecideFrameAnchor::FIRST;
 	int64_t from_k = 1;
@@ -325,6 +329,11 @@ struct DecideHelperDefinition {
 	//! members the payload at the rows the window reads and, with an `else`, the `else` at the window's anchor once
 	//! per missing position (the O's DecideBody::members and fallback, DecideTermLowering).
 	BoundDecideReducerExpression &Reducer() const;
+	//! REDUCER_VALUE: the frame whose range over decisions the helper is, when its body is that frame's node
+	//! (BoundDecideFrameExpression); INVALID_INDEX when its body is a reducer.
+	idx_t Frame() const;
+	//! REDUCER_VALUE: what the helper reduces, the reducer's argument or the frame's payload.
+	unique_ptr<Expression> &Member() const;
 	//! REDUCER_VALUE: "sum", "avg", "min" or "max": the reducer's function, or its frame's (DecideFrameSpec::reducer).
 	string agg_name;
 	//! REDUCER_VALUE: the key the helper has one instance per among the rows `when` keeps, into `keys`: the reducer's

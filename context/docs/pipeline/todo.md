@@ -28,21 +28,6 @@ every one of them:
 - **Tests** (R32): focused tests in each task's **Done when**; `make decide-test` once at the end of each queue
   group; every other suite in TREE-28.
 
-## TREE-13 — A frame is its own class
-
-- **Problem.** A frame is a `BoundDecideReducerExpression` with a `frame` field (R28). A point frame is `first(e)`
-  posing as an aggregate. `TryGetDecideFrame` guards 28 sites and `ContainsDecideFrame` 7
-  (`decide_reducer_path.cpp:19`, `decide_canonicalizer.cpp:313`, `decide_rewrite_scoped.cpp:359`,
-  `decide_shape_check.cpp:206`). A frame node can carry `by`, `per`, a norm, a filter. A range's reducer is held
-  twice: on the node and in `DecideFrameSpec::reducer`.
-- **Change.** `BoundDecideFrameExpression`: a frame index and its payload, with the four duties of a new class. The
-  frame's reducer lives in its `DecideFrameSpec` alone. The binder makes no `first`. A reader that means "a reducer"
-  tests the reducer class, and the frame guards go. `DecideFrameSpec::reducer` holds the frame's reducer; TREE-10 gives it the kind's type.
-- **Done when.** `TryGetDecideFrame` and `ContainsDecideFrame` are named nowhere, or each remaining use is a class
-  test; `./test/decide/run_tests.sh -k "frame or at_ or range or previous or over"`,
-  `build/release/test/unittest "[decidb]"` and `DECIDB_VERIFY_SERIALIZER=1 ./test/decide/run_tests.sh -k "frame"`
-  pass; design.md § 3.2.2 and § 3.4 describe the class.
-
 ## TREE-10 — A reducer holds its kind; a norm is bound as itself
 
 - **Problem.** `BoundDecideReducerExpression` has no kind. About 25 readers compare `function->name` strings
@@ -57,7 +42,6 @@ every one of them:
   of AVG (R33): the node is an AVG from the binder to lowering; `RewriteAvgInExpression` only records its account;
   `count_scale` and the SUM rebind go; the linear form scales a kind-AVG reducer's terms. `DecideFrameSpec::reducer`
   is the same enum. The form is `context/opa_rewrite/review/TREE-10-form.md`.
-- **Needs.** TREE-13.
 - **Done when.** No reader compares a reducer's function name; `./test/decide/run_tests.sh -k "norm or avg or
   minmax or reducer or count"` and `build/release/test/unittest "[decidb]"` pass; design.md § 3.2.2 names the kind; `language/explain.md` shows an AVG clause with
   its account line and no rewritten `sum(...)` layer; every test that pins that layer is listed in the report.
@@ -100,7 +84,6 @@ every one of them:
 - **Options.** (1) Trace it and delete the field and the table: the reducer lowers from its own fields. Cost
   unknown until traced. (2) Keep both, with the reason stated in the stage doc and design.md § 3.5.
 - **Recommendation.** 1. The task opens by tracing why the copy is read and reports the form before any code.
-- **Needs.** TREE-13.
 - **Done when.** The owner rules on the reported form; under option 1 `retained` is named nowhere and
   `./test/decide/run_tests.sh -k "inline or nested or helper or minmax"` passes.
 
@@ -197,7 +180,6 @@ every one of them:
   switch (`logical_decide.cpp:332-351,437-466`). `DecideHelperRef::kind` copies the entry's kind.
 - **Change.** A base with the head fields and a derived class per kind, reached by `Cast<T>()`, with virtual
   `EnumerateExpressions` and `Bodies`, as `LogicalOperator` does. A field exists only on the kind that has it.
-- **Needs.** TREE-13.
 - **Done when.** No reader switches on the kind to pick fields;
   `./test/decide/run_tests.sh -k "abs or product or bilinear or norm or minmax or helper or definition"` and
   `build/release/test/unittest "[decidb]"` pass.
@@ -297,7 +279,7 @@ every one of them:
 - **Recommendation.** 1a, 2a, 3a.
 - **Change.** R17: each rule reads the clauses and nodes; `DirectIR` and `DirectFrontEnd` go; `NULL_GUARD_TAG` and
   its two writers go.
-- **Needs.** TREE-13, TREE-20.
+- **Needs.** TREE-20.
 - **Done when.** `DirectIR` and `NULL_GUARD_TAG` are named nowhere; `./test/decide/run_tests.sh -k "direct"` and
   `build/release/test/unittest "[decidb]"` pass; no rule fires or declines on a query where it did the other.
 

@@ -234,6 +234,7 @@ void LogicalOperatorVisitor::VisitExpression(unique_ptr<Expression> *expression)
 		break;
 	case ExpressionClass::BOUND_DECIDE_NULL_TEST:
 	case ExpressionClass::BOUND_DECIDE_REDUCER:
+	case ExpressionClass::BOUND_DECIDE_FRAME:
 		break;
 	default:
 		throw InternalException("Unrecognized expression type in logical operator visitor");

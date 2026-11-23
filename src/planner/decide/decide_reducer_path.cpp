@@ -17,11 +17,29 @@
 namespace duckdb {
 
 bool TryGetDecideFrame(const Expression &expr, idx_t &frame) {
-	if (expr.GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_DECIDE_FRAME) {
 		return false;
 	}
-	frame = expr.Cast<BoundDecideReducerExpression>().frame;
-	return frame != DConstants::INVALID_INDEX;
+	frame = expr.Cast<BoundDecideFrameExpression>().frame;
+	return true;
+}
+
+unique_ptr<Expression> DecideFrameFold(const DecideFrameSpec &spec, const BoundDecideFrameExpression &frame) {
+	if (!spec.reduce) {
+		return nullptr;
+	}
+	auto &reduce = spec.reduce->Cast<BoundAggregateExpression>();
+	vector<unique_ptr<Expression>> arguments;
+	for (auto &child : frame.children) {
+		arguments.push_back(child->Copy());
+	}
+	auto fold = make_uniq<BoundAggregateExpression>(reduce.function, std::move(arguments), nullptr,
+	                                                reduce.bind_info ? reduce.bind_info->Copy() : nullptr,
+	                                                AggregateType::NON_DISTINCT);
+	fold->return_type = reduce.return_type;
+	fold->alias = frame.GetAlias();
+	fold->query_location = frame.GetQueryLocation();
+	return std::move(fold);
 }
 
 bool ContainsDecideFrame(const Expression &expr) {

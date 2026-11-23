@@ -1312,6 +1312,11 @@
         "type": "Expression*"
       },
       {
+        "id": 144,
+        "name": "reduce",
+        "type": "Expression*"
+      },
+      {
         "id": 123,
         "name": "spelling",
         "type": "string"

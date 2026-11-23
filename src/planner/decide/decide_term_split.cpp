@@ -293,7 +293,7 @@ void DecideTermSplitter::SplitNode(const Expression &expr, int sign, vector<Deci
 		return;
 	}
 	idx_t frame;
-	if (TryGetDecideFrame(expr, frame) && expr.Cast<BoundDecideReducerExpression>().children.size() == 1) {
+	if (TryGetDecideFrame(expr, frame) && expr.Cast<BoundDecideFrameExpression>().children.size() == 1) {
 		// A frame selector over decisions: an opaque term whose payload's terms are read at the selected row.
 		DecideSplitTerm term;
 		term.sign = sign;
@@ -302,7 +302,7 @@ void DecideTermSplitter::SplitNode(const Expression &expr, int sign, vector<Deci
 		term.marker = &expr;
 		term.opaque = expr.Copy();
 		term.coefficient = make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1));
-		Split(*expr.Cast<BoundDecideReducerExpression>().children[0], 1, term.inner);
+		Split(*expr.Cast<BoundDecideFrameExpression>().children[0], 1, term.inner);
 		out.push_back(std::move(term));
 		return;
 	}

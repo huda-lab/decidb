@@ -68,6 +68,13 @@ DecideTermDegree DecideDegreeOf(ClientContext &context, const Expression &expr, 
 		}
 		return result;
 	}
+	if (node.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_FRAME) {
+		// A frame reads other rows' values of its payload: the payload's degree.
+		for (auto &child : node.Cast<BoundDecideFrameExpression>().children) {
+			absorb(*child, false);
+		}
+		return result;
+	}
 	if (node.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
 		ExpressionIterator::EnumerateChildren(node, [&](const Expression &child) { absorb(child, false); });
 		result.polynomial = false;
@@ -284,7 +291,8 @@ struct ProductReader {
 			return;
 		}
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
-		    expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
+		    expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER ||
+		    expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_FRAME) {
 			for (auto *seen : form.zero_terms) {
 				if (DecideTermsEqual(*seen, expr, decide_index)) {
 					return;

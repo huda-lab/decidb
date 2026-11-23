@@ -59,13 +59,12 @@ void BoundDecideReducerExpression::CopyFacts(const BoundDecideReducerExpression 
 	count_scale = other.count_scale;
 	holds_reducer = other.holds_reducer;
 	retained = other.retained;
-	frame = other.frame;
 	frame_aggregate = other.frame_aggregate;
 }
 
 bool BoundDecideReducerExpression::FactsEqual(const BoundDecideReducerExpression &other) const {
 	return by == other.by && per == other.per && norm == other.norm && count_scale == other.count_scale &&
-	       holds_reducer == other.holds_reducer && retained == other.retained && frame == other.frame &&
+	       holds_reducer == other.holds_reducer && retained == other.retained &&
 	       frame_aggregate == other.frame_aggregate;
 }
 
@@ -139,7 +138,6 @@ void BoundDecideReducerExpression::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault(210, "count_scale", count_scale, false);
 	serializer.WritePropertyWithDefault(211, "holds_reducer", holds_reducer, false);
 	serializer.WritePropertyWithDefault(212, "retained", retained, DConstants::INVALID_INDEX);
-	serializer.WritePropertyWithDefault(213, "frame", frame, DConstants::INVALID_INDEX);
 	serializer.WritePropertyWithDefault(214, "frame_aggregate", frame_aggregate, DConstants::INVALID_INDEX);
 }
 
@@ -167,7 +165,6 @@ unique_ptr<Expression> BoundDecideReducerExpression::Deserialize(Deserializer &d
 	deserializer.ReadPropertyWithExplicitDefault(210, "count_scale", result->count_scale, false);
 	deserializer.ReadPropertyWithExplicitDefault(211, "holds_reducer", result->holds_reducer, false);
 	deserializer.ReadPropertyWithExplicitDefault(212, "retained", result->retained, DConstants::INVALID_INDEX);
-	deserializer.ReadPropertyWithExplicitDefault(213, "frame", result->frame, DConstants::INVALID_INDEX);
 	deserializer.ReadPropertyWithExplicitDefault(214, "frame_aggregate", result->frame_aggregate,
 	                                             DConstants::INVALID_INDEX);
 	return std::move(result);

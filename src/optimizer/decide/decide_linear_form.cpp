@@ -55,10 +55,9 @@ static unique_ptr<Expression> FrameColumnValue(const Expression &value) {
 	           : value.Copy();
 }
 
-//! Whether `expr` is a reducer: an aggregate, a frame's marker excepted (a tuple term read at another row).
+//! Whether `expr` is a reducer.
 static bool IsReducer(const Expression &expr) {
-	idx_t frame;
-	return expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER && !TryGetDecideFrame(expr, frame);
+	return expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER;
 }
 
 //===--------------------------------------------------------------------===//
@@ -124,11 +123,10 @@ public:
 	//! A reducer the value rewrite lifted into a helper decision: its member terms into `body`; a range frame's
 	//! helper also reads its `else`, at the window's anchor.
 	void Members(DecideHelperDefinition &link, DecideBody &body) {
-		auto &reducer = link.Reducer();
-		ExtractLinearTerms(*reducer.children[0], body.members);
-		if (reducer.frame != DConstants::INVALID_INDEX) {
+		ExtractLinearTerms(*link.Member(), body.members);
+		if (link.Frame() != DConstants::INVALID_INDEX) {
 			const BoundConstantExpression one(Value::INTEGER(1));
-			AppendFallbackTerms(reducer.frame, one, 1, body.fallback);
+			AppendFallbackTerms(link.Frame(), one, 1, body.fallback);
 		}
 		CollectLikeTerms(body.members);
 		CollectLikeTerms(body.fallback);
@@ -217,7 +215,7 @@ private:
 			// The binder gave payload and fallback one type (BindDecideFrame): a point's value, a range's reducer
 			// argument.
 			auto &payload_type = kind == DecideFrameColumn::Kind::REDUCED
-			                         ? value->Cast<BoundDecideReducerExpression>().children[0]->return_type
+			                         ? value->Cast<BoundAggregateExpression>().children[0]->return_type
 			                         : column.type;
 			if (fallback->return_type != payload_type) {
 				throw InternalException("DECIDE: %s reads a payload of type %s and an else of type %s",
@@ -370,12 +368,12 @@ private:
 				throw InternalException("DECIDE: a frame over decisions reached evaluation unextracted: %s",
 				                        op.bound.frames[frame].text);
 			}
-			auto &marker = expr->Cast<BoundDecideReducerExpression>();
+			auto &marker = expr->Cast<BoundDecideFrameExpression>();
 			// A point reads its payload at one row; a range reduces its payload's values, its `else` read where a
 			// position is missing.
-			auto value = op.bound.frames[frame].range
-			                 ? FrameColumnRef(DecideFrameColumn::Kind::REDUCED, frame, &marker)
-			                 : FrameColumnRef(DecideFrameColumn::Kind::VALUE, frame, marker.children[0].get());
+			auto fold = DecideFrameFold(op.bound.frames[frame], marker);
+			auto value = fold ? FrameColumnRef(DecideFrameColumn::Kind::REDUCED, frame, fold.get())
+			                  : FrameColumnRef(DecideFrameColumn::Kind::VALUE, frame, marker.children[0].get());
 			// The marker's parent was bound to the marker's type.
 			expr = BoundCastExpression::AddCastToType(context, std::move(value), marker.return_type);
 			return;
@@ -468,7 +466,9 @@ private:
 		for (auto &link : links) {
 			LowerFrames(link.second->members);
 			LowerFrames(link.second->fallback);
-			LowerFrames(link.first->Reducer().filter);
+			if (link.first->Frame() == DConstants::INVALID_INDEX) {
+				LowerFrames(link.first->Reducer().filter);
+			}
 			LowerFrames(link.first->when);
 		}
 	}

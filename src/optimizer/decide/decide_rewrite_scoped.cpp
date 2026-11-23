@@ -94,7 +94,8 @@ struct ReducerSite {
 
 //! Whether a reducer over decisions stands at or below `expr`.
 bool HoldsDecisionReducer(const Expression &expr, idx_t decide_index) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER ||
+	    expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_FRAME) {
 		return BoundExpressionReferencesDecide(expr, decide_index);
 	}
 	bool found = false;
@@ -113,13 +114,13 @@ vector<ReducerSite> CollectReducerSites(ClientContext &context, const BooleanDec
 		return HoldsDecisionReducer(node, booleans.decide_index);
 	};
 	PolarityVisit visit = [&](unique_ptr<Expression> &node, int node_sign, const PolarityPath &path) {
+		if (node->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_FRAME) {
+			return true; // a frame is a tuple term of the row
+		}
 		if (node->GetExpressionClass() != ExpressionClass::BOUND_DECIDE_REDUCER) {
 			return false;
 		}
-		idx_t frame;
-		if (!TryGetDecideFrame(*node, frame)) { // a frame is a tuple term of the row
-			sites.push_back({&node, path.beside_held ? 0 : node_sign, path.beside_decision, path.inside_function});
-		}
+		sites.push_back({&node, path.beside_held ? 0 : node_sign, path.beside_decision, path.inside_function});
 		return true;
 	};
 	WalkPolarity(context, booleans, expr, sign, holds, visit);
@@ -151,7 +152,7 @@ struct Helpers {
 	idx_t Find(const BoundDecideReducerExpression &agg, const Expression *rows, idx_t path_key, idx_t class_key) const {
 		for (idx_t i = 0; i < decide.helper_definitions.size(); i++) {
 			auto &link = *decide.helper_definitions[i];
-			if (link.kind != DecideHelperKind::REDUCER_VALUE) {
+			if (link.kind != DecideHelperKind::REDUCER_VALUE || link.Frame() != DConstants::INVALID_INDEX) {
 				continue;
 			}
 			auto &held = link.Reducer();
@@ -355,9 +356,8 @@ void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 	// form is weighted inside, by the root, since a weight is never negative: the objective stays a sum of squares.
 	auto swap = [&](unique_ptr<Expression> &slot) {
 		auto &outer = slot->Cast<BoundDecideReducerExpression>();
-		idx_t frame;
-		if (TryGetDecideFrame(outer, frame) || !outer.function || !StringUtil::CIEquals(outer.function->name, "sum") ||
-		    outer.children.size() != 1 || outer.per != DConstants::INVALID_INDEX) {
+		if (!outer.function || !StringUtil::CIEquals(outer.function->name, "sum") || outer.children.size() != 1 ||
+		    outer.per != DConstants::INVALID_INDEX) {
 			return;
 		}
 		auto *body = UnwrapDecideCasts(*outer.children[0], decide_index);
@@ -367,9 +367,9 @@ void DecideOptimizer::SwapObjectiveSummation(LogicalDecide &decide) {
 		auto &inner = body->Cast<BoundDecideReducerExpression>();
 		const bool avg = StringUtil::CIEquals(inner.function->name, "avg");
 		if ((!avg && !StringUtil::CIEquals(inner.function->name, "sum")) || inner.children.size() != 1 ||
-		    TryGetDecideFrame(inner, frame) || inner.per != DConstants::INVALID_INDEX ||
-		    DecideCanonicalizer::ContainsReducer(*inner.children[0]) || ContainsDecideFrame(*inner.children[0]) ||
-		    (inner.filter && ContainsDecideFrame(*inner.filter)) || splitter.IsLinear(*inner.children[0])) {
+		    inner.per != DConstants::INVALID_INDEX || DecideCanonicalizer::ContainsReducer(*inner.children[0]) ||
+		    ContainsDecideFrame(*inner.children[0]) || (inner.filter && ContainsDecideFrame(*inner.filter)) ||
+		    splitter.IsLinear(*inner.children[0])) {
 			return; // a linear nest is read through helpers, which the model writes in (D89)
 		}
 		const idx_t group_key = inner.by;
