@@ -559,6 +559,47 @@ def test_norm_l0_indicator_takes_the_scope_the_counted_expression_reads(
     judge_rows(answer(cli, sql), domains, holds, objective)
 
 
+_ABS_T = (0, 5, 9)
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+@pytest.mark.parametrize(
+    "clause, goal, holds, objective",
+    [
+        pytest.param(
+            "",
+            "MINIMIZE norm(abs(x - t), 0)",
+            lambda a: True,
+            lambda a: sum(a[f"x{i}"] != t for i, t in enumerate(_ABS_T)),
+            id="objective",
+        ),
+        pytest.param(
+            "AND norm(abs(x - t), 0) <= 1",
+            "MINIMIZE SUM(x * id)",
+            lambda a: sum(a[f"x{i}"] != t for i, t in enumerate(_ABS_T)) <= 1,
+            lambda a: sum((i + 1) * a[f"x{i}"] for i in range(3)),
+            id="clause",
+        ),
+    ],
+)
+def test_norm_l0_of_an_abs_is_bounded_by_the_reach_of_the_abs(request, cli_fixture, clause, goal, holds, objective):
+    """The rows `M * z >= e` of a count written with no M hold only the indicator and an ABS helper when `e` is an
+    ABS. Their M is the helper's reach, so one row may move by 2 where a placeholder M of 1 lets each move by 1 only.
+    Judged against every assignment on both solvers."""
+    cli = request.getfixturevalue(cli_fixture)
+    sql = f"""
+        SELECT id, x FROM (VALUES (1, 0), (2, 5), (3, 9)) d(id, t)
+        DECIDE x(INT) SUCH THAT x <= 20 AND SUM(x) = 12 {clause} {goal} ORDER BY id"""
+    judge_rows(
+        answer(cli, sql),
+        {f"x{i}": range(21) for i in range(3)},
+        lambda a: sum(a.values()) == 12 and holds(a),
+        objective,
+        maximize=False,
+    )
+
+
 @pytest.mark.correctness
 def test_norm_l0_beside_a_reducer_with_a_constant_term(decidb_cli, oracle_solver):
     """`SUM(x + 2) <= 100` holds a constant term (`2` per row, no decision) beside `x`, in a clause the L0 links are

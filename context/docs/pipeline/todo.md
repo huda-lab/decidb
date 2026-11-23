@@ -45,21 +45,6 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
   `build/release/test/unittest "[decidb]"`; the corpus query of `test/decide/golden/corpus.sql` line 717's
   neighbour (`per grp: sum(x) by (grp) <= budget / 10 * open`) has 6 columns and 3 rows.
 
-## MODEL-9 — An L0 indicator's rows are handed over as its link
-
-- **Problem.** `MINIMIZE norm(abs(x - t), 0)` returns a wrong answer: over `t = (0, 5, 9)` with `sum(x) = 12` it
-  changes two rows by 1 where changing one row by 2 is optimal (`norm(x - t, 0)` on the same data is right).
-  `FormulateModel` finds an L0 indicator's forward rows by scanning every clause for one that names the indicator
-  beside a decision that is no ABS helper (`formulate_model.cpp:53-76`); under `abs` the row's only other decision is
-  an ABS helper, so the row keeps the placeholder Big-M of 1 (`decide_rewrite_norm_in.cpp:91`) and caps `|x - t|` at
-  1. The plan knows each row's role: the definition's `links` are in a fixed order and the F node holds `rows`.
-- **Change.** The emitter hands an L0 indicator's rows to stage 06 as a link (indicator, forward rows, reverse row),
-  read off the F node as an ABS's envelope rows are (`AbsEnvelope`, `AbsLinkSpec`); stage 06 sizes the forward
-  rows' Big-M from the link and scans no clause.
-- **Done when.** An oracle test of `norm(abs(e), 0)` in the objective and in a clause, on both backends, that fails
-  on the scan; `./test/decide/run_tests.sh -k "norm or l0 or abs"`; `build/release/test/unittest "[decidb]"`; model
-  goldens identical.
-
 ## MODEL-10 — Code no reader reaches is deleted
 
 - **Problem.** Nine items have no caller or reader (each confirmed by a search of `src` and `test/common`):

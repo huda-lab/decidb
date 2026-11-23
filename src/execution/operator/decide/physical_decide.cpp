@@ -604,12 +604,6 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	// here, before any pass reads the rows: implied-bound propagation reads `aux >= inner` of `ABS(x) <= 3` as a bound
 	// on x.
 	solver_input.abs_links = std::move(gstate.evaluated_abs_links);
-	for (auto &definition : tree->definitions) {
-		auto indicator = definition->TryCast<DecideL0IndicatorDefinition>();
-		if (indicator && indicator->auto_m) {
-			solver_input.l0_auto_indicators.push_back(definition->helper);
-		}
-	}
 	EmitAbsEnvelopes(solver_input);
 	solver_input.reducer_value_links = std::move(gstate.evaluated_value_links);
 

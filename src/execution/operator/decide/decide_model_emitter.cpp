@@ -597,6 +597,19 @@ void DecideModelEmitter::Constraints() {
 			abs_function_of_clause[clause_index] = function;
 		}
 	}
+	// The rows `M * z >= e` and `M * z >= -e` of a count of nonzeros written with no M, by clause.
+	vector<idx_t> sized_indicator_of_clause(roots.size(), DConstants::INVALID_INDEX);
+	for (auto function : tree.function_nodes) {
+		const auto &node = *tree.nodes[function];
+		if (!tree.IsFunction(node, DecideHelperKind::L0_INDICATOR)) {
+			continue;
+		}
+		auto &indicator = tree.Definition(node)->Cast<DecideL0IndicatorDefinition>();
+		for (idx_t r = 0; indicator.auto_m && r < DecideL0IndicatorDefinition::TOLERANCE_ROW; r++) {
+			sized_indicator_of_clause[tree.nodes[node.Cast<DecideFunctionNode>().rows[r]]->compiled.clause_index] =
+			    indicator.helper;
+		}
+	}
 	// The folded bounds follow under DIAGNOSE, numbered after every other clause: only the repair model emits them.
 	const idx_t num_evaluated = num_constraints + (tree.diagnose ? tree.singleton_row_count : 0);
 	// A decision with no instance has no value wherever a clause reads it (D84), a folded bound included: the data
@@ -623,9 +636,10 @@ void DecideModelEmitter::Constraints() {
 			AbsEnvelope(abs_function_of_clause[c], root, c < num_constraints);
 			continue;
 		}
-		Route(clause.lhs_is_aggregate || clause.was_minmax_easy ? Groups(root, c < num_constraints)
-		                                                        : Rows(root, c < num_constraints),
-		      c >= num_constraints);
+		auto emitted = clause.lhs_is_aggregate || clause.was_minmax_easy ? Groups(root, c < num_constraints)
+		                                                                 : Rows(root, c < num_constraints);
+		emitted.row.sized_indicator = sized_indicator_of_clause[c];
+		Route(std::move(emitted), c >= num_constraints);
 	}
 }
 

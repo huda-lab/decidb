@@ -972,6 +972,13 @@ exact whether a clause caps it, floors it or equates it, and whether the objecti
 of `e` strictly between 0 and the tolerance has no feasible indicator. An auto `M` is the span of `e` over the rows and
 is refused where `e` has no finite bound.
 
+The plan states which rows take an auto `M`: the indicator's F node holds its rows in a fixed order, and the emitter
+stamps the two `M*z` rows with their indicator (`EvaluatedConstraint::sized_indicator`). `FormulateModel` sizes
+exactly those rows and reads no row's shape, so `norm(abs(e), 0)`, whose `M*z` rows hold only the indicator and an ABS
+helper, is sized as any other. The `M` is derived once the boxes of ABS helpers, products and helper decisions have
+settled, since `e` may hold any of them, and before those constructs' refusals, so a count over an open decision is
+refused as the count. A refusal names an ABS helper by the ABS as written.
+
 ### ABS
 
 Stage 05 records each ABS (an `ABS` entry of `LogicalDecide::helper_definitions`) and emits no row. The tree builds its two envelope rows,

@@ -16,9 +16,6 @@ the owner rules first.
 - [ ] MODEL-6 One reading of a reducer body (decision) — pipeline/todo.md § MODEL-6
 - [ ] MODEL-8 The helper of a link whose data may split its classes (decision) — pipeline/todo.md § MODEL-8
 
-## 6.1 A wrong answer (one lane)
-- [ ] MODEL-9 An L0 indicator's rows are handed over as its link — pipeline/todo.md § MODEL-9
-
 ## 6.2 Code with no reader (one lane)
 - [ ] MODEL-10 Code no reader reaches is deleted — pipeline/todo.md § MODEL-10
 - [ ] MODEL-11 The tree is verified in debug builds, once — pipeline/todo.md § MODEL-11

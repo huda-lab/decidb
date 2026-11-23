@@ -31,8 +31,8 @@ its programs). Model building, the solve and the diagnoses live with their stage
 
 `EvaluateTree` fills one `EvaluatedClauses`, the filter state of the objective's terms and product groups, which
 `BuildSolverInput` reads. `FormulateModel` reads `SolverInput`, the box and the column space and nothing else: the
-declared names, the auto-`M` indicators and the native-construct policy are on `SolverInput`
-(`variable_names`, `l0_auto_indicators`, `use_native_constructs`). Nothing in it depends on a variable bound, so the
+declared names and the native-construct policy are on `SolverInput` (`variable_names`, `use_native_constructs`), and
+a row whose `M` the box gives names its indicator (`EvaluatedConstraint::sized_indicator`). Nothing in it depends on a variable bound, so the
 formulation pass runs twice against two boxes from one input.
 
 The operator holds the child plan, the tree, the run's settings (`debug`, `solver_backend_name`, the native-construct
@@ -1103,9 +1103,9 @@ stage 06 along with the rows it guards. See
 The one Big-M still derived here is the auto-`M` refill for `norm(e, 0)` links,
 whose `M` bounds an expression rather than answering a comparison, so there is no
 bound to classify. It calls `DecideTightPerRowBigM` across the stage boundary. The
-links it refills and the ABS helpers it leaves alone are read from the tree's function
-nodes (an `L0_INDICATOR` node with `l0_auto_m`, an `ABS` node's `value_var`), never from
-a decision's name, which is the user's to choose.
+rows it refills are the first two of an `L0_INDICATOR` F node whose definition is
+`auto_m`, which the emitter stamps as it routes them; no row is recognised by its shape
+or by a decision's name.
 
 A *variable* with no finite bound is the separate case, and the answer there is also
 refusal rather than a constant — there is no fixed Big-M anywhere in DeciDB. The order

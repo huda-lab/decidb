@@ -8,13 +8,12 @@
 //===----------------------------------------------------------------------===//
 #include "duckdb/decidb/formulation/formulate_model.hpp"
 #include "duckdb/common/decide_profile.hpp"
-#include "duckdb/common/unordered_set.hpp"
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
 
 namespace duckdb {
 
 void FormulateModel(SolverInput &input, const FormulationBox &box, VarIndexer &var_indexer) {
-	DecideProfileScope phase("formulation.l0_constants");
+	DecideProfileScope phase("formulation.abs_bounds");
 	idx_t num_rows = input.num_rows;
 
 	// The flat column space is settled by assembly and is never rebuilt here: the row,
@@ -32,68 +31,6 @@ void FormulateModel(SolverInput &input, const FormulationBox &box, VarIndexer &v
 	// A frame read is named as its base is: the bound a refusal asks for is the base's.
 	for (auto &read : input.frame_reads) {
 		decide_var_names.push_back(decide_var_names[read.base]);
-	}
-
-	// Auto-M for L0 `norm(e, 0)`: the binder emitted the raw links `e <= M*z` and
-	// `-e <= M*z` with a placeholder coefficient on each `__l0auto_ind_*` indicator.
-	// Now that implied bounds are known, fill a tight, data-driven Big-M (mirrors
-	// the <> path): zero the indicator's own coefficient, compute M from the
-	// remaining (inner-expression) terms + RHS, then set the indicator coefficient
-	// to -M. The links carry a negative indicator coefficient, so the implied-bound
-	// propagation assembly ran already skipped them (no contamination from the
-	// placeholder). This is a constant derived from `box`, which is why it is here and
-	// not with the propagation: it has to be re-derived whenever the box changes.
-	{
-		unordered_set<idx_t> l0_auto(input.l0_auto_indicators.begin(), input.l0_auto_indicators.end());
-		unordered_set<idx_t> abs_helpers;
-		for (auto &link : input.abs_links) {
-			abs_helpers.insert(link.aux_idx);
-		}
-		if (!l0_auto.empty()) {
-			for (auto &ec : input.constraints) {
-				// Locate the auto-L0 indicator term, and confirm this is a LINK
-				// (it also carries the inner expression's variable) rather than the
-				// indicator's own 0<=z<=1 bound row — which we must not rewrite.
-				idx_t z_term = DConstants::INVALID_INDEX;
-				bool has_inner_var = false;
-				for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
-					idx_t v = ec.variable_indices[t];
-					if (v == DConstants::INVALID_INDEX) {
-						continue;
-					}
-					if (l0_auto.count(v)) {
-						z_term = t;
-					} else if (!abs_helpers.count(input.BaseVariable(v))) {
-						// The REVERSE link `ABS(inner) >= TOL*z` also references the L0
-						// indicator, but its only other variable is the ABS aux and its
-						// z-coefficient is the fixed tolerance — it must NOT be refilled.
-						// Only the FORWARD links carry the inner decision variable, so an
-						// ABS-aux companion marks the reverse link to skip.
-						has_inner_var = true;
-					}
-				}
-				if (z_term == DConstants::INVALID_INDEX || !has_inner_var) {
-					continue;
-				}
-				// Zero the indicator's own contribution, compute the tight Big-M from
-				// the remaining (inner) terms + RHS, then set the indicator coeff = +M.
-				// The link is normalized to `M*z - inner >= rhs`, so the indicator
-				// coefficient is positive.
-				const idx_t z = ec.variable_indices[z_term];
-				auto set_indicator = [&](double value) {
-					for (idx_t t = 0; t < ec.records.variables.size(); t++) {
-						if (ec.records.variables[t] == z) {
-							ec.records.coefficients[t] = value;
-						}
-					}
-				};
-				set_indicator(0.0);
-				double M = DecideTightPerRowBigM(ec, box, decide_var_names, InstanceBox {input, var_indexer},
-				                                 DecideWrittenClause(input, ec.provenance.origin.source_clause_id),
-				                                 "norm(e, 0)");
-				set_indicator(M);
-			}
-		}
 	}
 
 	// THE ROUTING of every construct this stage may state natively, one rule for all of them (NativeConstructPolicy).
@@ -125,9 +62,11 @@ void FormulateModel(SolverInput &input, const FormulationBox &box, VarIndexer &v
 	// tightens, so alternating them settles in as many passes as the constructs nest. The refusals are decided last,
 	// on the settled boxes, naming a helper by its reducer: a product refuses a factor with no finite top, and the
 	// lowering of an exact ABS refuses an operand with no finite reach (the native path leaves it open and answers).
-	phase.Next("formulation.abs_bounds");
 	for (auto &link : input.reducer_value_links) {
 		decide_var_names[link.value_var] = link.label;
+	}
+	for (auto &link : input.abs_links) {
+		decide_var_names[link.aux_idx] = link.written;
 	}
 	const idx_t max_passes =
 	    2 * (input.abs_links.size() + input.bilinear_links.size() + input.reducer_value_links.size() + 1);
@@ -153,8 +92,32 @@ void FormulateModel(SolverInput &input, const FormulationBox &box, VarIndexer &v
 			break;
 		}
 	}
+	// The Big-M of a count of nonzeros `norm(e, 0)` written with none: its rows `M * z >= e` and `M * z >= -e` arrive
+	// with a placeholder on the indicator `z`, and M is the reach of the rest of the row in `box`, so it is derived
+	// again whenever the box changes. The boxes above are settled first: `e` may hold an ABS or a helper decision. It
+	// is derived before the refusals below, so a count over an open decision is refused as the count it is.
+	phase.Next("formulation.l0_constants");
+	for (auto &ec : input.constraints) {
+		const idx_t z = ec.sized_indicator;
+		if (z == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		auto set_indicator = [&](double value) {
+			for (idx_t t = 0; t < ec.records.variables.size(); t++) {
+				if (ec.records.variables[t] == z) {
+					ec.records.coefficients[t] = value;
+				}
+			}
+		};
+		set_indicator(0.0);
+		set_indicator(DecideTightPerRowBigM(ec, box, decide_var_names, InstanceBox {input, var_indexer},
+		                                    DecideWrittenClause(input, ec.provenance.origin.source_clause_id),
+		                                    "norm(e, 0)"));
+	}
+	phase.Next("formulation.abs_refusals");
 	DeriveBilinearAuxiliaryBounds(input, box, decide_var_names);
 	DeriveAbsAuxiliaryBounds(input, var_indexer, decide_var_names, !native_abs.available);
+
 	EmitAbsConstraints(input, var_indexer, native_abs);
 
 	// The helper decisions' definitions: an equality row per group for SUM/AVG, an

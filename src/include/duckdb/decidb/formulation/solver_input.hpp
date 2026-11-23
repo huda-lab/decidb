@@ -309,6 +309,10 @@ struct EvaluatedConstraint {
 	//! that defines an auxiliary says what it is, not what was asked of it. The two lower-envelope rows of an ABS
 	//! (`aux >= inner`, `aux >= -inner`) define its auxiliary.
 	idx_t defined_var = DConstants::INVALID_INDEX;
+	//! The indicator of a count of nonzeros whose coefficient on these rows is the Big-M of `M * z >= e` that stage 06
+	//! derives from the box (DecideL0IndicatorDefinition::auto_m), or INVALID_INDEX. The plan states which rows these
+	//! are; the emitter copies it from the indicator's F node.
+	idx_t sized_indicator = DConstants::INVALID_INDEX;
 
 	//! What the emitter knows of the clause: its `origin` (the clause identity retained when one cast comparison
 	//! expands to multiple boundary rows, the DROP group every descendant row shares, and the elastic group of the
@@ -675,9 +679,6 @@ struct SolverInput {
 	vector<BilinearLinkSpec> bilinear_links;
 	//! Every ABS, in the order stage 05 allocated their auxiliaries (innermost first).
 	vector<AbsLinkSpec> abs_links;
-	//! The indicator decisions of `norm(e, 0)` whose Big-M the formulation derives from the box (the binder emitted the
-	//! links `e <= M*z` and `-e <= M*z` with a placeholder on `z`).
-	vector<idx_t> l0_auto_indicators;
 	//! The value rewrite's helper decisions that keep a column, each with its evaluated definition: the groups stage
 	//! 08 did not write where they are read. Consumed (moved into `constraints` or emitted as extremum links) by the
 	//! formulation pass.
