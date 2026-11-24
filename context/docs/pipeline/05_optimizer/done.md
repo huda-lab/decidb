@@ -228,9 +228,8 @@ instance and constrains nothing, so
 its bound is not read (guide §7.4), as a frame's is not. A reducer over data whose argument reads a frame stays a reducer over the rows it
 reads, naming its entry of `LogicalDecide::frame_aggregates` by its `frame_aggregate` field (its path key and its own `per` key,
 `MakeFrameAggregate`), and a norm of one also checks its body (`ArgumentMessage`) at the rows the reducer reads,
-since a norm's value can hide a NaN (an L0 count's SIGN reads it as 0); the linear form makes it a trailing frame column
-(`DecideFrameColumn::Kind::AGGREGATE`, a second `LowerFramesOnce` once every frame has its columns) that stage 08
-computes. With several threads the
+since a norm's value can hide a NaN (an L0 count's SIGN reads it as 0); the tree makes it a G whose operand reads the
+frames (`DecideTree::frame_aggregate_nodes`), which stage 08 folds. With several threads the
 source hands its rows on in an order that varies with the thread schedule. The DECIDE operator reads them in that order,
 so the model's row and column order and the group a scope check names first can differ between runs of
 one query. Neither changes the answer's optimum. Tests that compare models run on one thread
@@ -336,7 +335,7 @@ stripping binder casts, and multiplying a peeled reducer scale into everything t
 reducer produced.
 
 One walk lowers a clause once (`DecideTreeConstruction`): it makes the clause's nodes, then hands the same canonical
-clause and its facts to the term half (`DecideTermLowering`: `Clause`, `Objective`, `Members`, `Frames`), which the
+clause and its facts to the term half (`DecideTermLowering`: `Clause`, `Objective`, `Members`, `Fallback`), which the
 walk owns. The output goes into the tree under construction, not into a model of its own: each
 clause's `DecideConstraint` into the root the walk made of its comparison (a folded bound's into its
 folded root), the optional `DecideObjective` into the objective's root, each helper's terms
@@ -448,12 +447,19 @@ and NULL where it has none; `FALLBACK` is `c'` at a row whose position is missin
 (D84): a comparison reading it skips that instance, the objective drops the term (`DropNullObjectiveTerms`). The
 payload's terms are the frame's `READ` columns, and a position whose rows hold two payloads is refused at execution
 (D73, `DecideDescentPosition::conflict`); the decisions its `else` reads are recorded per frame
-(`DecideFrameReads::fallback_decisions`, for D82). `LowerFramesInPreparedModel` then replaces each frame left in an
-expression stage 08 evaluates -- a frame over data, in a coefficient, a bound, a filter -- by its `VALUE` column (the
-payload at the selected row, the `else` at a row that reaches it, NULL where neither stands, of the payload's own type)
-or, for a range, its `REDUCED` column (the frame's reducer over the window's values), and a reducer's NULL test of a
-frame over decisions (stage 04) by its `DEFINED` column, TRUE where each of the frame's `READ` and `FALLBACK` columns
-holds a value. A frame over decisions inside a `MIN`/`MAX` of several terms is a term
+(`DecideFrameReads::fallback_decisions`, for D82).
+
+The tree owns the frame columns (`DecideTree::frame_reads`), and whoever reads a frame asks it for the column
+(`DecideFrameReads::Slot`, which makes one when none reads that value that way yet; R50). The tree walk, as it makes
+a frame's O, asks for the one value a frame over data reads and keeps its index on the node
+(`DecideFrameNode::value_column`): its `VALUE` column (the payload at the selected row, the `else` at a row that
+reaches it, NULL where neither stands, of the payload's own type) or, for a range, its `REDUCED` column (the frame's
+reducer over the window's values). The term half asks for the `READ` and `FALLBACK` columns of the coefficients a
+frame over decisions reads, and for an `else`'s as its O is made (`DecideTermLowering::Fallback`). The program
+compiler asks for the `DEFINED` column a reducer's NULL test of a frame over decisions reads (stage 04), TRUE where
+each of the frame's `READ` and `FALLBACK` columns holds a value. A frame over data stays its marker in a coefficient or
+a bound, and the compiler reads it from its O as it compiles the expression (`Translate`), so no pass rewrites the
+term half's records and the two readings cannot disagree on a frame's column. A frame over decisions inside a `MIN`/`MAX` of several terms is a term
 like any other (`DecideBody::members`), its `frame_read` set: stage 08 hands stage 06 the decision and the instance
 each term reads (`ReducerValueMembers::variables`, `::instances`), the instance the frame's selected row reads. A range over decisions reaches no term: it is a
 helper by now (§2, `RewriteFrameRanges`), whose link also reads the range's `else` as terms, each coefficient a

@@ -581,14 +581,10 @@ DecideFrameColumnValues ComputeDecideFrameColumns(ClientContext &context, const 
 	DecideFrameColumnValues computed;
 	auto &values_of = computed.values;
 	auto &errors_of = computed.errors;
-	// DEFINED reads the frame's other columns, so it is computed after them. A reducer over data reading frames is
-	// computed once they are appended, its column after every frame's.
+	// DEFINED reads the frame's other columns, so it is computed after them.
 	vector<idx_t> defined;
 	for (idx_t j = 0; j < columns.size(); j++) {
 		auto &column = columns[j];
-		if (column.kind == DecideFrameColumn::Kind::AGGREGATE) {
-			break;
-		}
 		auto &map = maps[column.frame];
 		auto out = make_uniq<Vector>(column.type, num_rows);
 		std::map<idx_t, ErrorData> errors;

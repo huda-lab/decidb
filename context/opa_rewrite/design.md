@@ -166,8 +166,8 @@ three steps, where column bindings are final (`plan_decide.cpp:224`):
    states. A reducer body has two readings by two readers (R31): what its node reads, which the walk collects, and
    its coefficient algebra, which the term half does with the splitter the rewrites share. A per-row clause's left
    side is split whole, since the splitter keeps a decision-free sum as one constant term. A root stores no lowered
-   body: the decisions its atoms read are its `decisions`. The helpers' members and the frame columns are split in
-   later loops of the same construction, which keeps the frame columns' stated layout.
+   body: the decisions its atoms read are its `decisions`. The helpers' members are split in a later loop of the
+   same construction. The frame columns are the tree's, made as each reader asks for one.
 2. **The solver gate** (`RequireDecideSolverSupport`), as today.
 3. **`CompileDecideTree`**, today's program compiler, unchanged.
 
@@ -175,7 +175,7 @@ three steps, where column bindings are final (`plan_decide.cpp:224`):
   `DecideReducerNodes`),
   and the checks that they agree. [read] 81 internal errors in the three construction files.
 - Kept, because they serve more than the join: the term splitter (three rewrites and the direct rules use it),
-  like-term collection, the frame-column registry, and the order of rows the model dumps record.
+  like-term collection, and the order of rows the model dumps record.
 - `DecideNode` holds no copy of a plan fact and no unread field: the tree holds the helper definitions and a node
   names its own by index. A root's bound, origin and defined helper are read from its clause record
   (`DecideConstraint`), an F's from its definition, a linked G's or a range O's reducer from the definition or the
@@ -369,7 +369,7 @@ Ruled by the owner (`decisions.md` R21 to R26):
 
 ## 4. Phase 6: the model is written at the nodes
 
-The design, its measurements and the tasks: [review/ARCH-2-design.md](review/ARCH-2-design.md). Rulings R42 to R46.
+The design, its measurements and the tasks: [review/ARCH-2-design.md](review/ARCH-2-design.md). Rulings R42 to R50.
 
 - **Three owners (R42).** The optimizer chooses the form of every lowering and stamps it on the plan: a helper's
   form, an AVG under `<>` kept as sums. A node repeats that form once per group and decides nothing. Stage 06
@@ -392,8 +392,9 @@ The design, its measurements and the tasks: [review/ARCH-2-design.md](review/ARC
   (`execution.tree_model`) at a peak of 0.99 GB, 40 clauses 32 ms at 1.03 GB; 40 clauses that each read a helper,
   38 ms at 1.27 GB, the difference in memory being the solver's own.
 - **The planner reads a clause twice**: the tree walk builds nodes and the term half builds terms, one extraction
-  for a clause and the objective (`DecideTermLists`). Joining the two readings is an open decision (R46,
-  `context/docs/pipeline/todo.md` § MODEL-6).
+  for a clause and the objective (`DecideTermLists`). The two stay apart (R50): the splitter has ten users and nine
+  never see a node. What they shared twice, the frame columns, the tree owns (`DecideFrameReads::Slot`), and a frame
+  over data is read from its O when a term's coefficient is compiled.
 - **Shared with Phase 5:** routing, containers, the key map, data programs and folds, frames, the no-value rule
   (`DecideAbsence`), plan-time helper allocation, the linearizers of stage 06.
 

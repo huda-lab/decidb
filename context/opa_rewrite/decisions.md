@@ -61,6 +61,7 @@ recommendation; nobody settles one silently. Rulings about a single task live wi
 | R47 | A SUM or AVG helper one clause reads in rows the plan cannot count per group is settled by the data, group by group: a group one row reads is written into that row, a group several rows read keeps its column. A second fact tested at the node, beside R44's (2026-11-24) |
 | R48 | A clause's emitted rows stay on its record (`EvaluatedConstraint::emitted_rows`): a function of the record and the column space, both fixed before the first read (2026-11-24) |
 | R49 | The objective's coefficients reach stage 06 in one form, a coefficient per instance; a per-row decision's pay a second pass, 5 ms over 2,000,000 rows (2026-11-24) |
+| R50 | R46 settled: the planner keeps two readings of a clause. The tree owns the frame columns and each reader asks it for one; the term half's frame lowering pass and the aggregate kind of frame column go, and the shared splitter is untouched (2026-11-24) |
 
 ## Open decisions
 

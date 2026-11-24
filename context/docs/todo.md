@@ -13,4 +13,3 @@ the owner rules first.
 # Phase 6 — The model is written at the nodes
 
 ## 6.0 Owner decisions
-- [ ] MODEL-6 One reading of a reducer body (decision) — pipeline/todo.md § MODEL-6

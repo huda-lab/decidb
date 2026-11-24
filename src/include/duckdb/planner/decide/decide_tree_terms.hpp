@@ -342,34 +342,28 @@ struct DecideObjective : DecideTermLists {
 //!              holds one, a range's window reads something; NULL elsewhere (BOOLEAN; `value`
 //!              is null): what a reducer's NULL test reads for a frame over decisions in its
 //!              argument (DecideCanonicalizer::SkipNullData)
-//! A reducer over data whose argument reads a frame (LogicalDecide::frame_aggregates) is one column of its own, after
-//! every frame's, computed once they are:
-//!   AGGREGATE — `value`, the reducer over the rows its filter keeps, its argument reading frame columns: on each row
-//!              its group's value of `key`, in the reducer's type, each class of `class_key` counted once per
-//!              signature; NULL on a row in no group, and where the group has none to reduce (`count`: 0). `frame` is
-//!              INVALID_INDEX
+//! A reducer over data whose argument reads a frame (LogicalDecide::frame_aggregates) is no column: it is its G's
+//! fold (DecideTree::frame_aggregate_nodes), whose operand reads the frame's.
 struct DecideFrameColumn {
-	enum class Kind : uint8_t { VALUE, READ, FALLBACK, DEFINED, REDUCED, AGGREGATE };
+	enum class Kind : uint8_t { VALUE, READ, FALLBACK, DEFINED, REDUCED };
 	Kind kind = Kind::READ;
 	idx_t frame = DConstants::INVALID_INDEX;
 	unique_ptr<Expression> value;
 	//! VALUE, REDUCED: the frame's `else`, of the payload's type; null when it has none.
 	unique_ptr<Expression> fallback;
 	LogicalType type;
-	//! AGGREGATE: its entry of LogicalDecide::frame_aggregates, and that entry's path key and own `per` key, into
-	//! LogicalDecide::keys, and the reducer as written.
-	idx_t aggregate = DConstants::INVALID_INDEX;
-	idx_t key = DConstants::INVALID_INDEX;
-	idx_t class_key = DConstants::INVALID_INDEX;
-	string text;
 };
 
-//! The values the frame selectors read, as columns after the input's, which stage 05's lowering makes of every frame
-//! read (DecideTermLowering) and the tree holds (DecideTree::frame_reads).
+//! The values the frame selectors read, as columns after the input's, which the tree holds (DecideTree::frame_reads)
+//! and whoever reads a frame asks for (Slot): the tree walk a frame's one value as it makes the frame's O, the term
+//! half a coefficient a frame over decisions reads, the compiler a frame's DEFINED column.
 struct DecideFrameReads {
 	//! The columns: the first is chunk column `column_base`, the number of columns the input has.
 	vector<DecideFrameColumn> columns;
 	idx_t column_base = 0;
+	//! The column of `frame` that reads `value` the way `kind` says, made when no column does yet; its index.
+	//! `fallback` is the frame's `else` for a VALUE or REDUCED column, which reads it.
+	idx_t Slot(DecideFrameColumn::Kind kind, idx_t frame, const Expression *value, const Expression *fallback);
 	//! Per frame, its `else` as a signature keys it where an anchor reaches it (D82): the
 	//! FALLBACK columns of its terms (into `columns`), and the decisions it reads at the
 	//! row itself. Both empty for a frame with no `else`.

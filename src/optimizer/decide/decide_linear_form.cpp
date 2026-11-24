@@ -49,13 +49,6 @@ static void EnumerateChildrenConst(const Expression &expr,
 	throw InternalException("DECIDE term '%s' reached term extraction unopened", term.opaque->ToString());
 }
 
-//! `value` as a frame column holds it, for execution to evaluate: a reducer is the aggregate it names.
-static unique_ptr<Expression> FrameColumnValue(const Expression &value) {
-	return value.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER
-	           ? value.Cast<BoundDecideReducerExpression>().ToAggregate()
-	           : value.Copy();
-}
-
 //! Whether `expr` is a reducer.
 static bool IsReducer(const Expression &expr) {
 	return expr.GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER;
@@ -70,10 +63,8 @@ static bool IsReducer(const Expression &expr) {
 //! list, their scopes, and what earlier passes recorded on the clauses. It never reads a data row.
 class DecideLinearFormBuilder {
 public:
-	DecideLinearFormBuilder(ClientContext &context, LogicalDecide &op, const DecideTree &tree)
+	DecideLinearFormBuilder(ClientContext &context, LogicalDecide &op, DecideTree &tree)
 	    : context(context), op(op), tree(tree), decide_index(op.decide_index), splitter(context, op) {
-		// A frame's values are columns after the input's (DecideFrameColumn).
-		frame_reads.column_base = op.children.empty() ? 0 : op.children[0]->types.size();
 	}
 
 	//! One clause, or one row a function owns, in canonical form: its terms into `constraint`, which holds its facts.
@@ -105,7 +96,6 @@ public:
 		CollectLikeTerms(constraint.terms);
 		KeepAvgAsSumUnderNotEqual(constraint);
 		SettleWeightSigns(constraint.product_groups);
-		clauses.push_back(&constraint);
 	}
 
 	//! The objective's records, null for one that reads no decision.
@@ -116,7 +106,6 @@ public:
 			CollectLikeTerms(lowered->terms);
 			SettleWeightSigns(lowered->product_groups);
 		}
-		objective = lowered.get();
 		return lowered;
 	}
 
@@ -130,15 +119,24 @@ public:
 		}
 		CollectLikeTerms(body.members);
 		CollectLikeTerms(body.fallback);
-		links.emplace_back(&link, &body);
 	}
 
-	//! Once every term is split: every frame left in an expression execution evaluates is over data -- a frame over
-	//! decisions became its terms -- or the NULL test of a reducer's member, and becomes the column it reads. The
-	//! frame columns go to the tree.
-	void Frames(DecideTree &into) {
-		LowerFramesInPreparedModel();
-		into.frame_reads = std::move(frame_reads);
+	//! What a signature keys frame `frame`'s reached `else` by (DecideFrameReads::fallback_columns,
+	//! ::fallback_decisions): the FALLBACK column of each of its terms, and the decisions it reads at the row itself.
+	void Fallback(idx_t frame) {
+		auto &reads = tree.frame_reads;
+		const BoundConstantExpression one(Value::INTEGER(1));
+		vector<DecideTerm> terms;
+		AppendFallbackTerms(frame, one, 1, terms);
+		for (auto &term : terms) {
+			reads.fallback_columns[frame].push_back(term.coefficient->Cast<BoundReferenceExpression>().index -
+			                                        reads.column_base);
+			auto &decisions = reads.fallback_decisions[frame];
+			if (term.variable_index != DConstants::INVALID_INDEX &&
+			    std::find(decisions.begin(), decisions.end(), term.variable_index) == decisions.end()) {
+				decisions.push_back(term.variable_index);
+			}
+		}
 	}
 
 private:
@@ -192,47 +190,12 @@ private:
 	// Frame selectors (language/guide.md §5.6)
 	//===------------------------------------------------------------------===//
 
-	//! The frame column holding `value` read the way `kind` says for frame `frame`
-	//! (DecideFrameColumn), registered once per distinct value; its index. A VALUE column
-	//! also reads the frame's `else`.
-	idx_t FrameColumnSlot(DecideFrameColumn::Kind kind, idx_t frame, const Expression *value) {
-		auto &columns = frame_reads.columns;
-		auto held = value ? FrameColumnValue(*value) : nullptr;
-		for (idx_t i = 0; i < columns.size(); i++) {
-			auto &column = columns[i];
-			if (column.kind == kind && column.frame == frame && Expression::Equals(column.value, held)) {
-				return i;
-			}
-		}
-		DecideFrameColumn column;
-		column.kind = kind;
-		column.frame = frame;
-		column.value = std::move(held);
-		column.type = value ? value->return_type : LogicalType::BOOLEAN;
-		auto &fallback = op.bound.frames[frame].fallback;
-		const bool reads_fallback = kind == DecideFrameColumn::Kind::VALUE || kind == DecideFrameColumn::Kind::REDUCED;
-		if (reads_fallback && fallback) {
-			// The binder gave payload and fallback one type (BindDecideFrame): a point's value, a range's reducer
-			// argument.
-			auto &payload_type = kind == DecideFrameColumn::Kind::REDUCED
-			                         ? value->Cast<BoundAggregateExpression>().children[0]->return_type
-			                         : column.type;
-			if (fallback->return_type != payload_type) {
-				throw InternalException("DECIDE: %s reads a payload of type %s and an else of type %s",
-				                        op.bound.frames[frame].text, payload_type.ToString(),
-				                        fallback->return_type.ToString());
-			}
-			column.fallback = fallback->Copy();
-		}
-		columns.push_back(std::move(column));
-		return columns.size() - 1;
-	}
-
-	//! The chunk column holding `value` read the way `kind` says for frame `frame`.
-	unique_ptr<Expression> FrameColumnRef(DecideFrameColumn::Kind kind, idx_t frame, const Expression *value) {
-		auto slot = FrameColumnSlot(kind, frame, value);
-		return make_uniq<BoundReferenceExpression>(op.bound.frames[frame].spelling, frame_reads.columns[slot].type,
-		                                           frame_reads.column_base + slot);
+	//! The chunk column holding the coefficient `value` read the way `kind` says (READ, FALLBACK) for frame `frame`.
+	unique_ptr<Expression> FrameColumnRef(DecideFrameColumn::Kind kind, idx_t frame, const Expression &value) {
+		auto &reads = tree.frame_reads;
+		const auto slot = reads.Slot(kind, frame, &value, nullptr);
+		return make_uniq<BoundReferenceExpression>(op.bound.frames[frame].spelling, reads.columns[slot].type,
+		                                           reads.column_base + slot);
 	}
 
 	//! `factor * column`, the factor a frame term stands under (1 for a bare frame).
@@ -273,9 +236,9 @@ private:
 	}
 
 	//! `factor * c * v` for the term `c * v` of frame `frame`'s payload or `else`, its coefficient `c` read through
-	//! the frame column of `kind`; the column's index.
-	idx_t AppendFrameColumnTerm(idx_t frame, DecideFrameColumn::Kind kind, DecideSplitTerm &inner,
-	                            const Expression &factor, int sign, vector<DecideTerm> &out) {
+	//! the frame column of `kind`.
+	void AppendFrameColumnTerm(idx_t frame, DecideFrameColumn::Kind kind, DecideSplitTerm &inner,
+	                           const Expression &factor, int sign, vector<DecideTerm> &out) {
 		if (inner.opaque) {
 			ThrowOpaqueTerm(inner);
 		}
@@ -286,18 +249,13 @@ private:
 		if (!inner.coefficient) {
 			inner.coefficient = make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1));
 		}
-		auto slot = FrameColumnSlot(kind, frame, inner.coefficient.get());
-		auto column = FrameColumnRef(kind, frame, inner.coefficient.get());
+		auto column = FrameColumnRef(kind, frame, *inner.coefficient);
 		out.push_back(DecideTerm(inner.var_a, ScaleFrameColumn(factor, std::move(column)), sign * inner.sign));
-		return slot;
 	}
 
 	//! A frame's `else` as its terms, each read at the anchor -- its coefficient a FALLBACK column, 0 where no position
-	//! is missing -- each times `factor`, and its decisions recorded (DecideFrameReads::fallback_decisions).
-	//! Nothing for a frame with none.
+	//! is missing -- each times `factor`. Nothing for a frame with none.
 	void AppendFallbackTerms(idx_t frame, const Expression &factor, int sign, vector<DecideTerm> &out) {
-		auto &fallback_decisions = frame_reads.fallback_decisions;
-		fallback_decisions.resize(op.bound.frames.size());
 		auto &spec = op.bound.frames[frame];
 		if (!spec.fallback) {
 			return;
@@ -306,170 +264,6 @@ private:
 		splitter.Split(*spec.fallback, 1, fallback);
 		for (auto &inner : fallback) {
 			AppendFrameColumnTerm(frame, DecideFrameColumn::Kind::FALLBACK, inner, factor, sign, out);
-			auto &into = fallback_decisions[frame];
-			if (inner.var_a != DConstants::INVALID_INDEX &&
-			    std::find(into.begin(), into.end(), inner.var_a) == into.end()) {
-				into.push_back(inner.var_a);
-			}
-		}
-	}
-
-	//! What a signature keys each frame's reached `else` by (DecideFrameReads::fallback_columns): the
-	//! FALLBACK column of each of its terms, which the frame's own reading may already have registered
-	//! (FrameColumnSlot keeps each once).
-	void RecordFallbackColumns() {
-		auto &columns = frame_reads.fallback_columns;
-		columns.assign(op.bound.frames.size(), vector<idx_t>());
-		frame_reads.fallback_decisions.resize(op.bound.frames.size());
-		const BoundConstantExpression one(Value::INTEGER(1));
-		for (idx_t f = 0; f < op.bound.frames.size(); f++) {
-			vector<DecideTerm> terms;
-			AppendFallbackTerms(f, one, 1, terms);
-			for (auto &term : terms) {
-				auto &ref = term.coefficient->Cast<BoundReferenceExpression>();
-				columns[f].push_back(ref.index - frame_reads.column_base);
-			}
-		}
-	}
-
-	//! Replaces each frame in `expr` by the column it reads: a frame over data by its VALUE (its payload at the
-	//! selected row, or its `else` at the row itself, NULL where neither stands), and a frame over decisions under a
-	//! reducer's NULL test (DecideCanonicalizer::SkipNullData) by its DEFINED column. Every other frame over decisions
-	//! became its terms.
-	void LowerFrames(unique_ptr<Expression> &expr) {
-		if (!expr) {
-			return;
-		}
-		idx_t frame;
-		if (expr->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_REDUCER &&
-		    expr->Cast<BoundDecideReducerExpression>().frame_aggregate != DConstants::INVALID_INDEX) {
-			// A reducer over data reading a frame (LogicalDecide::frame_aggregates): its frames first; once every
-			// frame has its columns, a column of its own after them (lower_aggregates).
-			auto &reducer = expr->Cast<BoundDecideReducerExpression>();
-			for (auto &child : reducer.children) {
-				LowerFrames(child);
-			}
-			LowerFrames(reducer.filter);
-			if (lower_aggregates) {
-				expr = FrameAggregateRef(reducer.frame_aggregate, reducer);
-			}
-			return;
-		}
-		if (expr->GetExpressionType() == ExpressionType::OPERATOR_IS_NOT_NULL) {
-			auto &test = expr->Cast<BoundOperatorExpression>();
-			if (test.children.size() == 1 && TryGetDecideFrame(*test.children[0], frame) &&
-			    FindDecideVariable(*test.children[0]) != DConstants::INVALID_INDEX) {
-				test.children[0] = FrameColumnRef(DecideFrameColumn::Kind::DEFINED, frame, nullptr);
-				return;
-			}
-		}
-		if (TryGetDecideFrame(*expr, frame)) {
-			if (FindDecideVariable(*expr) != DConstants::INVALID_INDEX) {
-				throw InternalException("DECIDE: a frame over decisions reached evaluation unextracted: %s",
-				                        op.bound.frames[frame].text);
-			}
-			auto &marker = expr->Cast<BoundDecideFrameExpression>();
-			// A point reads its payload at one row; a range reduces its payload's values, its `else` read where a
-			// position is missing.
-			auto fold = DecideFrameFold(op.bound.frames[frame], marker);
-			auto value = fold ? FrameColumnRef(DecideFrameColumn::Kind::REDUCED, frame, fold.get())
-			                  : FrameColumnRef(DecideFrameColumn::Kind::VALUE, frame, marker.children[0].get());
-			// The marker's parent was bound to the marker's type.
-			expr = BoundCastExpression::AddCastToType(context, std::move(value), marker.return_type);
-			return;
-		}
-		ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) { LowerFrames(child); });
-	}
-
-	void LowerFrames(vector<unique_ptr<Expression>> &exprs) {
-		for (auto &expr : exprs) {
-			LowerFrames(expr);
-		}
-	}
-
-	void LowerFrames(vector<DecideTerm> &terms) {
-		for (auto &term : terms) {
-			LowerFrames(term.coefficient);
-			LowerFrames(term.filter);
-		}
-	}
-
-	void LowerFrames(DecideConstraint &constraint) {
-		LowerFrames(constraint.scope.when);
-		LowerFrames(constraint.terms);
-		LowerFrames(constraint.rhs_expr);
-		for (auto *end :
-		     {&constraint.admitted_lower, &constraint.admitted_upper, &constraint.admitted_a, &constraint.admitted_r}) {
-			LowerFrames(*end);
-		}
-		LowerFrames(constraint.product_groups);
-	}
-
-	void LowerFrames(vector<DecideProductGroup> &groups) {
-		for (auto &group : groups) {
-			LowerFrames(group.weight);
-			LowerFrames(group.filter);
-			LowerFrames(group.left);
-			LowerFrames(group.right);
-		}
-	}
-
-	//! Every expression execution evaluates, over the columns frames read (LowerFrames).
-	//! The column of frame aggregate `index` (made when new, after every frame column), as the reducer `marker`'s
-	//! parent reads it: of its type, and named by the reducer as written.
-	unique_ptr<Expression> FrameAggregateRef(idx_t index, const Expression &marker) {
-		auto &columns = frame_reads.columns;
-		auto slot = frame_aggregate_slots.find(index);
-		if (slot == frame_aggregate_slots.end()) {
-			auto &record = op.frame_aggregates[index];
-			DecideFrameColumn column;
-			column.kind = DecideFrameColumn::Kind::AGGREGATE;
-			column.aggregate = index;
-			column.value = FrameColumnValue(marker);
-			column.type = marker.return_type;
-			column.key = record.key;
-			column.class_key = record.class_key;
-			column.text = record.text;
-			columns.push_back(std::move(column));
-			slot = frame_aggregate_slots.emplace(index, columns.size() - 1).first;
-		}
-		auto column = make_uniq<BoundReferenceExpression>(op.frame_aggregates[index].text, marker.return_type,
-		                                                  frame_reads.column_base + slot->second);
-		// It equals the reducer in value, so a message quotes it as the reducer was written (the location rule).
-		DecideReplaces(*column, marker);
-		return std::move(column);
-	}
-
-	void LowerFramesInPreparedModel() {
-		if (op.bound.frames.empty()) {
-			return;
-		}
-		// Twice: the frames first, then each reducer over data reading one, whose column follows every frame's.
-		lower_aggregates = false;
-		LowerFramesOnce();
-		if (!op.frame_aggregates.empty()) {
-			lower_aggregates = true;
-			LowerFramesOnce();
-		}
-		RecordFallbackColumns();
-	}
-
-	void LowerFramesOnce() {
-		for (auto *clause : clauses) {
-			LowerFrames(*clause);
-		}
-		if (objective) {
-			LowerFrames(objective->when_condition);
-			LowerFrames(objective->terms);
-			LowerFrames(objective->product_groups);
-		}
-		for (auto &link : links) {
-			LowerFrames(link.second->members);
-			LowerFrames(link.second->fallback);
-			if (link.first->Frame() == DConstants::INVALID_INDEX) {
-				LowerFrames(link.first->Reducer().filter);
-			}
-			LowerFrames(link.first->when);
 		}
 	}
 
@@ -924,28 +718,17 @@ private:
 private:
 	ClientContext &context;
 	LogicalDecide &op;
-	//! The tree under construction.
-	const DecideTree &tree;
-	//! The records filled, in the order filled, which the tree's nodes hold: the frame passes read them once every
-	//! term is split.
-	vector<DecideConstraint *> clauses;
-	DecideObjective *objective = nullptr;
-	vector<pair<DecideReducerValueDefinition *, DecideBody *>> links;
-	//! The frame columns the lowering reads (DecideTree::frame_reads).
-	DecideFrameReads frame_reads;
+	//! The tree under construction, whose frame columns a frame over decisions' terms read (DecideTree::frame_reads).
+	DecideTree &tree;
 	idx_t decide_index;
 	DecideTermSplitter splitter;
-	//! LowerFramesInPreparedModel's second pass: each reducer over data reading a frame becomes its column.
-	bool lower_aggregates = false;
-	//! Frame aggregate (LogicalDecide::frame_aggregates) -> its column (into DecideFrameReads::columns).
-	unordered_map<idx_t, idx_t> frame_aggregate_slots;
 };
 
 struct DecideTermLowering::Builder : DecideLinearFormBuilder {
 	using DecideLinearFormBuilder::DecideLinearFormBuilder;
 };
 
-DecideTermLowering::DecideTermLowering(ClientContext &context, LogicalDecide &op, const DecideTree &tree)
+DecideTermLowering::DecideTermLowering(ClientContext &context, LogicalDecide &op, DecideTree &tree)
     : builder(make_uniq<Builder>(context, op, tree)) {
 }
 
@@ -966,8 +749,8 @@ void DecideTermLowering::Members(DecideReducerValueDefinition &link, DecideBody 
 	builder->Members(link, body);
 }
 
-void DecideTermLowering::Frames(DecideTree &tree) {
-	builder->Frames(tree);
+void DecideTermLowering::Fallback(idx_t frame) {
+	builder->Fallback(frame);
 }
 
 } // namespace duckdb

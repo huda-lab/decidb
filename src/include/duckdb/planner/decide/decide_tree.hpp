@@ -246,6 +246,8 @@ struct DecideFrameNode : public DecideNode {
 	idx_t frame = DConstants::INVALID_INDEX;
 	unique_ptr<Expression> fallback;
 	unique_ptr<Expression> over;
+	//! Over data, the column holding its one value (DecideFrameReads::columns): a point's VALUE, a range's REDUCED.
+	idx_t value_column = DConstants::INVALID_INDEX;
 };
 
 //! F: a helper definition's value.
@@ -291,7 +293,7 @@ struct DecideTree {
 	//! then the folded bounds whose repair rows come from their clause.
 	idx_t constraint_count = 0;
 	idx_t singleton_row_count = 0;
-	//! The frame columns the clauses' terms read (DecideTermLowering).
+	//! The frame columns its expressions read.
 	DecideFrameReads frame_reads;
 	//! The constraints' records, by clause_index; a folded bound's is none of them.
 	vector<const DecideConstraint *> Constraints() const;
@@ -319,8 +321,7 @@ struct DecideTree {
 	//! (LogicalDecide::frame_aggregates), its G.
 	vector<idx_t> frame_nodes;
 	vector<idx_t> frame_aggregate_nodes;
-	//! Per frame column (DecideFrameReads::columns), what its O computes for it; a reducer's over frames
-	//! (AGGREGATE) is its G's fold.
+	//! Per frame column (DecideFrameReads::columns), what its O computes for it.
 	vector<DecideFrameColumnPrograms> frame_columns;
 
 	// The facts the plan states of the query, which PlanDecide moves in from the LogicalDecide once the tree is

@@ -293,15 +293,29 @@ private:
 	}
 
 	//! Stage 05's `expression` over `site`'s layout. Stage 05 reads the source as the operator's input columns, a data
-	//! reducer as its record's placeholder, a frame as a column after the input's, and an admitted end its inputs a and
-	//! r as DecideAdmittedInput.
+	//! reducer as its record's placeholder, a frame over data as its marker, a coefficient a frame over decisions
+	//! reads as a column after the input's, and an admitted end its inputs a and r as DecideAdmittedInput.
 	unique_ptr<Expression> Translate(idx_t site, const Expression &expression) {
 		DecideChunkLeaf leaf = [&](const Expression &leaf_expression) -> unique_ptr<Expression> {
 			const auto kind = leaf_expression.GetExpressionClass();
+			auto &type = leaf_expression.return_type;
+			if (kind == ExpressionClass::BOUND_DECIDE_FRAME) {
+				// A frame over data is its O's one value. One over decisions became its terms, and no coefficient
+				// holds it.
+				auto &frame = tree.nodes[tree.frame_nodes[leaf_expression.Cast<BoundDecideFrameExpression>().frame]]
+				                  ->Cast<DecideFrameNode>();
+				return frame.decision_value ? nullptr : FrameRead(site, frame, type);
+			}
+			if (kind == ExpressionClass::BOUND_DECIDE_REDUCER) {
+				// A reducer over data reading a frame is its G's fold (LogicalDecide::frame_aggregates).
+				const auto aggregate = leaf_expression.Cast<BoundDecideReducerExpression>().frame_aggregate;
+				return aggregate < tree.frame_aggregate_nodes.size()
+				           ? Hole(site, tree.frame_aggregate_nodes[aggregate], type)
+				           : nullptr;
+			}
 			if (kind != ExpressionClass::BOUND_REF && kind != ExpressionClass::BOUND_COLUMN_REF) {
 				return nullptr;
 			}
-			auto &type = leaf_expression.return_type;
 			for (idx_t record = 0; record < op.bound.bound_aggregates.size(); record++) {
 				if (op.bound.bound_aggregates[record].IsReadBy(leaf_expression)) {
 					return Hole(site, record_nodes[record], type);
@@ -343,41 +357,23 @@ private:
 		return make_uniq<BoundReferenceExpression>(type, DECIDE_HOLE_BASE + hole);
 	}
 
-	//! Frame column `j` (DecideFrameReads::columns) as `site` reads it, of type `type`: the column of its
-	//! frame's O at the entry's row (language/guide.md §5.6), or a reducer's over frames, its G's fold.
+	//! Frame column `j` (DecideFrameReads::columns) as `site` reads it, of type `type`: the column of its frame's O at
+	//! the entry's row (language/guide.md §5.6).
 	unique_ptr<Expression> FrameColumn(idx_t site, idx_t j, const LogicalType &type) {
-		auto &column = tree.frame_reads.columns[j];
-		if (column.kind == DecideFrameColumn::Kind::AGGREGATE) {
-			const auto aggregate = column.aggregate;
-			if (aggregate >= tree.frame_aggregate_nodes.size() ||
-			    tree.frame_aggregate_nodes[aggregate] == DConstants::INVALID_INDEX) {
-				throw InternalException("DECIDE tree: %s has no node", column.text);
-			}
-			return Hole(site, tree.frame_aggregate_nodes[aggregate], type);
-		}
-		if (tree.frame_nodes[column.frame] == DConstants::INVALID_INDEX) {
-			throw InternalException("DECIDE tree: frame %llu has no node", column.frame);
-		}
-		return Hole(site, tree.frame_nodes[column.frame], type, j);
+		return Hole(site, tree.frame_nodes[tree.frame_reads.columns[j].frame], type, j);
 	}
 
-	//! An O's value as an expression Lower read in the tree's terms reads it: over data, its frame's one value (a
-	//! point's VALUE or a range's REDUCED column), of the read's type; over decisions, a reducer's NULL test of it, its
-	//! DEFINED column, as stage 05 reads both (DecideFrameColumn).
+	//! An O's value as `site` reads it: over data, its frame's one value (DecideFrameNode::value_column), of the
+	//! read's type; over decisions, a reducer's NULL test of it, its DEFINED column.
 	unique_ptr<Expression> FrameRead(idx_t site, const DecideFrameNode &frame, const LogicalType &type) {
-		auto &columns = tree.frame_reads.columns;
-		for (idx_t j = 0; j < columns.size(); j++) {
-			auto kind = columns[j].kind;
-			const bool read = frame.decision_value
-			                      ? kind == DecideFrameColumn::Kind::DEFINED
-			                      : kind == DecideFrameColumn::Kind::VALUE || kind == DecideFrameColumn::Kind::REDUCED;
-			if (read && columns[j].frame == frame.frame) {
-				auto hole = FrameColumn(site, j, columns[j].type);
-				return frame.decision_value ? std::move(hole)
-				                            : BoundCastExpression::AddCastToType(context, std::move(hole), type);
-			}
+		auto &reads = tree.frame_reads;
+		if (frame.decision_value) {
+			const auto defined = reads.Slot(DecideFrameColumn::Kind::DEFINED, frame.frame, nullptr, nullptr);
+			return FrameColumn(site, defined, reads.columns[defined].type);
 		}
-		throw InternalException("DECIDE tree: %s has no column its reader reads", frame.text);
+		D_ASSERT(frame.value_column != DConstants::INVALID_INDEX);
+		auto value = FrameColumn(site, frame.value_column, reads.columns[frame.value_column].type);
+		return BoundCastExpression::AddCastToType(context, std::move(value), type);
 	}
 
 public:
@@ -388,7 +384,7 @@ public:
 		tree.frame_columns.resize(columns.size());
 		for (idx_t j = 0; j < columns.size(); j++) {
 			auto &column = columns[j];
-			if (column.kind == DecideFrameColumn::Kind::AGGREGATE || column.kind == DecideFrameColumn::Kind::DEFINED) {
+			if (column.kind == DecideFrameColumn::Kind::DEFINED) {
 				continue;
 			}
 			auto &programs = tree.frame_columns[j];

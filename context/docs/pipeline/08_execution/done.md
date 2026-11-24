@@ -722,8 +722,8 @@ some rule dropped, or a NULL on its left side will, has no instance, so no bound
 columns print as the frame is written: a column past the source's columns is named by its text
 (`DecideSourceNames::source_columns`).
 
-A reducer over data reading a frame (`DecideFrameColumn::Kind::AGGREGATE`, after every frame column) is computed once
-the frames' columns are computed (in column order, so one may read another): its G folds its operand's entries the
+A reducer over data reading a frame is a G of the tree (`DecideTree::frame_aggregate_nodes`), no frame column, and a
+coefficient or a bound that reads it reads the G's value: its G folds its operand's entries the
 filter keeps, grouped by its path key, each class of its own `per` once per signature (each frame by its keys), its
 values reduced as SQL's aggregate does, a NULL skipped (`DecideAggregateStates`). Each row reads its group's value,
 NULL in no group or where the group has nothing to reduce (`count`: 0).

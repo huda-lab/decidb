@@ -294,9 +294,9 @@ private:
 
 	//! A reducer over data whose argument reads a frame: no side table can compute it, since a frame's values are
 	//! columns execution computes. It stays a reducer over the rows it reads (`Reads`, its new filter), naming its
-	//! entry of LogicalDecide::frame_aggregates -- its path key and its `per` key --, which stage 05 makes a frame
-	//! column execution computes after the frames (DecideFrameColumn::Kind::AGGREGATE). The reducers inside its
-	//! argument are columns first, as for any reducer.
+	//! entry of LogicalDecide::frame_aggregates -- its path key and its `per` key --, which the tree makes a G whose
+	//! operand reads the frames (DecideTree::frame_aggregate_nodes). The reducers inside its argument are columns
+	//! first, as for any reducer.
 	unique_ptr<Expression> MakeFrameAggregate(const BoundDecideReducerExpression &reducer,
 	                                          const DecideReducerPath &path) {
 		// A NaN its argument reads makes the reducer's value NaN, which the value's reader refuses; a norm's value can

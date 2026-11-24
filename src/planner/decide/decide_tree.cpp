@@ -107,6 +107,29 @@ static unique_ptr<DecideConstraint> ReadDecideClauseFacts(ClientContext &context
 
 //! The construction's helpers, in a namespace of their own rather than an anonymous one: the header's
 //! DecideTreeConstruction::Builder derives from DecideTreeBuilder.
+idx_t DecideFrameReads::Slot(DecideFrameColumn::Kind kind, idx_t frame, const Expression *value,
+                             const Expression *fallback) {
+	for (idx_t i = 0; i < columns.size(); i++) {
+		auto &column = columns[i];
+		if (column.kind == kind && column.frame == frame &&
+		    (value ? column.value && column.value->Equals(*value) : !column.value)) {
+			return i;
+		}
+	}
+	DecideFrameColumn column;
+	column.kind = kind;
+	column.frame = frame;
+	column.type = value ? value->return_type : LogicalType::BOOLEAN;
+	if (value) {
+		column.value = value->Copy();
+	}
+	if (fallback) {
+		column.fallback = fallback->Copy();
+	}
+	columns.push_back(std::move(column));
+	return columns.size() - 1;
+}
+
 namespace decide_tree_build {
 
 static unique_ptr<Expression> CopyOrNull(const unique_ptr<Expression> &expression) {
@@ -162,6 +185,10 @@ public:
 		}
 		definition_nodes.assign(op.helper_definitions.size(), DConstants::INVALID_INDEX);
 		frame_nodes.assign(op.bound.frames.size(), DConstants::INVALID_INDEX);
+		// A frame's values are columns after the input's (DecideFrameColumn).
+		tree->frame_reads.column_base = op.children.empty() ? 0 : op.children[0]->types.size();
+		tree->frame_reads.fallback_columns.resize(op.bound.frames.size());
+		tree->frame_reads.fallback_decisions.resize(op.bound.frames.size());
 		record_nodes.assign(op.bound.bound_aggregates.size(), DConstants::INVALID_INDEX);
 		tree->frame_aggregate_nodes.assign(op.frame_aggregates.size(), DConstants::INVALID_INDEX);
 	}
@@ -222,7 +249,6 @@ public:
 				              tree->nodes[definition_nodes[i]]->compiled);
 			}
 		}
-		terms.Frames(*tree);
 		RemoveInheritedPathGates();
 		Definitions();
 	}
@@ -970,8 +996,7 @@ private:
 		}
 		if (marker && marker->GetExpressionClass() == ExpressionClass::BOUND_DECIDE_FRAME) {
 			auto &aggregate = marker->Cast<BoundDecideFrameExpression>();
-			// Its payload is its body. A collated extremum's comparison key is lowered for the columns it reads; the
-			// term half folds a range from the frame's own reducer (DecideFrameFold).
+			// Its payload is its body. A collated extremum's comparison key is lowered for the columns it reads.
 			for (auto &argument : aggregate.children) {
 				auto lowered = Lower(index, *argument);
 				Decisions(*lowered, node.decisions);
@@ -979,6 +1004,14 @@ private:
 					node.body = std::move(lowered);
 					node.decision_value = HasDecision(aggregate);
 				}
+			}
+			if (!node.decision_value) {
+				// Over data it reads one value: a point its payload at the row it selects, a range its own reducer
+				// over the values its window reads (DecideFrameFold).
+				const auto fold = DecideFrameFold(frame, aggregate);
+				node.value_column = tree->frame_reads.Slot(
+				    fold ? DecideFrameColumn::Kind::REDUCED : DecideFrameColumn::Kind::VALUE, frame_index,
+				    fold ? fold.get() : aggregate.children[0].get(), frame.fallback.get());
 			}
 		}
 		if (payload && !node.body) {
@@ -990,6 +1023,7 @@ private:
 		auto payload_signature = std::move(node.signature);
 		if (frame.fallback) {
 			node.fallback = Lower(index, *frame.fallback);
+			terms.Fallback(frame_index);
 		}
 		node.signature = std::move(payload_signature);
 		return index;

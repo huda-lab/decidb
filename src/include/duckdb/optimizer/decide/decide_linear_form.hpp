@@ -47,7 +47,7 @@ struct DecideLoweredAtom {
 //! stage 08 to evaluate against the relational input.
 class DecideTermLowering {
 public:
-	DecideTermLowering(ClientContext &context, LogicalDecide &op, const DecideTree &tree);
+	DecideTermLowering(ClientContext &context, LogicalDecide &op, DecideTree &tree);
 	~DecideTermLowering();
 	//! The terms of a canonical clause, or of a row a function owns, into `constraint`, which holds its facts. `atoms`
 	//! are its left side's.
@@ -56,9 +56,9 @@ public:
 	unique_ptr<DecideObjective> Objective(const BoundDecideClause &objective, const vector<DecideLoweredAtom> &atoms);
 	//! A helper's member terms and its frame's `else` terms, into the body of its G or O.
 	void Members(DecideReducerValueDefinition &link, DecideBody &body);
-	//! Once every term is split: the frames left in the records become the columns they read, and the frame columns
-	//! go to `tree` (DecideTree::frame_reads).
-	void Frames(DecideTree &tree);
+	//! What a signature keys frame `frame`'s reached `else` by: its terms' FALLBACK columns and the decisions it reads,
+	//! into the tree's frame columns (DecideFrameReads::fallback_columns, ::fallback_decisions).
+	void Fallback(idx_t frame);
 
 private:
 	struct Builder;
