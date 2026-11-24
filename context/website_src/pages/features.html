@@ -1,0 +1,136 @@
+<!--hero-->
+
+<div class="container">
+  <div class="doc-layout">
+    <nav class="toc" aria-label="On this page">
+      <div class="toc-title">On this page</div>
+      <ul>
+        <li><a href="#rewriting">Query rewriting</a></li>
+        <li class="sub"><a href="#see-it">How to tell</a></li>
+        <li class="sub"><a href="#which">Which queries</a></li>
+        <li class="sub"><a href="#control">Turning it off</a></li>
+        <li><a href="#diagnose">DIAGNOSE</a></li>
+        <li class="sub"><a href="#reading">Reading the answer</a></li>
+        <li class="sub"><a href="#unbounded">No limit on the objective</a></li>
+      </ul>
+    </nav>
+
+    <article class="prose">
+
+      <!-- ============================================================ QUERY REWRITING -->
+      <section id="rewriting">
+        <h2><a class="anchor" href="#rewriting">Query rewriting</a></h2>
+        <p class="lead">Some optimization problems have an exact answer that sorting, ranking and running totals can
+          compute. When DeciDB recognizes one, it rewrites the query into those operations and never
+          starts a solver. You write the same SQL; it returns sooner.</p>
+        <div class="note note--direct"><strong>Faster, exact, and no license needed</strong>
+          <p>A fair allocation over 800,000 decisions takes 0.026 s rewritten, against 2,158 s in Gurobi. Every rewritten
+            class was faster than Gurobi at every size measured. The answer is exact, with no solver tolerance, and a
+            quadratic class needs no Gurobi license.</p></div>
+        <p>A query DeciDB cannot prove to be one of these shapes goes to the solver unchanged, so rewriting never changes
+          what a query means.</p>
+
+        <h3 id="see-it"><a class="anchor" href="#see-it">How to tell</a></h3>
+        <p>Nothing in the query marks it. <code>EXPLAIN</code> shows whether it was rewritten and by which rule (the
+          engine's name for the feature is "direct solve"):</p>
+<!--explain check="fair-allocation" rewrite title="Split a budget fairly"-->SELECT program, alloc
+FROM Programs
+DECIDE alloc(REAL)
+SUCH THAT alloc <= max_alloc AND SUM(alloc) <= 100
+MAXIMIZE MIN(alloc / need);<!--/explain-->
+
+        <h3 id="which"><a class="anchor" href="#which">Which queries are rewritten</a></h3>
+        <p>Nine shapes today. The rule is the name <code>EXPLAIN</code> prints.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Problem</th><th>The query has</th><th>Rule</th></tr></thead>
+          <tbody>
+            <tr><td><a href="examples/shortlist.html">Pick the best rows by score</a></td><td>one <code>BOOL</code> per row, limits on how many, a score to maximize; per group too</td><td><code>S1</code></td></tr>
+            <tr><td><a href="examples/nested-quotas.html">The best rows under nested quotas</a></td><td>count limits whose groups nest: teams inside divisions inside a total</td><td><code>S2</code></td></tr>
+            <tr><td><a href="examples/sprint-planning.html">As many rows as fit a budget</a></td><td><code>MAXIMIZE SUM(x)</code> under one <code>SUM(w * x) &lt;= B</code></td><td><code>S3</code></td></tr>
+            <tr><td><a href="#a1">Each row on its own</a></td><td>a range for each row and nothing linking rows</td><td><code>A1</code></td></tr>
+            <tr><td><a href="examples/depot-placement.html">One value closest to every row</a></td><td>one shared <code>REAL</code> and a squared or absolute distance</td><td><code>A2</code></td></tr>
+            <tr><td><a href="#r1">Fill a budget by value per unit</a></td><td><code>REAL</code> amounts with caps and one budget</td><td><code>R1</code></td></tr>
+            <tr><td><a href="examples/fair-allocation.html">A fair split of a budget</a></td><td><code>MAXIMIZE MIN(c * x)</code>, caps and one budget</td><td><code>R4</code></td></tr>
+            <tr><td><a href="#n1">Stay inside one sum of squares</a></td><td>one <code>SUM(POWER(x, 2)) &lt;= B</code></td><td><code>N1</code></td></tr>
+            <tr><td><a href="examples/matching.html">Match two tables one to one</a></td><td>a <code>BOOL</code> per pair, one pair per row on each side, a distance cost</td><td><code>O1</code></td></tr>
+          </tbody>
+        </table></div>
+        <p>Three of them in full:</p>
+<!--sql title="Fill a truck by value per kg" run="r1" direct="R1_CONTINUOUS_KNAPSACK" dec="kg"-->SELECT good, value_per_kg, available_kg, ROUND(kg, 1) AS kg
+FROM Cargo
+DECIDE kg(REAL)
+SUCH THAT kg <= available_kg AND SUM(kg) <= 1000
+MAXIMIZE SUM(value_per_kg * kg);<!--/sql-->
+        <p id="r1">The truck takes the most valuable goods per kilogram first, until it is full.</p>
+<!--sql title="Each order picks its best quantity in its own range" run="a1" direct="A1_SEPARABLE_BOX" dec="qty"-->SELECT sku, margin, min_qty, max_qty, qty
+FROM Orders
+DECIDE qty(INT)
+SUCH THAT qty BETWEEN min_qty AND max_qty
+MAXIMIZE SUM(margin * qty);<!--/sql-->
+        <p id="a1">Each quantity goes to whichever end of its range its margin favors.</p>
+<!--sql title="The best direction within a sum of squares" run="n1" direct="N1_EUCLIDEAN_BALL" dec="x"-->SELECT name, score, ROUND(x, 3) AS x
+FROM Signals
+DECIDE x(REAL)
+SUCH THAT SUM(POWER(x, 2)) <= 25
+MAXIMIZE SUM(score * x);<!--/sql-->
+        <p id="n1"><code>x</code> points along the scores, scaled to the limit: with scores 3, 4 and 0 and a limit of 25,
+          it answers 3, 4 and 0.</p>
+
+        <h3 id="control"><a class="anchor" href="#control">Turning it off</a></h3>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Setting</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>SET decide_direct_solve = 'auto'</code></td><td>the default: rewrite when DeciDB can prove the shape</td></tr>
+            <tr><td><code>SET decide_direct_solve = 'off'</code></td><td>always use the solver</td></tr>
+            <tr><td><code>SET decide_direct_solve = 'require'</code></td><td>stop with an error when no rule applies</td></tr>
+          </tbody>
+        </table></div>
+        <p>When several answers are equally good, the rewritten query may return a different one than the solver would;
+          the objective is the same.</p>
+        <p>How DeciDB proves a query's shape and builds the plan that replaces the solver is in the documentation:
+          <a href="docs/rewriting.html">query rewriting</a> and <a href="docs/rewrite-rules.html">the rewrite rules</a>.</p>
+      </section>
+
+      <!-- ============================================================ DIAGNOSE -->
+      <section id="diagnose">
+        <h2><a class="anchor" href="#diagnose">DIAGNOSE</a></h2>
+        <p class="lead">A query with no answer usually has one rule that is too tight. Put <code>DIAGNOSE</code> in front
+          of it and DeciDB tells you which clause to change and by how much.</p>
+        <p>This bag must weigh 40 kg or less and hold at least four items, and no four items are that light:</p>
+<!--sql check="knapsack" expect="Prefix the query with DIAGNOSE" show status="the solver found no answer"-->SELECT item, x FROM Items
+DECIDE x(BOOL)
+SUCH THAT SUM(x * weight) <= 40 AND SUM(x) >= 4
+MAXIMIZE SUM(x * value);<!--/sql-->
+        <p>The same query with <code>DIAGNOSE</code> in front returns what to change instead of the rows:</p>
+<!--sql run="knapsack" dec="suggested_change,amount"-->DIAGNOSE
+SELECT item, x FROM Items
+DECIDE x(BOOL)
+SUCH THAT SUM(x * weight) <= 40 AND SUM(x) >= 4
+MAXIMIZE SUM(x * value);<!--/sql-->
+
+        <h3 id="reading"><a class="anchor" href="#reading">Reading the answer</a></h3>
+        <p>Each row is one finding. Raise the weight limit from 40 to 57 and the query has an answer; the row marked
+          <code>achievable_objective</code> gives the value you would then get.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Column</th><th>Holds</th></tr></thead>
+          <tbody>
+            <tr><td><code>state</code></td><td><code>infeasible</code>, <code>unbounded</code> or <code>feasible</code></td></tr>
+            <tr><td><code>clause</code></td><td>the clause as you wrote it</td></tr>
+            <tr><td><code>suggested_change</code></td><td>the smallest edit that makes the query answerable</td></tr>
+            <tr><td><code>amount</code></td><td>how far the bound moves, or the objective you would reach</td></tr>
+            <tr><td><code>edit_source</code></td><td>the kind of finding, such as <code>achievable_objective</code></td></tr>
+          </tbody>
+        </table></div>
+        <p>A query that already has an answer returns one row with <code>state = 'feasible'</code>. To get one suggestion
+          per row or group instead of per clause, <code>SET diagnose_decide_infeasible_slack_scope = 'expanded'</code>.
+          <code>DIAGNOSE</code> costs nothing until you write it, and it always uses a solver.</p>
+
+        <h3 id="unbounded"><a class="anchor" href="#unbounded">No limit on the objective</a></h3>
+        <p>When nothing stops the objective from growing forever, the query stops and <code>DIAGNOSE</code> names the
+          decision that needs a limit, with how many of its values escape. The
+          <a href="examples/diagnose.html">DIAGNOSE example</a> shows the full answer for the bag above.</p>
+        <p>How DeciDB finds the smallest change is in the documentation: <a href="docs/diagnose.html">inside DIAGNOSE</a>.</p>
+      </section>
+    </article>
+  </div>
+</div>

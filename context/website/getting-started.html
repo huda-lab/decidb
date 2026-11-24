@@ -1,742 +1,313 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="en" data-type="software" data-radius="sharp" data-ground="sage" data-buttons="pill" data-motion>
 <head>
-  <script>
-  (function(){var t=localStorage.getItem('decidb-theme')||'light';
-  document.documentElement.setAttribute('data-theme',t)})();
-  </script>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Get started with DeciDB - Download or build the standalone database and run your first optimization query in minutes.">
-  <meta name="keywords" content="DeciDB, DuckDB, SQL, optimization, installation, tutorial, getting started">
-  <title>Getting Started - DeciDB</title>
-
-  <!-- Favicon -->
-  <link rel="icon" type="image/svg+xml" href="assets/images/logo.svg">
-
-  <!-- Tailwind CSS -->
-  <script src="assets/js/tw-config.js"></script>
-  <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- DM Serif Display + DM Sans -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&amp;family=DM+Serif+Display&amp;display=swap" rel="stylesheet">
-
-  <!-- JetBrains Mono for code -->
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
-
-  <!-- Prism.js for syntax highlighting -->
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-sql.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js"></script>
-
-  <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-
-  <!-- Custom CSS -->
-  <link rel="stylesheet" href="assets/css/custom.css">
-
-  <!-- Custom JS -->
-  <script src="assets/js/main.js" defer></script>
-
-  <style>
-    body {
-      font-family: 'DM Sans', system-ui, sans-serif;
-    }
-    code, pre {
-      font-family: 'JetBrains Mono', monospace;
-    }
-  </style>
+<meta charset="utf-8">
+<script>(function(){var r=document.documentElement,t;try{t=localStorage.getItem('decidb-theme')}catch(e){}if(!r.dataset.theme)r.dataset.theme=t==='dark'?'dark':'light'})()</script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script>document.documentElement.classList.add('m-enter');setTimeout(()=>document.documentElement.classList.add('m-enter-done'),700)</script>
+<title>Install DeciDB: your first DECIDE query</title>
+<meta name="description" content="Install DeciDB and write your first DECIDE query: decisions, constraints, objectives and the scope words per, when and by.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Install DeciDB: your first DECIDE query">
+<meta property="og:description" content="Install DeciDB and write your first DECIDE query: decisions, constraints, objectives and the scope words per, when and by.">
+<meta property="og:image" content="assets/images/share.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="assets/images/mark.svg" type="image/svg+xml">
+<meta name="theme-color" content="#ffffff">
+<!-- <link rel="canonical" href="https://huda-lab.github.io/decidb/"> once the published address is confirmed -->
+<meta name="site-kind" content="software">
+<meta name="page-type" content="software">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/system.css">
+<link rel="stylesheet" href="assets/ui/cards.css">
+<link rel="stylesheet" href="assets/motion/motion.css">
+<link rel="stylesheet" href="assets/backgrounds/backgrounds.css">
+<link rel="stylesheet" href="assets/layout/layout.css">
+<link rel="stylesheet" href="assets/icons/icon.css">
+<style>
+:root {
+  --p-bg: #ffffff; --p-surface: #f4f4f4; --p-ink: #111111; --p-muted: #6b6b6b;
+  --p-accent: #1a4be0; --p-accent-ink: #ffffff; --p-action: #1a4be0; --p-action-ink: #ffffff;
+  --p-inv-bg: #111111; --p-inv-surface: #1e1e1e; --p-inv-ink: #ffffff; --p-inv-muted: #9a9a9a;
+  --p-inv-accent: #ffffff; --p-inv-accent-ink: #111111; --p-inv-action: #ffffff; --p-inv-action-ink: #111111;
+  --font-display: "Geist", system-ui, sans-serif;
+  --font-text: "Geist", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --display-weight: 500;
+  --display-tracking: -0.035em;
+  --display-tracking-xl: -0.045em;
+}
+/* the evening grade (a tech page may take it): light is the default; the nav's switch sets data-theme to dark and the
+   head script remembers it; the page tokens go dark, the lit ground (sage) and the panels' painted grounds stay light, as the
+   kit keeps them */
+:root[data-theme="dark"] {
+  --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
+  --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
+  --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
+  --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
+}
+</style>
+<link rel="stylesheet" href="assets/css/site.css">
 </head>
-<body class="min-h-screen">
+<body class="doc-body">
+<header class="nav">
+  <div class="wrap nav__bar">
+    <a class="skip-link" href="#top">Skip to content</a>
+    <a class="nav__logo" href="index.html"><img class="logo logo--light" src="assets/images/logo.svg" alt="DeciDB" width="140" height="42"><img class="logo logo--dark" src="assets/images/logo-dark.svg" alt="DeciDB" width="140" height="42" loading="lazy"><img class="logo logo--mark" src="assets/images/mark.svg" alt="DeciDB" width="40" height="32" loading="lazy"></a>
+    <nav class="nav__links" aria-label="Main">
+      <div class="nav__item"><a class="nav__link" href="getting-started.html" aria-current="page">Get started</a></div><div class="nav__item"><a class="nav__link" href="demo.html">Live demo</a></div><div class="nav__item"><a class="nav__link" href="guide.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="about.html">About</a></div><div class="nav__item"><a class="nav__link" href="docs/index.html"><span class="nav__full">Documentation</span><span class="nav__short" aria-hidden="true">Docs</span></a></div><div class="nav__item"><a class="nav__link" href="features.html"><span class="nav__full">Novel features</span><span class="nav__short" aria-hidden="true">Features</span></a></div>
+    </nav>
+    <div class="nav__actions">
+      <button class="btn btn--secondary theme-toggle" type="button" aria-pressed="false" data-theme-toggle hidden><svg class="theme-toggle__sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="theme-toggle__moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg><span class="theme-toggle__label">Dark theme</span></button>
+      <a class="nav__link" href="https://github.com/huda-lab/decidb">GitHub</a>
+      <a class="btn btn--primary" href="getting-started.html#install"><span>Install<span class="nav__more"> DeciDB</span></span></a>
+    </div>
+    <button class="nav__toggle" type="button" aria-expanded="false" aria-label="Menu">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M2 5h14M2 13h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+</header>
+<main id="top">
+<section class="hero hero--page" data-enter aria-labelledby="page-h">
+  <div class="wrap"><div class="hero-text hero-split grid">
+    <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">Home</a><span aria-hidden="true">/</span>Get started</nav><h1 id="page-h">Get started</h1><p class="hero__lead">Install DeciDB, run a first optimization query, and learn the parts every DECIDE query has.</p><div class="btn-row"><a class="btn btn--primary" href="#install">Install DeciDB</a><a class="btn btn--secondary" href="#first-query">Your first query</a></div></div>
+    <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="11" data-ui-pause-host><div class="ui ui-hw hw hw--page " role="img" aria-label="Install DeciDB, open the shell and run the first query: it takes the laptop, camera, lens."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · shop.db</span></div><div class="hw__page"><pre class="hw__cmd"><code><span class="hw__prompt">$</span> pip install decidb
+<span class="hw__prompt">$</span> ./decidb shop.db</code></pre><pre class="hw__sql"><code><span class="tk-k">SELECT</span> item, value, weight, <span class="tk-v">x</span> <span class="tk-k">AS</span> take
+<span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">50</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre><div class="hw__out" data-ly-steps="520"><div class="sq__grid " style="--tpl: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr))"><div class="sq__tr sq__th"><span class="">item</span><span class="r">value</span><span class="r">weight</span><span class="r">take</span></div><div class="sq__tr is-on" data-step><span class="">Laptop</span><span class="r">100</span><span class="r">20</span><span class="r">1</span></div><div class="sq__tr is-on" data-step><span class="">Camera</span><span class="r">60</span><span class="r">10</span><span class="r">1</span></div><div class="sq__tr" data-step><span class="">Drone</span><span class="r">120</span><span class="r">30</span><span class="r">0</span></div><div class="sq__tr" data-step><span class="">Tripod</span><span class="r">40</span><span class="r">15</span><span class="r">0</span></div><div class="sq__tr is-on" data-step><span class="">Lens</span><span class="r">75</span><span class="r">12</span><span class="r">1</span></div></div></div></div></div></div>
+  </div></div>
+</section>
 
-  <!-- Skip Link for Accessibility -->
-  <a href="#main-content" class="skip-link">Skip to main content</a>
-
-  <!-- ============================================
-       HEADER / NAVIGATION
-       ============================================ -->
-  <header class="fixed top-0 w-full header-bg backdrop-blur-sm border-b border-bdcolor z-50">
-    <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
-      <!-- Logo -->
-      <a href="index.html" class="flex items-center space-x-2">
-        <img src="assets/images/logo.svg" alt="DeciDB" class="h-8 logo-img">
-        <div class="hidden sm:block">
-          <div class="text-xs text-fg-subtle">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
-        </div>
-      </a>
-
-      <!-- Desktop Navigation -->
-      <div class="hidden md:flex items-center space-x-6">
-        <a href="index.html" class="nav-link">Home</a>
-        <a href="getting-started.html" class="nav-link active">Getting Started</a>
-        <a href="documentation.html" class="nav-link">Docs</a>
-        <a href="examples.html" class="nav-link">Examples</a>
-        <a href="about.html" class="nav-link">About</a>
-      </div>
-
-      <!-- CTA Buttons -->
-      <div class="hidden md:flex items-center space-x-3">
-        <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"
-           class="btn btn-secondary text-sm">
-          <i data-lucide="github" class="w-4 h-4"></i>
-          GitHub
-        </a>
-        <a href="getting-started.html" class="btn btn-primary text-sm">
-          Get Started
-          <i data-lucide="arrow-right" class="w-4 h-4"></i>
-        </a>
-        <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">
-          <svg class="icon-sun" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
-          <svg class="icon-moon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-        </button>
-      </div>
-
-      <!-- Mobile Menu Button -->
-      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-canvas-inset"
-              aria-label="Toggle menu" aria-expanded="false">
-        <i data-lucide="menu" id="menu-open-icon" class="w-6 h-6"></i>
-        <i data-lucide="x" id="menu-close-icon" class="w-6 h-6 hidden"></i>
-      </button>
+<div class="container">
+  <div class="doc-layout">
+    <nav class="toc" aria-label="On this page">
+      <div class="toc-title">On this page</div>
+      <ul>
+        <li><a href="#install">Install</a></li>
+        <li><a href="#first-query">Your first query</a></li>
+        <li><a href="#anatomy">Anatomy of a DECIDE query</a></li>
+        <li><a href="#decisions">Decisions</a></li>
+        <li><a href="#groups">Rules about groups</a></li>
+        <li><a href="#python">From Python</a></li>
+        <li><a href="#solvers">Solvers</a></li>
+        <li><a href="#next">Next steps</a></li>
+      </ul>
     </nav>
 
-    <!-- Mobile Menu -->
-    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-bdcolor bg-canvas" aria-hidden="true">
-      <div class="container mx-auto px-4 py-4 space-y-4">
-        <a href="index.html" class="block py-2 nav-link">Home</a>
-        <a href="getting-started.html" class="block py-2 nav-link active">Getting Started</a>
-        <a href="documentation.html" class="block py-2 nav-link">Docs</a>
-        <a href="examples.html" class="block py-2 nav-link">Examples</a>
-        <a href="about.html" class="block py-2 nav-link">About</a>
-        <hr class="border-bdcolor">
-        <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"
-           class="flex items-center gap-2 py-2 text-fg-muted hover:text-accent">
-          <i data-lucide="github" class="w-5 h-5"></i>
-          GitHub
-        </a>
-        <a href="getting-started.html" class="btn btn-primary w-full justify-center">
-          Get Started
-          <i data-lucide="arrow-right" class="w-4 h-4"></i>
-        </a>
+    <article class="prose">
+      <section id="install">
+        <h2>Install</h2>
+        <p>Three ways in: the command-line shell, the Python package, or a build from source.</p>
+        <h3 id="install-cli">Command-line shell</h3>
+        <p>The command-line shell is one self-contained binary. Download the archive for your platform:</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th scope="col">Platform</th><th scope="col">Requirements</th><th scope="col"></th></tr></thead>
+          <tbody>
+            <tr><td>Linux x86-64</td><td>Ubuntu 18.04+, CentOS 7+</td><td><a class="link" href="https://github.com/huda-lab/decidb/releases/latest/download/decidb_cli-linux-amd64.zip">Download</a></td></tr>
+            <tr><td>macOS (universal)</td><td>macOS 11+</td><td><a class="link" href="https://github.com/huda-lab/decidb/releases/latest/download/decidb_cli-osx-universal.zip">Download</a></td></tr>
+            <tr><td>Windows x64</td><td>Windows 10+</td><td><a class="link" href="https://github.com/huda-lab/decidb/releases/latest/download/decidb_cli-windows-amd64.zip">Download</a></td></tr>
+          </tbody>
+        </table></div>
+<div class="code" data-lang="bash"><div class="code__head"><span class="code__title">Linux / macOS</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-f">unzip</span> decidb_cli-osx-universal.zip     <span class="tk-c"># or the Linux archive</span>
+<span class="tk-f">chmod</span> +x decidb
+<span class="tk-f">./decidb</span> <span class="tk-k">--version</span></code></pre></div>
+<div class="code" data-lang="bash"><div class="code__head"><span class="code__title">Windows (PowerShell)</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-f">Expand-Archive</span> decidb_cli-windows-amd64.zip <span class="tk-k">-DestinationPath</span> .
+<span class="tk-f">.\decidb.exe</span> <span class="tk-k">--version</span></code></pre></div>
+        <div class="note"><strong>Unsigned binaries</strong>
+          <p>On macOS, right-click the binary, choose Open and confirm. On Windows, choose "More info" and then "Run
+            anyway" in SmartScreen.</p></div>
+        <div class="note"><strong>Release 0.2 and this site</strong>
+          <p>The current release, 0.2, uses the earlier spellings, such as <code>PER</code> after a constraint. The
+            queries on this site use the new ones; the guide's <a href="guide.html#migrating">migration
+            table</a> lists each change.</p></div>
+        <h3 id="install-python">Python</h3>
+        <p>Wheels are published for Python 3.11, 3.12 and 3.13 on macOS (Apple Silicon), Linux (x86-64) and Windows
+          (x86-64).</p>
+<div class="code" data-lang="bash"><div class="code__head"><span class="code__title">Shell</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-f">pip</span> install decidb</code></pre></div>
+<div class="code" data-lang="python"><div class="code__head"><span class="code__title">Python</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">import</span> decidb
+decidb.<span class="tk-f">connect</span>().<span class="tk-f">sql</span>(<span class="tk-s">&quot;SELECT 42&quot;</span>).<span class="tk-f">fetchall</span>()</code></pre></div>
+        <h3 id="install-source">Build from source</h3>
+        <p>You need a C++17 compiler, CMake 3.15+, Python 3 and Git; Ninja is used when present.</p>
+<div class="code" data-lang="bash"><div class="code__head"><span class="code__title">Shell</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-f">git</span> clone https://github.com/huda-lab/decidb.git
+<span class="tk-f">cd</span> decidb
+<span class="tk-f">make</span> release
+<span class="tk-f">./build/release/decidb</span> <span class="tk-k">--version</span></code></pre></div>
+        <p>On Windows, with Visual Studio 2019+ and Ninja:</p>
+<div class="code" data-lang="bash"><div class="code__head"><span class="code__title">Windows (PowerShell)</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-f">cmake</span> <span class="tk-k">-G</span> Ninja <span class="tk-k">-B</span> build/release <span class="tk-k">-DCMAKE_BUILD_TYPE</span>=Release <span class="tk-k">-DDISABLE_UNITY</span>=1
+<span class="tk-f">ninja</span> <span class="tk-k">-C</span> build/release</code></pre></div>
+      </section>
+
+      <section id="first-query">
+        <h2>Your first query</h2>
+        <p>Start the shell. With no file name the database lives in memory; <code>./decidb shop.db</code> opens or creates
+          a file.</p>
+<div class="code" data-lang="bash"><div class="code__head"><span class="code__title">Shell</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-f">./decidb</span></code></pre></div>
+        <p>Create a small table of items, each with a value and a weight:</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">CREATE</span> <span class="tk-k">TABLE</span> Items (item <span class="tk-t">VARCHAR</span>, value <span class="tk-t">INT</span>, weight <span class="tk-t">INT</span>, category <span class="tk-t">VARCHAR</span>);
+<span class="tk-k">INSERT</span> <span class="tk-k">INTO</span> Items <span class="tk-k">VALUES</span>
+    (<span class="tk-s">&#x27;Laptop&#x27;</span>, <span class="tk-n">100</span>, <span class="tk-n">20</span>, <span class="tk-s">&#x27;tech&#x27;</span>), (<span class="tk-s">&#x27;Camera&#x27;</span>, <span class="tk-n">60</span>, <span class="tk-n">10</span>, <span class="tk-s">&#x27;tech&#x27;</span>), (<span class="tk-s">&#x27;Drone&#x27;</span>, <span class="tk-n">120</span>, <span class="tk-n">30</span>, <span class="tk-s">&#x27;tech&#x27;</span>),
+    (<span class="tk-s">&#x27;Tripod&#x27;</span>, <span class="tk-n">40</span>, <span class="tk-n">15</span>, <span class="tk-s">&#x27;gear&#x27;</span>), (<span class="tk-s">&#x27;Lens&#x27;</span>, <span class="tk-n">75</span>, <span class="tk-n">12</span>, <span class="tk-s">&#x27;gear&#x27;</span>);</code></pre></div>
+        <p>Which items should go in a bag that holds 50 kg, to carry the most value?</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, value, weight, <span class="tk-v">x</span> <span class="tk-k">AS</span> take
+<span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">50</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>5 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">item</th><th scope="col" class="num">value</th><th scope="col" class="num">weight</th><th scope="col" class="num dec">take</th></tr></thead><tbody><tr class="on"><td>Laptop</td><td class="num">100</td><td class="num">20</td><td class="num dec">1</td></tr><tr class="on"><td>Camera</td><td class="num">60</td><td class="num">10</td><td class="num dec">1</td></tr><tr><td>Drone</td><td class="num">120</td><td class="num">30</td><td class="num dec">0</td></tr><tr><td>Tripod</td><td class="num">40</td><td class="num">15</td><td class="num dec">0</td></tr><tr class="on"><td>Lens</td><td class="num">75</td><td class="num">12</td><td class="num dec">1</td></tr></tbody></table></div></div></div>
+        <p>The query returns every row, with the decision <code>x</code> filled in: 1 for the laptop, camera and
+          lens, 0 for the rest. Together they weigh 42 kg and are worth 235, and no other choice under 50 kg is worth
+          more.</p>
+      </section>
+
+      <section id="anatomy">
+        <h2>Anatomy of a DECIDE query</h2>
+        <p>A DECIDE query is a <code><span class="tk-k">SELECT</span></code> with three more clauses. In the query above:</p>
+        <dl class="reads">
+          <dt><code><span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)</code></dt>
+          <dd>declares the decisions: here one yes-or-no value <code>x</code> per row. Every decision has a name and a
+            type in parentheses.</dd>
+          <dt><code><span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">50</span></code></dt>
+          <dd>states the constraints, joined by <code><span class="tk-k">AND</span></code>. A constraint with a sum holds over many rows; one
+            without, such as <code>x &lt;= cap</code>, holds on every row.</dd>
+          <dt><code><span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value)</code></dt>
+          <dd>states the objective. Write <code><span class="tk-d">MINIMIZE</span></code> for a cost, or leave it out to ask for any answer that
+            satisfies the constraints.</dd>
+          <dt><code><span class="tk-k">SELECT</span></code>, <code><span class="tk-k">FROM</span></code>, <code><span class="tk-k">WHERE</span></code></dt>
+          <dd>are ordinary SQL. <code><span class="tk-k">FROM</span></code> and <code><span class="tk-k">WHERE</span></code> run first and pick the rows that get decisions;
+            <code><span class="tk-k">SELECT</span></code> and <code><span class="tk-k">ORDER</span> <span class="tk-k">BY</span></code> run after the solve and read the decisions like columns.</dd>
+        </dl>
+        <p>The declaration can also sit between <code><span class="tk-k">SELECT</span></code> and <code><span class="tk-k">FROM</span></code>, the order the DeciDB paper
+          uses. Both orders mean the same:</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span>
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-k">FROM</span> Items
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">50</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre></div>
+      </section>
+
+      <section id="decisions">
+        <h2>Decisions</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th scope="col">Type</th><th scope="col">Values</th><th scope="col">Returned as</th><th scope="col">Use it for</th></tr></thead>
+          <tbody>
+            <tr><td><code><span class="tk-t">BOOL</span></code></td><td>0 or 1</td><td><code><span class="tk-t">INTEGER</span></code></td><td>pick or skip, open or closed</td></tr>
+            <tr><td><code><span class="tk-t">INT</span></code></td><td>0, 1, 2, … by default</td><td><code><span class="tk-t">BIGINT</span></code></td><td>whole quantities</td></tr>
+            <tr><td><code><span class="tk-t">REAL</span></code></td><td>0 or more by default</td><td><code><span class="tk-t">DOUBLE</span></code></td><td>amounts, shares, positions</td></tr>
+          </tbody>
+        </table></div>
+        <p>Zero is a default lower bound, not a floor: a constraint such as <code>x &gt;= -<span class="tk-n">10</span></code> or
+          <code>x <span class="tk-k">BETWEEN</span> -<span class="tk-n">5</span> <span class="tk-k">AND</span> <span class="tk-n">5</span></code> lets an <code><span class="tk-t">INT</span></code> or <code><span class="tk-t">REAL</span></code> decision go negative.</p>
+        <p>A decision can also be shared. <code><span class="tk-d">per</span> K:</code> in front of a declaration makes one decision per distinct
+          value of <code>K</code>, and <code><span class="tk-d">per</span> ():</code> makes exactly one for the whole query. Over shipments joined
+          to the depots they leave from:</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> S.shipmentID, D.depotID, <span class="tk-v">ship</span>, <span class="tk-v">open</span>, <span class="tk-v">biggest</span>
+<span class="tk-k">FROM</span> Shipment S <span class="tk-k">JOIN</span> Depot D <span class="tk-k">USING</span> (depotID)
+<span class="tk-d">DECIDE</span> <span class="tk-v">ship</span>(<span class="tk-t">INT</span>), <span class="tk-d">per</span> D: <span class="tk-v">open</span>(<span class="tk-t">BOOL</span>), <span class="tk-d">per</span> (): <span class="tk-v">biggest</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">ship</span> &lt;= S.demand * <span class="tk-v">open</span>
+      <span class="tk-k">AND</span> <span class="tk-v">ship</span> &lt;= <span class="tk-v">biggest</span>
+      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) &gt;= <span class="tk-n">150</span>
+<span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(S.unit_cost * <span class="tk-v">ship</span>) + <span class="tk-f">SUM</span>(D: D.opening_cost * <span class="tk-v">open</span>) + <span class="tk-n">10</span> * <span class="tk-v">biggest</span>;</code></pre></div>
+        <p><code>ship</code> is one decision per shipment row, <code>open</code> one per depot, shared by that depot's
+          shipments, and <code>biggest</code> one for the whole query: the largest single shipment, which the objective
+          keeps small. <a href="guide.html#decide">More on decisions</a>.</p>
+      </section>
+
+      <section id="groups">
+        <h2>Rules about groups</h2>
+        <p>Constraints often apply group by group. Three keywords, written in front of a constraint or after a reducer,
+          say which rows a rule covers:</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th scope="col">Write</th><th scope="col">Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code><span class="tk-d">when</span> category = <span class="tk-s">&#x27;A&#x27;</span>: <span class="tk-f">SUM</span>(x) &gt;= <span class="tk-n">2</span></code></td><td>Look only at the rows where the condition holds.</td></tr>
+            <tr><td><code><span class="tk-d">per</span> sector: <span class="tk-f">SUM</span>(x) <span class="tk-d">by</span> (sector) &lt;= <span class="tk-n">2</span></code></td><td>One constraint per sector; each sum reads its own sector's rows.</td></tr>
+            <tr><td><code><span class="tk-f">SUM</span>(<span class="tk-d">when</span> morning: x * hours) &lt;= <span class="tk-n">20</span></code></td><td>A condition on one sum only.</td></tr>
+            <tr><td><code>x &lt;= <span class="tk-n">0.25</span> * <span class="tk-f">SUM</span>(x) <span class="tk-d">by</span> (region)</code></td><td>Each row at most a quarter of its region's total.</td></tr>
+          </tbody>
+        </table></div>
+        <p>Try one on the bag: at most one tech item.</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">At most one tech item</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, category, value, weight, <span class="tk-v">x</span>
+<span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">50</span>
+      <span class="tk-k">AND</span> <span class="tk-d">when</span> category = <span class="tk-s">&#x27;tech&#x27;</span>: <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) &lt;= <span class="tk-n">1</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>5 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">item</th><th scope="col" class="">category</th><th scope="col" class="num">value</th><th scope="col" class="num">weight</th><th scope="col" class="num dec">x</th></tr></thead><tbody><tr class="on"><td>Laptop</td><td>tech</td><td class="num">100</td><td class="num">20</td><td class="num dec">1</td></tr><tr><td>Camera</td><td>tech</td><td class="num">60</td><td class="num">10</td><td class="num dec">0</td></tr><tr><td>Drone</td><td>tech</td><td class="num">120</td><td class="num">30</td><td class="num dec">0</td></tr><tr class="on"><td>Tripod</td><td>gear</td><td class="num">40</td><td class="num">15</td><td class="num dec">1</td></tr><tr class="on"><td>Lens</td><td>gear</td><td class="num">75</td><td class="num">12</td><td class="num dec">1</td></tr></tbody></table></div></div></div>
+        <p>The <a href="guide.html#per">guide</a> covers group rules step by step, and the
+          <a href="examples.html">examples</a> show each pattern on a full problem.</p>
+      </section>
+
+      <section id="python">
+        <h2>From Python</h2>
+        <p>In Python, a DECIDE query runs like any other query and returns a relation you can turn into a
+          DataFrame:</p>
+<div class="code" data-lang="python"><div class="code__head"><span class="code__title">Python</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">import</span> decidb
+
+con = decidb.<span class="tk-f">connect</span>()
+con.<span class="tk-f">sql</span>(<span class="tk-s">&quot;CREATE TABLE Items AS SELECT * FROM &#x27;items.csv&#x27;&quot;</span>)
+answer = con.<span class="tk-f">sql</span>(<span class="tk-s">&quot;&quot;&quot;
+    SELECT item, x FROM Items
+    DECIDE x(BOOL)
+    SUCH THAT SUM(x * weight) &lt;= 50
+    MAXIMIZE SUM(x * value)
+&quot;&quot;&quot;</span>).<span class="tk-f">df</span>()</code></pre></div>
+      </section>
+
+      <section id="solvers">
+        <h2>Solvers</h2>
+        <p>DeciDB carries the bundled HiGHS solver and needs nothing else for linear, integer and convex quadratic
+          models. When the Gurobi library and a license are present, DeciDB uses Gurobi: it is faster on these workloads
+          and also takes non-convex and mixed-integer quadratic models and quadratic constraints. A model that only
+          Gurobi can solve is refused, with a message, when Gurobi is not available. Some problems need neither:
+          <a href="features.html#rewriting">query rewriting</a> answers them with sorting, ranking and aggregation instead. The
+          <a href="guide.html#solvers">guide</a> lists which solver takes which kind of query.</p>
+      </section>
+
+      <section id="next">
+        <h2>Next steps</h2>
+        <div class="refs refs--3">
+          <a class="ref" href="guide.html"><h3>Guide</h3><p>Each clause in the order you write it: DECIDE, SUCH THAT, then the objective.</p></a>
+          <a class="ref" href="features.html"><h3>Novel features</h3><p>Query rewriting, and DIAGNOSE for a query with no answer.</p></a>
+          <a class="ref" href="examples.html"><h3>Examples</h3><p>Twenty complete problems with data, query and answer.</p></a>
+        </div>
+      </section>
+    </article>
+  </div>
+</div>
+
+</main>
+<footer class="footer closing footer--statement g2m" id="contact" aria-labelledby="close-h">
+  <div class="wrap">
+    <div class="closing__cta close--word">
+      <div class="section-head--split">
+        <div><h2 id="close-h">Run your first DECIDE query</h2><p class="t-lead">Python wheels and command-line builds for macOS, Linux and Windows.</p></div>
+        <a class="btn btn--primary" href="getting-started.html#install">Install DeciDB<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a>
+      </div>
+      <p class="close__word" aria-hidden="true">DeciDB</p>
+    </div>
+    <div class="closing__links">
+      <div class="grid">
+        <div class="span-4 stack-4">
+          <a class="nav__logo" href="index.html"><img src="assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
+          <p class="footer__lede">Constrained optimization in SQL.</p>
+        </div>
+        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="getting-started.html">Get started</a></li><li><a href="demo.html">Live demo</a></li><li><a href="guide.html">Guide</a></li><li><a href="docs/index.html">Documentation</a></li><li><a href="features.html">Novel features</a></li><li><a href="examples.html">Examples</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="examples/knapsack.html">Knapsack</a></li><li><a href="examples/facility-location.html">Depots</a></li><li><a href="examples/fair-allocation.html">Fair allocation</a></li><li><a href="examples/diagnose.html">DIAGNOSE</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Project</h3><ul><li><a href="about.html">About</a></li><li><a href="about.html#research">Papers</a></li><li><a href="https://github.com/huda-lab/decidb">GitHub</a></li><li><a href="https://huda-lab.github.io/">HUDA Lab</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Contact</h3><ul><li><a href="mailto:support@decidb.com">Email the team</a></li><li><a href="https://github.com/huda-lab/decidb/issues">Report an issue</a></li></ul></div>
+      </div>
+      <div class="footer__legal">
+        <span>&copy; 2026 HUDA Lab, NYU Abu Dhabi and UMass Amherst</span>
+        <span>Product names and logos are trademarks of their owners.</span>
       </div>
     </div>
-  </header>
-
-  <!-- ============================================
-       MAIN CONTENT
-       ============================================ -->
-  <main id="main-content" class="pt-20">
-
-    <!-- ============================================
-         HERO SECTION
-         ============================================ -->
-    <section class="py-12 bg-canvas">
-      <div class="container mx-auto px-4">
-        <!-- Breadcrumb -->
-        <nav class="breadcrumb mb-8" aria-label="Breadcrumb">
-          <a href="index.html">Home</a>
-          <span class="separator"><i data-lucide="chevron-right" class="w-4 h-4"></i></span>
-          <span class="text-fg font-medium">Getting Started</span>
-        </nav>
-
-        <div class="max-w-4xl">
-          <h1 class="text-4xl md:text-5xl text-fg mb-4">
-            Getting Started with DeciDB
-          </h1>
-          <p class="text-xl text-fg-muted">
-            Install DeciDB and run your first optimization query.
-          </p>
-        </div>
-      </div>
-    </section>
-
-    <!-- ============================================
-         CONTENT WITH SIDEBAR
-         ============================================ -->
-    <section class="py-12">
-      <div class="container mx-auto px-4">
-        <div class="flex flex-col lg:flex-row gap-12">
-
-          <!-- Sidebar Navigation -->
-          <aside class="lg:w-64 flex-shrink-0">
-            <nav class="sidebar-nav lg:sticky lg:top-24">
-              <h3 class="text-sm font-semibold text-fg uppercase tracking-wider mb-4">On This Page</h3>
-              <ul class="space-y-1">
-                <li>
-                  <a href="#prerequisites" class="sidebar-link active">Prerequisites</a>
-                </li>
-                <li>
-                  <a href="#installation" class="sidebar-link">Installation</a>
-                </li>
-                <li>
-                  <a href="#first-query" class="sidebar-link">Your First Query</a>
-                </li>
-              </ul>
-            </nav>
-          </aside>
-
-          <!-- Main Content -->
-          <div class="flex-1 max-w-3xl">
-
-            <!-- Prerequisites Section -->
-            <section id="prerequisites" class="mb-16">
-              <h2 class="text-3xl text-fg mb-6 flex items-center gap-3">
-                <span class="flex items-center justify-center w-10 h-10 bg-canvas-inset text-fg rounded-md text-lg font-semibold">1</span>
-                Prerequisites
-              </h2>
-
-              <p class="text-fg-muted mb-6">
-                Requirements depend on your installation method:
-              </p>
-
-              <!-- Binary Users -->
-              <div class="callout callout-info mb-6">
-                <strong>Binary Downloads (Recommended)</strong>
-                <p class="text-sm mt-1">No prerequisites. DeciDB binaries are self-contained.</p>
-              </div>
-
-              <!-- Build from Source -->
-              <div class="mb-6">
-                <h3 class="font-semibold text-fg mb-3">Building from Source</h3>
-                <ul class="space-y-2 text-fg-muted text-sm">
-                  <li><strong>C++ Compiler:</strong> GCC 9+, Clang 10+, or MSVC 2019+</li>
-                  <li><strong>CMake:</strong> Version 3.15+</li>
-                  <li><strong>Python:</strong> Version 3.7+ (parser generation)</li>
-                  <li><strong>Git:</strong> For cloning the repository</li>
-                  <li><strong>Make or Ninja:</strong> Build system</li>
-                  <li><strong>Gurobi (optional):</strong> Auto-detected at runtime. If its library and license are available, Gurobi is used as the primary solver; otherwise bundled HiGHS handles the model classes it supports. Gurobi-only models are rejected when Gurobi is unavailable.</li>
-                </ul>
-              </div>
-
-              <div class="mb-6">
-                <h3 class="font-semibold text-fg mb-3">Supported Platforms</h3>
-                <ul class="text-fg-muted text-sm space-y-1">
-                  <li>Linux x86-64 (Ubuntu 18.04+)</li>
-                  <li>macOS 11.0+ (Intel &amp; Apple Silicon)</li>
-                  <li>Windows 10+ (x64)</li>
-                </ul>
-              </div>
-
-              <div class="callout callout-warning">
-                <strong>Development Status</strong>
-                <p class="text-sm mt-1">DeciDB is in active development. The <code>master</code> branch contains the working prototype.</p>
-              </div>
-            </section>
-
-            <!-- Installation Section -->
-            <section id="installation" class="mb-16">
-              <h2 class="text-3xl text-fg mb-6 flex items-center gap-3">
-                <span class="flex items-center justify-center w-10 h-10 bg-canvas-inset text-fg rounded-md text-lg font-semibold">2</span>
-                Installation
-              </h2>
-
-              <!-- Installation Method Tabs -->
-              <div class="mb-8">
-                <div class="flex flex-wrap gap-2 mb-6">
-                  <button class="install-tab active px-4 py-2 rounded-lg font-medium text-sm bg-canvas-subtle text-fg" data-tab="binary">
-                    Download Binary
-                  </button>
-                  <button class="install-tab px-4 py-2 rounded-lg font-medium text-sm bg-canvas-inset text-fg-muted hover:bg-canvas-subtle" data-tab="source">
-                    Build from Source
-                  </button>
-                  <button class="install-tab px-4 py-2 rounded-lg font-medium text-sm bg-canvas-inset text-fg-muted hover:bg-canvas-subtle" data-tab="pip">
-                    pip install
-                  </button>
-                </div>
-
-                <!-- Option 1: Download Binary -->
-                <div id="install-binary" class="install-content">
-                  <!-- Step 1: Download -->
-                  <div class="mb-8">
-                    <h3 class="text-xl font-semibold text-fg mb-4">Step 1: Download for Your Platform</h3>
-                    <div class="bg-canvas-subtle rounded-lg border border-bdcolor overflow-hidden">
-                      <table class="w-full text-sm">
-                        <thead>
-                          <tr class="bg-canvas-inset">
-                            <th class="text-left px-4 py-3 text-fg">Platform</th>
-                            <th class="text-left px-4 py-3 text-fg">Requirements</th>
-                            <th class="text-left px-4 py-3 text-fg">Download</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr class="border-t border-bdcolor">
-                            <td class="px-4 py-3 font-medium text-fg">Linux x86-64</td>
-                            <td class="px-4 py-3 text-fg-muted">Ubuntu 18.04+, CentOS 7+</td>
-                            <td class="px-4 py-3">
-                              <a href="https://github.com/huda-lab/decidb/releases/latest/download/decidb_cli-linux-amd64.zip"
-                                 class="btn btn-primary btn-sm">
-                                <i data-lucide="download" class="w-4 h-4"></i>
-                                Download
-                              </a>
-                            </td>
-                          </tr>
-                          <tr class="border-t border-bdcolor">
-                            <td class="px-4 py-3 font-medium text-fg">macOS Universal</td>
-                            <td class="px-4 py-3 text-fg-muted">macOS 11.0+</td>
-                            <td class="px-4 py-3">
-                              <a href="https://github.com/huda-lab/decidb/releases/latest/download/decidb_cli-osx-universal.zip"
-                                 class="btn btn-primary btn-sm">
-                                <i data-lucide="download" class="w-4 h-4"></i>
-                                Download
-                              </a>
-                            </td>
-                          </tr>
-                          <tr class="border-t border-bdcolor">
-                            <td class="px-4 py-3 font-medium text-fg">Windows x64</td>
-                            <td class="px-4 py-3 text-fg-muted">Windows 10+</td>
-                            <td class="px-4 py-3">
-                              <a href="https://github.com/huda-lab/decidb/releases/latest/download/decidb_cli-windows-amd64.zip"
-                                 class="btn btn-primary btn-sm">
-                                <i data-lucide="download" class="w-4 h-4"></i>
-                                Download
-                              </a>
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-
-                  <!-- Step 2: Extract and Verify -->
-                  <div class="mb-8">
-                    <h3 class="text-xl font-semibold text-fg mb-4">Step 2: Extract and Verify</h3>
-
-                    <!-- Linux/macOS -->
-                    <div class="mb-4">
-                      <h4 class="font-medium text-fg-muted mb-2">Linux / macOS</h4>
-                      <div class="code-block">
-                        <div class="code-header">
-                          <span class="language-label">Bash</span>
-                          <button class="copy-button" data-clipboard-target="#code-extract-unix">
-                            <i data-lucide="copy" class="w-4 h-4"></i>
-                            Copy
-                          </button>
-                        </div>
-                        <pre class="language-bash"><code id="code-extract-unix"># Extract the downloaded file (adjust filename for your platform)
-unzip decidb_cli-linux-amd64.zip
-
-# Make executable
-chmod +x decidb
-
-# Verify installation
-./decidb --version</code></pre>
-                      </div>
-                    </div>
-
-                    <!-- Windows -->
-                    <div class="mb-4">
-                      <h4 class="font-medium text-fg-muted mb-2">Windows (PowerShell)</h4>
-                      <div class="code-block">
-                        <div class="code-header">
-                          <span class="language-label">PowerShell</span>
-                          <button class="copy-button" data-clipboard-target="#code-extract-win">
-                            <i data-lucide="copy" class="w-4 h-4"></i>
-                            Copy
-                          </button>
-                        </div>
-                        <pre class="language-bash"><code id="code-extract-win"># Extract ZIP file using File Explorer or:
-Expand-Archive decidb_cli-windows-amd64.zip -DestinationPath .
-
-# Verify installation
-.\decidb.exe --version</code></pre>
-                      </div>
-                    </div>
-                  </div>
-
-                  <!-- Security Note -->
-                  <div class="callout callout-warning mb-8">
-                    <strong>Unsigned Binaries</strong>
-                    <p class="text-sm mt-1"><strong>macOS:</strong> Right-click → Open → confirm.</p>
-                    <p class="text-sm"><strong>Windows:</strong> SmartScreen → "More info" → "Run anyway".</p>
-                  </div>
-
-                  <!-- Test Query -->
-                  <div class="mb-8">
-                    <h3 class="text-xl font-semibold text-fg mb-4">Step 3: Test Installation</h3>
-                    <div class="code-block">
-                      <div class="code-header">
-                        <span class="language-label">Bash</span>
-                        <button class="copy-button" data-clipboard-target="#code-test-binary">
-                          <i data-lucide="copy" class="w-4 h-4"></i>
-                          Copy
-                        </button>
-                      </div>
-                      <pre class="language-bash"><code id="code-test-binary"># Test basic query
-./decidb -c "SELECT 'DeciDB is ready!' as message;"</code></pre>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Option 2: Build from Source -->
-                <div id="install-source" class="install-content hidden">
-                  <!-- Step 1: Clone -->
-                  <div class="mb-8">
-                    <h3 class="text-xl font-semibold text-fg mb-4">Step 1: Clone the Repository</h3>
-                    <div class="code-block">
-                      <div class="code-header">
-                        <span class="language-label">Bash</span>
-                        <button class="copy-button" data-clipboard-target="#code-clone">
-                          <i data-lucide="copy" class="w-4 h-4"></i>
-                          Copy
-                        </button>
-                      </div>
-                      <pre class="language-bash"><code id="code-clone">git clone https://github.com/huda-lab/decidb.git
-cd decidb</code></pre>
-                    </div>
-                  </div>
-
-                  <!-- Step 2: Build -->
-                  <div class="mb-8">
-                    <h3 class="text-xl font-semibold text-fg mb-4">Step 2: Configure and Build</h3>
-                    <!-- Linux / macOS -->
-                    <div class="mb-4">
-                      <h4 class="font-medium text-fg-muted mb-2">Linux / macOS</h4>
-                      <div class="code-block">
-                        <div class="code-header">
-                          <span class="language-label">Bash</span>
-                          <button class="copy-button" data-clipboard-target="#code-build-unix">
-                            <i data-lucide="copy" class="w-4 h-4"></i>
-                            Copy
-                          </button>
-                        </div>
-                        <pre class="language-bash"><code id="code-build-unix">make release</code></pre>
-                      </div>
-                    </div>
-
-                    <!-- Windows -->
-                    <div class="mb-4">
-                      <h4 class="font-medium text-fg-muted mb-2">Windows (PowerShell)</h4>
-                      <p class="text-fg-subtle text-xs mb-2">Requires Visual Studio 2019+ and Ninja installed.</p>
-                      <div class="code-block">
-                        <div class="code-header">
-                          <span class="language-label">PowerShell</span>
-                          <button class="copy-button" data-clipboard-target="#code-build-win">
-                            <i data-lucide="copy" class="w-4 h-4"></i>
-                            Copy
-                          </button>
-                        </div>
-                        <pre class="language-bash"><code id="code-build-win">cmake -G Ninja -B build/release -DCMAKE_BUILD_TYPE=Release -DDISABLE_UNITY=1
-ninja -C build/release</code></pre>
-                      </div>
-                    </div>
-                  </div>
-
-                  <!-- Step 3: Verify -->
-                  <div class="mb-8">
-                    <h3 class="text-xl font-semibold text-fg mb-4">Step 3: Verify Installation</h3>
-                    <!-- Linux / macOS -->
-                    <div class="mb-4">
-                      <h4 class="font-medium text-fg-muted mb-2">Linux / macOS</h4>
-                      <div class="code-block">
-                        <div class="code-header">
-                          <span class="language-label">Bash</span>
-                          <button class="copy-button" data-clipboard-target="#code-verify-unix">
-                            <i data-lucide="copy" class="w-4 h-4"></i>
-                            Copy
-                          </button>
-                        </div>
-                        <pre class="language-bash"><code id="code-verify-unix"># Verify installation
-./build/release/decidb --version
-
-# Test basic query
-./build/release/decidb -c "SELECT 'DeciDB is ready!' as message;"</code></pre>
-                      </div>
-                    </div>
-
-                    <!-- Windows -->
-                    <div class="mb-4">
-                      <h4 class="font-medium text-fg-muted mb-2">Windows (PowerShell)</h4>
-                      <div class="code-block">
-                        <div class="code-header">
-                          <span class="language-label">PowerShell</span>
-                          <button class="copy-button" data-clipboard-target="#code-verify-win">
-                            <i data-lucide="copy" class="w-4 h-4"></i>
-                            Copy
-                          </button>
-                        </div>
-                        <pre class="language-bash"><code id="code-verify-win"># Verify installation
-.\build\release\decidb.exe --version
-
-# Test basic query
-.\build\release\decidb.exe -c "SELECT 'DeciDB is ready!' as message;"</code></pre>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-
-                <!-- Option 3: pip install -->
-                <div id="install-pip" class="install-content hidden">
-                  <div class="mb-8">
-                    <h3 class="text-xl font-semibold text-fg mb-4">Step 1: Install the Package</h3>
-                    <p class="text-fg-muted mb-4 text-sm">
-                      Wheels are published for Python 3.11, 3.12 and 3.13 on macOS (Apple Silicon), Linux (x86-64) and Windows (x86-64).
-                    </p>
-                    <div class="code-block">
-                      <div class="code-header">
-                        <span class="language-label">Bash</span>
-                        <button class="copy-button">
-                          <i data-lucide="copy" class="w-4 h-4"></i>
-                          Copy
-                        </button>
-                      </div>
-                      <pre class="language-bash"><code>pip install decidb</code></pre>
-                    </div>
-                  </div>
-
-                  <div class="mb-8">
-                    <h3 class="text-xl font-semibold text-fg mb-4">Step 2: Verify It Works</h3>
-                    <p class="text-fg-muted mb-4 text-sm">
-                      The API mirrors <code>duckdb</code>'s: connect, then run SQL.
-                    </p>
-                    <div class="code-block">
-                      <div class="code-header">
-                        <span class="language-label">Python</span>
-                        <button class="copy-button">
-                          <i data-lucide="copy" class="w-4 h-4"></i>
-                          Copy
-                        </button>
-                      </div>
-                      <pre class="language-python"><code>import decidb
-
-decidb.connect().sql("SELECT 42").fetchall()</code></pre>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-            </section>
-
-            <!-- Your First Query Section -->
-            <section id="first-query" class="mb-16">
-              <h2 class="text-3xl text-fg mb-6 flex items-center gap-3">
-                <span class="flex items-center justify-center w-10 h-10 bg-canvas-inset text-fg rounded-md text-lg font-semibold">3</span>
-                Your First Query
-              </h2>
-
-              <p class="text-fg-muted mb-6">
-                A classic knapsack problem: select items to maximize value within a weight limit.
-              </p>
-
-              <!-- Start DeciDB -->
-              <div class="mb-8">
-                <h3 class="text-xl font-semibold text-fg mb-4">Start DeciDB</h3>
-                <div class="code-block">
-                  <div class="code-header">
-                    <span class="language-label">Bash</span>
-                    <button class="copy-button" data-clipboard-target="#code-start">
-                      <i data-lucide="copy" class="w-4 h-4"></i>
-                      Copy
-                    </button>
-                  </div>
-                  <pre class="language-bash"><code id="code-start"># Start DeciDB with a new database
-./decidb my_database.db</code></pre>
-                </div>
-                <p class="text-sm text-fg-subtle mt-2">
-                  This opens an interactive SQL shell. You can also use <code class="bg-canvas-inset px-1 rounded">./decidb</code> without a filename for an in-memory database.
-                </p>
-              </div>
-
-              <!-- Step 1: Create Sample Data -->
-              <div class="mb-8">
-                <h3 class="text-xl font-semibold text-fg mb-4">Create Sample Data</h3>
-                <p class="text-fg-muted mb-4">In the DeciDB shell, run:</p>
-                <div class="code-block">
-                  <div class="code-header">
-                    <span class="language-label">SQL</span>
-                    <button class="copy-button" data-clipboard-target="#code-data">
-                      <i data-lucide="copy" class="w-4 h-4"></i>
-                      Copy
-                    </button>
-                  </div>
-                  <pre class="language-sql"><code id="code-data">CREATE TABLE Items (
-    id INTEGER,
-    value INTEGER,
-    weight INTEGER,
-    category VARCHAR
-);
-
-INSERT INTO Items VALUES
-    (1, 100, 20, 'electronics'),
-    (2, 60, 10, 'electronics'),
-    (3, 120, 30, 'electronics'),
-    (4, 50, 50, 'furniture');</code></pre>
-                </div>
-              </div>
-
-              <!-- Step 2: Write Optimization Query -->
-              <div class="mb-8">
-                <h3 class="text-xl font-semibold text-fg mb-4">Write the Optimization Query</h3>
-                <div class="code-block">
-                  <div class="code-header">
-                    <span class="language-label">SQL</span>
-                    <button class="copy-button" data-clipboard-target="#code-query">
-                      <i data-lucide="copy" class="w-4 h-4"></i>
-                      Copy
-                    </button>
-                  </div>
-                  <pre class="language-sql"><code id="code-query">SELECT id, value, weight, x
-FROM Items
-WHERE category = 'electronics'
-DECIDE x(BOOL)
-SUCH THAT
-    SUM(x * weight) <= 50
-MAXIMIZE SUM(x * value);</code></pre>
-                </div>
-              </div>
-
-              <!-- Understanding the Query -->
-              <div class="mb-8">
-                <h3 class="text-xl font-semibold text-fg mb-4">What Each Clause Does</h3>
-                <ol class="space-y-3">
-                  <li class="flex gap-4">
-                    <span class="flex-shrink-0 w-7 h-7 bg-canvas-inset text-fg rounded-md flex items-center justify-center font-bold text-sm">1</span>
-                    <div>
-                      <code class="text-fg">WHERE category = 'electronics'</code>
-                      <span class="text-fg-muted"> &mdash; Only electronics are considered. Item 4 (furniture) is excluded.</span>
-                    </div>
-                  </li>
-                  <li class="flex gap-4">
-                    <span class="flex-shrink-0 w-7 h-7 bg-canvas-inset text-fg rounded-md flex items-center justify-center font-bold text-sm">2</span>
-                    <div>
-                      <code class="text-fg">DECIDE x(BOOL)</code>
-                      <span class="text-fg-muted"> &mdash; Creates a binary (0/1) variable <code>x</code> for each remaining row.</span>
-                    </div>
-                  </li>
-                  <li class="flex gap-4">
-                    <span class="flex-shrink-0 w-7 h-7 bg-canvas-inset text-fg rounded-md flex items-center justify-center font-bold text-sm">3</span>
-                    <div>
-                      <code class="text-fg">SUCH THAT SUM(x * weight) &lt;= 50</code>
-                      <span class="text-fg-muted"> &mdash; The total weight of selected items cannot exceed 50.</span>
-                    </div>
-                  </li>
-                  <li class="flex gap-4">
-                    <span class="flex-shrink-0 w-7 h-7 bg-canvas-inset text-fg rounded-md flex items-center justify-center font-bold text-sm">4</span>
-                    <div>
-                      <code class="text-fg">MAXIMIZE SUM(x * value)</code>
-                      <span class="text-fg-muted"> &mdash; Pick the combination with the highest total value.</span>
-                    </div>
-                  </li>
-                </ol>
-              </div>
-
-              <!-- Expected Output -->
-              <div class="mb-8">
-                <h3 class="text-xl font-semibold text-fg mb-4">Expected Output</h3>
-                <div class="table-wrapper rounded-lg border border-bdcolor overflow-hidden">
-                  <table class="w-full">
-                    <thead>
-                      <tr class="bg-canvas-inset">
-                        <th class="text-left px-4 py-3 text-fg">id</th>
-                        <th class="text-left px-4 py-3 text-fg">value</th>
-                        <th class="text-left px-4 py-3 text-fg">weight</th>
-                        <th class="text-left px-4 py-3 text-fg">x</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr>
-                        <td class="px-4 py-3 text-fg">1</td>
-                        <td class="px-4 py-3 text-fg">100</td>
-                        <td class="px-4 py-3 text-fg">20</td>
-                        <td class="px-4 py-3 font-semibold text-fg">1</td>
-                      </tr>
-                      <tr>
-                        <td class="px-4 py-3 text-fg">2</td>
-                        <td class="px-4 py-3 text-fg">60</td>
-                        <td class="px-4 py-3 text-fg">10</td>
-                        <td class="px-4 py-3 text-fg-subtle">0</td>
-                      </tr>
-                      <tr>
-                        <td class="px-4 py-3 text-fg">3</td>
-                        <td class="px-4 py-3 text-fg">120</td>
-                        <td class="px-4 py-3 text-fg">30</td>
-                        <td class="px-4 py-3 font-semibold text-fg">1</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-
-                <p class="mt-4 text-fg-muted text-sm">
-                  <strong>Result:</strong> Items 1 and 3 are selected (<code>x = 1</code>). Their combined weight is exactly 50 (at the limit) and their combined value is 220 &mdash; the highest achievable. Item 2 is skipped (<code>x = 0</code>) because including it would push the total weight to 60.
-                </p>
-              </div>
-
-              <!-- Alternative: One-liner -->
-              <div class="mb-8">
-                <h3 class="text-xl font-semibold text-fg mb-4">Alternative: Run from Command Line</h3>
-                <p class="text-fg-muted mb-4">
-                  You can also run queries directly from your terminal without entering the interactive shell:
-                </p>
-                <div class="code-block">
-                  <div class="code-header">
-                    <span class="language-label">Bash</span>
-                    <button class="copy-button" data-clipboard-target="#code-oneliner">
-                      <i data-lucide="copy" class="w-4 h-4"></i>
-                      Copy
-                    </button>
-                  </div>
-                  <pre class="language-bash"><code id="code-oneliner"># Run a query file
-./decidb my_database.db -f query.sql
-
-# Or execute inline
-./decidb my_database.db -c "SELECT * FROM Items;"</code></pre>
-                </div>
-              </div>
-            </section>
-
-          </div>
-        </div>
-      </div>
-    </section>
-
-  </main>
-
-  <!-- ============================================
-       FOOTER
-       ============================================ -->
-  <footer class="bg-canvas text-fg-muted border-t border-bdcolor">
-    <div class="container mx-auto px-4 py-12">
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
-        <div>
-          <img src="assets/images/logo.svg" alt="DeciDB" class="h-8 mb-4 logo-img">
-          <p class="text-sm text-fg-subtle mb-4">Optimization-enabled SQL queries for DuckDB</p>
-          <p class="text-xs text-fg-subtle">&copy; 2026 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
-        </div>
-        <div>
-          <h4 class="font-semibold text-fg mb-3 text-sm">Documentation</h4>
-          <ul class="space-y-2 text-sm">
-            <li><a href="getting-started.html" class="text-fg-subtle hover:text-accent">Getting Started</a></li>
-            <li><a href="documentation.html" class="text-fg-subtle hover:text-accent">Syntax Reference</a></li>
-            <li><a href="examples.html" class="text-fg-subtle hover:text-accent">Examples</a></li>
-          </ul>
-        </div>
-        <div>
-          <h4 class="font-semibold text-fg mb-3 text-sm">Resources</h4>
-          <ul class="space-y-2 text-sm">
-            <li><a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">GitHub Repository</a></li>
-            <li><a href="https://github.com/huda-lab/decidb/issues" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">Issue Tracker</a></li>
-            <li><a href="about.html#research" class="text-fg-subtle hover:text-accent">Research Papers</a></li>
-          </ul>
-        </div>
-        <div>
-          <h4 class="font-semibold text-fg mb-3 text-sm">Contact</h4>
-          <ul class="space-y-2 text-sm text-fg-subtle">
-            <li>NYU Abu Dhabi &amp; UMass Amherst</li>
-            <li><a href="mailto:huda-lab@nyu.edu" class="text-accent hover:text-accent">huda-lab@nyu.edu</a></li>
-          </ul>
-        </div>
-      </div>
-      <div class="mt-8 pt-8 border-t border-bdcolor-muted text-center text-xs text-fg-subtle">
-        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled)</p>
-      </div>
-    </div>
-  </footer>
-
-  <!-- Initialize Lucide Icons -->
-  <script>
-    lucide.createIcons();
-  </script>
-
+  </div>
+</footer>
+<script type="module" src="assets/system.js"></script>
+<script type="module" src="assets/motion/motion.js"></script>
+<script type="module" src="assets/layout/layout.js"></script>
+<script src="assets/js/site.js" defer></script>
 </body>
 </html>

@@ -1,0 +1,852 @@
+<!doctype html>
+<html lang="en" data-type="software" data-radius="sharp" data-ground="sage" data-buttons="pill" data-motion>
+<head>
+<meta charset="utf-8">
+<script>(function(){var r=document.documentElement,t;try{t=localStorage.getItem('decidb-theme')}catch(e){}if(!r.dataset.theme)r.dataset.theme=t==='dark'?'dark':'light'})()</script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script>document.documentElement.classList.add('m-enter');setTimeout(()=>document.documentElement.classList.add('m-enter-done'),700)</script>
+<title>Canonicalizer and optimizer: DeciDB documentation</title>
+<meta name="description" content="How DeciDB writes every DECIDE constraint and objective in one canonical shape, judges its algebra once, and then picks a formulation for each construct.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Canonicalizer and optimizer: DeciDB documentation">
+<meta property="og:description" content="How DeciDB writes every DECIDE constraint and objective in one canonical shape, judges its algebra once, and then picks a formulation for each construct.">
+<meta property="og:image" content="../assets/images/share.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../assets/images/mark.svg" type="image/svg+xml">
+<meta name="theme-color" content="#ffffff">
+<!-- <link rel="canonical" href="https://huda-lab.github.io/decidb/"> once the published address is confirmed -->
+<meta name="site-kind" content="software">
+<meta name="page-type" content="software">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/system.css">
+<link rel="stylesheet" href="../assets/ui/cards.css">
+<link rel="stylesheet" href="../assets/motion/motion.css">
+<link rel="stylesheet" href="../assets/backgrounds/backgrounds.css">
+<link rel="stylesheet" href="../assets/layout/layout.css">
+<link rel="stylesheet" href="../assets/icons/icon.css">
+<style>
+:root {
+  --p-bg: #ffffff; --p-surface: #f4f4f4; --p-ink: #111111; --p-muted: #6b6b6b;
+  --p-accent: #1a4be0; --p-accent-ink: #ffffff; --p-action: #1a4be0; --p-action-ink: #ffffff;
+  --p-inv-bg: #111111; --p-inv-surface: #1e1e1e; --p-inv-ink: #ffffff; --p-inv-muted: #9a9a9a;
+  --p-inv-accent: #ffffff; --p-inv-accent-ink: #111111; --p-inv-action: #ffffff; --p-inv-action-ink: #111111;
+  --font-display: "Geist", system-ui, sans-serif;
+  --font-text: "Geist", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --display-weight: 500;
+  --display-tracking: -0.035em;
+  --display-tracking-xl: -0.045em;
+}
+/* the evening grade (a tech page may take it): light is the default; the nav's switch sets data-theme to dark and the
+   head script remembers it; the page tokens go dark, the lit ground (sage) and the panels' painted grounds stay light, as the
+   kit keeps them */
+:root[data-theme="dark"] {
+  --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
+  --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
+  --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
+  --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
+}
+</style>
+<link rel="stylesheet" href="../assets/css/site.css">
+</head>
+<body class="doc-body">
+<header class="nav">
+  <div class="wrap nav__bar">
+    <a class="skip-link" href="#top">Skip to content</a>
+    <a class="nav__logo" href="../index.html"><img class="logo logo--light" src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42"><img class="logo logo--dark" src="../assets/images/logo-dark.svg" alt="DeciDB" width="140" height="42" loading="lazy"><img class="logo logo--mark" src="../assets/images/mark.svg" alt="DeciDB" width="40" height="32" loading="lazy"></a>
+    <nav class="nav__links" aria-label="Main">
+      <div class="nav__item"><a class="nav__link" href="../getting-started.html">Get started</a></div><div class="nav__item"><a class="nav__link" href="../demo.html">Live demo</a></div><div class="nav__item"><a class="nav__link" href="../guide.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="../examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="../examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="../examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="../examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="../examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="../examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="../examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="../examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="../examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="../examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="../features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="../about.html">About</a></div><div class="nav__item"><a class="nav__link" href="../docs/index.html" aria-current="page"><span class="nav__full">Documentation</span><span class="nav__short" aria-hidden="true">Docs</span></a></div><div class="nav__item"><a class="nav__link" href="../features.html"><span class="nav__full">Novel features</span><span class="nav__short" aria-hidden="true">Features</span></a></div>
+    </nav>
+    <div class="nav__actions">
+      <button class="btn btn--secondary theme-toggle" type="button" aria-pressed="false" data-theme-toggle hidden><svg class="theme-toggle__sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="theme-toggle__moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg><span class="theme-toggle__label">Dark theme</span></button>
+      <a class="nav__link" href="https://github.com/huda-lab/decidb">GitHub</a>
+      <a class="btn btn--primary" href="../getting-started.html#install"><span>Install<span class="nav__more"> DeciDB</span></span></a>
+    </div>
+    <button class="nav__toggle" type="button" aria-expanded="false" aria-label="Menu">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M2 5h14M2 13h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+</header>
+<main id="top">
+<section class="hero hero--page" data-enter aria-labelledby="page-h">
+  <div class="wrap"><div class="hero-text hero-split grid">
+    <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a><span aria-hidden="true">/</span><a href="../docs/index.html">Documentation</a><span aria-hidden="true">/</span>Canonicalizer and optimizer</nav><h1 id="page-h">Canonicalizer and optimizer</h1><p class="hero__lead">How every clause takes one canonical shape, with decisions on the left and the bound on the right, and how the optimizer then picks a formulation for each construct.</p></div>
+    <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="25" data-ui-pause-host><div class="ui ui-hw hw hw--page hw--mid" role="img" aria-label="The DECIDE path, from the parser to execution; this page covers Canonicalizer, Optimizer."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · the DECIDE path</span></div><div class="hw__page"><div class="hw__stages" data-ly-steps="260"><div class="hw__stage" data-step><span class="hw__num">01</span><b>Parser</b><span>the grammar and the DECIDE keywords</span></div><div class="hw__stage" data-step><span class="hw__num">02</span><b>Binder</b><span>names, scopes and types</span></div><div class="hw__stage" data-step><span class="hw__num">03</span><b>Logical plan</b><span>the LogicalDecide operator</span></div><div class="hw__stage is-on" data-step><span class="hw__num">04</span><b>Canonicalizer</b><span>one shape for every clause</span></div><div class="hw__stage is-on" data-step><span class="hw__num">05</span><b>Optimizer</b><span>the formulation</span></div><div class="hw__stage hw__stage--exit" data-step><span class="hw__num">↳</span><b>Query rewriting</b><span>relational operators, no solver</span></div><div class="hw__stage" data-step><span class="hw__num">06</span><b>Model</b><span>variables, coefficients, bounds</span></div><div class="hw__stage" data-step><span class="hw__num">07</span><b>Solver</b><span>Gurobi or HiGHS</span></div><div class="hw__stage hw__stage--exit" data-step><span class="hw__num">↳</span><b>DIAGNOSE</b><span>what to change when there is no answer</span></div><div class="hw__stage" data-step><span class="hw__num">08</span><b>Execution</b><span>the decisions, back as columns</span></div></div></div></div></div>
+  </div></div>
+</section>
+<div class="container"><div class="doc-layout doc-layout--docs"><nav class="docnav" aria-label="Documentation pages"><div class="toc-title">Documentation</div><p class="docnav__group">Start here</p><ul><li><a href="index.html">Overview</a></li><li><a href="life-of-a-query.html">Life of a query</a></li></ul><p class="docnav__group">The pipeline</p><ul><li><a href="front-end.html">Parser, binder and plan</a></li><li><a href="canonical-form.html" aria-current="page">Canonicalizer and optimizer</a></li><li><a href="solving.html">Model, solvers and execution</a></li></ul><p class="docnav__group">Novel features</p><ul><li><a href="rewriting.html">Query rewriting</a></li><li><a href="rewrite-rules.html">The rewrite rules</a></li><li><a href="diagnose.html">DIAGNOSE</a></li></ul><p class="docnav__group">Quality</p><ul><li><a href="testing.html">Testing</a></li><li><a href="performance.html">Performance</a></li></ul></nav>
+<nav class="toc" aria-label="On this page">
+  <div class="toc-title">On this page</div>
+  <ul>
+    <li><a href="#canonicalizer">The canonicalizer</a></li>
+    <li class="sub"><a href="#boundary">One shape boundary</a></li>
+    <li class="sub"><a href="#sides">Decisions left, the bound right</a></li>
+    <li class="sub"><a href="#scales">A factor stays outside its reducer</a></li>
+    <li class="sub"><a href="#products">One spelling per product</a></li>
+    <li class="sub"><a href="#objective">The objective</a></li>
+    <li class="sub"><a href="#casts">Casts</a></li>
+    <li class="sub"><a href="#shapes">Per-row, aggregate and value shapes</a></li>
+    <li class="sub"><a href="#scope-checks">The scope checks</a></li>
+    <li class="sub"><a href="#shape-check">The shape check</a></li>
+    <li class="sub"><a href="#verification">Verification</a></li>
+    <li><a href="#optimizer">The optimizer</a></li>
+    <li class="sub"><a href="#solver-first">The solver comes first</a></li>
+    <li class="sub"><a href="#passes">Pass order</a></li>
+    <li class="sub"><a href="#abs">ABS</a></li>
+    <li class="sub"><a href="#minmax">MIN and MAX</a></li>
+    <li class="sub"><a href="#norm-in">NORM and IN</a></li>
+    <li class="sub"><a href="#avg-ne">AVG and &lt;&gt;</a></li>
+    <li class="sub"><a href="#bilinear">Products of decisions</a></li>
+    <li class="sub"><a href="#value-rewrite">The value rewrite</a></li>
+    <li class="sub"><a href="#folding">Bounds into boxes</a></li>
+    <li class="sub"><a href="#prepared">The prepared linear form</a></li>
+    <li class="sub"><a href="#query-rewriting">Where query rewriting enters</a></li>
+  </ul>
+</nav>
+<article class="prose">
+  <section id="canonicalizer">
+    <h2><a class="anchor" href="#canonicalizer">The canonicalizer</a></h2>
+    <p class="lead">One planning boundary decides the shape of every constraint and of the objective. Every later
+      stage reads that shape and never decides it again.</p>
+    <p>A user can write one constraint many ways: <code><span class="tk-n">5</span> &gt;= x</code> or <code>x &lt;= <span class="tk-n">5</span></code>,
+      <code><span class="tk-f">SUM</span>(x * w)</code> or <code><span class="tk-f">SUM</span>(w * x)</code>, <code><span class="tk-n">2</span> * (x - <span class="tk-n">1</span>)</code> or <code><span class="tk-n">2</span> * x - <span class="tk-n">2</span></code>. If each
+      later stage had to accept every spelling, each would carry its own list of cases, and the lists would drift
+      apart. So the canonicalizer writes one form per meaning, as a compiler's canonicalization pass does (LLVM's
+      InstCombine is the standard example), and every later stage matches that one form.</p>
+
+    <h3 id="boundary"><a class="anchor" href="#boundary">One shape boundary</a></h3>
+    <p>The canonicalizer runs at exactly three places, and there must not be a fourth:</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Entry point</th><th scope="col">Covers</th></tr></thead>
+      <tbody>
+        <tr><td><code>Binder::CreatePlan</code>, after <code>PlanSubqueries</code></td><td>the constraints and the
+          objective the user wrote</td></tr>
+        <tr><td><a href="front-end.html#entry-points"><code>LogicalDecide::AddConstraint</code></a></td><td>every
+          constraint the optimizer writes</td></tr>
+        <tr><td><a href="front-end.html#entry-points"><code>LogicalDecide::SetObjective</code></a></td><td>every
+          objective the optimizer rewrites</td></tr>
+      </tbody>
+    </table></div>
+    <p>It runs after binding for two reasons. A decision is exactly a bound column reference on the DECIDE
+      operator's table index, an identity the parsed tree does not have. And it must see the flattened subqueries
+      that <code>PlanSubqueries</code> produces. At the first entry point, the order is:</p>
+<div class="code" data-lang="text"><div class="code__head"><span class="code__title">src/planner/binder/query_node/plan_select_node.cpp</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code>if (statement.decide_constraints) {
+	canonicalizer.BuildConstraintScopeChecks(*statement.decide_constraints, scope_checks);
+	statement.decide_constraints = canonicalizer.CanonicalizeTree(*statement.decide_constraints);
+	canonicalizer.VerifyCanonical(*statement.decide_constraints);
+	FinalizeConstraintSourceInfo(*statement.decide_constraints, statement.decide_constraint_sources,
+	                             statement.decide_text, statement.keyed_scopes, statement.decide_index,
+	                             &amp;statement.decide_keys);
+	shape_check.CheckConstraints(*statement.decide_constraints, statement.decide_constraint_sources);
+	canonicalizer.SkipNullData(*statement.decide_constraints, statement.keyed_scopes,
+	                           statement.decide_keys);
+}</code></pre></div>
+    <p>The scope checks read each clause as bound; the shape check reads it as canonicalized; and
+      <code>SkipNullData</code> adds a tagged <code><span class="tk-k">IS</span> <span class="tk-k">NOT</span> <span class="tk-k">NULL</span></code> test to a reducer's filter for each data
+      factor of its body, so a reducer skips a NULL the way SQL's aggregates do.</p>
+    <p>Every rule of the pass is an identity: for every input it gives the same value, type, NULL and error under
+      DuckDB's evaluation. The pass is also:</p>
+    <ul>
+      <li><strong>Total.</strong> It never declines an input. A pass that may decline cannot be the single home of
+        anything: every stage after it must handle both "it ran" and "it declined", and the declined branch is where
+        duplicate implementations come from.</li>
+      <li><strong>Pure.</strong> It takes a tree by const reference and returns a new one, so the written form and the
+        canonical form are both alive at the call site. That is what lets EXPLAIN print both.</li>
+      <li><strong>A fixed point.</strong> Canonicalizing a canonical tree changes nothing.</li>
+    </ul>
+    <p>A rewrite belongs here only if it also reads nothing but what binding knows, serves every later stage rather
+      than one back end, and removes a variant some later stage checks. That keeps the pass from becoming a second
+      optimizer: a rewrite that needs a key or a <code><span class="tk-k">NOT</span> <span class="tk-k">NULL</span></code> holds only for some tables, and a form one
+      solver prefers is a formulation choice.</p>
+
+    <h3 id="sides"><a class="anchor" href="#sides">Decisions left, the bound right</a></h3>
+    <p>The pass splits each side of a comparison into additive terms (<code>a + b</code> into <code>+a</code> and
+      <code>+b</code>, <code>a - b</code> into <code>+a</code> and <code>-b</code>) and asks one question of each term:
+      does it reference a decision? A term that does goes left; a term that does not goes right, with its sign
+      flipped. If every decision is on the right, the sides swap and the operator flips. It then merges like terms,
+      and distributes a factor known before the query runs over a sum, as a negation already distributes:</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span>
+<span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-n">3</span> &gt;= <span class="tk-v">x</span>
+      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) + <span class="tk-n">5</span> &lt;= <span class="tk-n">60</span>
+      <span class="tk-k">AND</span> <span class="tk-n">2</span> * (<span class="tk-v">x</span> - <span class="tk-n">1</span>) &lt;= <span class="tk-n">3</span>
+      <span class="tk-k">AND</span> <span class="tk-v">x</span> + <span class="tk-n">1</span> &gt;= <span class="tk-n">2</span> * <span class="tk-v">x</span> - <span class="tk-n">1</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>)</code></pre></div><div class="code" data-lang="explain"><div class="code__head"><span class="code__title">EXPLAIN: the DECIDE node</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DECIDE</span>
+  <span class="tk-g">Variables:</span> <span class="tk-v">x</span>
+  <span class="tk-g">Objective:</span> <span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>)
+  <span class="tk-g">Constraints:</span>
+    <span class="tk-n">3</span> &gt;= <span class="tk-v">x</span>
+      <span class="tk-g">≡</span> <span class="tk-v">x</span> &lt;= <span class="tk-n">3</span>
+    <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) + <span class="tk-n">5</span> &lt;= <span class="tk-n">60</span>
+      <span class="tk-g">≡</span> <span class="tk-f">sum</span>(weight * <span class="tk-v">x</span>) &lt;= -<span class="tk-n">5</span> + <span class="tk-n">60</span>
+    <span class="tk-n">2</span> * (<span class="tk-v">x</span> - <span class="tk-n">1</span>) &lt;= <span class="tk-n">3</span>
+      <span class="tk-g">≡</span> <span class="tk-n">2</span> * <span class="tk-v">x</span> &lt;= <span class="tk-n">2</span> * <span class="tk-n">1</span> + <span class="tk-n">3</span>
+    <span class="tk-v">x</span> + <span class="tk-n">1</span> &gt;= <span class="tk-n">2</span> * <span class="tk-v">x</span> - <span class="tk-n">1</span>
+      <span class="tk-g">≡</span> -<span class="tk-n">1</span> * <span class="tk-v">x</span> &gt;= -<span class="tk-n">1</span> - <span class="tk-n">1</span></code></pre></div>
+    <p>Each <code>≡</code> line is the canonical form EXPLAIN prints under the clause as written. Read them one at a
+      time:</p>
+    <ul>
+      <li><code><span class="tk-n">3</span> &gt;= x</code> has its decision on the right, so the sides swap: <code>x &lt;= <span class="tk-n">3</span></code>.</li>
+      <li>The constant <code><span class="tk-n">5</span></code> crosses with its sign flipped, and the product takes its one spelling, data
+        first: <code><span class="tk-f">sum</span>(weight * x) &lt;= -<span class="tk-n">5</span> + <span class="tk-n">60</span></code>.</li>
+      <li>The <code><span class="tk-n">2</span></code> is known before the query runs, so it distributes: <code><span class="tk-n">2</span> * x &lt;= <span class="tk-n">2</span> * <span class="tk-n">1</span> + <span class="tk-n">3</span></code>.</li>
+      <li><code>x</code> and <code><span class="tk-n">2</span> * x</code> are like terms; the left side bears a decision, so the operator stays
+        and the terms merge: <code>-<span class="tk-n">1</span> * x &gt;= -<span class="tk-n">1</span> - <span class="tk-n">1</span></code>.</li>
+    </ul>
+    <p>The pass never folds constants (it leaves <code>-<span class="tk-n">5</span> + <span class="tk-n">60</span></code> for execution to add), never multiplies out a power or a
+      product of sums, and never opens an <code>ABS</code>, a <code>MIN</code>, a <code>MAX</code> or a subquery. A
+      quadratic <code><span class="tk-f">POWER</span>(x - t, <span class="tk-n">2</span>)</code>, a composed <code><span class="tk-f">MAX</span>(x * v)</code> and a filtered
+      <code><span class="tk-f">SUM</span>(<span class="tk-d">when</span> c: x)</code> are each one decision-bearing term, as plain as <code>x</code>. A data-only reducer
+      carries no decision, so it goes right like any other data. One look inside a term is allowed, because it holds
+      for every body: a <code>MIN</code> or <code>MAX</code> hands its constant addends to the bound
+      (<code><span class="tk-f">max</span>(x + <span class="tk-n">0.75</span>) &gt; <span class="tk-n">7</span></code> is <code><span class="tk-f">max</span>(x) + <span class="tk-n">0.75</span> &gt; <span class="tk-n">7</span></code>), since adding one number to every row
+      does not change which row is extreme.</p>
+
+    <h3 id="scales"><a class="anchor" href="#scales">A factor stays outside its reducer</a></h3>
+    <p>A factor on a reducer (<code><span class="tk-n">2</span> * <span class="tk-f">SUM</span>(x)</code>, <code><span class="tk-f">SUM</span>(x) * <span class="tk-n">2</span></code>, <code><span class="tk-f">SUM</span>(x) / <span class="tk-n">2</span></code>) has one
+      canonical place: outside the reducer, written <code>factor * AGG</code> or <code>AGG / factor</code>.
+      <code>PeelScale</code> is the one function that judges it, and it peels to exhaustion, so
+      <code><span class="tk-n">2</span> * (<span class="tk-n">3</span> * <span class="tk-f">SUM</span>(x))</code> yields one factor.</p>
+    <p>Outside, because <code>MIN</code> and <code>MAX</code> are order statistics, not linear functions: they commute
+      with a positive factor only. <code><span class="tk-f">MAX</span>(-<span class="tk-n">2</span> * x)</code> is <code>-<span class="tk-n">2</span> * <span class="tk-f">MIN</span>(x)</code>, not <code>-<span class="tk-n">2</span> * <span class="tk-f">MAX</span>(x)</code>.
+      Pushing a factor inside therefore needs its sign, and a scalar subquery's sign is unknown until the query
+      runs. Kept outside, the sign never affects correctness; it only selects the cheaper formulation, so an unknown
+      sign costs time instead of failing.</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span>
+<span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">x</span> &lt;= <span class="tk-n">3</span>
+      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) * <span class="tk-n">3</span> &lt;= <span class="tk-n">12</span>
+      <span class="tk-k">AND</span> (<span class="tk-f">SUM</span>(weight * <span class="tk-v">x</span>) + <span class="tk-n">10</span>) / <span class="tk-n">2</span> &lt;= <span class="tk-n">30</span>
+      <span class="tk-k">AND</span> <span class="tk-n">2</span> * (<span class="tk-f">MIN</span>(value * <span class="tk-v">x</span>) - <span class="tk-n">10</span>) &gt;= -<span class="tk-n">20</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>)</code></pre></div><div class="code" data-lang="explain"><div class="code__head"><span class="code__title">EXPLAIN: the DECIDE node</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DECIDE</span>
+  <span class="tk-g">Variables:</span> <span class="tk-v">x</span>
+  <span class="tk-g">Objective:</span> <span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>)
+  <span class="tk-g">Constraints:</span>
+    <span class="tk-v">x</span> &lt;= <span class="tk-n">3</span>
+    <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) * <span class="tk-n">3</span> &lt;= <span class="tk-n">12</span>
+      <span class="tk-g">≡</span> <span class="tk-n">3</span> * <span class="tk-f">sum</span>(<span class="tk-v">x</span>) &lt;= <span class="tk-n">12</span>
+    (<span class="tk-f">SUM</span>(weight * <span class="tk-v">x</span>) + <span class="tk-n">10</span>) / <span class="tk-n">2</span> &lt;= <span class="tk-n">30</span>
+      <span class="tk-g">≡</span> <span class="tk-f">sum</span>(weight * <span class="tk-v">x</span>) / <span class="tk-n">2</span> &lt;= -(<span class="tk-n">10</span> / <span class="tk-n">2</span>) + <span class="tk-n">30</span>
+    <span class="tk-n">2</span> * (<span class="tk-f">MIN</span>(value * <span class="tk-v">x</span>) - <span class="tk-n">10</span>) &gt;= -<span class="tk-n">20</span>
+      <span class="tk-g">≡</span> <span class="tk-n">2</span> * <span class="tk-f">min</span>(value * <span class="tk-v">x</span>) &gt;= <span class="tk-n">2</span> * <span class="tk-n">10</span> + -<span class="tk-n">20</span>
+      <span class="tk-g">↳</span> <span class="tk-f">min</span>(value * <span class="tk-v">x</span>) becomes a bound on each member</code></pre></div>
+    <p>The last clause shows why a known factor distributes. Left as one product, <code><span class="tk-n">2</span> * (<span class="tk-f">MIN</span>(...) - <span class="tk-n">10</span>)</code>
+      would be a reducer inside an expression, the value shape below. Distributed, it is a plain <code>MIN</code>
+      term, which the optimizer turns into one bound per member (the <code>↳</code> line).</p>
+    <p>What may be a factor:</p>
+    <ul>
+      <li><strong>A constant, an uncorrelated subquery, or arithmetic over query-wide values</strong>: anywhere.</li>
+      <li><strong>A column, or a correlated subquery</strong>: in a constraint, where each row has its own value and
+        the comparison takes the value shape; never in the objective, which is produced once
+        (<a href="front-end.html#provenance">subquery provenance</a>).</li>
+      <li><strong>A <code><span class="tk-t">BOOL</span></code> decision on a bare reducer</strong> (<code>b * <span class="tk-f">SUM</span>(x)</code>): the optimizer
+        holds the reducer in a helper decision and linearizes the product.</li>
+      <li><strong>Any other decision</strong>: never. An <code><span class="tk-t">INT</span></code> or <code><span class="tk-t">REAL</span></code> decision times a
+        reducer is not convex.</li>
+    </ul>
+
+    <h3 id="products"><a class="anchor" href="#products">One spelling per product</a></h3>
+    <p>Every product of decisions takes one spelling: a coefficient on the left (a constant, data, or a product of
+      data) times decision factors, each raised to a whole power. <code>NormalizeProducts</code> is a bottom-up
+      rewrite rule over every <code>*</code> and whole-exponent <code>POWER</code> that holds a decision, in the
+      manner of DuckDB's <code>ArithmeticSimplificationRule</code> over constants. It merges equal factors into
+      powers, comparing a sum as a multiset of signed terms, so <code>(x + y) * (y + x)</code> is a square.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Written</th><th scope="col">Canonical</th></tr></thead>
+      <tbody>
+        <tr><td><code><span class="tk-n">2</span>*x*x</code>, <code>x*<span class="tk-n">2</span>*x</code></td><td><code><span class="tk-n">2</span> * <span class="tk-f">POWER</span>(x, <span class="tk-n">2</span>)</code></td></tr>
+        <tr><td><code>w*x*x</code>, <code>x*w*x</code>, <code><span class="tk-f">POWER</span>(x, <span class="tk-n">2</span>)*w</code></td><td><code>w * <span class="tk-f">POWER</span>(x, <span class="tk-n">2</span>)</code></td></tr>
+        <tr><td><code>(x-t)*(x-t)</code></td><td><code><span class="tk-f">POWER</span>(x - t, <span class="tk-n">2</span>)</code></td></tr>
+        <tr><td><code>(x+y)*(y+x)</code></td><td><code><span class="tk-f">POWER</span>(x + y, <span class="tk-n">2</span>)</code></td></tr>
+        <tr><td><code>x * w</code></td><td><code>w * x</code></td></tr>
+        <tr><td><code><span class="tk-f">POWER</span>(x, <span class="tk-n">1</span>)</code></td><td><code>x</code></td></tr>
+        <tr><td><code><span class="tk-f">POWER</span>(x, <span class="tk-k">CAST</span>(<span class="tk-n">2</span> <span class="tk-k">AS</span> <span class="tk-t">INTEGER</span>))</code></td><td><code><span class="tk-f">POWER</span>(x, <span class="tk-n">2</span>)</code></td></tr>
+      </tbody>
+    </table></div>
+    <p>The rule never expands a square and never folds data: it composes data factors into the coefficient with
+      <code>*</code>, so SQL's own arithmetic over the data runs as written, overflow included. With a
+      <code><span class="tk-t">BOOL</span></code> decision every square is linear (<code>b * b</code> is <code>b</code>), so this example runs
+      on any solver, and the <code>↳</code> lines show the optimizer's next step:</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span>
+<span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight * <span class="tk-v">x</span>) &lt;= <span class="tk-n">45</span>
+      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span>*<span class="tk-n">2</span>*<span class="tk-v">x</span>) &lt;= <span class="tk-n">6</span>
+      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(<span class="tk-v">x</span>, <span class="tk-n">1</span>) * weight) &gt;= <span class="tk-n">10</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>)</code></pre></div><div class="code" data-lang="explain"><div class="code__head"><span class="code__title">EXPLAIN: the DECIDE node</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DECIDE</span>
+  <span class="tk-g">Variables:</span> <span class="tk-v">x</span>
+  <span class="tk-g">Objective:</span> <span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>)
+  <span class="tk-g">Constraints:</span>
+    <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight * <span class="tk-v">x</span>) &lt;= <span class="tk-n">45</span>
+      <span class="tk-g">≡</span> <span class="tk-f">sum</span>(weight * <span class="tk-f">power</span>(<span class="tk-v">x</span>, <span class="tk-n">2</span>)) &lt;= <span class="tk-n">45</span>
+      <span class="tk-g">↳</span> <span class="tk-f">sum</span>(weight * <span class="tk-v">x</span>) &lt;= <span class="tk-n">45</span>
+    <span class="tk-f">SUM</span>(<span class="tk-v">x</span>*<span class="tk-n">2</span>*<span class="tk-v">x</span>) &lt;= <span class="tk-n">6</span>
+      <span class="tk-g">≡</span> <span class="tk-f">sum</span>(<span class="tk-n">2</span> * <span class="tk-f">power</span>(<span class="tk-v">x</span>, <span class="tk-n">2</span>)) &lt;= <span class="tk-n">6</span>
+      <span class="tk-g">↳</span> <span class="tk-f">sum</span>(<span class="tk-n">2</span> * <span class="tk-v">x</span>) &lt;= <span class="tk-n">6</span>
+    <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(<span class="tk-v">x</span>, <span class="tk-n">1</span>) * weight) &gt;= <span class="tk-n">10</span>
+      <span class="tk-g">≡</span> <span class="tk-f">sum</span>(weight * <span class="tk-v">x</span>) &gt;= <span class="tk-n">10</span></code></pre></div>
+    <p>Across a clause's additive spine, like terms merge over products as over atoms: <code>x*x + x*x</code> is
+      <code><span class="tk-n">2</span> * <span class="tk-f">POWER</span>(x, <span class="tk-n">2</span>)</code>. Inside one reducer body they stay apart, and the term reader adds them into one
+      coefficient later, so the model is the same. A respelled node takes the query location of the node it
+      replaces, so a message about it underlines the term as the user typed it, as Clang underlines a source range
+      rather than reprinting its syntax tree.</p>
+
+    <h3 id="objective"><a class="anchor" href="#objective">The objective</a></h3>
+    <p>An objective is one side of a comparison, with no relation to orient and no bound to separate.
+      <code>CanonicalizeObjective</code> uses the same decomposition, factor peeling and like-term merging as the
+      constraints, which is the reason the objective goes through this boundary instead of a normalizer of its own.
+      Two rules are its own:</p>
+    <ul>
+      <li><strong>Constant terms move to an offset.</strong> A term with no decision moves into
+        <code>objective_constant_offset</code>. It shifts the objective's value without moving the best answer.</li>
+      <li><strong>Every objective is a minimization.</strong> <code><span class="tk-d">MAXIMIZE</span> f</code> is stored as
+        <code><span class="tk-d">MINIMIZE</span> -f</code>, the sign carried by each term (CVXPY's <code>FlipObjective</code> reduction does the
+        same). The flip is the last step, so like terms merge in the written direction. Every later stage reads one
+        sense; only messages, EXPLAIN and two reported values read the sense the user wrote.</li>
+    </ul>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span>
+<span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">x</span> &lt;= <span class="tk-n">3</span> <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(weight * <span class="tk-v">x</span>) &lt;= <span class="tk-n">50</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value) + <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>) + <span class="tk-n">7</span></code></pre></div><div class="code" data-lang="explain"><div class="code__head"><span class="code__title">EXPLAIN: the DECIDE node</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DECIDE</span>
+  <span class="tk-g">Variables:</span> <span class="tk-v">x</span>
+  <span class="tk-g">Objective:</span> <span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value) + <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>) + <span class="tk-n">7</span>
+    <span class="tk-g">≡</span> <span class="tk-n">2</span> * <span class="tk-f">sum</span>(value * <span class="tk-v">x</span>)
+  <span class="tk-g">Constraints:</span>
+    <span class="tk-v">x</span> &lt;= <span class="tk-n">3</span>
+    <span class="tk-f">SUM</span>(weight * <span class="tk-v">x</span>) &lt;= <span class="tk-n">50</span></code></pre></div>
+    <p>EXPLAIN prints the canonical objective in the written sense, so the flip alone adds no <code>≡</code> line.
+      The two sums merge into <code><span class="tk-n">2</span> * <span class="tk-f">sum</span>(value * x)</code>, and the <code><span class="tk-n">7</span></code> moves to the offset.</p>
+
+    <h3 id="casts"><a class="anchor" href="#casts">Casts</a></h3>
+    <p>A solver model has one numeric domain, <code><span class="tk-t">DOUBLE</span></code>. That does not license erasing SQL casts: a data
+      cast is a value operation (<code><span class="tk-k">CAST</span>(<span class="tk-n">1.6</span> <span class="tk-k">AS</span> <span class="tk-t">INTEGER</span>)</code> is 2), and dropping it would change a bound or a
+      coefficient. Three rules follow:</p>
+    <ol>
+      <li><strong>A cast the user writes over a decision is refused</strong>, whatever its target type. Only the
+        parsed tree shows who wrote a cast, so the binder checks it
+        (<code>ValidateDecideNoExplicitDecisionCasts</code>).</li>
+      <li><strong>A cast over data keeps DuckDB's meaning.</strong> The whole typed expression is evaluated first, and
+        only its result becomes a <code><span class="tk-t">DOUBLE</span></code> at the solver's door.</li>
+      <li><strong>A cast the binder inserts over decision algebra is transparent.</strong> Once rule 1 has run, such
+        a cast is type reconciliation, and <code>UnwrapDecideCasts</code> looks through it.</li>
+    </ol>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span>
+<span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-k">CAST</span>(<span class="tk-v">x</span> <span class="tk-k">AS</span> <span class="tk-t">DOUBLE</span>) * weight) &lt;= <span class="tk-n">50</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>)</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>refused before solving</span></div><pre>Binder Error: DECIDE does not allow casts over decision expressions: &#x27;CAST(x AS DOUBLE)&#x27;. Decision values are modeled directly as DOUBLE. Remove the cast; casts over data-only expressions are allowed.</pre></div></div>
+    <p>This is an authorship boundary, and that is why it cannot be reconstructed later. A cast the user wrote and a
+      cast the binder added are both a <code>BoundCastExpression</code>, and whether a cast widens does not say who
+      wrote it.</p>
+
+    <h3 id="shapes"><a class="anchor" href="#shapes">Per-row, aggregate and value shapes</a></h3>
+    <p><code>ClassifyScoped</code> reads each canonical comparison's decision side and names its shape, which fixes
+      how many model rows the clause becomes:</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Decision side holds</th><th scope="col">Shape</th><th scope="col">Model rows</th></tr></thead>
+      <tbody>
+        <tr><td>no reducer</td><td>per-row (<code>ROWS</code>)</td><td>one per kept row, or one per class of an
+          enclosing <code><span class="tk-d">per</span> K:</code></td></tr>
+        <tr><td>reducers sharing one <code><span class="tk-d">by</span></code> key, beside terms that are one value per group</td><td>aggregate
+          (<code>AGGREGATE</code>)</td><td>one per <code><span class="tk-d">by</span></code> group</td></tr>
+        <tr><td>anything else: a per-row decision beside a reducer, a factor that varies by row, two
+          <code><span class="tk-d">by</span></code> keys, a reducer inside an expression</td><td>value (<code>VALUE</code>)</td><td>each reducer
+          becomes a helper decision per group, then one row per class</td></tr>
+      </tbody>
+    </table></div>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> S.shipmentID, <span class="tk-v">ship</span>
+<span class="tk-k">FROM</span> Shipment S <span class="tk-k">JOIN</span> Depot D <span class="tk-k">USING</span> (depotID)
+<span class="tk-d">DECIDE</span> <span class="tk-v">ship</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">ship</span> &lt;= S.demand
+      <span class="tk-k">AND</span> <span class="tk-d">per</span> D.depotID: <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.depotID) &lt;= D.capacity
+      <span class="tk-k">AND</span> <span class="tk-v">ship</span> &lt;= <span class="tk-n">0.40</span> * <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region)
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>)</code></pre></div><div class="code" data-lang="explain"><div class="code__head"><span class="code__title">EXPLAIN: the DECIDE node</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DECIDE</span>
+  <span class="tk-g">Variables:</span> <span class="tk-v">ship</span>
+  <span class="tk-g">Objective:</span> <span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>)
+  <span class="tk-g">Constraints:</span>
+    <span class="tk-v">ship</span> &lt;= S.demand
+    <span class="tk-d">per</span> D.depotID: <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.depotID) &lt;= D.capacity
+    <span class="tk-v">ship</span> &lt;= <span class="tk-n">0.40</span> * <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region)
+      <span class="tk-g">≡</span> <span class="tk-v">ship</span> - <span class="tk-n">0.40</span> * <span class="tk-f">sum</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) &lt;= <span class="tk-n">0.0</span>
+      <span class="tk-g">↳</span> <span class="tk-f">sum</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) becomes a helper decision <span class="tk-d">per</span> group</code></pre></div>
+    <p>The first clause is per-row: one row per shipment. The second is aggregate: one row per depot. The third
+      compares each shipment with its region's total, which one row per group cannot hold, so it takes the value
+      shape and the optimizer replaces the regional sum with a helper decision
+      (<a href="#value-rewrite">the value rewrite</a>).</p>
+    <p>A term beside the reducers is one value per group when its scope, the join of its factors' scopes on the
+      lattice query-wide &lt; key &lt; per row (<code>JoinDecideKeys</code>), is the <code><span class="tk-d">by</span></code> key or
+      query-wide. So the facility link <code><span class="tk-d">per</span> D: <span class="tk-f">SUM</span>(ship) <span class="tk-d">by</span> (D) &lt;= cap * open</code>, with <code>open</code>
+      declared <code><span class="tk-d">per</span> D:</code>, is aggregate: one row per depot, reading that depot's <code>open</code>.</p>
+    <p>Only the canonicalizer sees the enclosing scope, so it decides the shape once and stamps it on the
+      comparison: the <code><span class="tk-d">by</span></code> key for the aggregate shape, <code>VALUE_REWRITE_TAG</code> for the value shape.
+      The linear form, the value rewrite and query rewriting read the stamp instead of classifying again.</p>
+
+    <h3 id="scope-checks"><a class="anchor" href="#scope-checks">The scope checks</a></h3>
+    <p>A clause written <code><span class="tk-d">per</span> K:</code> is one constraint per class of <code>K</code>, so everything it reads
+      outside its reducers must be one value per class. <code>BuildConstraintScopeChecks</code> and
+      <code>BuildObjectiveScopeChecks</code> read each clause as bound and record <code>DETERMINES</code> checks on
+      <code>LogicalDecide::scope_checks</code>: the clause's key must determine each data value, each decision outside
+      a reducer and each <code><span class="tk-d">by</span></code> key, and a reducer's own <code><span class="tk-d">per</span></code> must determine its body. Execution
+      runs every check before it reads a clause:</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> S.shipmentID, <span class="tk-v">ship</span>
+<span class="tk-k">FROM</span> Shipment S <span class="tk-k">JOIN</span> Depot D <span class="tk-k">USING</span> (depotID)
+<span class="tk-d">DECIDE</span> <span class="tk-v">ship</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">ship</span> &lt;= S.demand
+      <span class="tk-k">AND</span> <span class="tk-d">per</span> D.region: <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) &lt;= D.capacity
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>)</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>refused before solving</span></div><pre>Invalid Input Error: DECIDE: per D.region does not determine D.capacity. D.region = &#x27;North&#x27; has more than one value: 80, 100.</pre></div></div>
+    <p>The checks run on the data, not as a static proof, because whether a key determines a column is a property
+      of the rows. A static rule would refuse queries that are fine on their data. Two cases need no check: a literal
+      or a query-wide value, and one of the key's own elements, which the key determines by construction
+      (<code><span class="tk-d">per</span> a: <span class="tk-f">SUM</span>(x) <span class="tk-d">by</span> (a)</code> builds no check for <code>a</code>). Key elements compare as rows group on
+      them, collation included, as <code><span class="tk-k">GROUP</span> <span class="tk-k">BY</span></code> compares them.</p>
+
+    <h3 id="shape-check"><a class="anchor" href="#shape-check">The shape check</a></h3>
+    <p><code>DecideShapeCheck</code> is the one place the algebra of a clause is judged. It is the semantic-analysis
+      pass of a compiler front end: the parser has refused syntax, the binder what only it sees, and what remains is
+      whether the model has a reading for each term. It reads the one spelling the canonicalizer writes, so a shape
+      has one reading however the user typed it, and it runs only on what the user wrote. It refuses:</p>
+    <ul>
+      <li>a function or operator over a decision outside the vocabulary (<code>+</code>, <code>-</code>,
+        <code>*</code>, division by data, a whole-exponent <code>POWER</code>, <code>ABS</code> and the reducers,
+        under any name DuckDB registers for them), such as <code><span class="tk-f">sqrt</span>(x)</code>, <code>x % <span class="tk-n">2</span></code> or
+        <code><span class="tk-f">COALESCE</span>(x, <span class="tk-n">0</span>)</code>;</li>
+      <li>a <code>POWER</code> whose exponent is not a whole number known before the query runs;</li>
+      <li>a division by a decision;</li>
+      <li>a <code><span class="tk-k">CASE</span></code> over a decision (a <code><span class="tk-k">CASE</span></code> over data is a per-row coefficient);</li>
+      <li>a term of degree above 2.</li>
+    </ul>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span>
+<span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">x</span> &lt;= <span class="tk-n">3</span> <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * <span class="tk-v">x</span> * <span class="tk-v">x</span>) &lt;= <span class="tk-n">10</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>)</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>refused before solving</span></div><pre>Invalid Input Error: DECIDE: the SUCH THAT clause `SUM(x * x * x) &lt;= 10` has a term of degree 3, which no solver DeciDB supports can optimize. Instead, write each term with at most two decision factors, as in x, POWER(x, 2) or x * y.</pre></div></div>
+    <p>Degree is read by <code>DecideDegreeOf</code>, the one definition in the code base: a decision is 1, data is
+      0, a reducer has the degree of its body, <code>+</code>, <code>-</code> and <code>ABS</code> take their largest
+      child, <code>*</code> adds, a whole-exponent <code>POWER</code> multiplies, and a division by data keeps its
+      numerator's. Degree is not a count of occurrences: <code>(x + y) * z</code> has three and degree 2. Every
+      refusal quotes the clause as written and carries the term's location, so the caret underlines it. The check
+      runs before any optimizer rewrite, so whether a query is legal never depends on what a rewrite did.</p>
+
+    <h3 id="verification"><a class="anchor" href="#verification">Verification</a></h3>
+    <p><code>VerifyCanonical</code> and <code>VerifyCanonicalObjective</code> check the invariant without changing the
+      tree: wrappers, decision side, placement, and a fixed-point test that canonicalizes a copy and compares the two.
+      The comparison reads the expression's alias, where DECIDE keeps its tags, because DuckDB's
+      <code>Expression::Equals</code> ignores it. They run at three points: after the user's clauses are
+      canonicalized, on each subtree entering <code>AddConstraint</code> or <code>SetObjective</code>, and on the
+      whole tree when the physical plan is built, after every optimizer rewrite.</p>
+    <p>A failure there is an engine bug, not user input, so it throws an internal error. The full check is
+      debug-only, in the idiom of DuckDB's <code>LogicalOperator::Verify</code>: canonicalizing every tree a second
+      time is too costly for release. The user-facing refusals of <code>ValidateCanonicalTree</code> are a separate
+      function and run in every build.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/planner/decide/decide_canonicalizer.cpp"><code>src/planner/decide/decide_canonicalizer.cpp</code></a>: <code>CanonicalizeTree</code>,
+        <code>CanonicalizeObjective</code>, <code>PeelScale</code>, <code>MergeLikeAtoms</code>,
+        <code>ClassifyScoped</code>, the scope checks, <code>VerifyCanonical</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/planner/decide/decide_canonicalizer.hpp"><code>src/include/duckdb/planner/decide/decide_canonicalizer.hpp</code></a>: the contract, in code</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/planner/decide/decide_product_form.cpp"><code>src/planner/decide/decide_product_form.cpp</code></a>: <code>NormalizeProducts</code>,
+        <code>DecideDegreeOf</code>, <code>BuildDecideProduct</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/planner/decide/decide_shape_check.cpp"><code>src/planner/decide/decide_shape_check.cpp</code></a>: <code>DecideShapeCheck</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/planner/decide/decide_cast_policy.cpp"><code>src/planner/decide/decide_cast_policy.cpp</code></a>: <code>UnwrapDecideCasts</code>,
+        <code>PlanTimeSignOf</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/planner/decide/decide_term_split.cpp"><code>src/planner/decide/decide_term_split.cpp</code></a>: <code>DecideTermSplitter</code>, which reads a
+        canonical term as coefficient times decisions</li>
+      <li>Tests: <a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/decide/tests"><code>test/decide/tests/test_canonicalize_*.py</code></a> (casts, scales, signs, sides, homogeneity,
+        idempotence), <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_product_normal_form.py"><code>test_product_normal_form.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_scope_determination.py"><code>test_scope_determination.py</code></a>,
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/common/test_decidb_canonical_verifier.cpp"><code>test/common/test_decidb_canonical_verifier.cpp</code></a>, and the golden model dumps in
+        <a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/decide/golden"><code>test/decide/golden/</code></a></li>
+    </ul></div>
+  </section>
+
+  <section id="optimizer">
+    <h2><a class="anchor" href="#optimizer">The optimizer</a></h2>
+    <p class="lead">The DECIDE optimizer picks a formulation for every construct a solver cannot take as written:
+      ABS, MIN and MAX, AVG, <code>&lt;&gt;</code>, <code><span class="tk-k">IN</span></code>, <code>norm</code> and products of decisions. It
+      reads canonical input and writes canonical output.</p>
+    <p>It runs as one of DuckDB's optimizer passes, <code>OptimizerType::DECIDE_OPTIMIZER</code>, and it is required,
+      not an optional speedup: a plan the DECIDE optimizer never saw is refused at physical planning. Every
+      constraint it writes re-enters through <code>AddConstraint</code> and every objective through
+      <code>SetObjective</code>, so its output is canonical by construction. It never decides shape, parses SQL,
+      reads data or calls a solver.</p>
+
+    <h3 id="solver-first"><a class="anchor" href="#solver-first">The solver comes first</a></h3>
+    <p>The right formulation depends on what the backend states natively: a solver with a native absolute value needs
+      no Big-M envelope, and lowering one anyway would only lose accuracy. So before any formulation rewrite,
+      <code>ChooseDecideSolver</code> picks the backend and records three answers on the plan:
+      <code>solver_backend_name</code>, <code>use_native_constructs</code> (the constructs it can state) and
+      <code>force_native_constructs</code> (the policy over them). Nothing downstream picks again: the choice rides
+      the plan to execution and to every diagnostic re-solve.</p>
+    <p>Capability is not policy, and <code>MIN</code>/<code>MAX</code> is where the two part. Gurobi can state a
+      maximum as a general constraint, but measured on the Q9 benchmark shape at 30K rows the native form is 1.8
+      times slower than the lowering, and 41 times slower on a <code><span class="tk-f">MAX</span>(e) &gt;= K</code> constraint of the same size.
+      So the native form is the fallback, used only where the lowering has no valid Big-M. Whether a clause has one
+      depends on evaluated coefficients, so execution applies the recorded policy to data only it can see.</p>
+    <p><code>RequireDecideSolverSupport</code>, the model-class gate, compares what the query demands with what the
+      backend declares, once the prepared form exists. A construct the backend lacks is lowered; a model class it
+      lacks is refused, since nothing lowers a quadratic constraint or a non-convex objective into linear rows. The
+      gate runs at plan time, not bind time, because the same SQL is legal on every machine: the message blames the
+      host and names the solver to install. And it runs before any row is read, because each class follows from the
+      tree's shape and declared types alone.</p>
+
+    <h3 id="passes"><a class="anchor" href="#passes">Pass order</a></h3>
+    <p><code>OptimizeDecide</code> first runs <code>RewriteRhsAggregates</code>, which replaces each data-only reducer
+      on a bound (<code><span class="tk-f">sum</span>(x) &lt;= <span class="tk-f">sum</span>(cap)</code>) with a column computed by DuckDB, grouped by its
+      <code><span class="tk-d">by</span></code> key. Then <code>ChooseDecideAnswer</code> lets the query rewriting rules try the node
+      (<a href="#query-rewriting">below</a>); if none applies, it chooses the solver, and
+      <code>RewriteForSolver</code> runs fifteen passes. The order is load-bearing:</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">#</th><th scope="col">Pass</th><th scope="col">Why here</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><code>RecordReducedBounds</code></td><td>records the bound aggregates and their checks for
+          the solver path</td></tr>
+        <tr><td>2</td><td><code>TagAtomicRemovalGroups</code></td><td>gives each clause an identity before any rewrite
+          splits it into several rows, so DIAGNOSE removes a clause's rows together</td></tr>
+        <tr><td>3</td><td><code>RewriteNorm</code></td><td>lowers <code><span class="tk-f">norm</span>(e, <span class="tk-n">0</span>)</code> before later passes meet the
+          marker</td></tr>
+        <tr><td>4</td><td><code>RewriteInDomain</code></td><td>lowers <code>x <span class="tk-k">IN</span> (...)</code> to indicators</td></tr>
+        <tr><td>5</td><td><code>TagAbsForBigM</code></td><td>marks each ABS that needs an upper envelope; must precede
+          the next pass, which replaces the nodes</td></tr>
+        <tr><td>6</td><td><code>RewriteAbs</code></td><td>replaces each ABS with an auxiliary, so later passes see plain
+          variables</td></tr>
+        <tr><td>7</td><td><code>InstallRowChecks</code></td><td>places the scope checks a plan can make under the
+          node; after every pass that adds one</td></tr>
+        <tr><td>8</td><td><code>RewriteBilinear</code></td><td>linearizes every product with a <code><span class="tk-t">BOOL</span></code>
+          factor</td></tr>
+        <tr><td>9</td><td><code>DefineNonlinearReducerBodies</code></td><td>names a non-linear body under a MIN or MAX
+          by a helper per row, before the passes that read members as linear</td></tr>
+        <tr><td>10</td><td><code>RewriteScopedReducers</code></td><td>the value rewrite; after ABS and bilinear, whose
+          auxiliaries may stand in a reducer's body</td></tr>
+        <tr><td>11</td><td><code>RewriteComposedMinMax</code></td><td>claims a MIN or MAX beside other terms before the
+          single-term pass</td></tr>
+        <tr><td>12</td><td><code>RewriteMinMax</code></td><td>a lone MIN or MAX, in constraints and the
+          objective</td></tr>
+        <tr><td>13</td><td><code>RewriteNotEqual</code></td><td>marks each <code>&lt;&gt;</code></td></tr>
+        <tr><td>14</td><td><code>RewriteAvgToSum</code></td><td>last of the rewrites, so every reducer it meets is
+          settled</td></tr>
+        <tr><td>15</td><td><code>FoldSingletonRows</code></td><td>last of all: an <code><span class="tk-k">IN</span></code> may emit a bound it
+          must fold, and every auxiliary must exist before the boxes are sized</td></tr>
+      </tbody>
+    </table></div>
+    <p>Each rewrite records what it made of a construct (<code>rewrite_accounts</code>). EXPLAIN prints each record
+      under its clause as a <code>↳</code> line, followed by the rows the rewrite added. The examples below show
+      them.</p>
+
+    <h3 id="abs"><a class="anchor" href="#abs">ABS</a></h3>
+    <p><code>RewriteAbs</code> replaces each <code><span class="tk-f">ABS</span>(e)</code> over decisions with an auxiliary variable
+      <code>a</code> and the lower envelope <code>a &gt;= e</code>, <code>a &gt;= -e</code>. That alone is exact when
+      the clause pushes <code>a</code> down: <code><span class="tk-f">SUM</span>(<span class="tk-f">ABS</span>(e)) &lt;= K</code>, or <code><span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">ABS</span>(e))</code>.
+      Anywhere else (<code><span class="tk-f">ABS</span>(e) &gt;= K</code>, <code>=</code>, a subtracted ABS, <code><span class="tk-d">MAXIMIZE</span></code>), the solver
+      could inflate <code>a</code>, so <code>a</code> also needs an upper envelope: a sign indicator with two Big-M
+      rows, or the solver's native absolute value where it has one.</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span>
+<span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">x</span> &lt;= <span class="tk-n">3</span>
+      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-f">ABS</span>(<span class="tk-v">x</span> - <span class="tk-n">2</span>)) &lt;= <span class="tk-n">4</span>
+      <span class="tk-k">AND</span> <span class="tk-f">ABS</span>(<span class="tk-f">SUM</span>(<span class="tk-v">x</span>) - <span class="tk-n">6</span>) &gt;= <span class="tk-n">2</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>)</code></pre></div><div class="code" data-lang="explain"><div class="code__head"><span class="code__title">EXPLAIN: the DECIDE node</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DECIDE</span>
+  <span class="tk-g">Variables:</span> <span class="tk-v">x</span>
+  <span class="tk-g">Objective:</span> <span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>)
+  <span class="tk-g">Constraints:</span>
+    <span class="tk-v">x</span> &lt;= <span class="tk-n">3</span>
+    <span class="tk-f">SUM</span>(<span class="tk-f">ABS</span>(<span class="tk-v">x</span> - <span class="tk-n">2</span>)) &lt;= <span class="tk-n">4</span>
+      <span class="tk-g">↳</span> <span class="tk-f">abs</span>(<span class="tk-v">x</span> - <span class="tk-n">2</span>) becomes an auxiliary variable
+      <span class="tk-g">↳</span> <span class="tk-f">abs</span>(<span class="tk-v">x</span> - <span class="tk-n">2</span>) - <span class="tk-v">x</span> &gt;= -<span class="tk-n">2</span>
+      <span class="tk-g">↳</span> <span class="tk-f">abs</span>(<span class="tk-v">x</span> - <span class="tk-n">2</span>) + <span class="tk-v">x</span> &gt;= <span class="tk-n">0</span> + <span class="tk-n">2</span>
+    <span class="tk-f">ABS</span>(<span class="tk-f">SUM</span>(<span class="tk-v">x</span>) - <span class="tk-n">6</span>) &gt;= <span class="tk-n">2</span>
+      <span class="tk-g">↳</span> <span class="tk-f">abs</span>(<span class="tk-f">sum</span>(<span class="tk-v">x</span>) - <span class="tk-n">6</span>) becomes an auxiliary variable stated to the solver as an absolute value
+      <span class="tk-g">↳</span> <span class="tk-f">sum</span>(<span class="tk-v">x</span>) becomes a helper decision
+      <span class="tk-g">↳</span> <span class="tk-f">abs</span>(<span class="tk-f">sum</span>(<span class="tk-v">x</span>) - <span class="tk-n">6</span>) - <span class="tk-f">sum</span>(<span class="tk-v">x</span>) &gt;= -<span class="tk-n">6</span>
+      <span class="tk-g">↳</span> <span class="tk-f">abs</span>(<span class="tk-f">sum</span>(<span class="tk-v">x</span>) - <span class="tk-n">6</span>) + <span class="tk-f">sum</span>(<span class="tk-v">x</span>) &gt;= <span class="tk-n">0</span> + <span class="tk-n">6</span></code></pre></div>
+    <p>The first ABS is pinned by the clause, so its two envelope rows are all it needs. The second is pushed up, so
+      its account names the upper envelope this host's solver uses: a native absolute value on Gurobi, a sign
+      indicator on HiGHS. Its sum sits inside an expression, the value shape, so the sum also becomes a helper
+      decision. <code>TagAbsForBigM</code> decides which ABS needs it by reading the sign each term carries, through
+      <code>+</code>, <code>-</code>, casts, reducer bodies and constant factors (<code>WalkPolarity</code>). A factor
+      whose sign is known only at run time, such as a data column in <code><span class="tk-f">SUM</span>(w * <span class="tk-f">ABS</span>(x - t))</code>, gets the exact
+      form: assuming it positive would be unsound, since a negative <code>w</code> lets the auxiliary grow and the
+      constraint stop binding.</p>
+
+    <h3 id="minmax"><a class="anchor" href="#minmax">MIN and MAX</a></h3>
+    <p>Each direction of an extremum has its own cost. <code><span class="tk-f">MAX</span>(e) &lt;= K</code> holds exactly when every member
+      does, so the easy direction becomes one bound per member, with no new variable. <code><span class="tk-f">MAX</span>(e) &gt;= K</code>
+      needs some member to reach <code>K</code>, which takes an extremum column pinned by indicator rows: binary
+      variables with Big-M links. <code>MIN</code> is the mirror. <code>ExtremumPushOf</code> reads once which way a
+      clause pushes a term, for every pass that needs it.</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> S.shipmentID, <span class="tk-v">ship</span>
+<span class="tk-k">FROM</span> Shipment S <span class="tk-k">JOIN</span> Depot D <span class="tk-k">USING</span> (depotID)
+<span class="tk-d">DECIDE</span> <span class="tk-v">ship</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">ship</span> &lt;= S.demand
+      <span class="tk-k">AND</span> <span class="tk-f">MAX</span>(<span class="tk-v">ship</span>) &lt;= <span class="tk-n">35</span>
+      <span class="tk-k">AND</span> <span class="tk-f">MAX</span>(<span class="tk-v">ship</span>) &gt;= <span class="tk-n">30</span>
+      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) + <span class="tk-f">MAX</span>(<span class="tk-v">ship</span>) &lt;= <span class="tk-n">150</span>
+      <span class="tk-k">AND</span> <span class="tk-f">AVG</span>(<span class="tk-v">ship</span>) &gt;= <span class="tk-n">20</span>
+<span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(unit_cost * <span class="tk-v">ship</span>)</code></pre></div><div class="code" data-lang="explain"><div class="code__head"><span class="code__title">EXPLAIN: the DECIDE node</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DECIDE</span>
+  <span class="tk-g">Variables:</span> <span class="tk-v">ship</span>
+  <span class="tk-g">Objective:</span> <span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(unit_cost * <span class="tk-v">ship</span>)
+  <span class="tk-g">Constraints:</span>
+    <span class="tk-v">ship</span> &lt;= S.demand
+    <span class="tk-f">MAX</span>(<span class="tk-v">ship</span>) &lt;= <span class="tk-n">35</span>
+      <span class="tk-g">↳</span> <span class="tk-f">max</span>(<span class="tk-v">ship</span>) becomes a bound on each member
+    <span class="tk-f">MAX</span>(<span class="tk-v">ship</span>) &gt;= <span class="tk-n">30</span>
+      <span class="tk-g">↳</span> <span class="tk-f">max</span>(<span class="tk-v">ship</span>) becomes an extremum column pinned <span class="tk-d">by</span> indicator rows
+    <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) + <span class="tk-f">MAX</span>(<span class="tk-v">ship</span>) &lt;= <span class="tk-n">150</span>
+      <span class="tk-g">↳</span> <span class="tk-f">max</span>(<span class="tk-v">ship</span>) becomes an extremum column
+    <span class="tk-f">AVG</span>(<span class="tk-v">ship</span>) &gt;= <span class="tk-n">20</span>
+      <span class="tk-g">↳</span> <span class="tk-f">avg</span>(<span class="tk-v">ship</span>) becomes a sum divided <span class="tk-d">by</span> its row count
+      <span class="tk-g">↳</span> <span class="tk-f">sum</span>(<span class="tk-v">ship</span>) &gt;= <span class="tk-n">20</span></code></pre></div>
+    <p>The optimizer marks a hard clause; it allocates no binary itself. It cannot see the data, so it cannot know
+      whether a clause will take the native form or the lowering, and a binary per row for a native clause would
+      reference nothing. The model stage allocates them once bounds are known
+      (<a href="solving.html#model">building the model</a>).</p>
+    <p>A <code>MIN</code> or <code>MAX</code> beside other terms (<code><span class="tk-f">SUM</span>(ship) + <span class="tk-f">MAX</span>(ship) &lt;= <span class="tk-n">150</span></code>) is a
+      composed term. <code>RewriteComposedMinMax</code> lifts each term into a <code>ComposedMinMaxTerm</code>, from
+      which the model stage builds an extremum column for the clause's one row, and leaves a <code><span class="tk-k">TRUE</span></code>
+      placeholder in the tree. A body that squares or multiplies
+      decisions under a MIN or MAX is first named by a helper decision per row (<code>DefineNonlinearReducerBodies</code>),
+      stated only in the direction the clause pushes it, as the Plaisted-Greenbaum encoding states a definition only
+      in the polarity where it occurs.</p>
+
+    <h3 id="norm-in"><a class="anchor" href="#norm-in">NORM and IN</a></h3>
+    <p>The canonicalizer replaces <code><span class="tk-f">norm</span>(e, <span class="tk-n">1</span>)</code>, <code><span class="tk-f">norm</span>(e, <span class="tk-n">2</span>)</code> and <code><span class="tk-f">norm</span>(e, <span class="tk-s">&#x27;inf&#x27;</span>)</code>
+      with their definitions: <code><span class="tk-f">SUM</span>(<span class="tk-f">ABS</span>(e))</code>, <code><span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(e, <span class="tk-n">2</span>))</code> and <code><span class="tk-f">MAX</span>(<span class="tk-f">ABS</span>(e))</code>.
+      That swaps one term for another and opens nothing, so the pass stays total. <code><span class="tk-f">norm</span>(e, <span class="tk-n">0</span>)</code> counts the
+      nonzero values, which needs indicator variables, a formulation, so <code>RewriteNorm</code> lowers it: one
+      Boolean <code>z</code> per row, a forward link <code>|e| &lt;= M·z</code> and a reverse link
+      <code>|e| &gt;= tol·z</code>. The reverse link makes the count exact; without it, <code><span class="tk-f">SUM</span>(z)</code> would only
+      bound the count from above. The tolerance must exceed the solver's feasibility tolerance; it is
+      <code><span class="tk-n">1e-4</span></code> by default and set with <code>decide_l0_tolerance</code>.</p>
+    <p><code>RewriteInDomain</code> lowers <code>x <span class="tk-k">IN</span> (v1, ..., vk)</code> to <code>k</code> indicators with
+      <code>z1 + ... + zk = <span class="tk-n">1</span></code> and <code>x = v1·z1 + ... + vk·zk</code>. <code>x <span class="tk-k">IN</span> (v)</code> is
+      <code>x = v</code>, and <code>x <span class="tk-k">IN</span> (<span class="tk-n">0</span>, <span class="tk-n">1</span>)</code> on a <code><span class="tk-t">BOOL</span></code> is dropped.</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span>
+<span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">x</span> &lt;= <span class="tk-n">3</span>
+      <span class="tk-k">AND</span> <span class="tk-v">x</span> <span class="tk-k">IN</span> (<span class="tk-n">0</span>, <span class="tk-n">2</span>, <span class="tk-n">3</span>)
+      <span class="tk-k">AND</span> <span class="tk-f">norm</span>(<span class="tk-v">x</span>, <span class="tk-n">0</span>) &lt;= <span class="tk-n">3</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>)</code></pre></div><div class="code" data-lang="explain"><div class="code__head"><span class="code__title">EXPLAIN: the DECIDE node</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DECIDE</span>
+  <span class="tk-g">Variables:</span> <span class="tk-v">x</span>
+  <span class="tk-g">Objective:</span> <span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>)
+  <span class="tk-g">Constraints:</span>
+    <span class="tk-v">x</span> &lt;= <span class="tk-n">3</span>
+    <span class="tk-v">x</span> <span class="tk-k">IN</span> (<span class="tk-n">0</span>, <span class="tk-n">2</span>, <span class="tk-n">3</span>)
+      <span class="tk-g">↳</span> <span class="tk-v">x</span> <span class="tk-k">IN</span> (<span class="tk-n">0</span>, <span class="tk-n">2</span>, <span class="tk-n">3</span>) becomes one indicator <span class="tk-d">per</span> value
+      <span class="tk-g">↳</span> (<span class="tk-v">x</span> = <span class="tk-n">0</span>) + (<span class="tk-v">x</span> = <span class="tk-n">2</span>) + (<span class="tk-v">x</span> = <span class="tk-n">3</span>) = <span class="tk-n">1</span>
+      <span class="tk-g">↳</span> <span class="tk-v">x</span> + (<span class="tk-n">0</span> - <span class="tk-n">0</span>) * (<span class="tk-v">x</span> = <span class="tk-n">0</span>) + (<span class="tk-n">0</span> - <span class="tk-n">2</span>) * (<span class="tk-v">x</span> = <span class="tk-n">2</span>) + (<span class="tk-n">0</span> - <span class="tk-n">3</span>) * (<span class="tk-v">x</span> = <span class="tk-n">3</span>) = <span class="tk-n">0</span>
+    <span class="tk-f">norm</span>(<span class="tk-v">x</span>, <span class="tk-n">0</span>) &lt;= <span class="tk-n">3</span>
+      <span class="tk-g">↳</span> <span class="tk-f">norm</span>(<span class="tk-v">x</span>, <span class="tk-n">0</span>) becomes one indicator <span class="tk-d">per</span> row
+      <span class="tk-g">↳</span> <span class="tk-f">abs</span>(<span class="tk-v">x</span>) becomes an auxiliary variable stated to the solver as an absolute value
+      <span class="tk-g">↳</span> <span class="tk-f">sum</span>(<span class="tk-v">x</span> &lt;&gt; <span class="tk-n">0</span>) &lt;= <span class="tk-n">3</span>
+      <span class="tk-g">↳</span> M * (<span class="tk-v">x</span> &lt;&gt; <span class="tk-n">0</span>) - <span class="tk-v">x</span> &gt;= <span class="tk-n">0.0</span>
+      <span class="tk-g">↳</span> M * (<span class="tk-v">x</span> &lt;&gt; <span class="tk-n">0</span>) + <span class="tk-v">x</span> &gt;= <span class="tk-n">0.0</span>
+      <span class="tk-g">↳</span> <span class="tk-f">abs</span>(<span class="tk-v">x</span>) - <span class="tk-n">0.0001</span> * (<span class="tk-v">x</span> &lt;&gt; <span class="tk-n">0</span>) &gt;= <span class="tk-n">0.0</span>
+      <span class="tk-g">↳</span> <span class="tk-f">abs</span>(<span class="tk-v">x</span>) - <span class="tk-v">x</span> &gt;= <span class="tk-n">0.0</span>
+      <span class="tk-g">↳</span> <span class="tk-f">abs</span>(<span class="tk-v">x</span>) + <span class="tk-v">x</span> &gt;= <span class="tk-n">0</span></code></pre></div>
+    <p>EXPLAIN names each indicator by what it stands for: <code>(x = <span class="tk-n">2</span>)</code> for a value of the domain,
+      <code>(x &lt;&gt; <span class="tk-n">0</span>)</code> for a nonzero row. The second <code><span class="tk-k">IN</span></code> row is
+      <code>x = <span class="tk-n">0</span>·z0 + <span class="tk-n">2</span>·z2 + <span class="tk-n">3</span>·z3</code> with every term moved left. <code>M</code> is the Big-M the model stage
+      derives from the decisions' bounds, and <code><span class="tk-n">0.0001</span></code> is the tolerance. The norm's absolute value is
+      stated natively or by a sign indicator, as for any ABS pushed up.</p>
+    <p>An unlowered marker is the worst failure here: it is a real <code>SUM</code> with the order in its alias, so
+      a missed one would read as <code><span class="tk-f">SUM</span>(e)</code> and give a confident wrong answer.
+      <code>VerifyNormMarkersLowered</code> fails the query instead, at the end of the optimizer.</p>
+
+    <h3 id="avg-ne"><a class="anchor" href="#avg-ne">AVG and &lt;&gt;</a></h3>
+    <p><code>RewriteAvgToSum</code> replaces an <code>AVG</code> over decisions with a <code>SUM</code> tagged
+      <code>AVG_REWRITE_TAG</code>, and execution divides its terms by the number of rows the reducer reads in each
+      group (the AVG line in the MIN and MAX example above). An <code>AVG</code> over data alone is left as it is:
+      there is nothing to linearize, and rebinding it as <code>SUM</code> would give it <code>SUM</code>'s integral
+      type while its value stays fractional.</p>
+    <p>A <code>&lt;&gt;</code> becomes a disjunction: <code>&lt;= K - <span class="tk-n">1</span></code> or <code>&gt;= K + <span class="tk-n">1</span></code>, chosen by
+      one binary with two Big-M rows. <code>RewriteNotEqual</code> only marks the clause and its label; the model
+      stage allocates the binary once the bounds are known, for the same reason as a hard MIN or MAX. A fractional
+      <code>K</code> on a whole-numbered side can never be equaled, so that clause always holds and is dropped.</p>
+
+    <h3 id="bilinear"><a class="anchor" href="#bilinear">Products of decisions</a></h3>
+    <p><code>RewriteBilinear</code> reads each product in its canonical spelling and picks by the factors'
+      types:</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Factors</th><th scope="col">Formulation</th></tr></thead>
+      <tbody>
+        <tr><td><code><span class="tk-t">BOOL</span></code> times <code><span class="tk-t">BOOL</span></code></td><td>an AND: <code>w &lt;= b1</code>,
+          <code>w &lt;= b2</code>, <code>w &gt;= b1 + b2 - <span class="tk-n">1</span></code>; no Big-M</td></tr>
+        <tr><td><code><span class="tk-t">BOOL</span></code> times <code>x</code> in <code>[L, U]</code></td><td>a McCormick envelope, exact for a
+          binary factor: <code>w &lt;= U·b</code>, <code>w &gt;= x - U·(<span class="tk-n">1</span> - b)</code> and the <code>L</code>
+          corners</td></tr>
+        <tr><td><code><span class="tk-t">BOOL</span></code> squared</td><td>the factor itself</td></tr>
+        <tr><td>neither factor <code><span class="tk-t">BOOL</span></code></td><td>left in place for the quadratic (Q) matrix</td></tr>
+      </tbody>
+    </table></div>
+    <p>The McCormick corners need the bounds <code>L</code> and <code>U</code>, which may come from the data, so the
+      pass records the link and the model stage emits the rows. Each auxiliary takes its scope as DuckDB promotes a
+      binary operator's type: the least upper bound of its factors' scopes, on the order query-wide &lt; keyed &lt;
+      per row (<code>JoinScopes</code>). Two query-wide factors give one query-wide column, not one per row.</p>
+
+    <h3 id="value-rewrite"><a class="anchor" href="#value-rewrite">The value rewrite</a></h3>
+    <p>A comparison in the value shape cannot be one row per group. <code>RewriteScopedReducers</code> turns it into a
+      per-row clause: each reducer on its decision side becomes a helper decision, one per <code><span class="tk-d">by</span></code> group,
+      defined by its own rows in the model. So <code>ship &lt;= <span class="tk-n">0.20</span> * <span class="tk-f">SUM</span>(ship)</code> costs one row per shipment
+      and one helper, not one row per shipment holding a term for every shipment.</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> S.shipmentID, <span class="tk-v">ship</span>
+<span class="tk-k">FROM</span> Shipment S <span class="tk-k">JOIN</span> Depot D <span class="tk-k">USING</span> (depotID)
+<span class="tk-d">DECIDE</span> <span class="tk-v">ship</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">ship</span> &lt;= S.demand
+      <span class="tk-k">AND</span> <span class="tk-d">per</span> D.region: <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) &lt;= <span class="tk-n">0.6</span> * <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>)
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>)</code></pre></div><div class="code" data-lang="explain"><div class="code__head"><span class="code__title">EXPLAIN: the DECIDE node</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DECIDE</span>
+  <span class="tk-g">Variables:</span> <span class="tk-v">ship</span>
+  <span class="tk-g">Objective:</span> <span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>)
+  <span class="tk-g">Constraints:</span>
+    <span class="tk-v">ship</span> &lt;= S.demand
+    <span class="tk-d">per</span> D.region: <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) &lt;= <span class="tk-n">0.6</span> * <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>)
+      <span class="tk-g">≡</span> <span class="tk-d">per</span> D.region: <span class="tk-f">sum</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) - <span class="tk-n">0.6</span> * <span class="tk-f">sum</span>(<span class="tk-v">ship</span>) &lt;= <span class="tk-n">0.0</span>
+      <span class="tk-g">↳</span> <span class="tk-f">sum</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) becomes a helper decision <span class="tk-d">per</span> group
+      <span class="tk-g">↳</span> <span class="tk-f">sum</span>(<span class="tk-v">ship</span>) becomes a helper decision</code></pre></div>
+    <ul>
+      <li><strong>Type.</strong> A helper is <code><span class="tk-t">INTEGER</span></code> when the reducer's value is whole by declared types,
+        so a strict bound on the new row still steps exactly; otherwise it is <code><span class="tk-t">DOUBLE</span></code>.</li>
+      <li><strong>Sharing.</strong> One helper per reducer over one set of rows: a second occurrence with the same
+        body, <code><span class="tk-d">by</span></code> key, own <code><span class="tk-d">per</span></code> and enclosing <code><span class="tk-d">when</span></code> reuses the first. Two helpers
+        for one value could drift apart.</li>
+      <li><strong>Sides.</strong> A helper's definition states only the side its clauses need, as an epigraph
+        does: a <code>SUM</code> pushed down needs <code>helper &gt;= members</code>. An unknown sign,
+        <code>=</code> or <code>&lt;&gt;</code> needs both.</li>
+    </ul>
+
+    <h3 id="folding"><a class="anchor" href="#folding">Bounds into boxes</a></h3>
+    <p><code>x &lt;= <span class="tk-n">10</span></code> is one fact about a column, so it belongs in the column's bounds, its box, rather
+      than in one model row per data row. <code>FoldSingletonRows</code> folds every bound on one decision known
+      before the query runs into one box per decision, as MIP presolve turns a single-variable row into a column
+      bound. One classifier, <code>DecideReadSingletonRow</code>, reads every bound on one decision for this pass, the
+      linear form and query rewriting, so they cannot disagree about which values a bound admits. It admits exactly
+      what DuckDB admits: on an <code><span class="tk-t">INT</span></code>, <code><span class="tk-n">0.1</span> * x &lt;= <span class="tk-n">0.3</span></code> admits 3, because DuckDB evaluates
+      <code><span class="tk-n">0.1</span> * <span class="tk-n">3</span></code> as the exact decimal 0.3.</p>
+    <ul>
+      <li><strong>Tagged, not replaced.</strong> The comparison keeps its place in the tree with
+        <code>SINGLETON_ROW_BOUND_TAG</code>, so EXPLAIN and DIAGNOSE still show the bound the user wrote.</li>
+      <li><strong>Never under a <code><span class="tk-d">when</span></code>.</strong> <code><span class="tk-d">when</span> c: x &lt;= <span class="tk-n">0</span></code> holds on some rows, so it
+        is not a domain.</li>
+      <li><strong>Intersect, never assign.</strong> <code>x = <span class="tk-n">5</span> <span class="tk-k">AND</span> x = <span class="tk-n">10</span></code> inverts the box and is caught,
+        instead of keeping whichever bound came last.</li>
+      <li><strong>Last of all.</strong> An <code><span class="tk-k">IN</span></code> with a negative value emits a lower bound below 0, itself
+        a bound to fold; folded earlier, the default floor of 0 would make that value unreachable and change the
+        answer.</li>
+    </ul>
+    <p>This is a formulation choice, bound or row, so it belongs here and not in the canonicalizer, whose pass is pure
+      and never writes into bound arrays.</p>
+
+    <h3 id="prepared"><a class="anchor" href="#prepared">The prepared linear form</a></h3>
+    <p><code>BuildDecidePreparedModel</code> flattens each canonical comparison and the objective into terms,
+      <code>sign * coefficient * variable</code>, and product groups for the terms of degree 2. This is where the
+      algebra happens: <code>K * (<span class="tk-n">1</span> - pick)</code> becomes <code>K - K * pick</code>, a divisor moves into every
+      coefficient, and a reducer's factor multiplies everything the reducer produced. The result is
+      <code>LogicalDecide::prepared</code>, a <code>DecidePreparedModel</code>.</p>
+    <p>A coefficient stays an unevaluated expression: <code><span class="tk-f">SUM</span>(x * price)</code> yields the coefficient
+      <code>price</code>, which is a number only once a row exists. Everything else about a term (its variable, sign,
+      reducer, filter and key scope) is settled here, and no data is read. Like terms in a linear row merge, but only
+      when they also read the same rows: <code><span class="tk-f">sum</span>(<span class="tk-d">when</span> a: x)</code> and <code><span class="tk-f">sum</span>(<span class="tk-d">when</span> b: x)</code> name one column
+      over two row sets, and <code>TermsAreLike</code> keeps them apart.</p>
+    <p>The code is the optimizer's, but it runs from <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/execution/physical_plan/plan_decide.cpp"><code>plan_decide.cpp</code></a>, at physical planning. DuckDB's
+      column pruning and late materialization run after the DECIDE optimizer and rebind the operator's expressions;
+      a coefficient copied earlier would keep a stale binding and silently read the wrong column. Physical planning
+      is the first point where bindings are final, and the same point where the final <code>VerifyCanonical</code>
+      runs.</p>
+
+    <h3 id="query-rewriting"><a class="anchor" href="#query-rewriting">Where query rewriting enters</a></h3>
+    <p>Query rewriting answers some queries with DuckDB's own operators instead of a solver. It enters at one point:
+      <code>ChooseDecideAnswer</code>, after the bound-side rewrite and before the solver is chosen. A rule that
+      applies replaces the DECIDE node with an ordinary plan, and none of the fifteen passes runs. A
+      <code><span class="tk-d">DIAGNOSE</span></code> query, or one with a forced solver, keeps the solver path. The same table answers both
+      ways. A capacity across rows needs the solver:</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span>
+<span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">x</span> &lt;= <span class="tk-n">3</span> <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(weight * <span class="tk-v">x</span>) &lt;= <span class="tk-n">50</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>)</code></pre></div><div class="code" data-lang="plan"><div class="code__head"><span class="code__title">EXPLAIN: the operators</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-g"></span><span class="tk-k">PROJECTION</span>
+<span class="tk-g">└─ </span><span class="tk-d">DECIDE</span>   <span class="tk-g">decisions: </span><span class="tk-v">x</span>
+<span class="tk-g">   └─ </span><span class="tk-k">SEQ_SCAN</span>   Items</code></pre></div>
+    <p>With only a box on each row, every row is independent, and rule A1 computes each value with DuckDB's own
+      operators, with no solver:</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span>
+<span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">x</span> &lt;= <span class="tk-n">3</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value * <span class="tk-v">x</span>)</code></pre></div><div class="code" data-lang="plan"><div class="code__head"><span class="code__title">EXPLAIN: the operators</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-g"></span><span class="tk-k">PROJECTION</span>
+<span class="tk-g">└─ </span><span class="tk-k">PROJECTION</span>   <span class="tk-g">query rewriting, rule </span><span class="tk-d">A1_SEPARABLE_BOX</span>
+<span class="tk-g">   └─ </span><span class="tk-k">CTE</span>
+<span class="tk-g">      ├─ </span><span class="tk-k">UNGROUPED_AGGREGATE</span>
+<span class="tk-g">      │  └─ </span><span class="tk-k">PROJECTION x5</span>
+<span class="tk-g">      │     └─ </span><span class="tk-k">SEQ_SCAN</span>   Items
+<span class="tk-g">      └─ </span><span class="tk-k">PROJECTION x6</span>
+<span class="tk-g">         └─ </span><span class="tk-k">CROSS_PRODUCT</span>
+<span class="tk-g">            ├─ </span><span class="tk-k">SEQ_SCAN</span>   Items
+<span class="tk-g">            └─ </span><span class="tk-k">FILTER</span>
+<span class="tk-g">               └─ </span><span class="tk-k">CTE_SCAN</span></code></pre></div>
+    <p>The rules read the canonical tree through their own intermediate representation, so they see the same one
+      spelling as the passes on this page. How a rule recognizes its class and builds its plan is in
+      <a href="rewriting.html#recognize">query rewriting</a>, and each rule is in
+      <a href="rewrite-rules.html#a1">the rewrite rules</a>.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_optimizer.cpp"><code>src/optimizer/decide/decide_optimizer.cpp</code></a>: <code>OptimizeDecide</code>,
+        <code>RewriteForSolver</code> and the helpers the passes share</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_answer_choice.cpp"><code>src/optimizer/decide/decide_answer_choice.cpp</code></a>: <code>ChooseDecideAnswer</code>,
+        <code>ChooseDecideSolver</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_solver_gate.cpp"><code>src/optimizer/decide/decide_solver_gate.cpp</code></a>: <code>RequireDecideSolverSupport</code>; the
+        model classes are in <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/common/decide_solver_capabilities.hpp"><code>src/include/duckdb/common/decide_solver_capabilities.hpp</code></a></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_rewrite_abs.cpp"><code>src/optimizer/decide/decide_rewrite_abs.cpp</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_rewrite_minmax.cpp"><code>decide_rewrite_minmax.cpp</code></a>,
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_rewrite_norm_in.cpp"><code>decide_rewrite_norm_in.cpp</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_rewrite_notequal_avg.cpp"><code>decide_rewrite_notequal_avg.cpp</code></a>,
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_rewrite_bilinear.cpp"><code>decide_rewrite_bilinear.cpp</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_rewrite_define.cpp"><code>decide_rewrite_define.cpp</code></a>,
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_rewrite_scoped.cpp"><code>decide_rewrite_scoped.cpp</code></a> (the value rewrite): one file per pass</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_singleton_row_folding.cpp"><code>src/optimizer/decide/decide_singleton_row_folding.cpp</code></a>: <code>FoldSingletonRows</code>,
+        <code>DecideReadSingletonRow</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_linear_form.cpp"><code>src/optimizer/decide/decide_linear_form.cpp</code></a>: <code>BuildDecidePreparedModel</code>; the form
+        is in <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/planner/decide/decide_prepared_model.hpp"><code>src/include/duckdb/planner/decide/decide_prepared_model.hpp</code></a></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/execution/physical_plan/plan_decide.cpp"><code>src/execution/physical_plan/plan_decide.cpp</code></a>: where the prepared form and the gate run</li>
+      <li>Tests: <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_abs_linearization.py"><code>test/decide/tests/test_abs_linearization.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_min_max.py"><code>test_min_max.py</code></a>,
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_min_max_multiterm.py"><code>test_min_max_multiterm.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_minmax_body_definition.py"><code>test_minmax_body_definition.py</code></a>,
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_norm.py"><code>test_norm.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_cons_in.py"><code>test_cons_in.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_avg.py"><code>test_avg.py</code></a>,
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_bilinear.py"><code>test_bilinear.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_scope_value_rewrite.py"><code>test_scope_value_rewrite.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_singleton_row.py"><code>test_singleton_row.py</code></a>,
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_like_term_collection.py"><code>test_like_term_collection.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_native_constructs.py"><code>test_native_constructs.py</code></a></li>
+    </ul></div>
+  </section>
+<nav class="pager" aria-label="Documentation"><a class="pager__prev" href="front-end.html"><small>Previous</small>Parser, binder and plan</a><a class="pager__next" href="solving.html"><small>Next</small>Model, solvers and execution</a></nav></article>
+
+</div></div>
+</main>
+<footer class="footer closing footer--statement g2m" id="contact" aria-labelledby="close-h">
+  <div class="wrap">
+    <div class="closing__cta close--word">
+      <div class="section-head--split">
+        <div><h2 id="close-h">Run your first DECIDE query</h2><p class="t-lead">Python wheels and command-line builds for macOS, Linux and Windows.</p></div>
+        <a class="btn btn--primary" href="../getting-started.html#install">Install DeciDB<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a>
+      </div>
+      <p class="close__word" aria-hidden="true">DeciDB</p>
+    </div>
+    <div class="closing__links">
+      <div class="grid">
+        <div class="span-4 stack-4">
+          <a class="nav__logo" href="../index.html"><img src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
+          <p class="footer__lede">Constrained optimization in SQL.</p>
+        </div>
+        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Get started</a></li><li><a href="../demo.html">Live demo</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../docs/index.html">Documentation</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="../examples/knapsack.html">Knapsack</a></li><li><a href="../examples/facility-location.html">Depots</a></li><li><a href="../examples/fair-allocation.html">Fair allocation</a></li><li><a href="../examples/diagnose.html">DIAGNOSE</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Project</h3><ul><li><a href="../about.html">About</a></li><li><a href="../about.html#research">Papers</a></li><li><a href="https://github.com/huda-lab/decidb">GitHub</a></li><li><a href="https://huda-lab.github.io/">HUDA Lab</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Contact</h3><ul><li><a href="mailto:support@decidb.com">Email the team</a></li><li><a href="https://github.com/huda-lab/decidb/issues">Report an issue</a></li></ul></div>
+      </div>
+      <div class="footer__legal">
+        <span>&copy; 2026 HUDA Lab, NYU Abu Dhabi and UMass Amherst</span>
+        <span>Product names and logos are trademarks of their owners.</span>
+      </div>
+    </div>
+  </div>
+</footer>
+<script type="module" src="../assets/system.js"></script>
+<script type="module" src="../assets/motion/motion.js"></script>
+<script type="module" src="../assets/layout/layout.js"></script>
+<script src="../assets/js/site.js" defer></script>
+</body>
+</html>

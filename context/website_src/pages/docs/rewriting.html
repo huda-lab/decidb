@@ -1,0 +1,528 @@
+<!--meta
+title: Query rewriting: DeciDB documentation
+description: How DeciDB proves that a DECIDE query has a shape with an exact answer and replaces the solver with DuckDB operators that compute the optimum.
+h1: Query rewriting
+lede: How DeciDB proves that a query has a shape with a known exact answer, and replaces the solver with ordinary DuckDB operators that compute it.
+-->
+<nav class="toc" aria-label="On this page">
+  <div class="toc-title">On this page</div>
+  <ul>
+    <li><a href="#overview">Where rewriting runs</a></li>
+    <li><a href="#recognize">Recognizing a class</a></li>
+    <li class="sub"><a href="#ir">The IR</a></li>
+    <li class="sub"><a href="#registry">The rule registry</a></li>
+    <li class="sub"><a href="#proving">Proving a class</a></li>
+    <li><a href="#plan">The plan a rule builds</a></li>
+    <li class="sub"><a href="#side-by-side">Side by side with the solver</a></li>
+    <li class="sub"><a href="#shapes">Three plan shapes</a></li>
+    <li class="sub"><a href="#every-row">Every row is read</a></li>
+    <li class="sub"><a href="#source-reader">Reading the source twice</a></li>
+    <li><a href="#results">The result adapter</a></li>
+    <li class="sub"><a href="#late-materialization">Pruning and late materialization</a></li>
+    <li><a href="#policy">The policy</a></li>
+    <li class="sub"><a href="#explain">What EXPLAIN shows</a></li>
+    <li class="sub"><a href="#differences">Ties, exactness and errors</a></li>
+    <li class="sub"><a href="#declines">When DeciDB declines</a></li>
+    <li><a href="#duckdb-edits">Edits to DuckDB</a></li>
+  </ul>
+</nav>
+<article class="prose">
+
+  <section id="overview">
+    <h2><a class="anchor" href="#overview">Where rewriting runs</a></h2>
+    <p class="lead">Some DECIDE problems have an exact answer that sorting, ranking, aggregating and joining can compute.
+      Query rewriting finds them in the optimizer and replaces the DECIDE node with those operators, so no model is
+      built and no solver starts.</p>
+    <p>Take <code>SUM(pick) &lt;= 2 MAXIMIZE SUM(rating * pick)</code>. It asks for the two rows with the highest
+      rating. The rewritten plan ranks the rows by rating with a window and sets <code>pick = 1</code> on the first two
+      whose rating helps the objective. Any query DeciDB cannot prove to be such a shape goes to the solver unchanged.
+      The <a href="../features.html#rewriting">Novel features page</a> shows rewriting from the user's side.</p>
+    <p>Rewriting is a <strong>transformation rule</strong> in the Volcano and Cascades sense: a rule that replaces a
+      subtree of the plan with an equivalent one. It runs in the DECIDE optimizer
+      (<a href="canonical-form.html#optimizer">stage 05</a>), once per DECIDE node, in this order:</p>
+    <ol class="steps">
+      <li><strong>Bound side.</strong> <code>RewriteRhsAggregates</code> turns every reducer over data on the right side
+        of a clause (<code>SUM(x) &lt;= COUNT(*) / 2</code>) into a column of the source. It runs on both paths, so the
+        solver and a rule read a data bound from the same evaluator.</li>
+      <li><strong>Read.</strong> One front end reads the bound DECIDE node into an intermediate representation, the
+        IR.</li>
+      <li><strong>Check.</strong> Every registered rule checks its applicability condition on the IR. At most one may
+        hold.</li>
+      <li><strong>Apply.</strong> The rule that holds builds a relational plan, called the substitute.</li>
+      <li><strong>Adapt.</strong> The result adapter gives the substitute the DECIDE node's output columns and
+        bindings.</li>
+      <li><strong>Simplify.</strong> DuckDB's expression rewriter runs over the substitute. DuckDB's remaining
+        optimizer passes and its executor then treat it as any other plan.</li>
+    </ol>
+    <p>When no rule holds, a solver backend is chosen and the solver path continues as
+      <a href="solving.html#model">Model, solvers and execution</a> describes. There is no retry in the other direction:
+      once a rewritten plan runs, it cannot hand the query back to a solver. So a rule must prove everything its plan
+      relies on before it applies.</p>
+    <div class="note"><strong>The engine's name for it</strong>
+      <p>The engine calls this feature <em>direct solve</em>: the setting is <code>decide_direct_solve</code>,
+        <code>EXPLAIN</code> prints a <code>Direct solve rule</code> line, and the internal docs live in
+        <code>context/docs/direct_solve/</code>. This documentation says query rewriting.</p></div>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/optimizer/decide/decide_optimizer.cpp</code>: <code>DecideOptimizer::OptimizeDecide</code>, the
+        order of the passes</li>
+      <li><code>src/optimizer/decide/decide_rewrite_rhs_bounds.cpp</code>: <code>RewriteRhsAggregates</code>, the
+        bound side</li>
+      <li><code>src/optimizer/decide/decide_answer_choice.cpp</code>: <code>ChooseDecideAnswer</code>, a rule or a
+        solver</li>
+      <li><code>src/optimizer/decide/direct/direct_rule_driver.cpp</code>: <code>ApplyDirectSolveRules</code>, steps 2
+        to 6</li>
+      <li><code>src/optimizer/decide/direct/</code>: every file of the feature; headers in
+        <code>src/include/duckdb/optimizer/decide/direct/</code></li>
+    </ul></div>
+  </section>
+
+  <section id="recognize">
+    <h2><a class="anchor" href="#recognize">Recognizing a class</a></h2>
+    <p class="lead">A rule never reads the SQL text or the bound tree. One front end reads the DECIDE node into an IR,
+      and each rule proves from the IR alone that the query is an instance of its class.</p>
+
+    <h3 id="ir"><a class="anchor" href="#ir">The IR</a></h3>
+    <p>This is the compiler split into a front end, an intermediate representation and a back end. The front end
+      (<code>DirectIR::Read</code>) is the only code that knows the layout of the bound tree. The rules are the back
+      end. When the bound tree changes, the front end changes and the rules do not.</p>
+    <p>The IR describes the whole problem:</p>
+    <dl class="reads">
+      <dt><code>decisions</code></dt><dd>each decision's domain (<code>BOOL</code>, <code>INT</code> or
+        <code>REAL</code>) and scope: one per row, one per key (<code>per K:</code>) or one for the whole query</dd>
+      <dt><code>constraints</code></dt><dd>each clause with its comparison, its reducer and terms, its
+        <code>when</code>, its <code>by</code> key, a <code>per K:</code> in front, and its right side</dd>
+      <dt><code>objective</code></dt><dd>its parts, each with a sign, a constant factor, its terms and its
+        <code>when</code>. Every objective is a minimization, so a rule reads the direction from each part's sign.</dd>
+      <dt><code>row_checks</code></dt><dd>the scope checks the plan must run on the source rows</dd>
+      <dt><code>cross_product</code></dt><dd>the columns of each side when DECIDE's own child is a cross product</dd>
+      <dt><code>not_null</code>, <code>keys</code></dt><dd>the columns that a directly scanned table declares
+        <code>NOT NULL</code>, and its <code>UNIQUE</code> keys whose columns are all <code>NOT NULL</code></dd>
+    </dl>
+    <p>The front end reads the complete bound tree, not the solver's flattened model, because a flattened model can
+      drop a term and a rule must see everything the user wrote. Where the solver path has a reader for something, the
+      front end calls the same one, so the two paths cannot read it differently: the term splitter that breaks
+      <code>SUM(2*x - x)</code> into linear terms, and the classifier that reads a per-row comparison as a bound on one
+      decision (<code>DecideReadSingletonRow</code>).</p>
+    <p>The analysis is <strong>conservative</strong>: anything the front end cannot read exactly is marked
+      <em>not proved</em>, per clause, per objective part, or for the whole IR. Examples are an order-0 norm, a
+      <code>per K:</code> in front of a per-row clause, a two-level objective, and the determination check of an
+      entity-scoped decision. Building the IR never throws. The driver offers the IR to the rules only when every part
+      is proved and the objective's constant is finite (<code>DirectIRIsReadable</code>), so a gap in the front end
+      can never become a wrong rewrite.</p>
+    <p>The IR holds facts of the query and the catalog, never estimates. A declared <code>NOT NULL</code> holds for
+      every row a plan reads. Column statistics describe the data at planning time and prove nothing, and a
+      prepared plan keeps its choice while the rows change.</p>
+
+    <h3 id="registry"><a class="anchor" href="#registry">The rule registry</a></h3>
+    <p>Each problem class is one rule, a class that implements <code>DirectSolveRule</code>. This is the
+      <strong>Strategy</strong> pattern: every rule offers the same four methods.</p>
+    <dl class="reads">
+      <dt><code>CheckCondition(ir, context)</code></dt><dd>returns the applicability condition when the query is an
+        instance of the class, or null. Only this method can build a condition, so <code>Apply</code> never sees an
+        unverified shape.</dd>
+      <dt><code>Apply(reader, optimizer, condition, errors)</code></dt><dd>builds the substitute from the condition</dd>
+      <dt><code>Summary()</code></dt><dd>the fixed line <code>EXPLAIN</code> prints for the rule</dd>
+      <dt><code>Name()</code></dt><dd>the rule's name, such as <code>S1_UNIFORM_MATROID</code></dd>
+    </dl>
+    <p>One <strong>registry</strong> lists the rules, one factory function each (<strong>Factory Method</strong>):
+      <code>MakeS1UniformMatroidRule()</code>, <code>MakeA1SeparableBoxRule()</code> and so on. A new class is a new
+      file, <code>&lt;id&gt;_&lt;slug&gt;_rule.cpp</code>, and one line in the registry. The driver and the result
+      adapter hold no rule-specific code. The driver is a <strong>Template Method</strong>: it runs the same steps for
+      every rule, and the rule fills in the two that differ.</p>
+
+    <h3 id="proving"><a class="anchor" href="#proving">Proving a class</a></h3>
+    <p><code>CheckCondition</code> checks the shape, then certifies every clause, objective part, decision, runtime
+      check and output the plan relies on. Shape and certification are one step. Cascades separates a cheap pattern
+      match from the rule because one pattern is tried on many subtrees; a DECIDE query offers each rule a single node,
+      so a separate pattern step saves nothing.</p>
+    <p>Rules prove values with shared predicates, so every rule answers "may I use this value" the same way. A value is
+      admissible when it is numeric, reads no decision, is deterministic and reads only the source row
+      (<code>DirectProveValue</code>). The bound reader reads each kind of value once for all rules: a per-row bound, a
+      fixed value of a <code>BOOL</code>, the limit of a clause, an objective term. For example, S1 proves that its
+      decision is one <code>BOOL</code> per row, that every aggregate clause is a count whose constant coefficients add
+      up to exactly 1 or -1, that all count clauses share one <code>by</code> key and one <code>when</code>, that every
+      constant limit is below 1e20 in magnitude, and that the objective is a linear score.</p>
+    <p>Recognition reads the IR and never the data, so declining costs the same at every size: about 0.14 ms of
+      planning, measured on a query that R4 nearly admits.</p>
+    <p><strong>Rules are disjoint.</strong> The driver runs <code>CheckCondition</code> for every rule. If two hold,
+      it raises an internal error that names both. This departs from Cascades, where several rules may match and the
+      cheapest plan wins: here two rules holding means the rules overlap, which is a bug, and no ordering between them
+      is safe. Rules stay apart through the IR they require. S1 requires a count body whose coefficients add up to 1 or
+      -1, and S3 declines exactly that body. A1 forbids every aggregate clause, and R1 requires one.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/optimizer/decide/direct/direct_ir.cpp</code>: the front end, <code>DirectIR::Read</code></li>
+      <li><code>src/include/duckdb/optimizer/decide/direct/direct_rule.hpp</code>: the IR types,
+        <code>DirectSolveRule</code>, <code>DirectApplicabilityCondition</code>, <code>DirectSubstitute</code></li>
+      <li><code>src/optimizer/decide/direct/direct_registry.cpp</code> and <code>direct_rules.hpp</code>: the registry
+        and the factories</li>
+      <li><code>src/optimizer/decide/direct/direct_bound_reader.cpp</code> and <code>direct_expression.cpp</code>: the
+        shared readers and admission predicates</li>
+      <li><code>test/common/test_decidb_direct_ir.cpp</code>: every IR node kind and each not-proved part</li>
+      <li><code>test/common/test_decidb_direct_rule_driver.cpp</code>: stub rules, including two that hold at once</li>
+      <li><code>test/common/test_decidb_direct_decline.cpp</code>: each decline branch of each rule, and
+        <code>EveryRuleWithItsShapes</code>, which runs every rule on every other rule's shapes</li>
+    </ul></div>
+  </section>
+
+  <section id="plan">
+    <h2><a class="anchor" href="#plan">The plan a rule builds</a></h2>
+    <p class="lead"><code>Apply</code> builds the substitute: a plan of ordinary DuckDB logical operators (projections,
+      windows, aggregates, joins and materialized CTEs) that computes the optimal assignment. DuckDB optimizes and runs
+      it like any plan it built itself.</p>
+
+    <h3 id="side-by-side"><a class="anchor" href="#side-by-side">Side by side with the solver</a></h3>
+    <p>The shortlist of the <a href="../examples/shortlist.html">examples</a>: at most two films per genre, with the
+      highest total rating. Rewritten, it runs as these operators:</p>
+<!--plan check="shortlist" title="At most two films per genre" label="Rewritten: the operators DuckDB runs"-->SELECT title, genre, rating, pick
+FROM Films
+DECIDE pick(BOOL)
+SUCH THAT SUM(pick) by (genre) <= 2
+MAXIMIZE SUM(rating * pick);<!--/plan-->
+    <p>Read it from the bottom:</p>
+    <ol class="steps">
+      <li><strong>Scan.</strong> The lower <code>SEQ_SCAN</code> reads <code>genre</code> and <code>rating</code>,
+        and the row id.</li>
+      <li><strong>Scope and score.</strong> Two projections give each row its group key and its score. The score is
+        <code>-rating</code>, because the objective is a minimization in canonical form, with a check that raises the
+        solver's error for a NaN or infinite rating.</li>
+      <li><strong>Rank.</strong> The <code>WINDOW</code> computes <code>ROW_NUMBER</code> per genre in order of the
+        score.</li>
+      <li><strong>Prefix.</strong> Three projections set <code>pick = 1</code> where the rank is within 2 and the score
+        improves the objective.</li>
+      <li><strong>Late materialization.</strong> The <code>HASH_JOIN</code> fetches <code>title</code> from a second
+        scan by row id, after the rows are chosen, so the wide column never enters the rank
+        (<a href="#late-materialization">below</a>).</li>
+      <li><strong>Adapter.</strong> The projection that names the rule is the result adapter. The top projection is the
+        query's <code>SELECT</code> list.</li>
+    </ol>
+    <p>With rewriting off, the same problem goes to the solver. DuckDB runs one DECIDE operator over the scan, and the
+      operator builds a model with one binary variable per row:</p>
+<!--plan check="rewrite-shortlist-solver" title="The same query with decide_direct_solve = 'off'" label="Solver path: the operators DuckDB runs"-->SELECT title, genre, rating, pick
+FROM Films
+DECIDE pick(BOOL)
+SUCH THAT SUM(pick) by (genre) <= 2
+MAXIMIZE SUM(rating * pick);<!--/plan-->
+    <p>A rule builds its expressions with <code>ExpressionBuilder</code>, a fluent helper over bound expressions
+      (Fowler's Expression Builder), in their general form: a flag that is always true, a <code>CASE</code> on it, a
+      multiplication by 1.0. DuckDB's expression rewriter runs before the DECIDE optimizer, so nothing has simplified
+      them yet. The driver runs the rewriter over the substitute, and DuckDB's statistics propagation later folds the
+      constants the stages carry as columns. This is <strong>canonicalization after lowering</strong>, as MLIR's
+      canonicalize pass and LLVM's InstCombine do it. Measured at TPC-H scale factor 1, the rewriter alone lowers the
+      cost of a plan's row-side projections by about a tenth.</p>
+
+    <h3 id="shapes"><a class="anchor" href="#shapes">Three plan shapes</a></h3>
+    <p>The rules share three plan shapes, each a standard relational idea. Shared code builds each one, and a rule
+      supplies only what differs.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Shape</th><th>Rules</th><th>How it computes the answer</th><th>Standard idea</th></tr></thead>
+      <tbody>
+        <tr><td>Ranked prefix</td><td><a href="rewrite-rules.html#s1">S1</a>, <a href="rewrite-rules.html#s2">S2</a>,
+          <a href="rewrite-rules.html#s3">S3</a></td><td>a window ranks each group's rows by one column, and the answer
+          is a prefix of the ranking</td><td>a Template Method (<code>DirectRankedPrefix</code>): the builder fixes the
+          plan, and the rule gives the order, the prefix size and the group's verdict</td></tr>
+        <tr><td>Group then join</td><td><a href="rewrite-rules.html#a2">A2</a>, <a href="rewrite-rules.html#n1">N1</a>,
+          <a href="rewrite-rules.html#r1">R1</a>, <a href="rewrite-rules.html#r4">R4</a></td><td>a hash aggregate
+          reduces each class to one row that holds its answer, and a second read of the rows joins it back on the class
+          key</td><td>how DuckDB decorrelates a scalar subquery (<code>DirectJoinClassAnswers</code>)</td></tr>
+        <tr><td>Verify then stream</td><td><a href="rewrite-rules.html#a1">A1</a>,
+          <a href="rewrite-rules.html#o1">O1</a></td><td>a first read computes a one-row verdict over every row, and a
+          second read, gated on it, computes each row's answer as the row passes</td><td>PostgreSQL's InitPlan, DuckDB's
+          uncorrelated scalar subquery (<code>DirectAllRowsValid</code>)</td></tr>
+      </tbody>
+    </table></div>
+    <p>A <strong>class key</strong> is the set of columns a rule groups rows on and joins answers on. It is built so that
+      a row in no class (a <code>when</code> drops it, or its key is NULL) has a NULL in a column the join compares with
+      <code>=</code>. SQL's outer-join semantics then give that row NULL answers with no flag column, and a single
+      integer key compared with <code>=</code> is what DuckDB's perfect hash join takes
+      (<a href="#duckdb-edits">see the edits to DuckDB</a>).</p>
+
+    <h3 id="every-row"><a class="anchor" href="#every-row">Every row is read</a></h3>
+    <p>The solver reads every row before it answers, so a bad value on the last row raises an error even under
+      <code>LIMIT 1</code> or <code>COUNT(*)</code>. A rewritten plan owes the same; only <code>LIMIT 0</code> may skip
+      the read. Each shape keeps it in its own way:</p>
+    <ul>
+      <li>A <strong>hash aggregate</strong> holds every row before it gives one, so every check below it has run on all
+        rows first.</li>
+      <li>A <strong>rank window</strong> holds every row too, but gives them back group by group, so a check above it
+        reaches a later group only when the parent reads that far. A group's checks therefore stand in a
+        <em>held-rows</em> stage (<code>DirectHeldRows</code>): a materialized CTE that runs to its end before any read
+        of it starts. It is a pipeline breaker, an operator that consumes its whole input before it produces output,
+        like SQL Server's Eager Spool or PostgreSQL's Material node.</li>
+      <li>A <strong>streaming plan</strong> holds nothing, so it verifies first. One read computes the
+        <code>bool_and</code> of every row's check, which is true or raises, as a one-row CTE. Every later read is a
+        filter on that verdict crossed with the rows (<code>DirectSourceReader::Gate</code>), so no row passes before
+        every row is checked.</li>
+    </ul>
+    <p>A1 is the streaming case. In its plan, the <code>CTE</code>'s first child is the verdict: an
+      <code>UNGROUPED_AGGREGATE</code> over the per-row stages of a first scan. Its second child is the gated read: a
+      second scan crossed with the verdict (<code>FILTER</code> over <code>CTE_SCAN</code>), then the projections that
+      compute each row's answer.</p>
+<!--plan check="a1" title="Each order picks its quantity in its own range (A1)"-->SELECT sku, qty
+FROM Orders
+DECIDE qty(INT)
+SUCH THAT qty BETWEEN min_qty AND max_qty
+MAXIMIZE SUM(margin * qty);<!--/plan-->
+    <p>The verdict costs a second evaluation of the per-row stages, in place of memory that grows with the input.</p>
+    <p>The scope checks the solver makes before it reads a value (that a class of a <code>per K:</code> key shows one
+      value, that every value a data bound reads is valid) are built by one function on both paths,
+      <code>DirectAddRowChecks</code>. On the rewritten path they gate the source before any rule's own check, so a
+      scope error is raised before a bad value on both paths.</p>
+
+    <h3 id="source-reader"><a class="anchor" href="#source-reader">Reading the source twice</a></h3>
+    <p>Most plans read the source more than once: a verdict and a stream, a class plan and a join. One
+      <code>DirectSourceReader</code> serves the whole plan and decides once, from the total number of reads, whether to
+      recompute the source per read or to copy it, the choice DuckDB makes for a CTE.</p>
+    <ul>
+      <li>A source made of deterministic projections and filters over one table scan is rebuilt per read, so each read
+        is a parallel scan. It is copied once instead when the copy is cheaper: a read of the copy costs 0.4 of a
+        re-scan (<code>COPY_READ_COST</code>), so a source read three times or more is copied, provided the copy takes
+        at most an eighth of the memory limit (<code>COPY_MEMORY_SHARE</code>). Both constants come from interleaved
+        timings on TPC-H <code>partsupp</code> and a 20-column table at 10,000 to 1,000,000 rows.</li>
+      <li>Any other source (a join, a subquery with an aggregate, a table function, a call to <code>random()</code>) is
+        materialized once, so every read sees the same rows.</li>
+    </ul>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/optimizer/decide/direct/direct_ranked_prefix.cpp</code>: the ranked-prefix builder</li>
+      <li><code>src/optimizer/decide/direct/direct_plan_fragments.cpp</code>: <code>DirectJoinClassAnswers</code>,
+        <code>DirectAllRowsValid</code>, <code>DirectHeldRows</code>, <code>DirectClassKey</code>, and the other shared
+        fragments</li>
+      <li><code>src/optimizer/decide/direct/direct_source_reader.cpp</code>: reads, copies and gates</li>
+      <li><code>src/optimizer/decide/direct/direct_row_checks.cpp</code>: <code>DirectAddRowChecks</code></li>
+      <li><code>src/optimizer/decide/direct/direct_runtime_checks.cpp</code>: the checks that raise while the plan
+        runs</li>
+      <li><code>src/include/duckdb/optimizer/decide/direct/direct_expression.hpp</code>:
+        <code>ExpressionBuilder</code></li>
+      <li><code>test/decide/tests/test_direct_rule_conformance.py</code>: the all-rows read under <code>LIMIT 1</code>
+        and <code>COUNT(*)</code> for every rule</li>
+    </ul></div>
+  </section>
+
+  <section id="results">
+    <h2><a class="anchor" href="#results">The result adapter</a></h2>
+    <p class="lead">The substitute must look exactly like the DECIDE node it replaces: every source column in order,
+      then one column per decision, with the same types. A small logical operator, the result adapter, guarantees
+      it.</p>
+    <p>A decision's column is <code>INTEGER</code> 0 or 1 for <code>BOOL</code>, <code>BIGINT</code> for
+      <code>INT</code> and <code>DOUBLE</code> for <code>REAL</code>, as on the solver path, and duplicate rows stay
+      separate rows. The adapter (<code>LogicalDirectResultAdapter</code>, built by <code>AdaptDirectResult</code>) is
+      three standard ideas in one operator:</p>
+    <dl class="reads">
+      <dt>Adapter</dt><dd>in the GoF sense: the substitute presents the interface (columns and types) of the node it
+        replaces</dd>
+      <dt>Binding boundary</dt><dd>as a DuckDB projection is: the adapter owns a table index, and its outputs are
+        <code>(index, i)</code></dd>
+      <dt>Optimization fence</dt><dd>a filter or a limit above the result does not cross it. Pushed into the rank's
+        input, it would change which rows are ranked. Optimizing inside the substitute is fine.</dd>
+    </dl>
+    <p>A rule states where each output lives in its plan (the slot map, <code>DirectSubstitute::slot_map</code>), which
+      decision outputs may be skipped, and which <em>validated columns</em> must stay live: the columns that force the
+      all-rows read. The driver checks the slot map in release builds and raises an internal error on a misfit, because
+      rules are plug-ins and a broken one must fail loudly.</p>
+    <p>The driver then gives the adapter a new table index and rewrites every reference above the DECIDE node to the
+      adapter's bindings, once, with DuckDB's <code>ColumnBindingReplacer</code> stopped at the adapter
+      (<code>RebindAboveAdapter</code>). The adapter declares one dependency per output. A transparent wrapper does not
+      work: DuckDB's optimizer would prune the child to the columns it sees used, and a parent that reads another
+      column would read wrong data. In a physical plan the adapter lowers to a projection, so there is no new physical
+      operator; logical <code>EXPLAIN</code> names it <code>DIRECT_RESULT_ADAPTER</code>.</p>
+
+    <h3 id="late-materialization"><a class="anchor" href="#late-materialization">Pruning and late materialization</a></h3>
+    <p>An output no parent reads becomes a typed NULL placeholder only when skipping it is proved safe: a stored column,
+      a constant, or a column passed through unchanged. A computed column that could raise an error stays live, because
+      the solver would have raised it.</p>
+    <p><strong>Late materialization</strong> is the column-store technique of reading the narrow columns first and
+      fetching the wide ones by row id once the rows are chosen. When the source is one stored table under
+      deterministic projections and filters, the plan carries the table's row id like any source column. After DuckDB's
+      unused-column pass, when it is known what the parent reads, each variable-width column the parent reads and the
+      rule only forwards (<code>VARCHAR</code>, <code>BLOB</code>, lists, structs and the like) comes from a second scan
+      joined on the row id. That is the <code>HASH_JOIN</code> in the shortlist plan above.</p>
+    <p>Only variable-width columns move, because holding them is what costs memory. Peak memory of S1 over 5,000,000
+      rows with a 512-byte payload column, in a fresh <code>decidb -readonly</code> process (macOS memory footprint):</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>The payload</th><th>Peak, MiB</th></tr></thead>
+      <tbody>
+        <tr><td>unused by the parent (the control)</td><td>725</td></tr>
+        <tr><td>carried through the rank</td><td>3,351 to 3,362</td></tr>
+        <tr><td>late-materialized</td><td>811 to 829</td></tr>
+      </tbody>
+    </table></div>
+    <p>A fixed-width column stays in the single read: for a <code>BIGINT</code> key, S1's global top-k at 5,000,000
+      rows takes 0.28 to 0.33 s with the column moved against 0.21 to 0.25 s with it held, at the same memory.</p>
+    <p>The step (<code>ApplyDirectLateMaterialization</code>) runs inside DuckDB's <code>UNUSED_COLUMNS</code> pass,
+      right after removal, not beside DuckDB's own <code>LATE_MATERIALIZATION</code> pass: the passes in between add
+      projection maps that unused-column removal does not keep up to date.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/optimizer/decide/direct/direct_result_adapter.cpp</code>: the adapter, its checks, serialization
+        and pruning</li>
+      <li><code>src/optimizer/decide/direct/direct_late_materialization.cpp</code>: late materialization</li>
+      <li><code>src/optimizer/decide/direct/direct_rule_driver.cpp</code>: which source outputs may be skipped
+        (<code>DirectCanSkipSourceOutput</code>) and the call to <code>RebindAboveAdapter</code></li>
+      <li><code>test/decide/tests/test_direct_binding_boundary.py</code>: DuckDB passes that move bindings below the
+        adapter</li>
+      <li><code>test/decide/tests/test_direct_user_facing.py</code>: unused wide columns pruned, computed columns
+        kept</li>
+    </ul></div>
+  </section>
+
+  <section id="policy">
+    <h2><a class="anchor" href="#policy">The policy</a></h2>
+    <p class="lead">One setting controls rewriting. It is on by default, because a rewritten plan returns the solver's
+      answer and raises the solver's errors, and the whole test suite runs on both paths.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th><code>decide_direct_solve</code></th><th>A rule applies</th><th>No rule applies</th></tr></thead>
+      <tbody>
+        <tr><td><code>auto</code> (default)</td><td>rewritten plan</td><td>solver, silently</td></tr>
+        <tr><td><code>off</code></td><td>solver</td><td>solver</td></tr>
+        <tr><td><code>require</code></td><td>rewritten plan</td><td>an error; the solver never runs</td></tr>
+      </tbody>
+    </table></div>
+    <p>The mode is read when the plan is built, and a prepared statement keeps its choice until it is bound again.
+      <code>DIAGNOSE</code> always uses the solver (<a href="diagnose.html#router">Inside DIAGNOSE</a>), and so does
+      the test-only setting <code>DECIDB_FORCE_SOLVER</code>; <code>require</code> with either is an error. The
+      benchmarks pin <code>require</code>, so a query no rule takes fails instead of being timed on the solver, and so
+      do the tests that assert a rule applies. Adding a lower limit on the total to the shortlist leaves no rule that
+      applies: S1 takes count limits of one scope only, and S2 takes upper limits only.</p>
+<!--sql check="rewrite-shortlist-require" expect="direct solve did not apply" show-->SELECT title, genre, rating, pick
+FROM Films
+DECIDE pick(BOOL)
+SUCH THAT SUM(pick) by (genre) <= 2
+      AND SUM(pick) >= 5
+MAXIMIZE SUM(rating * pick);<!--/sql-->
+    <p><code>auto</code> is the default because every rule measured faster than Gurobi at every size the benchmarks
+      ran (<a href="rewrite-rules.html">the rules</a> give the numbers). A bug in a proof would give a wrong answer,
+      not a slow one, so the guard is the test suite. Each rule has a differential test that runs every case on an
+      independent oracle model, on <code>off</code> and on <code>require</code>, and requires all three to agree
+      (<a href="testing.html#oracle">Testing</a>). The whole suite also runs with
+      <code>DECIDB_TEST_DIRECT_SOLVE=off</code>, which sends every query to the solver.</p>
+
+    <h3 id="explain"><a class="anchor" href="#explain">What EXPLAIN shows</a></h3>
+    <p>A rewritten plan carries one annotation (<code>DirectExplainAnnotation</code>) with three lines: the mode, the
+      rule, and the rule's fixed condition line, which names the class and holds no number from the query. It shows in
+      logical and physical <code>EXPLAIN</code> and in profiling output.</p>
+<!--explain check="shortlist" rewrite title="Which rule rewrote the shortlist"-->SELECT title, genre, rating, pick
+FROM Films
+DECIDE pick(BOOL)
+SUCH THAT per genre: SUM(pick) by (genre) <= 2
+MAXIMIZE SUM(rating * pick);<!--/explain-->
+    <p>When no rule applies under <code>auto</code>, nothing is added, so the <code>EXPLAIN</code> of such a query is
+      exactly what the solver path prints. <code>require</code> says whether a rule applies, not why one does not.</p>
+
+    <h3 id="differences"><a class="anchor" href="#differences">Ties, exactness and errors</a></h3>
+    <ul>
+      <li><strong>Ties.</strong> When several assignments are optimal, a rewritten plan may return a different one
+        than the solver, with the same objective. Tests compare the row count and the objective, never the tied
+        assignment. A1 and A2 break a tie between equally good ends of an interval toward the end nearest 0.</li>
+      <li><strong>Exact bounds.</strong> A rewritten plan compares every bound exactly, in DOUBLE, as DuckDB evaluates
+        it. The solver accepts a violation of about 1e-6. So <code>SUM(x) &lt;= 1.9999999</code> selects 2 rows on the
+        solver and 1 rewritten, and S3 with weights 0.1 and 0.2 under <code>&lt;= 0.3</code> (whose DOUBLE sum is
+        0.30000000000000004) selects both rows on the solver and one rewritten. Rounding the bound removes the
+        difference.</li>
+      <li><strong>Errors.</strong> A rewritten plan raises wherever the solver raises (a NaN coefficient, an empty box,
+        an infeasible group), with the solver's text, built by the functions the solver calls
+        (<code>decide_value_messages.hpp</code>). A NULL is skipped where it is read, as on the solver. When a query has
+        several errors, the rewritten plan may raise a different one of them than the solver.</li>
+      <li><strong>Warnings.</strong> A rewritten plan builds no model, so the solver path's warnings about coefficient
+        sizes do not print. A rule that divides by a number it computes warns instead when the divisor is below the
+        normal range of a DOUBLE, about 2.2e-308.</li>
+      <li><strong>Two answers the solver path refuses.</strong> The solver expands <code>SUM(POWER(x - v, 2))</code>
+        and refuses the query once the constant <code>v^2</code> passes a DOUBLE; A1 and A2 answer it, since their
+        answer never reads that constant. And N1 answers a quadratic limit on a machine without a Gurobi license, where
+        the solver path refuses it.</li>
+    </ul>
+
+    <h3 id="declines"><a class="anchor" href="#declines">When DeciDB declines</a></h3>
+    <p>Rewriting is a shortcut, not a second solver. A rule takes a shape only when its proof is short and the gain is
+      large; the solver answers everything else correctly, only more slowly. A rule declines:</p>
+    <ul>
+      <li>anything the IR marks not proved;</li>
+      <li>a constant limit of magnitude 1e20 or more, because the solver's reading of such a constant depends on the
+        rows;</li>
+      <li>a bound that contradicts the decision's built-in domain (<code>x &gt;= 2</code> on a <code>BOOL</code>). The
+        solver rejects it with its own message before it reads a row, even over an empty source, so the rule leaves the
+        query to the solver;</li>
+      <li>a sign read from the data that would change the kind of problem, such as a weight that makes a limit
+        non-convex, since the plan cannot hand the query back once it runs. A sign that only changes values within the
+        same pass is handled in the plan, for every sign: R4's weights are of this kind;</li>
+      <li>a shape that would need a long proof or a parity check against solver quirks: S1 declines
+        <code>SUM(x + 1) &lt;= 5</code>, a count with a constant term.</li>
+    </ul>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/optimizer/decide/direct/direct_rule_driver.cpp</code>: the setting
+        (<code>RegisterDirectSolve</code>), the annotation, and the error for two rules</li>
+      <li><code>src/optimizer/decide/decide_answer_choice.cpp</code>: the <code>require</code>,
+        <code>DIAGNOSE</code> and forced-backend errors</li>
+      <li><code>src/include/duckdb/common/decide_value_messages.hpp</code>: the error texts both paths raise</li>
+      <li><code>test/decide/tests/test_direct_user_facing.py</code>: error texts compared in full between
+        <code>require</code> and <code>off</code></li>
+      <li><code>test/decide/tests/test_direct_rule_conformance.py</code>: near misses that must decline under
+        <code>require</code> and answer under <code>auto</code> as under <code>off</code></li>
+      <li><code>test/decide/run_direct_matrix.sh</code>: the suite with rewriting on, off, through the serializer and
+        on HiGHS</li>
+    </ul></div>
+  </section>
+
+  <section id="duckdb-edits">
+    <h2><a class="anchor" href="#duckdb-edits">Edits to DuckDB</a></h2>
+    <p class="lead">A rewritten plan is only as cheap as DuckDB's own rules and operators make it. Seven edits to
+      DuckDB's code, none of which mentions DECIDE, make a rule's plan run as DuckDB runs the same answer written by
+      hand in SQL.</p>
+    <p>Each edit helps any query with the shape it handles, and a standard query returns the same rows.</p>
+    <dl class="reads">
+      <dt><code>CaseSimplificationRule</code></dt><dd>evaluates a constant <code>WHEN</code> without throwing. When the
+        evaluation fails (an overflow, a bad cast), the check stays in the <code>CASE</code> and raises at run time, on
+        the rows that reach it. A rule's checks are <code>CASE</code>s that must raise only where they are chosen; a
+        throwing evaluation would raise while planning, even over no rows. The edit changes when an error is raised,
+        not whether.</dd>
+      <dt>Statistics propagation of a <code>CASE</code></dt><dd>propagates the <code>WHEN</code> checks first, then
+        applies the rule's own fold (<code>CaseSimplificationRule::Simplify</code>): a check the statistics prove false
+        or NULL is erased, and one they prove true becomes the <code>ELSE</code>. DuckDB never reruns the expression
+        rewriter after statistics, so a check proved only by statistics, such as <code>x IS NULL</code> over a
+        <code>NOT NULL</code> column, would run on every row. A rule builds such a check for every nullable input.</dd>
+      <dt><code>ArithmeticSimplificationRule</code></dt><dd>removes <code>x * 1.0</code>, <code>1.0 * x</code>,
+        <code>x / 1.0</code> and <code>x - 0.0</code> for <code>FLOAT</code> and <code>DOUBLE</code>. These hold bit for
+        bit under IEEE 754 for every <code>x</code>, including -0.0, NaN, the infinities and NULL. <code>x + 0.0</code>
+        does not (<code>-0.0 + 0.0</code> is <code>+0.0</code>) and stays. DuckDB's rule set matches integer types only,
+        and a rule's plan computes in DOUBLE.</dd>
+      <dt>Statistics of a comparison join</dt><dd>turns a join condition written <code>IS NOT DISTINCT FROM</code> into
+        <code>=</code> when the statistics show that neither side can hold a NULL. The two are then equivalent, and the
+        perfect hash join takes only <code>=</code>.</dd>
+      <dt><code>PerfectHashJoinExecutor</code></dt><dd>takes LEFT and SINGLE joins on one integer <code>=</code>
+        condition, not only inner joins. One slot past the build range holds NULL in every column, and a probe row
+        whose key is NULL, out of range or absent reads it. A build side with duplicate keys still falls back to the
+        hash join, so a SINGLE join's more-than-one-row error still raises. The class join of a group-then-join plan
+        is a SINGLE join on the class key: at scale factor 1 it costs 20.8 ms of CPU on <code>IS NOT DISTINCT
+        FROM</code>, 15.2 ms as a hash join on <code>=</code>, and 2.1 ms as a perfect hash join.</dd>
+      <dt>Folding in statistics propagation</dt><dd>after an expression's own handler, an expression whose children are
+        all constants is evaluated and becomes its value; if the evaluation fails, the expression stays and raises at
+        run time. The handlers turn children into constants, and without this fold the expression above them would
+        compute the same value on every row.</dd>
+      <dt>Constant columns</dt><dd>a projection column whose expression is a constant is recorded with its value, and
+        a reference to it inside a computation (a function argument, a comparison, a <code>CASE</code>, a cast) becomes
+        the constant. A reference that is itself an output, a join key or a group stays a column. A rule's plan carries
+        constants through its stages as columns (a seed, a flag, a bound written as a number), and the expression
+        rewriter does not look through a projection.</dd>
+    </dl>
+    <p>Two smaller changes serve the result adapter. DuckDB's unused-column pass narrows a materialized CTE's
+      definition to the columns its references read, which is projection pushdown across a CTE boundary (Spark's
+      <code>PushdownPredicatesAndPruneColumnsForCTEDef</code> does the same); DuckDB itself keeps a definition whole.
+      And the same pass calls a <code>PruneUnusedOutputs</code> hook on an extension operator, which the adapter uses
+      to drop the dependencies of outputs no parent reads.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/optimizer/rule/case_simplification.cpp</code>,
+        <code>src/optimizer/statistics/expression/propagate_case.cpp</code></li>
+      <li><code>src/optimizer/rule/arithmetic_simplification.cpp</code>, with
+        <code>IntegerOrFloatingTypeMatcher</code> in <code>src/include/duckdb/optimizer/matcher/type_matcher.hpp</code></li>
+      <li><code>src/optimizer/statistics/operator/propagate_join.cpp</code></li>
+      <li><code>src/execution/operator/join/perfect_hash_join_executor.cpp</code></li>
+      <li><code>src/optimizer/statistics_propagator.cpp</code>,
+        <code>src/optimizer/statistics/expression/propagate_columnref.cpp</code>,
+        <code>src/optimizer/statistics/operator/propagate_projection.cpp</code></li>
+      <li><code>src/optimizer/remove_unused_columns.cpp</code>: <code>NarrowMaterializedCTE</code></li>
+      <li>Tests: <code>test/optimizer/statistics/statistics_case.test</code>,
+        <code>statistics_constant_folding.test</code>, <code>statistics_constant_columns.test</code>;
+        <code>test/sql/optimizer/expression/test_case_simplification_error.test</code>,
+        <code>test_nop_arithmetic_float.test</code>, <code>test_not_distinct_from_to_equal.test</code>;
+        <code>test/sql/join/left_outer/test_left_join_perfect_hash.test</code>;
+        <code>test/common/test_decidb_perfect_hash_join.cpp</code></li>
+    </ul></div>
+  </section>
+</article>

@@ -298,6 +298,9 @@ CMakeUserPresets.json
 # Generated documentation
 docs
 !context/docs/
+# ...but the website's Documentation section is source and its pages
+!context/website/docs/
+!context/website_src/pages/docs/
 
 # tests
 test/test.sql

@@ -1,0 +1,431 @@
+<!--meta
+title: Life of a query: DeciDB documentation
+description: One DECIDE query followed through all eight stages of DeciDB, from tokens to the model a solver reads to rows, with the real output of each step.
+h1: Life of a query
+lede: One small query, followed through all eight stages from SQL text to rows. Every output on this page comes from running it.
+-->
+<nav class="toc" aria-label="On this page">
+  <div class="toc-title">On this page</div>
+  <ul>
+    <li><a href="#the-query">The query</a></li>
+    <li><a href="#parser">01 Parser</a></li>
+    <li><a href="#binder">02 Binder</a></li>
+    <li><a href="#logical-plan">03 Logical plan</a></li>
+    <li><a href="#canonicalizer">04 Canonicalizer</a></li>
+    <li><a href="#optimizer">05 Optimizer</a></li>
+    <li class="sub"><a href="#physical-plan">Into a physical plan</a></li>
+    <li><a href="#execution">08 Execution: buffer and evaluate</a></li>
+    <li><a href="#model">06 Model</a></li>
+    <li><a href="#solver">07 Solver</a></li>
+    <li><a href="#readback">08 Execution: the answer as rows</a></li>
+    <li><a href="#not-reached">What this query does not reach</a></li>
+  </ul>
+</nav>
+<article class="prose">
+
+  <!-- ============================================================ THE QUERY -->
+  <section id="the-query">
+    <h2><a class="anchor" href="#the-query">The query</a></h2>
+    <p class="lead">A bag holds at most 40 kg, and it may take at most one item of each category. Which items give the
+      most value?</p>
+    <p>The table is the Guide's five items: three <code>tech</code> items and two <code>gear</code> items, each with a
+      value and a weight.</p>
+<!--sql title="The query this page follows" run="items" dec="x" on="x"-->SELECT item, category, x
+FROM Items
+DECIDE x(BOOL)
+SUCH THAT SUM(x * weight) <= 40
+      AND per category: SUM(x) by (category) <= 1
+MAXIMIZE SUM(value * x);<!--/sql-->
+    <p>The answer is the Laptop and the Lens: 32 kg and a value of 175. Each clause pulls against another. Without the
+      category limit the best bag is the Camera and the Drone, worth 180, but both are <code>tech</code>. Without the
+      weight limit it is the Drone and the Lens, worth 195, but they weigh 42 kg.</p>
+    <p>The query is small enough to follow by hand, with 5 rows, 5 solver variables and 3 constraints, and it reaches
+      every stage. It has a product of data and a decision (<code>x * weight</code>), a scope in front of a clause
+      (<code>per category:</code>), a reducer with its own group (<code>SUM(x) by (category)</code>), and an objective
+      to maximize.</p>
+    <div class="note"><strong>The order of this page</strong>
+      <p>Stages 01 to 05 run while DuckDB prepares the statement. Stage 08 runs when it executes, and stages 06 and 07
+        run inside it. The sections below follow time, so stage 08 appears twice: once before the model is built, and
+        once after the solver answers.</p></div>
+  </section>
+
+  <!-- ============================================================ 01 PARSER -->
+  <section id="parser">
+    <h2><a class="anchor" href="#parser">01 Parser</a></h2>
+    <p class="lead">The parser cuts the text into tokens, matches them against the grammar, and moves the clause onto
+      DuckDB's parsed <code>SELECT</code>. It decides no shape and refuses nothing here.</p>
+    <p>The lexer reads <code>DECIDE</code> and sets its DECIDE flag. From that point it reads three words of this query
+      as follows:</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Word</th><th>Token</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td><code>per</code></td><td><code>PER_DECIDE</code></td><td>The flag is set, and the next token,
+          <code>category</code>, is neither <code>(</code> nor <code>ROW</code></td></tr>
+        <tr><td><code>by</code></td><td><code>BY_DECIDE</code></td><td>It follows the <code>)</code> of
+          <code>SUM(x)</code></td></tr>
+        <tr><td><code>BOOL</code></td><td>an ordinary name</td><td>A decision's type is a name the grammar reads as
+          <code>INT</code>, <code>REAL</code> or <code>BOOL</code>, not a keyword</td></tr>
+      </tbody>
+    </table></div>
+    <p>The grammar then matches the clause. <code>x(BOOL)</code> is a typed declaration: one decision per result row.
+      The two constraints are separated by the top-level <code>AND</code>, and <code>per category:</code> scopes only
+      the second, because the colon ends the scope and a constraint body binds more tightly than <code>AND</code>. The
+      scope is folded into a scope node around its constraint, and <code>by (category)</code> into a node around its
+      reducer.</p>
+    <p>The transformer moves the result onto five fields of DuckDB's <code>SelectNode</code>:
+      <code>decide_variables</code> (the one declaration), <code>decide_constraints</code> (the two constraints under
+      one <code>AND</code>), <code>decide_sense</code> (<code>MAXIMIZE</code>), <code>decide_objective</code>, and
+      <code>decide_text</code>, the clause as typed with one span per expression. That text is what every later message
+      and the <code>EXPLAIN</code> output quote. The scope and the <code>by</code> become tagged function nodes, the
+      form DuckDB's parsed expressions already have. A last pass looks for spellings the language removed and finds
+      none.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>third_party/libpg_query/src_backend_parser_parser.cpp</code>: <code>base_yylex</code>, where
+        <code>PER_DECIDE</code> and <code>BY_DECIDE</code> are emitted</li>
+      <li><code>third_party/libpg_query/grammar/statements/select.y</code>: <code>decide_clause</code>,
+        <code>decide_scope</code>, <code>decide_by</code></li>
+      <li><code>src/parser/transform/statement/transform_select_node.cpp</code>: <code>TransformSelectNode</code>
+        fills the <code>SelectNode</code> fields</li>
+      <li><code>src/parser/transform/expression/transform_operator.cpp</code>: scope nodes become
+        <code>SCOPE_PER_TAG</code> and <code>REDUCER_BY_TAG</code> function nodes</li>
+      <li><code>src/parser/decide/decide_removed_spellings.cpp</code>: <code>RefuseRemovedDecideSpellings</code></li>
+    </ul></div>
+  </section>
+
+  <!-- ============================================================ 02 BINDER -->
+  <section id="binder">
+    <h2><a class="anchor" href="#binder">02 Binder</a></h2>
+    <p class="lead">The binder resolves every name to a column, a decision or a key, and records what each decision
+      is.</p>
+    <p>DuckDB binds <code>FROM Items</code> as it binds any table. Its <code>SELECT</code> binder then makes its one
+      DECIDE call, <code>DecideDeclarationsBinder::BindDeclarations</code>, which binds the clause in three steps:</p>
+    <ol class="steps">
+      <li><strong>The declaration.</strong> <code>x</code> is not a column of <code>Items</code> and is declared once,
+        so it is registered as decision 0. It has no <code>per</code>, so its scope is one value per row. Its type is
+        <code>INTEGER</code>, and a flag marks it as boolean. No <code>x &gt;= 0</code> or <code>x &lt;= 1</code>
+        constraint is ever written for that: the 0 to 1 range travels as the flag, and the model builder sets it as the
+        variable's bounds.</li>
+      <li><strong>The constraints.</strong> In <code>x * weight</code>, <code>x</code> binds to the decision and
+        <code>weight</code> to the column. The <code>per category:</code> scope becomes a wrapper node over its
+        constraint, and <code>SUM(x) by (category)</code> becomes an aggregate tagged with its group key. Both keys
+        list the same column, so they share one entry of the query's key table: one key, written twice.</li>
+      <li><strong>The objective.</strong> It has no scope written, so it is produced once for the whole query, the
+        default <code>per ()</code>.</li>
+    </ol>
+    <p>Each bound node keeps the location of the text it came from, so a message about it can quote the user's words.
+      Nothing is refused: no decision appears in <code>WHERE</code>, a key or a <code>by</code>, and no reducer sits
+      inside another. The algebra of each clause, such as its degree, is not judged here. That waits for stage 04, after
+      the clause has one spelling.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/planner/expression_binder/decide/decide_declarations_binder.cpp</code>:
+        <code>BindDeclarations</code>, the declaration and its type</li>
+      <li><code>src/planner/expression_binder/decide/decide_constraints_binder.cpp</code>:
+        <code>BindScopedConstraint</code></li>
+      <li><code>src/planner/expression_binder/decide/decide_binder.cpp</code>: <code>BindReducerBy</code>, the key
+        table</li>
+      <li><code>src/include/duckdb/common/enums/decide.hpp</code>: <code>PER_CLASS_TAG</code> and the
+        <code>__group_key_</code> and <code>__per_key_</code> tag prefixes</li>
+    </ul></div>
+  </section>
+
+  <!-- ============================================================ 03 LOGICAL PLAN -->
+  <section id="logical-plan">
+    <h2><a class="anchor" href="#logical-plan">03 Logical plan</a></h2>
+    <p class="lead">The planner builds <code>LogicalDecide</code> above the scan, so only rows that survive
+      <code>FROM</code> and <code>WHERE</code> become decisions.</p>
+    <p><code>Binder::CreatePlan</code> plans a <code>SELECT</code> bottom up: the scan, then any <code>WHERE</code>
+      filter, then the DECIDE node, then grouping, <code>HAVING</code>, windows and the final projection. That order is
+      the language's meaning in operator form. <code>WHERE</code> runs first and cannot read a decision; everything
+      after the DECIDE node reads the decisions as columns.</p>
+    <p>This query has no subquery in its clauses, so the first job of this step, flattening each subquery into a join
+      and recording whether it is correlated, finds nothing. Before it builds the node, the same function hands both
+      clauses to stage 04. The node it builds holds the canonical clauses. The plan DuckDB runs has the same shape:</p>
+<!--plan check="items"-->SELECT item, category, x
+FROM Items
+DECIDE x(BOOL)
+SUCH THAT SUM(x * weight) <= 40
+      AND per category: SUM(x) by (category) <= 1
+MAXIMIZE SUM(value * x);<!--/plan-->
+    <p>The projection on top keeps the three columns the query selects. Had a rewrite added auxiliary variables, the
+      same projection would drop their columns. With a <code>WHERE</code> clause, DuckDB pushes the filter into the scan,
+      still below the DECIDE node.</p>
+    <p>After planning, a clause can enter <code>LogicalDecide</code> only through <code>AddConstraint</code> or
+      <code>SetObjective</code>. Both canonicalize what they receive, so no later stage can add a clause in a shape
+      stage 04 did not write.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/planner/binder/query_node/plan_select_node.cpp</code>: <code>Binder::CreatePlan</code></li>
+      <li><code>src/include/duckdb/planner/operator/decide/logical_decide.hpp</code>: what the node carries</li>
+      <li><code>src/planner/operator/decide/logical_decide.cpp</code>: <code>AddConstraint</code>,
+        <code>SetObjective</code></li>
+    </ul></div>
+  </section>
+
+  <!-- ============================================================ 04 CANONICALIZER -->
+  <section id="canonicalizer">
+    <h2><a class="anchor" href="#canonicalizer">04 Canonicalizer</a></h2>
+    <p class="lead">The canonicalizer writes each clause in one shape: decisions on the left, the bound on the right,
+      each product with its coefficient first. Then it names how each clause becomes model rows.</p>
+    <p><code>EXPLAIN</code> prints the result. Each clause appears as written; a line marked <code>≡</code> follows
+      when the canonical spelling differs.</p>
+<!--explain check="items"-->SELECT item, category, x
+FROM Items
+DECIDE x(BOOL)
+SUCH THAT SUM(x * weight) <= 40
+      AND per category: SUM(x) by (category) <= 1
+MAXIMIZE SUM(value * x);<!--/explain-->
+    <p>Clause by clause:</p>
+    <ul>
+      <li><strong><code>SUM(x * weight) &lt;= 40</code></strong> becomes <code>sum(weight * x) &lt;= 40</code>. Every
+        product is written as its coefficient times its decisions, so the later stages read one spelling. The decision
+        side already sits on the left and the bound on the right, so nothing moves.</li>
+      <li><strong><code>per category: SUM(x) by (category) &lt;= 1</code></strong> is already canonical, so it has no
+        <code>≡</code> line.</li>
+      <li><strong>The objective</strong> is written coefficient first, so it has no <code>≡</code> line either. Inside,
+        it changes: every stage after this one reads a minimization, so as its last step the canonicalizer negates each
+        term's sign, making <code>MAXIMIZE sum(value * x)</code> into <code>MINIMIZE -sum(value * x)</code>. The node
+        keeps the sense the user wrote for messages and for <code>EXPLAIN</code>, which prints the objective in that
+        sense.</li>
+    </ul>
+    <p>Then the canonicalizer names each comparison's shape, the rule for how many model rows it makes. Both
+      constraints have the aggregate shape: the decision side is a reducer, so the clause makes one row per
+      <code>by</code> group of the rows it keeps. The weight limit has no <code>by</code>, which means
+      <code>by ()</code>: one group, one row. The category limit groups by <code>category</code>: two groups, two rows.
+      Its <code>per category:</code> wrapper adds no row of its own. One row per <code>by</code> group already stands for
+      every class, so the wrapper only names the classes each row stands for, which DIAGNOSE reads to report one class
+      at a time.</p>
+    <p>Two more checks run here and pass:</p>
+    <ul>
+      <li><strong>Scope checks.</strong> A <code>per</code> key must determine each value its clause reads outside a
+        reducer, such as the bound and the <code>by</code> key: one value per class. The bound <code>1</code> is a
+        literal, and <code>category</code> is the key's own column, so there is nothing to check at run time.</li>
+      <li><strong>The shape check.</strong> It judges the algebra of each clause on the canonical spelling: every
+        function over a decision must be one the model can state, and every term must have degree 2 or less. Here
+        every term has degree 1.</li>
+    </ul>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/planner/decide/decide_canonicalizer.cpp</code>: <code>CanonicalizeTree</code>,
+        <code>CanonicalizeObjective</code>, <code>ClassifyScoped</code>, <code>BuildConstraintScopeChecks</code></li>
+      <li><code>src/planner/decide/decide_product_form.cpp</code>: <code>NormalizeProducts</code>, the one spelling of a
+        product</li>
+      <li><code>src/planner/decide/decide_shape_check.cpp</code>: <code>DecideShapeCheck</code></li>
+      <li><code>src/planner/decide/decide_source_provenance.cpp</code>: the <code>EXPLAIN</code> layers</li>
+    </ul></div>
+  </section>
+
+  <!-- ============================================================ 05 OPTIMIZER -->
+  <section id="optimizer">
+    <h2><a class="anchor" href="#optimizer">05 Optimizer</a></h2>
+    <p class="lead">The optimizer decides how the query is answered: by a rewrite into DuckDB operators, or by a solver.
+      For a solver, it then decides how each construct is written.</p>
+    <p>DuckDB runs its own passes first, among them the expression rewriter and filter pushdown. Then
+      <code>DecideOptimizer</code> visits each <code>LogicalDecide</code>:</p>
+    <ol class="steps">
+      <li><strong>Data bounds.</strong> A reducer over data on a bound's side, as in <code>SUM(x) &lt;=
+        SUM(cap)</code>, becomes a column the plan computes once. Both bounds here are literals.</li>
+      <li><strong>The answer.</strong> The node is read into the IR and offered to every rewrite rule. None applies:
+        the weight limit makes this a knapsack with group limits, a problem no built rule proves. So the query stays on
+        the solver's path.</li>
+      <li><strong>The solver.</strong> The backend is chosen once, here: Gurobi when its library and license are
+        present, otherwise HiGHS. The choice and what that backend can state natively are recorded on the node, and
+        every later stage reads them instead of asking again.</li>
+      <li><strong>The formulation passes.</strong> They always run in the same order: the tightest data bound of each
+        group, <code>norm</code>, <code>IN</code>, <code>ABS</code>, the scope checks that become plan operators,
+        bilinear products, non-linear reducer bodies, the value rewrite, composed and single <code>MIN</code> and
+        <code>MAX</code>, <code>&lt;&gt;</code>, <code>AVG</code>, and last the folding of a literal bound on one
+        variable into that variable's bounds. Each finds nothing to do here, so the node leaves the optimizer as it
+        entered.</li>
+    </ol>
+    <p>Asking for a rewrite shows the second step's answer. The setting <code>decide_direct_solve='require'</code> makes
+      a query fail when no rule applies:</p>
+<!--sql check="items" expect="direct solve did not apply" show-->SET decide_direct_solve = 'require';
+SELECT item, category, x
+FROM Items
+DECIDE x(BOOL)
+SUCH THAT SUM(x * weight) <= 40
+      AND per category: SUM(x) by (category) <= 1
+MAXIMIZE SUM(value * x);<!--/sql-->
+    <p>Remove the weight limit and rule S1 applies: the best item per category is a ranking, and the overview shows <a
+      href="index.html#exit-rewriting">that plan</a>.</p>
+
+    <h3 id="physical-plan"><a class="anchor" href="#physical-plan">Into a physical plan</a></h3>
+    <p>When DuckDB turns the logical plan into a physical one, <code>plan_decide.cpp</code> does three things before
+      it builds <code>PhysicalDecide</code>:</p>
+    <ol class="steps">
+      <li><strong>Verify.</strong> It refuses a plan the DECIDE optimizer never saw, since a plan without a chosen
+        backend cannot be answered. A debug build also checks that every clause is still canonical after all
+        rewriting.</li>
+      <li><strong>Flatten.</strong> It calls stage 05's last step, the linear form, which reads each clause into terms:
+        a decision, a coefficient expression, and a sign. The weight limit is one term, <code>x</code> with coefficient
+        <code>weight</code>. The category limit is one term, <code>x</code> with coefficient 1, grouped by
+        <code>category</code>. The objective is one term, <code>x</code> with coefficient <code>value</code> and sign
+        -1. It runs here, not earlier, because DuckDB's later passes move columns, and this is the first point where
+        the input columns are final.</li>
+      <li><strong>Gate.</strong> It checks the model class this query needs against the chosen backend. This is a
+        linear model with integer variables, which every backend takes. A quadratic constraint on HiGHS would be refused
+        here, before any row is read.</li>
+    </ol>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/optimizer/decide/decide_optimizer.cpp</code>: <code>OptimizeDecide</code> and
+        <code>RewriteForSolver</code>, the pass order</li>
+      <li><code>src/optimizer/decide/decide_answer_choice.cpp</code>: <code>ChooseDecideAnswer</code>,
+        <code>ChooseDecideSolver</code></li>
+      <li><code>src/decidb/solver/ilp_solver.cpp</code>: <code>SelectSolverBackend</code></li>
+      <li><code>src/execution/physical_plan/plan_decide.cpp</code>: the three steps above</li>
+      <li><code>src/optimizer/decide/decide_linear_form.cpp</code>: <code>BuildDecidePreparedModel</code></li>
+      <li><code>src/include/duckdb/planner/decide/decide_prepared_model.hpp</code>: <code>DecideTerm</code>,
+        <code>DecideConstraint</code></li>
+      <li><code>src/optimizer/decide/decide_solver_gate.cpp</code>: <code>RequireDecideSolverSupport</code></li>
+    </ul></div>
+  </section>
+
+  <!-- ============================================================ 08 EXECUTION, FIRST HALF -->
+  <section id="execution">
+    <h2><a class="anchor" href="#execution">08 Execution: buffer and evaluate</a></h2>
+    <p class="lead"><code>PhysicalDecide</code> reads every row before it can answer, then computes each coefficient
+      once, over all rows.</p>
+    <p><strong>Sink.</strong> The scan sends its rows in chunks. <code>Sink</code> appends each chunk to a
+      <code>ColumnDataCollection</code>, DuckDB's in-memory buffer of rows. After the last chunk it holds five rows:</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Row</th><th>item</th><th>category</th><th>weight</th><th>value</th></tr></thead>
+      <tbody>
+        <tr><td>0</td><td>Laptop</td><td>tech</td><td>20</td><td>100</td></tr>
+        <tr><td>1</td><td>Camera</td><td>tech</td><td>10</td><td>60</td></tr>
+        <tr><td>2</td><td>Drone</td><td>tech</td><td>30</td><td>120</td></tr>
+        <tr><td>3</td><td>Tripod</td><td>gear</td><td>15</td><td>40</td></tr>
+        <tr><td>4</td><td>Lens</td><td>gear</td><td>12</td><td>75</td></tr>
+      </tbody>
+    </table></div>
+    <p><strong>Finalize</strong> runs once, after the last row, in phases:</p>
+    <ol class="steps">
+      <li><strong>Keyed mappings.</strong> For each keyed decision, the class of each row. <code>x</code> is one per
+        row, so there is none.</li>
+      <li><strong>Scope checks.</strong> The one check the plan cannot make: that a key determines a keyed decision.
+        There is none here.</li>
+      <li><strong>Coefficients.</strong> Each coefficient expression runs once over the whole buffer, as a column, with
+        DuckDB's expression executor. The weight limit reads <code>weight</code>: 20, 10, 30, 15, 12. The category limit
+        assigns each row its <code>by</code> group: two groups. The objective reads <code>value</code> with the sign
+        applied: -100, -60, -120, -40, -75. Every value is finite, so no row is refused.</li>
+      <li><strong>Assembly.</strong> The evaluated clauses become a <code>SolverInput</code>, and a
+        <code>VarIndexer</code> lays out the solver's columns. It has four blocks: decisions per row, keyed decisions,
+        query-wide decisions, and auxiliaries. Here only the first is used: one decision over five rows is five
+        columns, numbered as the rows are.</li>
+      <li><strong>Lowering.</strong> Constructs stage 05 marked for Big-M or similar rows get their constants here,
+        from the data. There are none.</li>
+    </ol>
+    <p>The data is not read again after this point. What follows works on numbers.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/execution/operator/decide/physical_decide.cpp</code>: <code>Sink</code>, <code>Finalize</code>
+        (its phases are marked in the code), <code>BuildSolverInput</code>, <code>FormulateModel</code></li>
+      <li><code>src/include/duckdb/decidb/formulation/solver_input.hpp</code>: <code>SolverInput</code>,
+        <code>EvaluatedConstraint</code></li>
+      <li><code>src/include/duckdb/decidb/formulation/ilp_model.hpp</code>: <code>VarIndexer</code></li>
+    </ul></div>
+  </section>
+
+  <!-- ============================================================ 06 MODEL -->
+  <section id="model">
+    <h2><a class="anchor" href="#model">06 Model</a></h2>
+    <p class="lead">The model builder turns the evaluated clauses into the matrix a solver loads: columns with bounds,
+      rows with coefficients, and an objective. It names no solver.</p>
+    <p><code>SolverModel::Build</code> walks each clause. A clause of the aggregate shape emits one model row per
+      group: the weight limit emits one row over all five columns, the category limit one row per category. Each term
+      here names a decision that is one per row, so no two data rows share a solver column, and each coefficient is
+      copied into its row as it is. A keyed decision would put many data rows on one column, and their coefficients
+      would be summed first.</p>
+    <p>Each column's bounds come from the decision's type. <code>BOOL</code> gives 0 to 1 and marks the column binary.
+      The environment variable <code>DECIDB_DUMP_MODEL</code> prints the model exactly as it is handed to the
+      backend:</p>
+<!--model check="items" dump-only label="DECIDB_DUMP_MODEL output for this query"-->SELECT item, category, x
+FROM Items
+DECIDE x(BOOL)
+SUCH THAT SUM(x * weight) <= 40
+      AND per category: SUM(x) by (category) <= 1
+MAXIMIZE SUM(value * x)<!--/model-->
+    <p>Read it against the buffer. Columns 0 to 4 are the rows Laptop to Lens. The objective is a minimization of the
+      negated values. Row 0 is the weight limit. Row 1 is the <code>gear</code> group (Tripod and Lens) and row 2 the
+      <code>tech</code> group. There are no quadratic rows (<code>num_qrows</code>), no general constraints such as a
+      native <code>MAX</code> (<code>num_genconstrs</code>), and no indicator constraints. Gurobi and HiGHS receive the
+      same model for this query, since it uses nothing either one states natively.</p>
+    <p>Each row also carries its provenance: the clause it came from and the group it stands for. DIAGNOSE reads it to
+      name the clause a repair changes.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/decidb/formulation/ilp_model_builder.cpp</code>: <code>SolverModel::Build</code>,
+        <code>TermsHaveTheirOwnColumns</code></li>
+      <li><code>src/include/duckdb/decidb/formulation/ilp_model.hpp</code>: <code>SolverModel</code>,
+        <code>ConstraintProvenance</code></li>
+      <li><code>src/decidb/solver/ilp_solver.cpp</code>: the model dump</li>
+      <li><code>test/decide/golden/</code>: the model dumps of a 112-query corpus, compared on every test run (<a
+        href="testing.html#models">Testing</a>)</li>
+    </ul></div>
+  </section>
+
+  <!-- ============================================================ 07 SOLVER -->
+  <section id="solver">
+    <h2><a class="anchor" href="#solver">07 Solver</a></h2>
+    <p class="lead">The solve facade hands the model to the backend stage 05 chose and returns one status, whichever
+      backend ran.</p>
+    <p><code>SolveModel</code> builds the model, checks that it fits what the planned backend declares it can take, and
+      loads it. Gurobi is loaded from its shared library at run time; HiGHS is compiled into DeciDB. Each backend's
+      status is mapped to one <code>SolverStatus</code>, so no code above this stage branches on which solver ran.</p>
+    <p>Here the status is <code>OPTIMAL</code>, with the solution 1, 0, 0, 0, 1 and the objective -175: the value of the
+      minimization, which is 175 in the sense the user wrote. Check it by hand. The Laptop and the Lens weigh
+      20 + 12 = 32 kg, within 40, and take one item from each category. No other bag within both limits is worth as
+      much.</p>
+    <p>Had the status been infeasible or unbounded, a plain query would stop here with an error naming the state. Under
+      <code>DIAGNOSE</code>, the router would send it to an engine instead (<a href="diagnose.html">DIAGNOSE</a>).</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/decidb/solver/ilp_solver.cpp</code>: <code>SolveModel</code></li>
+      <li><code>src/decidb/solver/solver_registry.cpp</code>: <code>REGISTERED_BACKENDS</code>, the one table naming
+        each backend</li>
+      <li><code>src/include/duckdb/decidb/solver/solver_result.hpp</code>: <code>SolverStatus</code>,
+        <code>SolverResult</code></li>
+      <li><code>src/decidb/gurobi/</code>, <code>src/decidb/naive/</code>: the two backends</li>
+    </ul></div>
+  </section>
+
+  <!-- ============================================================ 08 EXECUTION, SECOND HALF -->
+  <section id="readback">
+    <h2><a class="anchor" href="#readback">08 Execution: the answer as rows</a></h2>
+    <p class="lead">The operator scans its buffer again and appends each decision's value to its row.</p>
+    <p><code>GetData</code> reads the buffered rows chunk by chunk. For each row and each decision, the
+      <code>VarIndexer</code> names the solver column that holds its value: here column <code>i</code> for row
+      <code>i</code>. For a keyed decision, every row of a class reads the same column, so they show one value.</p>
+    <p>A <code>BOOL</code> decision's result type is <code>INTEGER</code>, so each value is rounded to a whole number
+      and checked against the type's range before it is written. A solver returns 0.9999999 as readily as 1; the
+      rounding makes the column exact. The projection above the node then keeps <code>item</code>,
+      <code>category</code> and <code>x</code>, and the rows at the <a href="#the-query">top of this page</a> are the
+      result.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/execution/operator/decide/physical_decide.cpp</code>: <code>GetData</code>,
+        <code>DecideSolutionToInteger</code></li>
+    </ul></div>
+  </section>
+
+  <!-- ============================================================ NOT REACHED -->
+  <section id="not-reached">
+    <h2><a class="anchor" href="#not-reached">What this query does not reach</a></h2>
+    <p class="lead">The query is the smallest one that still has a scope and a group. These parts of the path need a
+      different query.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Not reached</th><th>Where it is explained</th></tr></thead>
+      <tbody>
+        <tr><td>A keyed decision (<code>per K: x</code>): the class mapping, and coefficients summed onto one
+          column</td><td><a href="solving.html#execution">Execution</a>, and the <a
+          href="../examples/facility-location.html">facility location</a> example</td></tr>
+        <tr><td>A <code>when</code> scope, and bounds read from data that need a run-time scope check</td><td><a
+          href="front-end.html#binder">The binder</a>, <a href="canonical-form.html#canonicalizer">the
+          canonicalizer</a></td></tr>
+        <tr><td>Moving terms across a comparison, and factors on a reducer</td><td><a
+          href="canonical-form.html#canonicalizer">The canonicalizer</a></td></tr>
+        <tr><td>A formulation pass that fires: Big-M, McCormick, <code>MIN</code> and <code>MAX</code>,
+          <code>&lt;&gt;</code>, the value rewrite</td><td><a href="canonical-form.html#optimizer">The
+          optimizer</a></td></tr>
+        <tr><td>A subquery as a bound</td><td><a href="front-end.html#logical-plan">The logical plan</a></td></tr>
+        <tr><td>A quadratic objective or constraint</td><td><a href="solving.html#model">The model</a></td></tr>
+        <tr><td>A rule that applies</td><td><a href="rewriting.html">Query rewriting</a></td></tr>
+        <tr><td>A solve that fails</td><td><a href="diagnose.html">DIAGNOSE</a></td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+</article>

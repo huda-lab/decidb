@@ -1,0 +1,711 @@
+<!doctype html>
+<html lang="en" data-type="software" data-radius="sharp" data-ground="sage" data-buttons="pill" data-motion>
+<head>
+<meta charset="utf-8">
+<script>(function(){var r=document.documentElement,t;try{t=localStorage.getItem('decidb-theme')}catch(e){}if(!r.dataset.theme)r.dataset.theme=t==='dark'?'dark':'light'})()</script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script>document.documentElement.classList.add('m-enter');setTimeout(()=>document.documentElement.classList.add('m-enter-done'),700)</script>
+<title>The rewrite rules: DeciDB documentation</title>
+<meta name="description" content="The nine problem classes DeciDB answers by query rewriting: the shape each needs, its algorithm, why the answer is exact, and what it costs.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="The rewrite rules: DeciDB documentation">
+<meta property="og:description" content="The nine problem classes DeciDB answers by query rewriting: the shape each needs, its algorithm, why the answer is exact, and what it costs.">
+<meta property="og:image" content="../assets/images/share.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="../assets/images/mark.svg" type="image/svg+xml">
+<meta name="theme-color" content="#ffffff">
+<!-- <link rel="canonical" href="https://huda-lab.github.io/decidb/"> once the published address is confirmed -->
+<meta name="site-kind" content="software">
+<meta name="page-type" content="software">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="../assets/system.css">
+<link rel="stylesheet" href="../assets/ui/cards.css">
+<link rel="stylesheet" href="../assets/motion/motion.css">
+<link rel="stylesheet" href="../assets/backgrounds/backgrounds.css">
+<link rel="stylesheet" href="../assets/layout/layout.css">
+<link rel="stylesheet" href="../assets/icons/icon.css">
+<style>
+:root {
+  --p-bg: #ffffff; --p-surface: #f4f4f4; --p-ink: #111111; --p-muted: #6b6b6b;
+  --p-accent: #1a4be0; --p-accent-ink: #ffffff; --p-action: #1a4be0; --p-action-ink: #ffffff;
+  --p-inv-bg: #111111; --p-inv-surface: #1e1e1e; --p-inv-ink: #ffffff; --p-inv-muted: #9a9a9a;
+  --p-inv-accent: #ffffff; --p-inv-accent-ink: #111111; --p-inv-action: #ffffff; --p-inv-action-ink: #111111;
+  --font-display: "Geist", system-ui, sans-serif;
+  --font-text: "Geist", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --display-weight: 500;
+  --display-tracking: -0.035em;
+  --display-tracking-xl: -0.045em;
+}
+/* the evening grade (a tech page may take it): light is the default; the nav's switch sets data-theme to dark and the
+   head script remembers it; the page tokens go dark, the lit ground (sage) and the panels' painted grounds stay light, as the
+   kit keeps them */
+:root[data-theme="dark"] {
+  --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
+  --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
+  --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
+  --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
+}
+</style>
+<link rel="stylesheet" href="../assets/css/site.css">
+</head>
+<body class="doc-body">
+<header class="nav">
+  <div class="wrap nav__bar">
+    <a class="skip-link" href="#top">Skip to content</a>
+    <a class="nav__logo" href="../index.html"><img class="logo logo--light" src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42"><img class="logo logo--dark" src="../assets/images/logo-dark.svg" alt="DeciDB" width="140" height="42" loading="lazy"><img class="logo logo--mark" src="../assets/images/mark.svg" alt="DeciDB" width="40" height="32" loading="lazy"></a>
+    <nav class="nav__links" aria-label="Main">
+      <div class="nav__item"><a class="nav__link" href="../getting-started.html">Get started</a></div><div class="nav__item"><a class="nav__link" href="../demo.html">Live demo</a></div><div class="nav__item"><a class="nav__link" href="../guide.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="../examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="../examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="../examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="../examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="../examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="../examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="../examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="../examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="../examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="../examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="../features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="../about.html">About</a></div><div class="nav__item"><a class="nav__link" href="../docs/index.html" aria-current="page"><span class="nav__full">Documentation</span><span class="nav__short" aria-hidden="true">Docs</span></a></div><div class="nav__item"><a class="nav__link" href="../features.html"><span class="nav__full">Novel features</span><span class="nav__short" aria-hidden="true">Features</span></a></div>
+    </nav>
+    <div class="nav__actions">
+      <button class="btn btn--secondary theme-toggle" type="button" aria-pressed="false" data-theme-toggle hidden><svg class="theme-toggle__sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="theme-toggle__moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg><span class="theme-toggle__label">Dark theme</span></button>
+      <a class="nav__link" href="https://github.com/huda-lab/decidb">GitHub</a>
+      <a class="btn btn--primary" href="../getting-started.html#install"><span>Install<span class="nav__more"> DeciDB</span></span></a>
+    </div>
+    <button class="nav__toggle" type="button" aria-expanded="false" aria-label="Menu">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M2 5h14M2 13h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+</header>
+<main id="top">
+<section class="hero hero--page" data-enter aria-labelledby="page-h">
+  <div class="wrap"><div class="hero-text hero-split grid">
+    <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a><span aria-hidden="true">/</span><a href="../docs/index.html">Documentation</a><span aria-hidden="true">/</span>The rewrite rules</nav><h1 id="page-h">The rewrite rules</h1><p class="hero__lead">The nine classes DeciDB rewrites: the shape each needs, the algorithm that answers it, why the answer is exact, and what it costs.</p></div>
+    <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="24" data-ui-pause-host><div class="ui ui-hw hw hw--page hw--mid" role="img" aria-label="The nine rewrite rules: S1_UNIFORM_MATROID, S2_LAMINAR_MATROID, S3_MAX_CARDINALITY_KNAPSACK, A1_SEPARABLE_BOX, A2_SINGLE_FACILITY_LOCATION, R1_CONTINUOUS_KNAPSACK, R4_MAX_MIN_FAIRNESS, N1_EUCLIDEAN_BALL, O1_MONGE_ASSIGNMENT."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · EXPLAIN · the rule each example fires</span></div><div class="hw__page"><div class="hw__rules" data-ly-steps="200"><div class="hw__rule" data-step><b>S1</b><code>UNIFORM_MATROID</code><span>the best rows by score</span></div><div class="hw__rule" data-step><b>S2</b><code>LAMINAR_MATROID</code><span>the best rows under nested quotas</span></div><div class="hw__rule" data-step><b>S3</b><code>MAX_CARDINALITY_KNAPSACK</code><span>as many rows as fit a budget</span></div><div class="hw__rule" data-step><b>A1</b><code>SEPARABLE_BOX</code><span>each row on its own</span></div><div class="hw__rule" data-step><b>A2</b><code>SINGLE_FACILITY_LOCATION</code><span>one value closest to every row</span></div><div class="hw__rule" data-step><b>R1</b><code>CONTINUOUS_KNAPSACK</code><span>fill a budget by value per unit</span></div><div class="hw__rule" data-step><b>R4</b><code>MAX_MIN_FAIRNESS</code><span>a fair split of a budget</span></div><div class="hw__rule" data-step><b>N1</b><code>EUCLIDEAN_BALL</code><span>stay inside one sum of squares</span></div><div class="hw__rule" data-step><b>O1</b><code>MONGE_ASSIGNMENT</code><span>match two tables one to one</span></div></div></div></div></div>
+  </div></div>
+</section>
+<div class="container"><div class="doc-layout doc-layout--docs"><nav class="docnav" aria-label="Documentation pages"><div class="toc-title">Documentation</div><p class="docnav__group">Start here</p><ul><li><a href="index.html">Overview</a></li><li><a href="life-of-a-query.html">Life of a query</a></li></ul><p class="docnav__group">The pipeline</p><ul><li><a href="front-end.html">Parser, binder and plan</a></li><li><a href="canonical-form.html">Canonicalizer and optimizer</a></li><li><a href="solving.html">Model, solvers and execution</a></li></ul><p class="docnav__group">Novel features</p><ul><li><a href="rewriting.html">Query rewriting</a></li><li><a href="rewrite-rules.html" aria-current="page">The rewrite rules</a></li><li><a href="diagnose.html">DIAGNOSE</a></li></ul><p class="docnav__group">Quality</p><ul><li><a href="testing.html">Testing</a></li><li><a href="performance.html">Performance</a></li></ul></nav>
+<nav class="toc" aria-label="On this page">
+  <div class="toc-title">On this page</div>
+  <ul>
+    <li><a href="#overview">The nine rules</a></li>
+    <li><a href="#s1">S1: rows by score</a></li>
+    <li><a href="#s2">S2: nested quotas</a></li>
+    <li><a href="#s3">S3: as many rows as fit</a></li>
+    <li><a href="#a1">A1: each row on its own</a></li>
+    <li><a href="#a2">A2: one shared value</a></li>
+    <li><a href="#r1">R1: fill a budget by value</a></li>
+    <li><a href="#r4">R4: a fair split</a></li>
+    <li><a href="#n1">N1: inside a sum of squares</a></li>
+    <li><a href="#o1">O1: match by position</a></li>
+    <li><a href="#not-built">Not built yet</a></li>
+  </ul>
+</nav>
+<article class="prose">
+
+  <section id="overview">
+    <h2><a class="anchor" href="#overview">The nine rules</a></h2>
+    <p class="lead">Each rule answers one class of problem with a known exact algorithm. The rule id (S1, A1, and so
+      on) and the rule name are what <code><span class="tk-k">EXPLAIN</span></code> prints.</p>
+    <p>How a rule recognizes its class, builds its plan and hands back DECIDE's columns is on
+      <a href="rewriting.html#recognize">Query rewriting</a>. This page covers what each rule answers. Every section
+      ends with a runnable query; the site's build runs it and checks that <code><span class="tk-k">EXPLAIN</span></code> names the rule.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Rule</th><th scope="col">EXPLAIN name</th><th scope="col">Answers</th><th scope="col">Plan shape</th></tr></thead>
+      <tbody>
+        <tr><td><a href="#s1">S1</a></td><td><code>S1_UNIFORM_MATROID</code></td><td>choose rows by score, with limits
+          on how many</td><td>ranked prefix</td></tr>
+        <tr><td><a href="#s2">S2</a></td><td><code>S2_LAMINAR_MATROID</code></td><td>the best rows under quotas that
+          nest</td><td>ranked prefix, one level per quota</td></tr>
+        <tr><td><a href="#s3">S3</a></td><td><code>S3_MAX_CARDINALITY_KNAPSACK</code></td><td>as many rows as fit one
+          budget</td><td>ranked prefix</td></tr>
+        <tr><td><a href="#a1">A1</a></td><td><code>A1_SEPARABLE_BOX</code></td><td>each row's best value in its own
+          range</td><td>verify then stream</td></tr>
+        <tr><td><a href="#a2">A2</a></td><td><code>A2_SINGLE_FACILITY_LOCATION</code></td><td>one shared value closest
+          to every row</td><td>group then join</td></tr>
+        <tr><td><a href="#r1">R1</a></td><td><code>R1_CONTINUOUS_KNAPSACK</code></td><td>fill one budget in order of
+          value per unit</td><td>group then join, with a price window</td></tr>
+        <tr><td><a href="#r4">R4</a></td><td><code>R4_MAX_MIN_FAIRNESS</code></td><td>raise the smallest share as high
+          as one budget allows</td><td>group then join</td></tr>
+        <tr><td><a href="#n1">N1</a></td><td><code>N1_EUCLIDEAN_BALL</code></td><td>stay inside one sum of
+          squares</td><td>group then join</td></tr>
+        <tr><td><a href="#o1">O1</a></td><td><code>O1_MONGE_ASSIGNMENT</code></td><td>match two tables one to one by
+          position</td><td>verify, rank each side, pair</td></tr>
+      </tbody>
+    </table></div>
+    <div class="note"><strong>How the timings are measured</strong>
+      <p>Every timing on this page comes from <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/benchmark/decide/direct_solve/run.py"><code>benchmark/decide/direct_solve/run.py</code></a> on an 11-core Apple M3
+        Pro, over TPC-H tables (most over the 800,000 rows of <code>partsupp</code> at scale factor 1), in November
+        2026. <em>Against Gurobi</em> runs a fresh <code>decidb</code> process per run and takes the median
+        of 3; the times include about 20 ms of process start and database open, and the two objectives agreed within
+        1e-6. <em>Against a hand-written plan</em> sums the CPU time of every operator, best of 5 in one process, beside
+        a SQL query an expert wrote for the same answer with the same checks; a ratio of 1.0 means the rule's plan costs
+        what that SQL costs. <a href="performance.html#benchmarks">Performance</a> describes the harness.</p></div>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>src/optimizer/decide/direct/&lt;id&gt;_&lt;slug&gt;_rule.cpp</code>: one file per rule, such as
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp"><code>s1_uniform_matroid_rule.cpp</code></a></li>
+      <li><code>test/decide/tests/test_direct_&lt;id&gt;_&lt;slug&gt;.py</code>: each rule's differential test against
+        an independent oracle</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/_direct_rule_fixtures.py"><code>test/decide/tests/_direct_rule_fixtures.py</code></a>: each rule's fixture for the shared conformance
+        suite</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/common/test_decidb_direct_decline.cpp"><code>test/common/test_decidb_direct_decline.cpp</code></a>: each rule's applying and declining shapes
+        (<code>S1AppliesShapes</code>, <code>S1DeclineShapes</code>, and so on)</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/benchmark/decide/direct_solve/queries"><code>benchmark/decide/direct_solve/queries/</code></a> and <a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/benchmark/decide/direct_solve/hand"><code>hand/</code></a>: the benchmark queries and their
+        hand-written comparators</li>
+    </ul></div>
+  </section>
+
+  <section id="s1">
+    <h2><a class="anchor" href="#s1">S1: choose rows by score</a></h2>
+    <p class="lead">S1 answers "choose rows by score, with limits on how many": one <code><span class="tk-t">BOOL</span></code> per row, a count
+      limit per group or over all rows, and a linear score.</p>
+    <p>Its class is the <strong>uniform matroid</strong>: the family of every set of at most <em>k</em> items. On a
+      matroid, choosing items greedily by weight gives an optimum.</p>
+    <p><strong>The shape.</strong> A query is S1 when it has:</p>
+    <ul>
+      <li>one decision, a <code><span class="tk-t">BOOL</span></code> per row;</li>
+      <li>count limits on <code><span class="tk-f">SUM</span>(x)</code> (<code>&lt;=</code>, <code>&lt;</code>, <code>&gt;=</code>,
+        <code>&gt;</code>, <code>=</code>, or several forming one interval), all with the same <code><span class="tk-d">by</span></code> key and
+        the same <code><span class="tk-d">when</span></code>. The body's constant coefficients must add up to exactly 1 or -1, so
+        <code><span class="tk-f">SUM</span>(<span class="tk-n">2</span>*x - x)</code> and <code><span class="tk-f">SUM</span>(-x)</code> are counts;</li>
+      <li>limits that are constants below 1e20 in magnitude, values of the row, or aggregates of the group, such as
+        <code><span class="tk-f">SUM</span>(x) &lt;= <span class="tk-n">0.1</span> * <span class="tk-f">COUNT</span>(*)</code> for the best tenth of the rows;</li>
+      <li>a linear objective <code><span class="tk-f">SUM</span>(score * x)</code>, maximized or minimized, or none;</li>
+      <li>other clauses only to fix single rows: <code>x = <span class="tk-n">1</span></code>, <code>x &lt;= flag</code>, under a
+        <code><span class="tk-d">when</span></code> or not.</li>
+    </ul>
+    <p><strong>The algorithm.</strong> For each group, with lower limit <em>L</em> and upper limit <em>U</em>:</p>
+    <ol class="steps">
+      <li><strong>Score.</strong> Compute each row's score, oriented so that a positive score improves the
+        objective.</li>
+      <li><strong>Rank.</strong> Number the rows by score, best first, with <code>ROW_NUMBER</code> over the
+        group.</li>
+      <li><strong>Size.</strong> With <em>p</em> rows of positive score, take <em>k</em> =
+        <code><span class="tk-f">LEAST</span>(U, <span class="tk-f">GREATEST</span>(L, p))</code> rows, less the rows fixed to 1.</li>
+      <li><strong>Choose.</strong> Set <code>x = <span class="tk-n">1</span></code> on the rows ranked within <em>k</em>.</li>
+    </ol>
+    <p><strong>Why it is exact.</strong> For any fixed count <em>m</em>, the <em>m</em> best scores are optimal:
+      swapping a chosen row for an unchosen one with a higher score cannot lower the total. The total grows while the
+      next score is positive and shrinks once it is negative, so the best count with no limit is <em>p</em>, and
+      clamping <em>p</em> into [<em>L</em>, <em>U</em>] gives the best count within the limits. A group with
+      <em>L</em> &gt; <em>U</em> raises the solver's infeasible error.</p>
+    <p><strong>Cost.</strong> One read of the source and one sort per group, in a window that holds every row. Over
+      800,000 rows, with each supplier keeping its two offers with the most stock (measured 2026-11-12), the plan takes
+      1.05 times the CPU of the hand-written plan, and 0.044 s against Gurobi's 3.046 s, 70 times faster. A limit read
+      from the data, such as the best tenth of all rows, adds a held-rows stage that checks every group before the
+      first row leaves: 1.72 times the hand plan's CPU, and 14.5 times faster than Gurobi.</p>
+    <p>In this example each genre gets one or two films, and only films rated above 8 improve the objective:</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">One or two films per genre, preferring those rated above 8</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> title, genre, rating, <span class="tk-v">pick</span>
+<span class="tk-k">FROM</span> Films
+<span class="tk-d">DECIDE</span> <span class="tk-v">pick</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">pick</span>) <span class="tk-d">by</span> (genre) &gt;= <span class="tk-n">1</span>
+      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">pick</span>) <span class="tk-d">by</span> (genre) &lt;= <span class="tk-n">2</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>((rating - <span class="tk-n">8</span>) * <span class="tk-v">pick</span>)
+<span class="tk-k">ORDER</span> <span class="tk-k">BY</span> genre, rating <span class="tk-k">DESC</span>;</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>10 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">title</th><th scope="col" class="">genre</th><th scope="col" class="num">rating</th><th scope="col" class="num dec">pick</th></tr></thead><tbody><tr class="on"><td>Second Helping</td><td>Comedy</td><td class="num">8.0</td><td class="num dec">1</td></tr><tr><td>Laugh Track</td><td>Comedy</td><td class="num">7.4</td><td class="num dec">0</td></tr><tr><td>Odd Couples</td><td>Comedy</td><td class="num">6.9</td><td class="num dec">0</td></tr><tr class="on"><td>Northern Lights</td><td>Drama</td><td class="num">8.6</td><td class="num dec">1</td></tr><tr class="on"><td>The Long Field</td><td>Drama</td><td class="num">8.1</td><td class="num dec">1</td></tr><tr><td>Paper Boats</td><td>Drama</td><td class="num">7.9</td><td class="num dec">0</td></tr><tr><td>Quiet Harbor</td><td>Drama</td><td class="num">7.2</td><td class="num dec">0</td></tr><tr class="on"><td>Deep Orbit</td><td>Sci-fi</td><td class="num">8.8</td><td class="num dec">1</td></tr><tr class="on"><td>Signal</td><td>Sci-fi</td><td class="num">8.3</td><td class="num dec">1</td></tr><tr><td>Red Dust</td><td>Sci-fi</td><td class="num">7.7</td><td class="num dec">0</td></tr></tbody></table></div></div></div>
+    <p>Drama and Sci-fi each have two films rated above 8, so <em>p</em> = 2 and both are chosen. Comedy has none, so
+      <em>p</em> = 0 and the lower limit sets <em>k</em> = 1: its best film, Second Helping at exactly 8, is chosen at
+      no cost to the objective.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp"><code>src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp</code></a>: the rule</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_ranked_prefix.cpp"><code>src/optimizer/decide/direct/direct_ranked_prefix.cpp</code></a>: the ranked-prefix plan it builds on</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_bound_reader.cpp"><code>src/optimizer/decide/direct/direct_bound_reader.cpp</code></a>: <code>DirectReadCountBody</code>,
+        <code>DirectReadFixedValues</code>, the count-limit readers</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_s1_uniform_matroid.py"><code>test/decide/tests/test_direct_s1_uniform_matroid.py</code></a>: the differential test</li>
+    </ul></div>
+  </section>
+
+  <section id="s2">
+    <h2><a class="anchor" href="#s2">S2: the best rows under nested quotas</a></h2>
+    <p class="lead">S2 answers "the best rows under nested quotas": upper count limits whose groups nest, such as teams
+      inside divisions inside a company-wide total.</p>
+    <p>A family of sets is <strong>laminar</strong> when any two of its sets are either disjoint or one contains the
+      other. Upper quotas over a laminar family form a <strong>laminar matroid</strong>, where a greedy choice is still
+      exact if it runs level by level, finest first.</p>
+    <p><strong>The shape.</strong> A query is S2 when it has:</p>
+    <ul>
+      <li>one <code><span class="tk-t">BOOL</span></code> per row and a linear score, as S1 reads them;</li>
+      <li>two or more upper count limits (<code><span class="tk-f">SUM</span>(x) &lt;= k</code> or <code>&lt; k</code>) on different scopes,
+        where a scope is a clause's <code><span class="tk-d">by</span></code> key, <code><span class="tk-d">when</span></code> and <code><span class="tk-d">per</span></code>. Clauses with the same
+        scope form one level, whose cap is the least of theirs;</li>
+      <li>levels that form a chain: each coarser level's <code><span class="tk-d">by</span></code> key is a subset of the finer one's, compared
+        as sets, with no <code><span class="tk-d">when</span></code> or the same one;</li>
+      <li>caps that are constants below 1e20, values of the row, or aggregates of the group.</li>
+    </ul>
+    <p>The nesting is proved from the query's text; the data is never consulted. <code><span class="tk-d">by</span> (department)</code> beside
+      <code><span class="tk-d">by</span> (division)</code> declines even when every department lies in one division, because the rule is chosen
+      once, when the plan is built, and the IR holds no functional dependencies.</p>
+    <p><strong>The algorithm.</strong></p>
+    <ol class="steps">
+      <li><strong>Finest level.</strong> Rank each group's rows by score and keep those ranked within the group's
+        remaining cap (its cap less its rows fixed to 1).</li>
+      <li><strong>Each coarser level.</strong> Rank, in its own groups, only the rows the level before it keeps
+        (<code>ROW_NUMBER</code> partitioned by the group and the previous level's keep flag), and keep those within
+        its cap.</li>
+      <li><strong>Choose.</strong> A row is chosen when the last level keeps it and its score improves the
+        objective.</li>
+    </ol>
+    <p><strong>Why it is exact.</strong> Within a finest group of cap <em>q</em>, only its <em>q</em> best positive
+      rows can ever be useful. Once a quota's children are processed, any feasible selection can be swapped for one at
+      least as good that uses only their survivors, so the parent loses nothing by ranking only the survivors. Each
+      stage only removes rows, so a quota met below stays met. Ranking each level over all of its rows would be wrong:
+      a division of cap 2 holding scores 9, 8 and 7, where 9 and 8 share a department of cap 1, must choose 9 and
+      7.</p>
+    <p><strong>Cost.</strong> One sort per level. Over TPC-H <code>customer</code> at 150,000 rows, with at most 2
+      per nation and market segment, 5 per nation and 100 overall (measured 2026-11-12), the plan takes 1.41 times the
+      CPU of a hand-written chain of <code>ROW_NUMBER</code> stages, and 0.052 s against Gurobi's 0.425 s. The linear
+      relaxation of laminar quotas is integral, so Gurobi solves at its root node; its cost is building the model,
+      which grows with the rows.</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">At most one hire per team, two per division, four in all</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> name, division, team, score, <span class="tk-v">hire</span>
+<span class="tk-k">FROM</span> Candidates
+<span class="tk-d">DECIDE</span> <span class="tk-v">hire</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">hire</span>) <span class="tk-d">by</span> (division, team) &lt;= <span class="tk-n">1</span>
+      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">hire</span>) <span class="tk-d">by</span> (division) &lt;= <span class="tk-n">2</span>
+      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">hire</span>) &lt;= <span class="tk-n">4</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(score * <span class="tk-v">hire</span>);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>9 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">name</th><th scope="col" class="">division</th><th scope="col" class="">team</th><th scope="col" class="num">score</th><th scope="col" class="num dec">hire</th></tr></thead><tbody><tr class="on"><td>Ada</td><td>Product</td><td>Design</td><td class="num">9.1</td><td class="num dec">1</td></tr><tr><td>Bo</td><td>Product</td><td>Design</td><td class="num">8.7</td><td class="num dec">0</td></tr><tr><td>Cy</td><td>Product</td><td>Mobile</td><td class="num">8.9</td><td class="num dec">0</td></tr><tr class="on"><td>Jo</td><td>Product</td><td>Web</td><td class="num">9.05</td><td class="num dec">1</td></tr><tr class="on"><td>Ed</td><td>Platform</td><td>Data</td><td class="num">9.4</td><td class="num dec">1</td></tr><tr><td>Fa</td><td>Platform</td><td>Data</td><td class="num">9.3</td><td class="num dec">0</td></tr><tr><td>Gu</td><td>Platform</td><td>Infra</td><td class="num">6.5</td><td class="num dec">0</td></tr><tr class="on"><td>Hu</td><td>Research</td><td>ML</td><td class="num">9.0</td><td class="num dec">1</td></tr><tr><td>Io</td><td>Research</td><td>ML</td><td class="num">8.0</td><td class="num dec">0</td></tr></tbody></table></div></div></div>
+    <p>The team level drops Bo, Fa and Io, the second candidates of their teams. The division level keeps Ada and Jo
+      in Product, above Cy. The company level keeps the four best survivors, Ed, Ada, Jo and Hu, and drops Gu.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/s2_laminar_matroid_rule.cpp"><code>src/optimizer/decide/direct/s2_laminar_matroid_rule.cpp</code></a>: the rule; <code>Contains</code>
+        proves that one scope nests in another</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_ranked_prefix.cpp"><code>src/optimizer/decide/direct/direct_ranked_prefix.cpp</code></a>: one level of the builder per quota
+        scope</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_s2_laminar_matroid.py"><code>test/decide/tests/test_direct_s2_laminar_matroid.py</code></a>: the differential test, including the
+        counter-example above</li>
+    </ul></div>
+  </section>
+
+  <section id="s3">
+    <h2><a class="anchor" href="#s3">S3: as many rows as fit one budget</a></h2>
+    <p class="lead">S3 answers "as many rows as fit one budget": every chosen row is worth the same, rows differ in
+      weight, and one budget limits the total weight. Its mirror, "the fewest rows that reach a minimum", is S3 too.</p>
+    <p>The class is the <strong>maximum-cardinality knapsack</strong>. A knapsack whose rows have different values is
+      the general 0-1 knapsack, which has no greedy answer and stays on the solver.</p>
+    <p><strong>The shape.</strong> A query is S3 when it has:</p>
+    <ul>
+      <li>one <code><span class="tk-t">BOOL</span></code> per row;</li>
+      <li>exactly one aggregate clause, <code><span class="tk-f">SUM</span>(w*x) &lt;= B</code> with a maximized count, or
+        <code><span class="tk-f">SUM</span>(w*x) &gt;= B</code> with a minimized count, per <code><span class="tk-d">by</span></code> group or over all rows;</li>
+      <li>weights of any sign, zero included. Constant weights that add up to exactly 1 or -1 make the body a count,
+        which is S1's, so S3 declines it and the two rules stay disjoint;</li>
+      <li>a limit that is a constant below 1e20, a value of the row (the group's tightest), or an aggregate of the
+        group;</li>
+      <li>an objective that is a positive constant times the count, and other clauses only to fix single rows.</li>
+    </ul>
+    <p><strong>The algorithm.</strong> For each group:</p>
+    <ol class="steps">
+      <li><strong>Sort.</strong> Order the free rows by weight, lightest first (heaviest first for a minimum).</li>
+      <li><strong>Running total.</strong> One window computes the running total of the weights and each row's rank.
+        Both share one partition and one order, so DuckDB sorts once and a row's rank is the position at which its
+        total is summed; two sorts could order tied rows differently.</li>
+      <li><strong>Size.</strong> A second window finds <em>k</em>: the largest rank whose total, plus the total of the
+        rows fixed to 1, fits <em>B</em> (for a minimum, the smallest rank that reaches it). The empty prefix
+        counts.</li>
+      <li><strong>Choose.</strong> Set <code>x = <span class="tk-n">1</span></code> on the rows ranked within <em>k</em>.</li>
+    </ol>
+    <p><strong>Why it is exact.</strong> Among all sets of <em>k</em> rows, the <em>k</em> lightest have the smallest
+      total, so some <em>k</em> rows fit exactly when the <em>k</em> lightest do. The longest prefix that fits is
+      therefore the largest count. With negative weights the running totals fall before they rise, so the plan takes the
+      largest rank that fits rather than stopping at the first that does not.</p>
+    <p><strong>Cost.</strong> One sort per group and two windows, over one read. With a budget of 5,000 per supplier
+      (measured 2026-11-12), the plan takes 1.53 times the CPU of a hand-written plan that cuts the running total at
+      the first row over budget. That cut is correct for TPC-H's positive costs only; the rule pays for the largest
+      fitting rank, which negative weights need. Against Gurobi at 800,000 rows: 0.094 s against 4.770 s (50.5 times)
+      with a budget per supplier, and 0.207 s against 22.978 s (110.8 times) with one budget over all rows, in a fourth
+      to a sixth of Gurobi's peak memory.</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Fit as many tickets as possible into 20 story points</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> ticket, points, <span class="tk-v">take</span>
+<span class="tk-k">FROM</span> Backlog
+<span class="tk-d">DECIDE</span> <span class="tk-v">take</span>(<span class="tk-t">BOOL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(points * <span class="tk-v">take</span>) &lt;= <span class="tk-n">20</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">take</span>)
+<span class="tk-k">ORDER</span> <span class="tk-k">BY</span> points;</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>8 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">ticket</th><th scope="col" class="num">points</th><th scope="col" class="num dec">take</th></tr></thead><tbody><tr class="on"><td>DB-2</td><td class="num">1</td><td class="num dec">1</td></tr><tr class="on"><td>UI-4</td><td class="num">2</td><td class="num dec">1</td></tr><tr class="on"><td>API-15</td><td class="num">3</td><td class="num dec">1</td></tr><tr class="on"><td>OPS-3</td><td class="num">3</td><td class="num dec">1</td></tr><tr class="on"><td>API-12</td><td class="num">5</td><td class="num dec">1</td></tr><tr class="on"><td>DB-7</td><td class="num">5</td><td class="num dec">1</td></tr><tr><td>UI-9</td><td class="num">8</td><td class="num dec">0</td></tr><tr><td>OPS-8</td><td class="num">13</td><td class="num dec">0</td></tr></tbody></table></div></div></div>
+    <p>The running totals of the sorted points are 1, 3, 6, 9, 14 and 19. The next ticket brings the total to 27, so
+      the six smallest tickets are the answer.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/s3_max_cardinality_knapsack_rule.cpp"><code>src/optimizer/decide/direct/s3_max_cardinality_knapsack_rule.cpp</code></a>: the rule</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_plan_fragments.cpp"><code>src/optimizer/decide/direct/direct_plan_fragments.cpp</code></a>: <code>DirectRunningSum</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_s3_max_cardinality_knapsack.py"><code>test/decide/tests/test_direct_s3_max_cardinality_knapsack.py</code></a>: the differential test, with
+        ties under a parallel sort</li>
+    </ul></div>
+  </section>
+
+  <section id="a1">
+    <h2><a class="anchor" href="#a1">A1: each row on its own</a></h2>
+    <p class="lead">A1 answers problems in which no clause or objective term links two rows: each decision is
+      optimized alone, inside its own range.</p>
+    <p>The class is the <strong>separable box-constrained problem</strong>: separable because the objective is a sum
+      of terms that each read one decision, and box-constrained because each decision has only its own lower and upper
+      bound.</p>
+    <p><strong>The shape.</strong> A query is A1 when it has:</p>
+    <ul>
+      <li>one or more <code><span class="tk-t">BOOL</span></code>, <code><span class="tk-t">INT</span></code> or <code><span class="tk-t">REAL</span></code> decisions per row;</li>
+      <li>only per-row bounds: a decision compared with a constant, a column or a deterministic expression of the row,
+        with a coefficient, an offset and a <code><span class="tk-d">when</span></code> allowed (<code><span class="tk-n">2</span>*x + <span class="tk-n">1</span> &lt;= cap</code>). No aggregate
+        clause;</li>
+      <li>an objective of linear terms and at most one square <code>k*(w*x + t)^<span class="tk-n">2</span></code> per decision, with
+        <code>k</code> a nonzero constant, or no objective.</li>
+    </ul>
+    <p><strong>The algorithm.</strong> A chain of projections, with no sort, window or join:</p>
+    <ol class="steps">
+      <li><strong>Read.</strong> Each bound clause becomes a lower and an upper end on its row, and the objective
+        becomes <code>a*x^<span class="tk-n">2</span> + b*x</code> per decision.</li>
+      <li><strong>Box.</strong> The row's box is the <code>GREATEST</code> of the lower ends and the
+        <code>LEAST</code> of the upper ends, within the decision's own box: [0, 1] for <code><span class="tk-t">BOOL</span></code>, and [0, ∞)
+        for <code><span class="tk-t">INT</span></code> and <code><span class="tk-t">REAL</span></code> unless a constant lower bound replaces the 0. An <code><span class="tk-t">INT</span></code> or
+        <code><span class="tk-t">BOOL</span></code> box is rounded inward.</li>
+      <li><strong>Answer.</strong> Where the objective, as a minimization, is convex, the turning point
+        <code>-b / (2a)</code> clamped into the box; otherwise the better end. For a whole number, the first integer
+        whose next step no longer improves.</li>
+      <li><strong>Verify, then stream.</strong> A first read checks every row (an empty box is infeasible; an improving
+        direction with no finite end is unbounded) into a one-row verdict, and a second read releases each row as it
+        is computed (<a href="rewriting.html#every-row">every row is read</a>).</li>
+    </ol>
+    <p><strong>Why it is exact.</strong> The objective is a sum of independent terms, and every clause touches one
+      decision, so improving one decision cannot change another's options or contribution. The best value of each
+      decision together is a global optimum. A linear or quadratic function of one variable on an interval has its
+      optimum at an end or at the turning point.</p>
+    <p><strong>Cost.</strong> Two reads and no held rows. Shipping each of 800,000 offers as close to 5,000 units as its
+      stock allows (measured 2026-11-09) takes 1.14 times the CPU of a hand-written plan that also reads the table
+      twice, and 0.028 s against Gurobi's 0.353 s, 12.5 times faster, in a sixteenth of its peak memory.</p>
+    <p>Here each order's profit is <code>margin * qty - <span class="tk-n">0.125</span> * qty^<span class="tk-n">2</span></code>, which peaks at 4 times the margin:</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Each order picks its most profitable quantity in its range</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> sku, margin, min_qty, max_qty, <span class="tk-v">qty</span>
+<span class="tk-k">FROM</span> Orders
+<span class="tk-d">DECIDE</span> <span class="tk-v">qty</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">qty</span> <span class="tk-k">BETWEEN</span> min_qty <span class="tk-k">AND</span> max_qty
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(margin * <span class="tk-v">qty</span> - <span class="tk-n">0.125</span> * <span class="tk-f">POWER</span>(<span class="tk-v">qty</span>, <span class="tk-n">2</span>));</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>4 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">sku</th><th scope="col" class="num">margin</th><th scope="col" class="num">min_qty</th><th scope="col" class="num">max_qty</th><th scope="col" class="num dec">qty</th></tr></thead><tbody><tr><td>A-100</td><td class="num">4.0</td><td class="num">10</td><td class="num">50</td><td class="num dec">16</td></tr><tr><td>B-200</td><td class="num">-1.5</td><td class="num">5</td><td class="num">20</td><td class="num dec">5</td></tr><tr><td>C-300</td><td class="num">2.5</td><td class="num">0</td><td class="num">30</td><td class="num dec">10</td></tr><tr><td>D-400</td><td class="num">-0.5</td><td class="num">3</td><td class="num">8</td><td class="num dec">3</td></tr></tbody></table></div></div></div>
+    <p>A-100 peaks at 16 and C-300 at 10, both inside their ranges. B-200 and D-400 have negative margins, so their
+      peaks lie below their ranges and each takes its lower end.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/a1_separable_box_rule.cpp"><code>src/optimizer/decide/direct/a1_separable_box_rule.cpp</code></a>: the rule</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_bound_reader.cpp"><code>src/optimizer/decide/direct/direct_bound_reader.cpp</code></a>: <code>DirectRowBox</code>,
+        <code>DirectStaticFloor</code>, the per-row bounds</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_plan_fragments.cpp"><code>src/optimizer/decide/direct/direct_plan_fragments.cpp</code></a>: <code>DirectTurningPoint</code>,
+        <code>DirectMinimizeOnInterval</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_a1_separable_box.py"><code>test/decide/tests/test_direct_a1_separable_box.py</code></a>: the differential test, with exact
+        <code>Fraction</code> arithmetic on random rows</li>
+    </ul></div>
+  </section>
+
+  <section id="a2">
+    <h2><a class="anchor" href="#a2">A2: one shared value closest to every row</a></h2>
+    <p class="lead">A2 answers problems where many rows share one <code><span class="tk-t">REAL</span></code> decision, for the whole query or
+      per key, and the objective measures its distance to a value on each row.</p>
+    <p>The class is <strong>single-facility location in one dimension</strong>: place one point to be as close as
+      possible to many points on a line.</p>
+    <p><strong>The shape.</strong> A query is A2 when it has:</p>
+    <ul>
+      <li>one <code><span class="tk-t">REAL</span></code> decision, query-wide (<code><span class="tk-d">per</span> ():</code>) or keyed (<code><span class="tk-d">per</span> K:</code>; see
+        <a href="../guide.html#how-many">the Guide</a>);</li>
+      <li>bounds that reduce to one interval per class: the largest lower end and the smallest upper end over the
+        class's rows;</li>
+      <li>one minimized loss of <code>w*c + t</code>, where the slope <code>w</code> is a nonzero constant: squared
+        (<code><span class="tk-f">SUM</span>(k * <span class="tk-f">POWER</span>(...))</code>, any weight <code>k</code>), absolute (<code><span class="tk-f">SUM</span>(k * <span class="tk-f">ABS</span>(...))</code>,
+        <code>k</code> a positive constant) or maximum absolute (<code><span class="tk-f">MAX</span>(k * <span class="tk-f">ABS</span>(...))</code>).</li>
+    </ul>
+    <p><strong>The algorithm.</strong> Group then join: one hash aggregate per class computes the loss's statistics,
+      and the class's answer, on one row, joins back to its rows on the class key.</p>
+    <div class="table-wrap"><table>
+      <thead><tr><th scope="col">Loss</th><th scope="col">Answer before clamping</th></tr></thead>
+      <tbody>
+        <tr><td>squared</td><td>the weighted mean <code>-b / (2a)</code>, from the sums <code>a</code> and
+          <code>b</code> of the expanded squares; an end of the interval when the total weight <code>a</code> is 0 or
+          less</td></tr>
+        <tr><td>absolute</td><td>a median: the point nearest 0 between the lower and the upper median
+          (<code>quantile_disc</code>)</td></tr>
+        <tr><td>maximum absolute</td><td>the midpoint of the least and the greatest value</td></tr>
+      </tbody>
+    </table></div>
+    <p>The answer is then clamped into the class's interval. Each loss is a Strategy (<code>SquareLoss</code>,
+      <code>AbsoluteLoss</code>, <code>MaxAbsoluteLoss</code>) that fills in its columns at each stage of one
+      plan-builder skeleton, a Template Method.</p>
+    <p><strong>Why it is exact.</strong> The mean minimizes the squared distance, a median the absolute distance, and
+      the midpoint of the extremes the largest distance. With a positive total weight each loss is a convex function
+      of one variable, so its minimum on an interval is its unconstrained minimum clamped into the interval. A squared
+      loss whose total weight is 0 or less is linear or concave, and its minimum lies at an end. Where several points
+      are optimal, A2 returns the one nearest 0.</p>
+    <p><strong>Cost.</strong> One hash aggregate and one join, on every thread, and no window. With one squared loss
+      over 800,000 rows (measured 2026-11-09), the plan takes 1.16 times the CPU of a hand-written plan, and 0.026 s
+      against Gurobi's 0.077 s. The absolute loss is where the gap opens: the solver path adds a helper decision per row
+      for each <code>ABS</code>, and keyed it takes 12.322 s against 0.039 s rewritten, 313 times faster, in a fortieth
+      of Gurobi's peak memory.</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">One depot per highway, closest in squared distance</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> highway, store, mile, <span class="tk-v">depot</span>
+<span class="tk-k">FROM</span> Stores
+<span class="tk-d">DECIDE</span> <span class="tk-d">per</span> highway: <span class="tk-v">depot</span>(<span class="tk-t">REAL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">depot</span> &lt;= <span class="tk-n">100</span>
+<span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(<span class="tk-v">depot</span> - mile, <span class="tk-n">2</span>));</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>7 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">highway</th><th scope="col" class="">store</th><th scope="col" class="num">mile</th><th scope="col" class="num dec">depot</th></tr></thead><tbody><tr><td>I-10</td><td>S1</td><td class="num">3.0</td><td class="num dec">10.0</td></tr><tr><td>I-10</td><td>S2</td><td class="num">8.0</td><td class="num dec">10.0</td></tr><tr><td>I-10</td><td>S3</td><td class="num">9.0</td><td class="num dec">10.0</td></tr><tr><td>I-10</td><td>S4</td><td class="num">20.0</td><td class="num dec">10.0</td></tr><tr><td>I-95</td><td>S5</td><td class="num">2.0</td><td class="num dec">16.0</td></tr><tr><td>I-95</td><td>S6</td><td class="num">6.0</td><td class="num dec">16.0</td></tr><tr><td>I-95</td><td>S7</td><td class="num">40.0</td><td class="num dec">16.0</td></tr></tbody></table></div></div></div>
+    <p>Each depot sits at its highway's mean mile: (3 + 8 + 9 + 20) / 4 = 10 on I-10, and (2 + 6 + 40) / 3 = 16 on
+      I-95. The store at mile 40 pulls the I-95 depot to 16. With the absolute distance of the
+      <a href="../examples/depot-placement.html">depot example</a>, the depot moves to the median, mile 6.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/a2_single_facility_location_rule.cpp"><code>src/optimizer/decide/direct/a2_single_facility_location_rule.cpp</code></a>: the rule, its
+        <code>PlanBuilder</code> and the three losses</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_plan_fragments.cpp"><code>src/optimizer/decide/direct/direct_plan_fragments.cpp</code></a>: <code>DirectJoinClassAnswers</code>,
+        <code>DirectClassKey</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_a2_single_facility_location.py"><code>test/decide/tests/test_direct_a2_single_facility_location.py</code></a>: the differential test, one case
+        per branch of the plan</li>
+    </ul></div>
+  </section>
+
+  <section id="r1">
+    <h2><a class="anchor" href="#r1">R1: fill a budget by value per unit</a></h2>
+    <p class="lead">R1 answers problems where <code><span class="tk-t">REAL</span></code> amounts, each with its own range, share one budget. The
+      best plan fills the budget in order of value per unit of budget.</p>
+    <p>The class is the <strong>continuous (fractional) knapsack</strong>: a knapsack whose items can be taken in
+      part.</p>
+    <p><strong>The shape.</strong> A query is R1 when it has:</p>
+    <ul>
+      <li>one or more <code><span class="tk-t">REAL</span></code> decisions per row, with any per-row bounds; a bound of magnitude 1e20 or more is
+        no bound, as on the solver;</li>
+      <li>one budget, <code>L &lt;= <span class="tk-f">SUM</span>(w*x) &lt;= U</code>, written with <code>&lt;=</code>, <code>&gt;=</code>,
+        <code>=</code> or <code><span class="tk-k">BETWEEN</span></code>, per <code><span class="tk-d">by</span></code> group or over all rows. The weight <code>w</code> is
+        read per row and may have any sign or be zero. The limits may be constants, columns or aggregates;</li>
+      <li>a linear objective, or none.</li>
+    </ul>
+    <p><strong>The algorithm.</strong> Each item has a break-even price <code>t = v / w</code>, its value per unit of
+      budget. At a price per unit of budget, an item whose <code>t</code> is above the price belongs at the end of its
+      range that spends more, and one below it at the end that spends less. Spending falls as the price rises, so one
+      sort by <code>t</code> finds the price at which spending meets the budget. Items tied at that price share what is
+      left in proportion to their room, so the answer is the same on every run. The plan has five stages:</p>
+    <ol class="steps">
+      <li><strong>Items.</strong> Each row's values: its ends, weight, value, price and room.</li>
+      <li><strong>Group totals.</strong> A hash aggregate per group: the spend at a zero price, the room in each
+        direction, and the verdicts (infeasible, unbounded).</li>
+      <li><strong>Price.</strong> One window ordered by <code>t</code> over the narrow items, then an aggregate that
+        picks the group's price.</li>
+      <li><strong>Sums at the price.</strong> A hash aggregate of what the items above, below and at the price
+        spend.</li>
+      <li><strong>Answer.</strong> Each row joins its group's numbers and computes its amount.</li>
+    </ol>
+    <p><strong>Why it is exact.</strong> A price certifies the answer, as a Lagrange multiplier does. Take a price
+      <em>λ</em> and an assignment <em>x</em> within the budget in which every item sits at the end its net value
+      <code>v - λw</code> prefers, where <em>λ</em> &gt; 0 only if the budget is spent to its upper limit and
+      <em>λ</em> &lt; 0 only if it is spent to its lower limit. For any
+      feasible <em>y</em>, Σ<em>v·y</em> = Σ(<em>v</em> − <em>λw</em>)<em>y</em> + <em>λ</em>Σ<em>w·y</em> ≤
+      Σ(<em>v</em> − <em>λw</em>)<em>x</em> + <em>λ</em>Σ<em>w·x</em> = Σ<em>v·x</em>. The plan builds exactly such
+      an <em>x</em> at the price it finds. The argument uses no sign of a weight and no order between items.</p>
+    <p><strong>Cost.</strong> One sort of the narrow items, several hash aggregates and joins. With one budget over
+      800,000 rows (measured 2026-11-09), the plan takes 0.96 times the CPU of a hand-written plan. With a budget per
+      part it takes 1.93 times, because each group's checks must raise before any row is released, even under
+      <code><span class="tk-k">LIMIT</span></code>, so the plan aggregates every row of each group and joins the verdict back. Against Gurobi it
+      at 800,000 rows: 0.092 s against 1.132 s with one budget, and 0.120 s against 1.386 s with a budget per
+      part, 11.5 to 12.3 times faster.</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Fill a 1,000 kg truck by value per kg</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> good, value_per_kg, available_kg, <span class="tk-f">ROUND</span>(<span class="tk-v">kg</span>, <span class="tk-n">1</span>) <span class="tk-k">AS</span> <span class="tk-v">kg</span>
+<span class="tk-k">FROM</span> Cargo
+<span class="tk-d">DECIDE</span> <span class="tk-v">kg</span>(<span class="tk-t">REAL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">kg</span> &lt;= available_kg <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">kg</span>) &lt;= <span class="tk-n">1000</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(value_per_kg * <span class="tk-v">kg</span>);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>5 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">good</th><th scope="col" class="num">value_per_kg</th><th scope="col" class="num">available_kg</th><th scope="col" class="num dec">kg</th></tr></thead><tbody><tr><td>Saffron</td><td class="num">90.0</td><td class="num">2.0</td><td class="num dec">2.0</td></tr><tr><td>Coffee</td><td class="num">12.0</td><td class="num">300.0</td><td class="num dec">300.0</td></tr><tr><td>Tea</td><td class="num">9.0</td><td class="num">200.0</td><td class="num dec">200.0</td></tr><tr><td>Rice</td><td class="num">1.5</td><td class="num">900.0</td><td class="num dec">498.0</td></tr><tr><td>Sugar</td><td class="num">1.1</td><td class="num">800.0</td><td class="num dec">0.0</td></tr></tbody></table></div></div></div>
+    <p>Saffron, coffee and tea come first by value per kg and are taken whole, 502 kg. Rice is the item at the price:
+      it fills the remaining 498 kg. Sugar, below the price, stays at 0.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/r1_continuous_knapsack_rule.cpp"><code>src/optimizer/decide/direct/r1_continuous_knapsack_rule.cpp</code></a>: the rule and its five
+        stages</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_bound_reader.cpp"><code>src/optimizer/decide/direct/direct_bound_reader.cpp</code></a>: <code>DirectReadLimit</code>, the budget's
+        limits</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_r1_continuous_knapsack.py"><code>test/decide/tests/test_direct_r1_continuous_knapsack.py</code></a>: the differential test</li>
+    </ul></div>
+  </section>
+
+  <section id="r4">
+    <h2><a class="anchor" href="#r4">R4: a fair split of one budget</a></h2>
+    <p class="lead">R4 answers <code><span class="tk-d">MAXIMIZE</span> <span class="tk-f">MIN</span>(c * x)</code> under one budget and a cap per row: raise the smallest
+      normalized share as high as the budget and the caps allow.</p>
+    <p>The class is <strong>weighted max-min fair allocation</strong>. In <code><span class="tk-f">MIN</span>(x / need)</code> the coefficient
+      <code>c</code> is <code><span class="tk-n">1</span> / need</code>, so the objective is the smallest share of need served.</p>
+    <p><strong>The shape.</strong> A query is R4 when it has:</p>
+    <ul>
+      <li>one <code><span class="tk-t">REAL</span></code> decision, per row or per key;</li>
+      <li>the objective <code><span class="tk-d">MAXIMIZE</span> <span class="tk-f">MIN</span>(c * x)</code>: one plain <code>MIN</code> over one term whose coefficient
+        is read from the row (see <a href="../guide.html#worst-case">the worst case</a> in the Guide);</li>
+      <li>one budget, <code><span class="tk-f">SUM</span>(w*x) &lt;= B</code>, the only aggregate clause, with a weight of any sign, per
+        <code><span class="tk-d">by</span></code> group or over all rows;</li>
+      <li>a box from 0 to a cap: the lower bound is 0, and every other clause is an upper bound on the row.</li>
+    </ul>
+    <p><strong>The algorithm.</strong> Every row the <code>MIN</code> reads must reach a common level <em>s</em>, so
+      <code>x &gt;= s / c</code>. Two things bound <em>s</em>. The budget allows <em>s</em> ≤ <em>B</em> /
+      <em>N</em>, where <em>N</em> is the sum of <code>w / c</code> over the rows with a positive weight. Each cap
+      allows <em>s</em> ≤ <code>cap * c</code>. The level is the smaller bound, and a row with a positive weight takes
+      exactly <code>s / c</code>. A row with a negative weight takes its cap, which frees budget for the others. One
+      hash aggregate per budget group computes the sums, and a second read joins each row to its group's level.</p>
+    <p><strong>Why it is exact.</strong> Any assignment whose smallest share is <em>s</em> spends at least
+      <em>s</em>·<em>N</em> of the budget and must respect <em>s</em> ≤ <code>cap * c</code> on every row. The plan
+      takes the highest level both bounds allow and gives every row exactly that level, which meets the budget and every
+      cap. Leftover budget stays unused, since the objective has no preference for where it goes.</p>
+    <p><strong>Cost.</strong> One hash aggregate and one join, no sort. Over 800,000 rows of <code>partsupp</code>
+      with the weight read from <code>ps_supplycost</code>, the plan takes 1.03 times the CPU of a hand-written plan
+      and answers in 0.026 s. Gurobi takes 2,158 s on the same query: it is fast while a cap sets the level and slow once
+      the budget binds, because the max-min objective becomes one helper variable bounded by every row.</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Split 100 units so the worst-served program gets the most</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> program, need, max_alloc,
+       <span class="tk-f">ROUND</span>(<span class="tk-v">alloc</span>, <span class="tk-n">2</span>) <span class="tk-k">AS</span> <span class="tk-v">alloc</span>, <span class="tk-f">ROUND</span>(<span class="tk-v">alloc</span> / need, <span class="tk-n">3</span>) <span class="tk-k">AS</span> share
+<span class="tk-k">FROM</span> Programs
+<span class="tk-d">DECIDE</span> <span class="tk-v">alloc</span>(<span class="tk-t">REAL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">alloc</span> &lt;= max_alloc <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">alloc</span>) &lt;= <span class="tk-n">100</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">MIN</span>(<span class="tk-v">alloc</span> / need);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>4 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">program</th><th scope="col" class="num">need</th><th scope="col" class="num">max_alloc</th><th scope="col" class="num dec">alloc</th><th scope="col" class="num dec">share</th></tr></thead><tbody><tr><td>Clinic</td><td class="num">20.0</td><td class="num">40.0</td><td class="num dec">16.67</td><td class="num dec">0.833</td></tr><tr><td>Shelter</td><td class="num">30.0</td><td class="num">25.0</td><td class="num dec">25.0</td><td class="num dec">0.833</td></tr><tr><td>School</td><td class="num">50.0</td><td class="num">60.0</td><td class="num dec">41.67</td><td class="num dec">0.833</td></tr><tr><td>Pantry</td><td class="num">10.0</td><td class="num">30.0</td><td class="num dec">8.33</td><td class="num dec">0.833</td></tr></tbody></table></div></div></div>
+    <p>The needs add up to 110, so the budget alone would allow a level of 100 / 110 = 0.909. Shelter's cap allows only
+      25 / 30 = 0.833, which is smaller, so every program gets 83.3% of its need and 8.33 units stay unspent.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/r4_max_min_fairness_rule.cpp"><code>src/optimizer/decide/direct/r4_max_min_fairness_rule.cpp</code></a>: the rule; the comment above
+        <code>PlanBuilder</code> lays out its stages</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_r4_max_min_fairness.py"><code>test/decide/tests/test_direct_r4_max_min_fairness.py</code></a>: the differential test</li>
+    </ul></div>
+  </section>
+
+  <section id="n1">
+    <h2><a class="anchor" href="#n1">N1: stay inside one sum of squares</a></h2>
+    <p class="lead">N1 answers problems with one limit <code><span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(x, <span class="tk-n">2</span>)) &lt;= B</code> on <code><span class="tk-t">REAL</span></code>
+      decisions: the feasible set is a ball around zero, or an ellipsoid when each row weighs its square.</p>
+    <p>The class is <strong>Euclidean-ball projection</strong> (the nearest point of a ball to a target) and the
+      <strong>support function</strong> of an ellipsoid (the best point of it for a linear objective).</p>
+    <p><strong>The shape.</strong> A query is N1 when it has:</p>
+    <ul>
+      <li>one <code><span class="tk-t">REAL</span></code> decision per row;</li>
+      <li>exactly one aggregate clause, <code><span class="tk-f">SUM</span>(c * <span class="tk-f">POWER</span>(s * x, <span class="tk-n">2</span>)) &lt;= B</code>, with <code>c</code> a positive
+        constant and <code>s</code> a constant or a value of the row. <code><span class="tk-f">POWER</span>(x, <span class="tk-n">2</span>)</code>, <code>x * x</code> and
+        <code><span class="tk-f">norm</span>(x, <span class="tk-n">2</span>)</code> all read this way;</li>
+      <li>a box of exactly [0, ∞) or (−∞, ∞). Any other bound declines, even one that would not bind, because the
+        answer is then the projection onto a clipped ball, which one scale does not give;</li>
+      <li>a linear objective, one convex square per row with its linear terms (a squared distance to a target), or no
+        objective. A slope that differs between rows admits only a linear objective.</li>
+    </ul>
+    <p><strong>The algorithm.</strong> With a target <em>y</em> (from the square), the answer is <em>y</em> when it lies
+      inside the ball, and otherwise <em>y</em> scaled toward zero to the ball's surface. With a linear objective of
+      direction <em>d</em>, the answer is <em>d</em> scaled to the surface. On [0, ∞), negative parts of <em>y</em> or
+      <em>d</em> become 0 first. One hash aggregate per ball computes the squared length <em>h</em>, its square root is
+      taken once per ball, and every row joins its ball's scale.</p>
+    <p><strong>Why it is exact.</strong> The nearest point of a ball to an outside target lies on the segment from the
+      center to the target, so projecting is scaling. For a linear objective, <em>d·x</em> ≤ ‖<em>d</em>‖·‖<em>x</em>‖ ≤
+      ‖<em>d</em>‖·√<em>B</em> by the Cauchy–Schwarz inequality, with equality when <em>x</em> points along <em>d</em>
+      and reaches the surface. A weight per row becomes a ball again after substituting <code>z = <span class="tk-f">sqrt</span>(q) * x</code>.
+      On [0, ∞), setting a coordinate with a negative target to 0 keeps the point feasible and brings it no farther from
+      the target.</p>
+    <p><strong>Cost.</strong> One hash aggregate and one join. Over 800,000 rows (measured 2026-11-09), the plan takes
+      0.032 s and 40 MiB at its peak against Gurobi's 3.295 s and 727 MiB, 102 times faster; against a hand-written
+      plan it takes 1.29 times the CPU. N1 also answers on a machine without a Gurobi license, where the
+      solver path refuses a quadratic limit.</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">The point nearest the scores inside a ball of radius 2</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> name, score, <span class="tk-f">ROUND</span>(<span class="tk-v">x</span>, <span class="tk-n">3</span>) <span class="tk-k">AS</span> <span class="tk-v">x</span>
+<span class="tk-k">FROM</span> Signals
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">REAL</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(<span class="tk-v">x</span>, <span class="tk-n">2</span>)) &lt;= <span class="tk-n">4</span>
+<span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(<span class="tk-v">x</span> - score, <span class="tk-n">2</span>));</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>3 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">name</th><th scope="col" class="num">score</th><th scope="col" class="num dec">x</th></tr></thead><tbody><tr><td>alpha</td><td class="num">3.0</td><td class="num dec">1.2</td></tr><tr><td>beta</td><td class="num">4.0</td><td class="num dec">1.6</td></tr><tr><td>gamma</td><td class="num">0.0</td><td class="num dec">0.0</td></tr></tbody></table></div></div></div>
+    <p>The target (3, 4, 0) has length 5, outside the ball of radius 2, so it is scaled by 2 / 5 to (1.2, 1.6, 0).</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/n1_euclidean_ball_rule.cpp"><code>src/optimizer/decide/direct/n1_euclidean_ball_rule.cpp</code></a>: the rule</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_plan_fragments.cpp"><code>src/optimizer/decide/direct/direct_plan_fragments.cpp</code></a>: <code>DirectProveSharedScope</code>, the
+        ball's scope</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_n1_euclidean_ball.py"><code>test/decide/tests/test_direct_n1_euclidean_ball.py</code></a>: the differential test</li>
+    </ul></div>
+  </section>
+
+  <section id="o1">
+    <h2><a class="anchor" href="#o1">O1: match two tables by position</a></h2>
+    <p class="lead">O1 answers one-to-one matchings: a <code><span class="tk-t">BOOL</span></code> for every pair of a cross product, each row of
+      each side matched exactly once, and a cost that is a distance between positions or a product.</p>
+    <p>The class is the <strong>Monge assignment</strong>. A cost is Monge when uncrossing two pairs never raises it;
+      for such a cost the matching in sorted order is optimal, with no search.</p>
+    <p><strong>The shape.</strong> A query is O1 when it has:</p>
+    <ul>
+      <li>a source that is a cross product of two tables; a <code><span class="tk-k">WHERE</span></code> on one side is allowed, since filter
+        pushdown places it inside that side;</li>
+      <li>one <code><span class="tk-t">BOOL</span></code> per pair, and exactly two clauses, <code><span class="tk-d">per</span> K: <span class="tk-f">SUM</span>(x) <span class="tk-d">by</span> (K) = <span class="tk-n">1</span></code>, one per
+        side, with no <code><span class="tk-d">when</span></code> (see <a href="../guide.html#per">per</a> in the Guide);</li>
+      <li>one cost: <code><span class="tk-f">ABS</span>(a - b)</code> or <code><span class="tk-f">POWER</span>(a - b, <span class="tk-n">2</span>)</code>, minimized; or <code>a * b</code>,
+        maximized or minimized;</li>
+      <li>positions declared <code><span class="tk-k">NOT</span> <span class="tk-k">NULL</span></code> on their tables, and a key that determines the position: the whole
+        row (<code><span class="tk-d">per</span> d</code>) or a key column of its table.</li>
+    </ul>
+    <p><strong>The algorithm.</strong></p>
+    <ol class="steps">
+      <li><strong>Verify.</strong> Check the cost's coefficient on every pair into a one-row verdict.</li>
+      <li><strong>Rank.</strong> Rank each side by position, with a window on that side's own rows, below the cross
+        product. This is eager aggregation (Yan and Larson) applied to windows: a step whose keys come from one side
+        runs on that side's n rows, not on the pairs.</li>
+      <li><strong>Pair.</strong> Over the cross product, set <code>x = <span class="tk-n">1</span></code> where the two ranks are equal (opposite,
+        for a minimized product), and raise the solver's infeasible error when the two sides, both nonempty, hold different
+        numbers of classes.</li>
+    </ol>
+    <p><strong>Why it is exact.</strong> For positions <em>a</em> ≤ <em>a′</em> and <em>b</em> ≤ <em>b′</em>, pairing
+      in order costs no more than crossing the pairs, for both the absolute and the squared distance. Any crossed
+      matching can be uncrossed one pair at a time without getting worse, which ends at the sorted matching. For a
+      product, the rearrangement inequality gives equal ranks for a maximum and opposite ranks for a minimum. The
+      positions must be declared <code><span class="tk-k">NOT</span> <span class="tk-k">NULL</span></code>: <code>SUM</code> drops a NULL term, so a NULL position would
+      make its row free, and ranking would no longer place it. A declared constraint holds for every row; statistics
+      would not prove it.</p>
+    <p><strong>Cost.</strong> One sort of each side's n rows, while the solver builds one binary per pair, n² in all.
+      With 1,600 suppliers a side, 2,560,000 pairs (measured 2026-11-10), the plan takes 0.057 s and 30 MiB against
+      Gurobi's 11.732 s and 5,060 MiB, 206 times faster. Against a hand-written plan at 10,240,000 pairs it takes 2.87
+      times the CPU, for the check of every pair's coefficient and the class ranks the rule needs for duplicate
+      rows.</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Match four drivers to four pickups along a road</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> driver, pickup, driver_km, pickup_km <span class="tk-k">FROM</span> (
+    <span class="tk-k">SELECT</span> d.driver, p.pickup, d.km <span class="tk-k">AS</span> driver_km, p.km <span class="tk-k">AS</span> pickup_km, <span class="tk-v">x</span>
+    <span class="tk-k">FROM</span> Drivers d <span class="tk-k">CROSS</span> <span class="tk-k">JOIN</span> Pickups p
+    <span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+    <span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-d">per</span> d: <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) <span class="tk-d">by</span> (d) = <span class="tk-n">1</span>
+          <span class="tk-k">AND</span> <span class="tk-d">per</span> p: <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) <span class="tk-d">by</span> (p) = <span class="tk-n">1</span>
+    <span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">ABS</span>(d.km - p.km) * <span class="tk-v">x</span>)
+) <span class="tk-k">WHERE</span> <span class="tk-v">x</span> = <span class="tk-n">1</span>
+<span class="tk-k">ORDER</span> <span class="tk-k">BY</span> driver;</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>4 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">driver</th><th scope="col" class="">pickup</th><th scope="col" class="num">driver_km</th><th scope="col" class="num">pickup_km</th></tr></thead><tbody><tr><td>Ana</td><td>P1</td><td class="num">1.0</td><td class="num">2.0</td></tr><tr><td>Ben</td><td>P2</td><td class="num">4.5</td><td class="num">3.0</td></tr><tr><td>Cai</td><td>P3</td><td class="num">7.0</td><td class="num">9.5</td></tr><tr><td>Dee</td><td>P4</td><td class="num">12.0</td><td class="num">11.0</td></tr></tbody></table></div></div></div>
+    <p>Both sides sorted by kilometer and paired by rank: 1 + 1.5 + 2.5 + 1 = 6 km in total.</p>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/o1_monge_assignment_rule.cpp"><code>src/optimizer/decide/direct/o1_monge_assignment_rule.cpp</code></a>: the rule; <code>CheckPairs</code>
+        is the verdict over the pairs</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_ir.cpp"><code>src/optimizer/decide/direct/direct_ir.cpp</code></a>: the IR's <code>cross_product</code>,
+        <code>not_null</code> and <code>keys</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_o1_monge_assignment.py"><code>test/decide/tests/test_direct_o1_monge_assignment.py</code></a>: the differential test</li>
+    </ul></div>
+  </section>
+
+  <section id="not-built">
+    <h2><a class="anchor" href="#not-built">Not built yet</a></h2>
+    <p class="lead">Nine more classes have a written definition and correctness argument but no rule. A query of one
+      of these shapes goes to the solver.</p>
+    <dl class="reads">
+      <dt>A3</dt><dd>multilinear optimization over a box: products such as <code>x*y</code> in a small bounded group,
+        linear in each decision when the others are fixed</dd>
+      <dt>A4</dt><dd>bounded-variable least squares, such as fitting a line under bounds on its coefficients</dd>
+      <dt>A5</dt><dd>monotone optimization: every decision has a direction that improves the objective and eases every
+        constraint</dd>
+      <dt>A6</dt><dd>rank-one bounded least squares: decisions that matter only through one weighted sum inside a
+        squared error</dd>
+      <dt>S4</dt><dd>cardinality-constrained bottleneck knapsack: exactly <em>k</em> rows within one budget, scored by
+        the best reward chosen</dd>
+      <dt>R2</dt><dd>discrete separable convex resource allocation: whole units among bounded <code><span class="tk-t">INT</span></code>
+        decisions</dd>
+      <dt>R3</dt><dd>continuous quadratic knapsack: one resource among <code><span class="tk-t">REAL</span></code> decisions with convex quadratic
+        penalties</dd>
+      <dt>O2</dt><dd>Monge transportation: divisible amounts between ordered sources and destinations with equal
+        totals</dd>
+      <dt>D1</dt><dd>block-diagonal decomposition: a query made of independent subproblems, split and each
+        rewritten</dd>
+    </dl>
+    <div class="src"><strong>In the source</strong><ul>
+      <li><code>context/docs/direct_solve/rules/&lt;id&gt;_&lt;slug&gt;/definition.md</code>: each class's worked
+        example, recognition, construction and correctness argument</li>
+    </ul></div>
+  </section>
+<nav class="pager" aria-label="Documentation"><a class="pager__prev" href="rewriting.html"><small>Previous</small>Query rewriting</a><a class="pager__next" href="diagnose.html"><small>Next</small>DIAGNOSE</a></nav></article>
+
+</div></div>
+</main>
+<footer class="footer closing footer--statement g2m" id="contact" aria-labelledby="close-h">
+  <div class="wrap">
+    <div class="closing__cta close--word">
+      <div class="section-head--split">
+        <div><h2 id="close-h">Run your first DECIDE query</h2><p class="t-lead">Python wheels and command-line builds for macOS, Linux and Windows.</p></div>
+        <a class="btn btn--primary" href="../getting-started.html#install">Install DeciDB<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a>
+      </div>
+      <p class="close__word" aria-hidden="true">DeciDB</p>
+    </div>
+    <div class="closing__links">
+      <div class="grid">
+        <div class="span-4 stack-4">
+          <a class="nav__logo" href="../index.html"><img src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
+          <p class="footer__lede">Constrained optimization in SQL.</p>
+        </div>
+        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Get started</a></li><li><a href="../demo.html">Live demo</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../docs/index.html">Documentation</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="../examples/knapsack.html">Knapsack</a></li><li><a href="../examples/facility-location.html">Depots</a></li><li><a href="../examples/fair-allocation.html">Fair allocation</a></li><li><a href="../examples/diagnose.html">DIAGNOSE</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Project</h3><ul><li><a href="../about.html">About</a></li><li><a href="../about.html#research">Papers</a></li><li><a href="https://github.com/huda-lab/decidb">GitHub</a></li><li><a href="https://huda-lab.github.io/">HUDA Lab</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Contact</h3><ul><li><a href="mailto:support@decidb.com">Email the team</a></li><li><a href="https://github.com/huda-lab/decidb/issues">Report an issue</a></li></ul></div>
+      </div>
+      <div class="footer__legal">
+        <span>&copy; 2026 HUDA Lab, NYU Abu Dhabi and UMass Amherst</span>
+        <span>Product names and logos are trademarks of their owners.</span>
+      </div>
+    </div>
+  </div>
+</footer>
+<script type="module" src="../assets/system.js"></script>
+<script type="module" src="../assets/motion/motion.js"></script>
+<script type="module" src="../assets/layout/layout.js"></script>
+<script src="../assets/js/site.js" defer></script>
+</body>
+</html>

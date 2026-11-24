@@ -1,459 +1,234 @@
-<!DOCTYPE html>
-<html lang="en">
+<!doctype html>
+<html lang="en" data-type="software" data-radius="sharp" data-ground="sage" data-buttons="pill" data-motion>
 <head>
-  <script>
-  (function(){var t=localStorage.getItem('decidb-theme')||'light';
-  document.documentElement.setAttribute('data-theme',t)})();
-  </script>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="About DeciDB - Research team, HUDA Lab, publications, and project information.">
-  <meta name="keywords" content="DeciDB, HUDA Lab, NYU Abu Dhabi, database research, optimization, team">
-  <title>About - DeciDB</title>
-
-  <!-- Favicon -->
-  <link rel="icon" type="image/svg+xml" href="assets/images/logo.svg">
-
-  <!-- Tailwind CSS -->
-  <script src="assets/js/tw-config.js"></script>
-  <script src="https://cdn.tailwindcss.com"></script>
-
-  <!-- DM Serif Display + DM Sans -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&amp;family=DM+Serif+Display&amp;display=swap" rel="stylesheet">
-
-  <!-- JetBrains Mono for code -->
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
-
-  <!-- Prism.js for syntax highlighting -->
-  <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css" rel="stylesheet">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bibtex.min.js"></script>
-
-  <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-
-  <!-- Custom CSS -->
-  <link rel="stylesheet" href="assets/css/custom.css">
-
-  <!-- Custom JS -->
-  <script src="assets/js/main.js" defer></script>
-
-  <style>
-    body {
-      font-family: 'DM Sans', system-ui, sans-serif;
-    }
-    code, pre {
-      font-family: 'JetBrains Mono', monospace;
-    }
-  </style>
+<meta charset="utf-8">
+<script>(function(){var r=document.documentElement,t;try{t=localStorage.getItem('decidb-theme')}catch(e){}if(!r.dataset.theme)r.dataset.theme=t==='dark'?'dark':'light'})()</script>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script>document.documentElement.classList.add('m-enter');setTimeout(()=>document.documentElement.classList.add('m-enter-done'),700)</script>
+<title>About DeciDB: in-database optimization research</title>
+<meta name="description" content="DeciDB is a research project of the HUDA Lab at NYU Abu Dhabi and UMass Amherst on in-database constrained optimization.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="About DeciDB: in-database optimization research">
+<meta property="og:description" content="DeciDB is a research project of the HUDA Lab at NYU Abu Dhabi and UMass Amherst on in-database constrained optimization.">
+<meta property="og:image" content="assets/images/share.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="assets/images/mark.svg" type="image/svg+xml">
+<meta name="theme-color" content="#ffffff">
+<!-- <link rel="canonical" href="https://huda-lab.github.io/decidb/"> once the published address is confirmed -->
+<meta name="site-kind" content="software">
+<meta name="page-type" content="software">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/system.css">
+<link rel="stylesheet" href="assets/ui/cards.css">
+<link rel="stylesheet" href="assets/motion/motion.css">
+<link rel="stylesheet" href="assets/backgrounds/backgrounds.css">
+<link rel="stylesheet" href="assets/layout/layout.css">
+<link rel="stylesheet" href="assets/icons/icon.css">
+<style>
+:root {
+  --p-bg: #ffffff; --p-surface: #f4f4f4; --p-ink: #111111; --p-muted: #6b6b6b;
+  --p-accent: #1a4be0; --p-accent-ink: #ffffff; --p-action: #1a4be0; --p-action-ink: #ffffff;
+  --p-inv-bg: #111111; --p-inv-surface: #1e1e1e; --p-inv-ink: #ffffff; --p-inv-muted: #9a9a9a;
+  --p-inv-accent: #ffffff; --p-inv-accent-ink: #111111; --p-inv-action: #ffffff; --p-inv-action-ink: #111111;
+  --font-display: "Geist", system-ui, sans-serif;
+  --font-text: "Geist", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --display-weight: 500;
+  --display-tracking: -0.035em;
+  --display-tracking-xl: -0.045em;
+}
+/* the evening grade (a tech page may take it): light is the default; the nav's switch sets data-theme to dark and the
+   head script remembers it; the page tokens go dark, the lit ground (sage) and the panels' painted grounds stay light, as the
+   kit keeps them */
+:root[data-theme="dark"] {
+  --p-bg: #0e0f10; --p-surface: #18191b; --p-ink: #f1f1ef; --p-muted: #a3a3a0;
+  --p-accent: #7d9dff; --p-accent-ink: #0e0f10; --p-action: #3463f0; --p-action-ink: #ffffff;
+  --p-inv-bg: #f4f4f2; --p-inv-surface: #e8e8e6; --p-inv-ink: #111111; --p-inv-muted: #5c5c5c;
+  --p-inv-accent: #1a4be0; --p-inv-accent-ink: #ffffff; --p-inv-action: #111111; --p-inv-action-ink: #ffffff;
+}
+</style>
+<link rel="stylesheet" href="assets/css/site.css">
 </head>
-<body class="min-h-screen">
+<body class="doc-body">
+<header class="nav">
+  <div class="wrap nav__bar">
+    <a class="skip-link" href="#top">Skip to content</a>
+    <a class="nav__logo" href="index.html"><img class="logo logo--light" src="assets/images/logo.svg" alt="DeciDB" width="140" height="42"><img class="logo logo--dark" src="assets/images/logo-dark.svg" alt="DeciDB" width="140" height="42" loading="lazy"><img class="logo logo--mark" src="assets/images/mark.svg" alt="DeciDB" width="40" height="32" loading="lazy"></a>
+    <nav class="nav__links" aria-label="Main">
+      <div class="nav__item"><a class="nav__link" href="getting-started.html">Get started</a></div><div class="nav__item"><a class="nav__link" href="demo.html">Live demo</a></div><div class="nav__item"><a class="nav__link" href="guide.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="about.html" aria-current="page">About</a></div><div class="nav__item"><a class="nav__link" href="docs/index.html"><span class="nav__full">Documentation</span><span class="nav__short" aria-hidden="true">Docs</span></a></div><div class="nav__item"><a class="nav__link" href="features.html"><span class="nav__full">Novel features</span><span class="nav__short" aria-hidden="true">Features</span></a></div>
+    </nav>
+    <div class="nav__actions">
+      <button class="btn btn--secondary theme-toggle" type="button" aria-pressed="false" data-theme-toggle hidden><svg class="theme-toggle__sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="theme-toggle__moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg><span class="theme-toggle__label">Dark theme</span></button>
+      <a class="nav__link" href="https://github.com/huda-lab/decidb">GitHub</a>
+      <a class="btn btn--primary" href="getting-started.html#install"><span>Install<span class="nav__more"> DeciDB</span></span></a>
+    </div>
+    <button class="nav__toggle" type="button" aria-expanded="false" aria-label="Menu">
+      <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M2 5h14M2 13h14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </button>
+  </div>
+</header>
+<main id="top">
+<section class="hero hero--page" data-enter aria-labelledby="page-h">
+  <div class="wrap"><div class="hero-text hero-split grid">
+    <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">Home</a><span aria-hidden="true">/</span>About</nav><h1 id="page-h">About DeciDB</h1><p class="hero__lead">A research collaboration between the HUDA Lab at NYU Abu Dhabi and UMass Amherst on bringing constrained optimization into the database.</p><div class="btn-row"><a class="btn btn--primary" href="assets/DeciDB_Paper.pdf">Read the paper</a><a class="btn btn--secondary" href="#team">The team</a></div></div>
+    <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="14" data-ui-pause-host><div class="ui ui-hw hw hw--page " role="img" aria-label="The four papers behind DeciDB, from Scalable Package Queries in 2016 to DeciDB itself."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · research</span></div><div class="hw__page"><div class="hw__q">Papers</div><div class="hw__papers" data-ly-steps="520"><div class="hw__paper" data-step><b>DeciDB: In-Database Processing of Decision Queries</b><span>CIDR 2027, submitted</span></div><div class="hw__paper" data-step><b>Scaling Package Queries to a Billion Tuples</b><span>VLDB 2024</span></div><div class="hw__paper" data-step><b>Scalable Computation of High-Order Optimization Queries</b><span>ACM 2019</span></div><div class="hw__paper" data-step><b>Scalable Package Queries in Relational Database Systems</b><span>VLDB 2016</span></div></div></div></div></div>
+  </div></div>
+</section>
 
-  <!-- Skip Link for Accessibility -->
-  <a href="#main-content" class="skip-link">Skip to main content</a>
-
-  <!-- ============================================
-       HEADER / NAVIGATION
-       ============================================ -->
-  <header class="fixed top-0 w-full header-bg backdrop-blur-sm border-b border-bdcolor z-50">
-    <nav class="container mx-auto px-4 py-4 flex justify-between items-center">
-      <!-- Logo -->
-      <a href="index.html" class="flex items-center space-x-2">
-        <img src="assets/images/logo.svg" alt="DeciDB" class="h-8 logo-img">
-        <div class="hidden sm:block">
-          <div class="text-xs text-fg-subtle">by HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst</div>
-        </div>
-      </a>
-
-      <!-- Desktop Navigation -->
-      <div class="hidden md:flex items-center space-x-6">
-        <a href="index.html" class="nav-link">Home</a>
-        <a href="getting-started.html" class="nav-link">Getting Started</a>
-        <a href="documentation.html" class="nav-link">Docs</a>
-        <a href="examples.html" class="nav-link">Examples</a>
-        <a href="about.html" class="nav-link active">About</a>
-      </div>
-
-      <!-- CTA Buttons -->
-      <div class="hidden md:flex items-center space-x-3">
-        <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"
-           class="btn btn-secondary text-sm">
-          <i data-lucide="github" class="w-4 h-4"></i>
-          GitHub
-        </a>
-        <a href="getting-started.html" class="btn btn-primary text-sm">
-          Get Started
-          <i data-lucide="arrow-right" class="w-4 h-4"></i>
-        </a>
-        <button id="theme-toggle" class="theme-toggle" aria-label="Toggle theme">
-          <svg class="icon-sun" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
-          <svg class="icon-moon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-        </button>
-      </div>
-
-      <!-- Mobile Menu Button -->
-      <button id="mobile-menu-button" class="md:hidden p-2 rounded-lg hover:bg-canvas-inset"
-              aria-label="Toggle menu" aria-expanded="false">
-        <i data-lucide="menu" id="menu-open-icon" class="w-6 h-6"></i>
-        <i data-lucide="x" id="menu-close-icon" class="w-6 h-6 hidden"></i>
-      </button>
+<div class="container">
+  <div class="doc-layout">
+    <nav class="toc" aria-label="On this page">
+      <div class="toc-title">On this page</div>
+      <ul>
+        <li><a href="#idea">The idea</a></li>
+        <li><a href="#research">Research</a></li>
+        <li><a href="#team">Team</a></li>
+        <li><a href="#how">How it is built</a></li>
+        <li><a href="#next">What comes next</a></li>
+      </ul>
     </nav>
 
-    <!-- Mobile Menu -->
-    <div id="mobile-menu" class="mobile-menu md:hidden border-t border-bdcolor bg-canvas" aria-hidden="true">
-      <div class="container mx-auto px-4 py-4 space-y-4">
-        <a href="index.html" class="block py-2 nav-link">Home</a>
-        <a href="getting-started.html" class="block py-2 nav-link">Getting Started</a>
-        <a href="documentation.html" class="block py-2 nav-link">Docs</a>
-        <a href="examples.html" class="block py-2 nav-link">Examples</a>
-        <a href="about.html" class="block py-2 nav-link active">About</a>
-        <hr class="border-bdcolor">
-        <a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer"
-           class="flex items-center gap-2 py-2 text-fg-muted hover:text-accent">
-          <i data-lucide="github" class="w-5 h-5"></i>
-          GitHub
-        </a>
-        <a href="getting-started.html" class="btn btn-primary w-full justify-center">
-          Get Started
-          <i data-lucide="arrow-right" class="w-4 h-4"></i>
-        </a>
-      </div>
-    </div>
-  </header>
+    <article class="prose">
+      <section id="idea">
+        <h2><a class="anchor" href="#idea">The idea</a></h2>
+        <p class="lead"><code><span class="tk-k">WHERE</span></code> filters one row at a time. <code><span class="tk-d">DECIDE</span></code> constrains the whole set of
+          decisions at once.</p>
+        <p>Package queries asked a database for a <em>set</em> of rows that satisfies constraints over the set: a meal
+          plan under a calorie budget, a portfolio within a risk limit. DeciDB generalizes them from choosing rows to
+          deciding values of any type (yes or no, whole quantities, continuous amounts), shared per row, per key or for
+          the whole query, and from linear rules to quadratic and bilinear ones.</p>
+        <p>The DECIDE language follows the language proposal developed with the project: three scope words
+          (<code><span class="tk-d">per</span></code>, <code><span class="tk-d">when</span></code>, <code><span class="tk-d">by</span></code>) that each answer one question about a rule, and a
+          determination rule that keeps every constraint well defined on the data it runs on.</p>
+      </section>
 
-  <!-- ============================================
-       MAIN CONTENT
-       ============================================ -->
-  <main id="main-content" class="pt-20">
-
-    <!-- ============================================
-         HERO SECTION
-         ============================================ -->
-    <section class="py-12 bg-canvas">
-      <div class="container mx-auto px-4">
-        <!-- Breadcrumb -->
-        <nav class="breadcrumb mb-8" aria-label="Breadcrumb">
-          <a href="index.html">Home</a>
-          <span class="separator"><i data-lucide="chevron-right" class="w-4 h-4"></i></span>
-          <span class="text-fg font-medium">About</span>
-        </nav>
-
-        <div class="max-w-4xl">
-          <h1 class="text-4xl md:text-5xl text-fg mb-4">
-            About DeciDB
-          </h1>
-          <p class="text-xl text-fg-muted">
-            A research collaboration between the HUDA Lab at NYU Abu Dhabi and UMass Amherst, bringing optimization directly into SQL.
-          </p>
-        </div>
-      </div>
-    </section>
-
-    <!-- ============================================
-         CONTENT WITH SIDEBAR
-         ============================================ -->
-    <section class="py-12">
-      <div class="container mx-auto px-4">
-        <div class="flex flex-col lg:flex-row gap-12">
-
-          <!-- Sidebar Navigation -->
-          <aside class="lg:w-64 flex-shrink-0">
-            <nav class="sidebar-nav lg:sticky lg:top-24">
-              <h3 class="text-sm font-semibold text-fg uppercase tracking-wider mb-4">On This Page</h3>
-              <ul class="space-y-1">
-                <li><a href="#research" class="sidebar-link active">Research Foundation</a></li>
-                <li><a href="#team" class="sidebar-link">The Team</a></li>
-                <li><a href="#huda-lab" class="sidebar-link">HUDA Lab</a></li>
-                <li><a href="#technical" class="sidebar-link">Technical Details</a></li>
-                <li><a href="#future" class="sidebar-link">Future Development</a></li>
-              </ul>
-            </nav>
-          </aside>
-
-          <!-- Main Content -->
-          <div class="flex-1 max-w-3xl">
-
-
-          <!-- ============================================
-               RESEARCH FOUNDATION
-               ============================================ -->
-          <section id="research" class="mb-16">
-            <h2 class="text-3xl text-fg mb-6">Research Foundation</h2>
-            <p class="text-fg-muted mb-6">
-              DeciDB builds on a decade of research into <strong>in-database constrained optimization</strong>:
-            </p>
-
-            <div class="space-y-5">
-              <!-- Paper 4 -->
-              <div class="py-4 border-b border-bdcolor-muted">
-                <h3 class="font-semibold text-fg mb-1">DeciDB: In-Database Processing of Decision Queries</h3>
-                <p class="text-sm text-fg-muted mb-1">Anh L. Mai, Filip Milisov, Hatim Rehmanjee, Azza Abouzied, Peter J. Haas, Alexandra Meliou</p>
-                <p class="text-sm text-fg-subtle mb-2"><em>Submitted to CIDR 2027</em></p>
-                <a href="assets/DeciDB_Paper.pdf" target="_blank" rel="noopener noreferrer"
-                   class="text-sm text-accent hover:text-accent inline-flex items-center gap-1">
-                  <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
-                  Read Paper
-                </a>
-              </div>
-
-              <!-- Paper 3 -->
-              <div class="py-4 border-b border-bdcolor-muted">
-                <h3 class="font-semibold text-fg mb-1">Scaling Package Queries to a Billion Tuples</h3>
-                <p class="text-sm text-fg-muted mb-1">Anh L. Mai, Pengyu Wang, Azza Abouzied, Matteo Brucato, Peter J. Haas, Alexandra Meliou</p>
-                <p class="text-sm text-fg-subtle mb-2"><em>Accepted to VLDB 2024</em></p>
-                <a href="https://doi.org/10.14778/3641204.3641222" target="_blank" rel="noopener noreferrer"
-                   class="text-sm text-accent hover:text-accent inline-flex items-center gap-1">
-                  <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
-                  Read Paper
-                </a>
-              </div>
-
-              <!-- Paper 2 -->
-              <div class="py-4 border-b border-bdcolor-muted">
-                <h3 class="font-semibold text-fg mb-1">Scalable Computation of High-Order Optimization Queries</h3>
-                <p class="text-sm text-fg-muted mb-1">Matteo Brucato, Azza Abouzied, Alexandra Meliou</p>
-                <p class="text-sm text-fg-subtle mb-2"><em>Accepted to ACM, 2019</em></p>
-                <a href="https://doi.org/10.1145/3299881" target="_blank" rel="noopener noreferrer"
-                   class="text-sm text-accent hover:text-accent inline-flex items-center gap-1">
-                  <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
-                  Read Paper
-                </a>
-              </div>
-
-              <!-- Paper 1 -->
-              <div class="py-4">
-                <h3 class="font-semibold text-fg mb-1">Scalable Package Queries in Relational Database Systems</h3>
-                <p class="text-sm text-fg-muted mb-1">Matteo Brucato, Azza Abouzied, Alexandra Meliou</p>
-                <p class="text-sm text-fg-subtle mb-2"><em>Accepted to VLDB 2016</em></p>
-                <a href="https://doi.org/10.14778/2904483.2904489" target="_blank" rel="noopener noreferrer"
-                   class="text-sm text-accent hover:text-accent inline-flex items-center gap-1">
-                  <i data-lucide="external-link" class="w-3.5 h-3.5"></i>
-                  Read Paper
-                </a>
-              </div>
-            </div>
-          </section>
-
-          <!-- ============================================
-               THE TEAM
-               ============================================ -->
-          <section id="team" class="mb-16">
-            <h2 class="text-3xl text-fg mb-6">The Team</h2>
-
-            <!-- NYU Abu Dhabi -->
-            <h3 class="text-xl font-semibold text-fg mb-4">NYU Abu Dhabi</h3>
-            <div class="grid md:grid-cols-2 gap-x-8 gap-y-4 mb-8">
-              <div class="py-3 border-b border-bdcolor-muted">
-                <a href="https://azza.azurewebsites.net/" target="_blank" rel="noopener noreferrer"
-                   class="font-semibold text-accent hover:text-accent flex items-center gap-1">
-                  Prof. Azza Abouzied
-                  <i data-lucide="external-link" class="w-3 h-3"></i>
-                </a>
-                <p class="text-sm text-fg-muted">Professor of Computer Science</p>
-              </div>
-              <div class="py-3 border-b border-bdcolor-muted">
-                <p class="font-semibold text-fg">Anh Mai</p>
-                <p class="text-sm text-fg-muted">PhD Student</p>
-              </div>
-              <div class="py-3 border-b border-bdcolor-muted">
-                <p class="font-semibold text-fg">Filip Milisov</p>
-                <p class="text-sm text-fg-muted">Research Scientist</p>
-              </div>
-              <div class="py-3 border-b border-bdcolor-muted">
-                <p class="font-semibold text-fg">Hatim Rehmanjee</p>
-                <p class="text-sm text-fg-muted">Research Scientist</p>
-              </div>
-            </div>
-
-            <!-- UMass Amherst -->
-            <h3 class="text-xl font-semibold text-fg mb-4">UMass Amherst</h3>
-            <div class="grid md:grid-cols-2 gap-x-8 gap-y-4">
-              <div class="py-3 border-b border-bdcolor-muted">
-                <a href="https://people.cs.umass.edu/~ameli/" target="_blank" rel="noopener noreferrer"
-                   class="font-semibold text-accent hover:text-accent flex items-center gap-1">
-                  Prof. Alexandra Meliou
-                  <i data-lucide="external-link" class="w-3 h-3"></i>
-                </a>
-                <p class="text-sm text-fg-muted">Professor of Information and Computer Sciences</p>
-              </div>
-              <div class="py-3 border-b border-bdcolor-muted">
-                <a href="https://people.cs.umass.edu/~phaas/" target="_blank" rel="noopener noreferrer"
-                   class="font-semibold text-accent hover:text-accent flex items-center gap-1">
-                  Prof. Peter J. Haas
-                  <i data-lucide="external-link" class="w-3 h-3"></i>
-                </a>
-                <p class="text-sm text-fg-muted">Professor of Information and Computer Sciences</p>
-              </div>
-            </div>
-          </section>
-
-          <!-- ============================================
-               HUDA LAB
-               ============================================ -->
-          <section id="huda-lab" class="mb-16">
-            <h2 class="text-3xl text-fg mb-6">HUDA Lab</h2>
-            <div>
-              <h3 class="text-2xl text-fg mb-3">Human Data Interaction Lab</h3>
-              <p class="text-fg-muted mb-4">
-                The HUDA Lab focuses on making data systems more accessible, interactive, and intelligent.
-              </p>
-              <h4 class="font-semibold text-fg mb-2">Research Areas:</h4>
-              <ul class="space-y-1 mb-6 text-fg-muted">
-                <li>&bull; Query interfaces for non-experts</li>
-                <li>&bull; Visual data exploration</li>
-                <li>&bull; Automated data analysis</li>
-                <li>&bull; Optimization in databases</li>
-              </ul>
-              <a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer"
-                 class="btn btn-primary">
-                Visit HUDA Lab Website
-                <i data-lucide="external-link" class="w-4 h-4"></i>
-              </a>
-            </div>
-
-          </section>
-
-          <!-- ============================================
-               TECHNICAL DETAILS
-               ============================================ -->
-          <section id="technical" class="mb-16">
-            <h2 class="text-3xl text-fg mb-6">Technical Details</h2>
-
-            <!-- Built With -->
-            <div class="mb-8">
-              <h3 class="text-xl font-semibold text-fg mb-4">Built With</h3>
-              <ul class="space-y-3">
-                <li class="flex items-baseline gap-3">
-                  <span class="text-accent">&bull;</span>
-                  <div>
-                    <a href="https://duckdb.org" target="_blank" rel="noopener noreferrer"
-                       class="font-semibold text-accent hover:text-accent inline-flex items-center gap-1">
-                      DuckDB <i data-lucide="external-link" class="w-3 h-3"></i>
-                    </a>
-                    <span class="text-sm text-fg-muted"> &mdash; Embeddable analytical database engine</span>
-                  </div>
-                </li>
-                <li class="flex items-baseline gap-3">
-                  <span class="text-accent">&bull;</span>
-                  <div>
-                    <a href="https://www.gurobi.com/" target="_blank" rel="noopener noreferrer"
-                       class="font-semibold text-accent hover:text-accent inline-flex items-center gap-1">
-                      Gurobi <i data-lucide="external-link" class="w-3 h-3"></i>
-                    </a>
-                    <span class="text-sm text-fg-muted"> &mdash; Primary MILP/QP/QCQP solver, auto-detected at runtime (commercial; recommended for performance)</span>
-                  </div>
-                </li>
-                <li class="flex items-baseline gap-3">
-                  <span class="text-accent">&bull;</span>
-                  <div>
-                    <a href="https://highs.dev/" target="_blank" rel="noopener noreferrer"
-                       class="font-semibold text-accent hover:text-accent inline-flex items-center gap-1">
-                      HiGHS <i data-lucide="external-link" class="w-3 h-3"></i>
-                    </a>
-                    <span class="text-sm text-fg-muted"> &mdash; Bundled open-source LP/MIP and continuous convex QP solver; handles supported models when Gurobi is unavailable</span>
-                  </div>
-                </li>
-              </ul>
-            </div>
-
-            <!-- Current Status -->
-            <div class="mb-8">
-              <h3 class="text-xl font-semibold text-fg mb-4">Current Status</h3>
-              <div class="grid md:grid-cols-2 gap-x-8 gap-y-3 text-sm">
-                <div class="py-2 border-b border-bdcolor-muted">
-                  <span class="font-semibold text-fg">Distribution:</span>
-                  <span class="text-fg-muted"> Tagged releases provide command-line binaries and Python packages</span>
-                </div>
-                <div class="py-2 border-b border-bdcolor-muted">
-                  <span class="font-semibold text-fg">Branch:</span>
-                  <span class="text-fg-muted"> <code>master</code> (active development)</span>
-                </div>
-                <div class="py-2 border-b border-bdcolor-muted">
-                  <span class="font-semibold text-fg">Test Coverage:</span>
-                  <span class="text-fg-muted"> 1,600+ Python cases across 84 test files, 9 focused C++ test files, and a 94-query golden corpus</span>
-                </div>
-                <div class="py-2 border-b border-bdcolor-muted">
-                  <span class="font-semibold text-fg">Target Scale:</span>
-                  <span class="text-fg-muted"> 1M rows in the standard TPC-H benchmark (exact solving with Gurobi)</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- Future Development -->
-            <div>
-              <h3 id="future" class="text-xl font-semibold text-fg mb-4">Future Development</h3>
-              <ul class="space-y-4">
-                <li class="flex items-start gap-3">
-                  <span class="text-accent mt-0.5">&bull;</span>
-                  <div>
-                    <span class="font-semibold text-fg">Sketch-Refine Algorithm</span>
-                    <p class="text-sm text-fg-muted">Scale beyond exact solving to very large datasets with bounded approximation error</p>
-                  </div>
-                </li>
-                <li class="flex items-start gap-3">
-                  <span class="text-accent mt-0.5">&bull;</span>
-                  <div>
-                    <span class="font-semibold text-fg">Broader Non-Linear Coverage</span>
-                    <p class="text-sm text-fg-muted">Extend automatic linearization beyond the current ABS, MIN/MAX, <code>&lt;&gt;</code>, <code>IN</code>, and McCormick bilinear forms; full QCQP/SOCP on HiGHS</p>
-                  </div>
-                </li>
-              </ul>
-            </div>
-          </section>
-
-
+      <section id="research">
+        <h2><a class="anchor" href="#research">Research</a></h2>
+        <div class="paper">
+          <div>
+            <h3 class="paper__title">DeciDB: In-Database Processing of Decision Queries</h3>
+            <p>Anh L. Mai, Filip Milisov, Hatim Rehmanjee, Azza Abouzied, Peter J. Haas, Alexandra Meliou</p>
+            <p>Submitted to CIDR 2027</p>
           </div>
+          <a class="link" href="assets/DeciDB_Paper.pdf" target="_blank" rel="noopener noreferrer">Read paper</a>
         </div>
+        <div class="paper">
+          <div>
+            <h3 class="paper__title">Scaling Package Queries to a Billion Tuples</h3>
+            <p>Anh L. Mai, Pengyu Wang, Azza Abouzied, Matteo Brucato, Peter J. Haas, Alexandra Meliou</p>
+            <p>VLDB 2024</p>
+          </div>
+          <a class="link" href="https://doi.org/10.14778/3641204.3641222" target="_blank" rel="noopener noreferrer">Read paper</a>
+        </div>
+        <div class="paper">
+          <div>
+            <h3 class="paper__title">Scalable Computation of High-Order Optimization Queries</h3>
+            <p>Matteo Brucato, Azza Abouzied, Alexandra Meliou</p>
+            <p>ACM, 2019</p>
+          </div>
+          <a class="link" href="https://doi.org/10.1145/3299881" target="_blank" rel="noopener noreferrer">Read paper</a>
+        </div>
+        <div class="paper">
+          <div>
+            <h3 class="paper__title">Scalable Package Queries in Relational Database Systems</h3>
+            <p>Matteo Brucato, Azza Abouzied, Alexandra Meliou</p>
+            <p>VLDB 2016</p>
+          </div>
+          <a class="link" href="https://doi.org/10.14778/2904483.2904489" target="_blank" rel="noopener noreferrer">Read paper</a>
+        </div>
+      </section>
+
+      <section id="team">
+        <h2><a class="anchor" href="#team">Team</a></h2>
+        <h3>NYU Abu Dhabi</h3>
+        <div class="members">
+          <div class="member"><b><a href="https://azza.azurewebsites.net/" target="_blank" rel="noopener noreferrer">Prof. Azza Abouzied</a></b><span>Professor of Computer Science</span></div>
+          <div class="member"><b>Anh Mai</b><span>PhD Student</span></div>
+          <div class="member"><b>Filip Milisov</b><span>Research Scientist</span></div>
+          <div class="member"><b>Hatim Rehmanjee</b><span>Research Scientist</span></div>
+          <div class="member"><b>Sami Akouk</b><span>Capstone Student</span></div>
+        </div>
+        <h3>UMass Amherst</h3>
+        <div class="members">
+          <div class="member"><b><a href="https://people.cs.umass.edu/~ameli/" target="_blank" rel="noopener noreferrer">Prof. Alexandra Meliou</a></b><span>Professor of Information and Computer Sciences</span></div>
+          <div class="member"><b><a href="https://people.cs.umass.edu/~phaas/" target="_blank" rel="noopener noreferrer">Prof. Peter J. Haas</a></b><span>Professor of Information and Computer Sciences</span></div>
+        </div>
+        <h3>HUDA Lab</h3>
+        <p>The Human Data Interaction Lab works on making data systems more accessible, interactive and intelligent:
+          query interfaces for non-experts, visual data exploration, automated data analysis, and optimization in
+          databases. <a href="https://huda-lab.github.io/" target="_blank" rel="noopener noreferrer">Visit the HUDA Lab website</a>.</p>
+      </section>
+
+      <section id="how">
+        <h2><a class="anchor" href="#how">How it is built</a></h2>
+        <dl class="kv">
+          <dt><a href="https://duckdb.org" target="_blank" rel="noopener noreferrer">DuckDB</a></dt>
+          <dd>The embeddable analytical engine DeciDB extends: parser, binder, optimizer and execution each own one part
+            of a DECIDE query.</dd>
+          <dt><a href="https://www.gurobi.com/" target="_blank" rel="noopener noreferrer">Gurobi</a></dt>
+          <dd>Used when its library and license are present: every model class, and the fastest on these workloads.</dd>
+          <dt><a href="https://highs.dev/" target="_blank" rel="noopener noreferrer">HiGHS</a></dt>
+          <dd>Bundled and open source: LP, MILP and convex QP, with no setup.</dd>
+          <dt><a href="features.html#rewriting">Query rewriting</a></dt>
+          <dd>Rules that recognize nine problem classes with an exact relational answer and rewrite the query to
+            compute it with relational operators, skipping the solver.</dd>
+          <dt>Testing</dt>
+          <dd>More than 7,000 Python cases, each comparing DeciDB's answer with an independent Gurobi model, run with
+            each solver and with query rewriting on and off.</dd>
+          <dt>Distribution</dt>
+          <dd>Tagged releases ship command-line binaries for macOS, Linux and Windows, and Python wheels.</dd>
+        </dl>
+      </section>
+
+      <section id="next">
+        <h2><a class="anchor" href="#next">What comes next</a></h2>
+        <ul>
+          <li><strong>The rest of the language proposal:</strong> nested reducers at any depth, frame selectors for ordered
+            data, <code>if</code> on decisions, declaration bounds and lexicographic objectives
+            (<a href="guide.html#roadmap">details</a>).</li>
+          <li><strong>More query-rewriting classes:</strong> the catalogue lists further classes with exact relational answers,
+            such as discrete resource allocation and transportation on sorted costs.</li>
+          <li><strong>Sketch-Refine:</strong> scale past exact solving to very large inputs with a bounded approximation
+            error.</li>
+        </ul>
+      </section>
+    </article>
+  </div>
+</div>
+
+</main>
+<footer class="footer closing footer--statement g2m" id="contact" aria-labelledby="close-h">
+  <div class="wrap">
+    <div class="closing__cta close--word">
+      <div class="section-head--split">
+        <div><h2 id="close-h">Run your first DECIDE query</h2><p class="t-lead">Python wheels and command-line builds for macOS, Linux and Windows.</p></div>
+        <a class="btn btn--primary" href="getting-started.html#install">Install DeciDB<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/><path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg></a>
       </div>
-    </section>
-
-  </main>
-
-  <!-- ============================================
-       FOOTER
-       ============================================ -->
-  <footer class="bg-canvas text-fg-muted border-t border-bdcolor">
-    <div class="container mx-auto px-4 py-12">
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-8">
-        <div>
-          <img src="assets/images/logo.svg" alt="DeciDB" class="h-8 mb-4 logo-img">
-          <p class="text-sm text-fg-subtle mb-4">Optimization-enabled SQL queries for DuckDB</p>
-          <p class="text-xs text-fg-subtle">&copy; 2026 HUDA Lab<br>NYU Abu Dhabi &amp; UMass Amherst</p>
+      <p class="close__word" aria-hidden="true">DeciDB</p>
+    </div>
+    <div class="closing__links">
+      <div class="grid">
+        <div class="span-4 stack-4">
+          <a class="nav__logo" href="index.html"><img src="assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
+          <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
-        <div>
-          <h4 class="font-semibold text-fg mb-3 text-sm">Documentation</h4>
-          <ul class="space-y-2 text-sm">
-            <li><a href="getting-started.html" class="text-fg-subtle hover:text-accent">Getting Started</a></li>
-            <li><a href="documentation.html" class="text-fg-subtle hover:text-accent">Syntax Reference</a></li>
-            <li><a href="examples.html" class="text-fg-subtle hover:text-accent">Examples</a></li>
-          </ul>
-        </div>
-        <div>
-          <h4 class="font-semibold text-fg mb-3 text-sm">Resources</h4>
-          <ul class="space-y-2 text-sm">
-            <li><a href="https://github.com/huda-lab/decidb" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">GitHub Repository</a></li>
-            <li><a href="https://github.com/huda-lab/decidb/issues" target="_blank" rel="noopener noreferrer" class="text-fg-subtle hover:text-accent">Issue Tracker</a></li>
-            <li><a href="about.html#research" class="text-fg-subtle hover:text-accent">Research Papers</a></li>
-          </ul>
-        </div>
-        <div>
-          <h4 class="font-semibold text-fg mb-3 text-sm">Contact</h4>
-          <ul class="space-y-2 text-sm text-fg-subtle">
-            <li>NYU Abu Dhabi &amp; UMass Amherst</li>
-            <li><a href="mailto:huda-lab@nyu.edu" class="text-accent hover:text-accent">huda-lab@nyu.edu</a></li>
-          </ul>
-        </div>
+        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="getting-started.html">Get started</a></li><li><a href="demo.html">Live demo</a></li><li><a href="guide.html">Guide</a></li><li><a href="docs/index.html">Documentation</a></li><li><a href="features.html">Novel features</a></li><li><a href="examples.html">Examples</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="examples/knapsack.html">Knapsack</a></li><li><a href="examples/facility-location.html">Depots</a></li><li><a href="examples/fair-allocation.html">Fair allocation</a></li><li><a href="examples/diagnose.html">DIAGNOSE</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Project</h3><ul><li><a href="about.html">About</a></li><li><a href="about.html#research">Papers</a></li><li><a href="https://github.com/huda-lab/decidb">GitHub</a></li><li><a href="https://huda-lab.github.io/">HUDA Lab</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Contact</h3><ul><li><a href="mailto:support@decidb.com">Email the team</a></li><li><a href="https://github.com/huda-lab/decidb/issues">Report an issue</a></li></ul></div>
       </div>
-
-      <div class="mt-8 pt-8 border-t border-bdcolor-muted text-center text-xs text-fg-subtle">
-        <p>&copy; 2026 HUDA Lab &middot; NYU Abu Dhabi &amp; UMass Amherst &middot; Built on DuckDB &middot; Solvers: Gurobi (primary), HiGHS (bundled)</p>
+      <div class="footer__legal">
+        <span>&copy; 2026 HUDA Lab, NYU Abu Dhabi and UMass Amherst</span>
+        <span>Product names and logos are trademarks of their owners.</span>
       </div>
     </div>
-  </footer>
-
-  <script>lucide.createIcons();</script>
-
+  </div>
+</footer>
+<script type="module" src="assets/system.js"></script>
+<script type="module" src="assets/motion/motion.js"></script>
+<script type="module" src="assets/layout/layout.js"></script>
+<script src="assets/js/site.js" defer></script>
 </body>
 </html>

@@ -1,0 +1,221 @@
+<!--hero-->
+<div class="container">
+  <div class="demo" data-demo>
+    <nav class="demo__rail" aria-label="Demo steps">
+      <div class="toc-title">Seven steps</div>
+      <ol>
+        <li><a href="#acts"><b>1</b>The acts</a></li>
+        <li><a href="#book"><b>2</b>Book the biggest crowd</a></li>
+        <li><a href="#rule"><b>3</b>Two per genre</a></li>
+        <li><a href="#what-if"><b>4</b>What if an act cancels?</a></li>
+        <li><a href="#impossible"><b>5</b>An impossible request</a></li>
+        <li><a href="#rewriting"><b>6</b>No solver needed</a></li>
+        <li><a href="#playground"><b>7</b>Your turn</a></li>
+      </ol>
+      <p class="demo__engine" data-engine-state>Starting DeciDB…</p>
+    </nav>
+
+    <div class="prose demo__story">
+      <section class="demo-step" id="acts">
+        <p class="demo-step__n">Step 1</p>
+        <h2><a class="anchor" href="#acts">The acts</a></h2>
+        <p class="lead">Maya runs a one-day city festival. Sixteen acts have answered her call, and the table
+          <code>Acts</code> holds what each one asks and brings.</p>
+        <p>Each row is one act: its genre, its fee in thousands of dollars, the crowd it is expected to draw, and a
+          critics' rating out of 10. Press <b>Run</b>, or <kbd>Ctrl</kbd> <kbd>Enter</kbd> in the editor. The query
+          runs in this page: DeciDB is compiled to WebAssembly and nothing is sent to a server.</p>
+<!--live id="acts" fixture="demo-festival" title="The table"-->SELECT act, genre, fee, crowd, rating
+FROM Acts
+ORDER BY genre, crowd DESC;<!--/live-->
+        <p>The board beside the story draws every act by fee and crowd. It follows each query you run.</p>
+      </section>
+
+      <section class="demo-step" id="book">
+        <p class="demo-step__n">Step 2</p>
+        <h2><a class="anchor" href="#book">Book the biggest crowd</a></h2>
+        <p class="lead">Maya has $100k for fees. Which acts draw the largest crowd within it?</p>
+        <p>In plain SQL this question has no answer: a query can filter and sort the acts, but it cannot search the
+          65,536 possible lineups. DECIDE adds that search to the query.</p>
+        <div class="live__controls" data-for="book">
+          <label class="live__range"><span>Budget for fees</span>
+            <input type="range" min="40" max="200" step="5" value="100" data-sub="(SUM\(book \* fee\) <= )(\d+)" data-unit="k">
+            <output>$100k</output></label>
+        </div>
+<!--live id="book" fixture="demo-festival" dec="book" title="Book within the budget"-->SELECT act, genre, fee, crowd, book
+FROM Acts
+DECIDE book(BOOL)
+SUCH THAT SUM(book * fee) <= 100
+MAXIMIZE SUM(book * crowd);<!--/live-->
+        <dl class="reads">
+          <dt><code>DECIDE book(BOOL)</code></dt><dd>one decision per row: book this act (1) or not (0).</dd>
+          <dt><code>SUCH THAT SUM(book * fee) &lt;= 100</code></dt><dd>the fees of the booked acts fit the budget.</dd>
+          <dt><code>MAXIMIZE SUM(book * crowd)</code></dt><dd>of the lineups that fit, return the one with the largest crowd.</dd>
+        </dl>
+        <p>DeciDB turns the query into an integer program, solves it with HiGHS, and returns the table with
+          <code>book</code> filled in. Move the budget, press <b>Run</b>, and the lineup changes. At $100k, four of the five acts are
+          electronic: they draw the most people per dollar.</p>
+      </section>
+
+      <section class="demo-step" id="rule">
+        <p class="demo-step__n">Step 3</p>
+        <h2><a class="anchor" href="#rule">Two per genre</a></h2>
+        <p class="lead">A festival of one genre will not do. Maya allows at most two acts of each genre.</p>
+        <p><code>SUM(book) by (genre) &lt;= 2</code> is one constraint for each genre: the sum runs over that
+          genre's rows. It is one more line in the query, and the rest stays as it was.</p>
+        <div class="live__controls" data-for="rule">
+          <label class="live__range"><span>Acts per genre, at most</span>
+            <input type="range" min="1" max="4" step="1" value="2" data-sub="(SUM\(book\) by \(genre\) <= )(\d+)">
+            <output>2</output></label>
+        </div>
+<!--live id="rule" fixture="demo-festival" dec="book" title="At most two per genre"-->SELECT act, genre, fee, crowd, book
+FROM Acts
+DECIDE book(BOOL)
+SUCH THAT SUM(book * fee) <= 100
+      AND SUM(book) by (genre) <= 2
+MAXIMIZE SUM(book * crowd);<!--/live-->
+        <p>The lineup now spans all four genres. It draws 1,000 fewer people than the electronic-heavy one: the
+          board's crowd figure is the price of the rule.</p>
+      </section>
+
+      <section class="demo-step" id="what-if">
+        <p class="demo-step__n">Step 4</p>
+        <h2><a class="anchor" href="#what-if">What if an act cancels?</a></h2>
+        <p class="lead">Plans change. The data changes with them; the query does not.</p>
+        <p>Each button below changes the <code>Acts</code> table, then runs the query again. DeciDB reads the table
+          each time, so the answer always fits the data as it is now.</p>
+        <div class="live__actions" data-for="what-if">
+          <button class="btn btn--secondary" type="button" data-sql="DELETE FROM Acts WHERE act = 'Glass Harbor';">Glass Harbor cancels</button>
+          <button class="btn btn--secondary" type="button" data-sql="UPDATE Acts SET fee = 30 WHERE act = 'Copper Lungs';">Copper Lungs asks $30k</button>
+          <button class="btn btn--secondary" type="button" data-sql="INSERT INTO Acts VALUES ('Paper Moons', 'Jazz', 12, 5000, 8.4);">A new jazz act signs up</button>
+          <button class="btn btn--secondary" type="button" data-restore>Restore the acts</button>
+        </div>
+<!--live id="what-if" fixture="demo-festival" dec="book" title="The same query"-->SELECT act, genre, fee, crowd, book
+FROM Acts
+DECIDE book(BOOL)
+SUCH THAT SUM(book * fee) <= 100
+      AND SUM(book) by (genre) <= 2
+MAXIMIZE SUM(book * crowd);<!--/live-->
+      </section>
+
+      <section class="demo-step" id="impossible">
+        <p class="demo-step__n">Step 5</p>
+        <h2><a class="anchor" href="#impossible">An impossible request</a></h2>
+        <p class="lead">A sponsor asks for two acts of every genre, and a late bill cuts the budget to $90k.</p>
+        <p>No lineup meets both, so the query has no answer. DeciDB says so, and does not guess.</p>
+<!--live id="impossible" fixture="demo-festival" dec="book" expect="Prefix the query with DIAGNOSE" title="Two of every genre for $90k"-->SELECT act, genre, fee, crowd, book
+FROM Acts
+DECIDE book(BOOL)
+SUCH THAT SUM(book * fee) <= 90
+      AND SUM(book) by (genre) >= 2
+MAXIMIZE SUM(book * crowd);<!--/live-->
+        <p>Put <code>DIAGNOSE</code> in front of the same query and DeciDB names the smallest change that gives it an
+          answer. Press <b>Apply</b> on a suggestion to make that change in the query above and run it.</p>
+<!--live id="diagnose" fixture="demo-festival" target="impossible" title="The same query, diagnosed"-->DIAGNOSE
+SELECT act, genre, fee, crowd, book
+FROM Acts
+DECIDE book(BOOL)
+SUCH THAT SUM(book * fee) <= 90
+      AND SUM(book) by (genre) >= 2
+MAXIMIZE SUM(book * crowd);<!--/live-->
+      </section>
+
+      <section class="demo-step" id="rewriting">
+        <p class="demo-step__n">Step 6</p>
+        <h2><a class="anchor" href="#rewriting">No solver needed</a></h2>
+        <p class="lead">Maya's last plan ignores the fees: one or two acts of each genre, the best rated.</p>
+        <p>Acts rated above 8 add to the objective and acts below 8 take from it, so each genre books its best act, and
+          its second best only if that act is rated above 8. DeciDB recognizes this shape (rule S1: the best rows of
+          each group) and rewrites the query into sorting and ranking. No solver starts.</p>
+<!--live id="rewriting" fixture="demo-festival" dec="book" direct="S1_UNIFORM_MATROID" title="The best rated, by genre"-->SELECT act, genre, rating, book
+FROM Acts
+DECIDE book(BOOL)
+SUCH THAT SUM(book) by (genre) >= 1
+      AND SUM(book) by (genre) <= 2
+MAXIMIZE SUM((rating - 8) * book)
+ORDER BY genre, rating DESC;<!--/live-->
+        <h3 id="race"><a class="anchor" href="#race">How much faster?</a></h3>
+        <p>Make a table of many acts and run the same query twice: once as DeciDB runs it, and once with
+          <code>decide_direct_solve = 'off'</code>, which sends it to the solver. Both return the same lineup.</p>
+<!--live id="race" fixture="demo-festival-big" dec="booked" title="The same plan on the table Big"-->SELECT genre, COUNT(*) AS booked
+FROM (SELECT act, genre, book
+      FROM Big
+      DECIDE book(BOOL)
+      SUCH THAT SUM(book) by (genre) >= 1
+            AND SUM(book) by (genre) <= 2
+      MAXIMIZE SUM((rating - 8) * book))
+WHERE book = 1
+GROUP BY genre
+ORDER BY genre;<!--/live-->
+        <div class="race" data-race="race">
+          <div class="race__pick" role="group" aria-label="Acts in Big">
+            <span>Acts in <code>Big</code></span>
+            <button class="pill" type="button" data-n="1000">1,000</button>
+            <button class="pill" type="button" data-n="10000" aria-pressed="true">10,000</button>
+            <button class="pill" type="button" data-n="30000">30,000</button>
+          </div>
+          <button class="btn btn--primary" type="button" data-race-go>Race</button>
+          <div class="race__bars" aria-live="polite"></div>
+        </div>
+        <p class="demo__aside">The solver here is HiGHS compiled to WebAssembly, on one thread. On your own machine
+          DeciDB uses every core, and Gurobi when it finds a license, so both paths run faster there. The
+          <a href="docs/performance.html">performance page</a> has the native timings.</p>
+      </section>
+
+      <section class="demo-step" id="playground">
+        <p class="demo-step__n">Step 7</p>
+        <h2><a class="anchor" href="#playground">Your turn</a></h2>
+        <p class="lead">Write your own query. <code>Acts</code> and <code>Big</code> are loaded; any SQL works.</p>
+        <div class="live__ideas" data-for="playground">
+          <span>Try</span>
+<!--idea for="playground" fixture="demo-festival" label="The cheapest lineup for 30,000 people"-->SELECT act, genre, fee, crowd, book
+FROM Acts
+DECIDE book(BOOL)
+SUCH THAT SUM(book * crowd) >= 30000
+MINIMIZE SUM(book * fee);<!--/idea-->
+<!--idea for="playground" fixture="demo-festival" label="Exactly one act per genre"-->SELECT act, genre, fee, crowd, book
+FROM Acts
+DECIDE book(BOOL)
+SUCH THAT SUM(book) by (genre) = 1
+      AND SUM(book * fee) <= 80
+MAXIMIZE SUM(book * crowd);<!--/idea-->
+<!--idea for="playground" fixture="demo-festival" label="The best rating for $60k"-->SELECT act, genre, fee, rating, book
+FROM Acts
+DECIDE book(BOOL)
+SUCH THAT SUM(book * fee) <= 60
+MAXIMIZE SUM(book * rating);<!--/idea-->
+<!--idea for="playground" fixture="demo-festival" label="How DeciDB plans step 3"-->EXPLAIN
+SELECT act, genre, fee, crowd, book
+FROM Acts
+DECIDE book(BOOL)
+SUCH THAT SUM(book * fee) <= 100
+      AND SUM(book) by (genre) <= 2
+MAXIMIZE SUM(book * crowd);<!--/idea-->
+        </div>
+<!--live id="playground" fixture="demo-festival" dec="book" title="Playground"-->SELECT act, genre, fee, crowd, book
+FROM Acts
+DECIDE book(BOOL)
+SUCH THAT SUM(book * fee) <= 120
+      AND SUM(book) by (genre) BETWEEN 1 AND 2
+MAXIMIZE SUM(book * crowd);<!--/live-->
+        <p>The <a href="guide.html">guide</a> explains every clause, and the <a href="examples.html">examples</a>
+          have 22 problems to copy from. To run DeciDB on your own data, <a href="getting-started.html">install it</a>:
+          the same queries run there on every core, with your files and databases.</p>
+      </section>
+    </div>
+
+    <aside class="demo__board" aria-label="Festival board">
+      <div class="board">
+        <div class="board__head"><span class="board__title">Festival board</span><span class="board__path" data-board-path>Run a step to fill the board</span></div>
+        <svg class="board__plot" viewBox="0 0 360 260" role="img" aria-labelledby="board-desc" data-board-plot><desc id="board-desc">Each act drawn by its fee and its expected crowd; booked acts are filled.</desc></svg>
+        <div class="board__legend" data-board-legend></div>
+        <dl class="board__facts">
+          <div><dt>Fees</dt><dd data-board-fees>–</dd></div>
+          <div><dt>Crowd</dt><dd data-board-crowd>–</dd></div>
+          <div><dt>Booked</dt><dd data-board-count>–</dd></div>
+        </dl>
+        <div class="board__meter" data-board-meter hidden><span></span></div>
+        <ul class="board__booked" data-board-booked aria-live="polite"></ul>
+      </div>
+    </aside>
+  </div>
+</div>
