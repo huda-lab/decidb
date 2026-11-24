@@ -5,7 +5,7 @@ It reads no SQL. A test states the query's result rows, its decisions with their
 its clauses as expression trees in plain Python; the evaluator generates the instances the
 language defines and then either solves them through the ``OracleSolver`` interface or
 judges DeciDB's answer against them. The definitions it follows are the deck's
-(``context/New_syntax.pdf`` pp. 25-56, 79-119) under the rulings of
+(``context/reference/New_syntax.pdf`` pp. 25-56, 79-119) under the rulings of
 ``context/docs/language/decisions.md`` (D5, D67, D68 and D70-D86), read literally, with no
 algorithmic shortcut:
 

@@ -417,3 +417,6 @@ AGENT.md
 !.claude/settings.json
 # Worktrees the Agent tool creates for isolated agents
 .claude/worktrees/
+
+# The paper, its figures and the language deck: kept locally, never committed.
+context/reference/

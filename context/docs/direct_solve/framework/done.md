@@ -381,7 +381,7 @@ assertion, ASan or UBSan report. It is the baseline for every direct-solve task 
     the MAX of a lower one, over the kept rows of the comparison's group; a row in no class of the clause's `per K:`
     (D5) gives no bound. An `=` bound must take one value per group. A constant, a query-wide value, a value with one
     value per group already, and a `<>` bound (which excludes each value it takes) are left alone. Every other data
-    bound is recorded as a side table (ruling R18, `context/opa_rewrite/decisions.md`): each reducer it reads is a bound
+    bound is recorded as a side table (ruling R18, `context/docs/pipeline/decisions.md`): each reducer it reads is a bound
     aggregate, and the bound's tightest value is one more, the MIN or MAX of the bound over the group's kept rows. The
     bound then reads a column with one value on every row of its group, on the solver path and the direct path alike,
     so a rule reads a data limit as it reads any source column and computes no bound itself. An `=` bound's NaN limit

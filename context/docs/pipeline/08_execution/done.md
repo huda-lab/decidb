@@ -88,7 +88,7 @@ its children's containers. Stage 08 does the same:
 | Bottom-up evaluation (pp. 93-97, 106-108) | `DecideTreeColumns`: each node's programs over its entries, children before parents; then `DecideModelEmitter` writes what stage 06 reads |
 
 **An error is raised where a read reaches it**, as in SQL: the first error the evaluation reaches stops the query, and
-no order among errors is owed (R10, R11, `context/opa_rewrite/decisions.md`). A `when` decides which rows a node reads,
+no order among errors is owed (R10, R11, `context/docs/pipeline/decisions.md`). A `when` decides which rows a node reads,
 so a read of a row the `when` drops raises nothing (`when t.w > 0: x <= ln(t.w)` where `w` is 0, `language/guide.md`
 §6.3), and neither does a value no parent reads. Nothing else is deferred: the evaluation keeps no ledger and ranks no
 error. A vector that fails is read again entry by entry only to find the failing entry's own inputs (`Numbers`), so the
@@ -112,7 +112,7 @@ time, each chunk's rows numbered by the rows before it, as a hash join builds it
 (`execution.descent_rows`, `DECIDB_PROFILE`, counts the rows read). The evaluation fetches its first chunk alone, for a
 value the whole query shares, and never scans the buffer again. A descent per thread, merged in `Finalize`, would route
 on several threads at the cost of a merge of several hundred lines, so the rows are routed once. Against that merge,
-over a stored table so the scan runs on several threads (`context/opa_rewrite/tools/ab_bench.py`), the two lightest
+over a stored table so the scan runs on several threads (`benchmark/decide/ab_bench.py`), the two lightest
 workloads spend more outside the solver: `flat-sum` 23 ms at 1 million rows (12%) and 53 ms at 2 million (14%, 3% of the
 whole query), `variants-10` 35 ms at 1 million (14%); the others move by at most 6%, and peak memory falls by 3 to 8%.
 The unbounded diagnosis's column groupings (§7b) explain the solved model after the evaluation, and read the named input
@@ -935,7 +935,7 @@ same places (`QuadraticClause::rows`, `data_rows`): as lists of terms they take 
 the objective's, dense over every row, would keep the columns, leaving the builder two readers.
 
 The records are `ClauseRecords` (`../06_model_formulation/done.md` § The rows a clause emits). Measured on
-`context/opa_rewrite/repro/clauses_times_rows.sql` (40 clauses over 2,000,000 rows, each keeping 2,000) against
+`benchmark/decide/queries/clauses_times_rows.sql` (40 clauses over 2,000,000 rows, each keeping 2,000) against
 columns as long as the input: `execution.tree_model` 32 ms against 534 ms, implied bounds 0 ms against 181 ms, peak
 memory 1.03 GB against 2.78 GB. A clause that keeps every row gains nothing from places and pays for its records:
 `y <= v` alone over 1,000,000 rows spends 103 ms in `execution.tree_model` against 53 ms, and 66 ms against 82 ms in

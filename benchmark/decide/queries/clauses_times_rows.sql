@@ -1,4 +1,4 @@
--- design.md section 4: writing the model scales with what the clauses keep, not with clauses times rows.
+-- Writing the model scales with what the clauses keep, not with clauses times rows (pipeline/08_execution/done.md).
 -- 2,000,000 rows; each clause keeps 2,000. Run with DECIDB_PROFILE=1 and read execution.tree_model and
 -- gurobi.optimize; /usr/bin/time -l gives peak memory.
 --   1 clause:   tree_model 29 ms, optimize 168 ms, peak 0.99 GB

@@ -259,7 +259,7 @@ term splitter use them:
 
 The `optimizer.decide` span of `DECIDB_PROFILE=1` times the whole block.
 
-**The form of a reducer helper** (`decide_helper_form.cpp`; context/opa_rewrite/decisions.md R42 to R44, R47). A helper the
+**The form of a reducer helper** (`decide_helper_form.cpp`; context/docs/pipeline/decisions.md R42 to R44, R47). A helper the
 value rewrite made is a column, or its members are written into what reads it. The pass (`HelperForms`) has two
 steps. It reads the readers: every place the plan names the helper's column, counted over every expression the plan
 holds (`LogicalDecide::EnumerateExpressions`, and a product's factors), and those of them that take a linear
@@ -556,8 +556,7 @@ no caret. A coefficient has one message for NaN and infinity. A number
 past a DOUBLE (`TOO_LARGE`) is raised only where DeciDB accumulates across rows. An `=` bound that takes two values
 raises through `__internal_decide_bound_disagreement` on a direct plan, from the same builder.
 
-The nodes the canonicalizer and the other rewrites build keep the location of the user text they replace
-(`context/opa_rewrite/design.md` § 3, contract 5).
+The nodes the canonicalizer and the other rewrites build keep the location of the user text they replace.
 
 One location rule holds (`decide_source_provenance.hpp`, `DecideReplaces`): every replacement equal in value takes the
 replaced node's location, `ReadQuotient`'s `(1/0) * x` and the like-term merge included. No structural proxy (a sum,

@@ -126,7 +126,7 @@ agree.
   `NeedsEnvelope()` and `NeedsClosing()` read the sides off it. An ABS's `exact` is the same kind of fact.
 - **None of it is serialized**: only a plan the DECIDE optimizer has not run on is (§5).
 
-**Where the rewrites' structure departs from `context/opa_rewrite/design.md` § 3.2.3.**
+**Choices in the rewrites' structure, each with its reason.**
 
 1. *There is no `BoundDecideFunctionExpression`.* The kept call stays a `BoundFunctionExpression` and holds a typed
    reference into the table (the symbol-reference pattern above). A wrapper node would hide the call from every
@@ -139,7 +139,7 @@ agree.
    `BOOLEAN_PRODUCT` is one entry per Boolean product the expansion reads, each one helper. One group record would be
    an entry with any number of helpers, where every other entry has at most one.
 
-**Where the bound structure departs from `context/opa_rewrite/design.md` § 3.2.2 and § 3.5.**
+**Choices in the bound structure, each with its reason.**
 
 1. *A member NULL test is its own node, not a field of the reducer.* `BoundDecideNullTestExpression` is a Decorator
    over the test, as PostgreSQL's `RestrictInfo` is over a conjunct of a qual: it travels inside the conjunction and

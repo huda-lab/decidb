@@ -20,7 +20,7 @@ import tempfile
 import time
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[3]
+REPO = Path(__file__).resolve().parents[2]
 # Label -> binary. Edit to the two builds being compared; the second is the OPA parent of the merge (f56845f560).
 BINARIES = {
     "tip": REPO / "build" / "release" / "decidb",

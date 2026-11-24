@@ -253,7 +253,7 @@ problem (or vice versa). See `tests/test_error_infeasible.py` for the
 canonical pattern.
 
 A test of an error asserts its kind and where it points, not its wording
-(`context/opa_rewrite/decisions.md` R16); the wording lives in
+(`context/docs/pipeline/decisions.md` R16); the wording lives in
 `language/errors.md`. `assert_error_at(sql, kind=..., at=..., word=...)` reads
 the kind as the DuckDB error class that opens the message (`Binder Error`, ...).
 `at` is a piece of the query: the caret under the `LINE n:` line falls inside

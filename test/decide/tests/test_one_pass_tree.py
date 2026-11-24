@@ -64,7 +64,7 @@ postorder=[0,5,4,3,2,7,6,1,10,9,8]
 
 
 def test_the_deck_example_builds_the_tree_of_page_81(decidb_cli):
-    """F1's tree is the annotated tree of p. 81 of context/New_syntax.pdf (E(TRUE, D.id) over the nest and the data
+    """F1's tree is the annotated tree of p. 81 of context/reference/New_syntax.pdf (E(TRUE, D.id) over the nest and the data
     sum, G(SUM, D.rid), E(S.p, S.cid), G(MAX, S.cid), E(TRUE, tid), G(SUM, S.m), E(TRUE, tid)), written as the dump
     writes a tree, which differs from the drawing in notation only:
     (1) the deck draws <=, + and * as nodes; the dump holds them in the E node's body;

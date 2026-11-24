@@ -1,6 +1,6 @@
 # Language roadmap
 
-DeciDB is moving to the language proposal ([`context/New_syntax.pdf`](../../New_syntax.pdf), "the deck"). This page
+DeciDB is moving to the language proposal ([`context/reference/New_syntax.pdf`](../../reference/New_syntax.pdf), "the deck"). This page
 lists what the move has not reached yet: deck features DeciDB does not implement, and current behavior the deck changes.
 Each item is planned transition work, not a bug: today's behavior is deliberate, documented in [guide.md](guide.md), and
 either refuses a query with a message or answers it correctly. None is scheduled; when one is, its work moves to the

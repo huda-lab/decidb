@@ -719,7 +719,7 @@ kept, model sizes pinned) and `test/common/test_decidb_helper_inlining.cpp`.
 
 ### 6.5 Deck examples 1–8
 
-From the language proposal ([`context/New_syntax.pdf`](../../New_syntax.pdf), pp. 17–24). All run as written and fully
+From the language proposal ([`context/reference/New_syntax.pdf`](../../reference/New_syntax.pdf), pp. 17–24). All run as written and fully
 explicit, over `FROM Shipment S JOIN Depot D USING (depotID)` with `DECIDE ship(INT), per D.depotID: reserve(REAL)`:
 
 | # | As written | Constraints | Reducer reads | A variant per distinct |

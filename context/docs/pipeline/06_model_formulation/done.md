@@ -168,7 +168,7 @@ and are freed there, a decision with one instance per class costs one number per
 it is read is its members. The objective's constant arrives whole in `objective_constant`.
 
 Every decision's coefficients take this one form, so a per-row decision's are read twice, once summed by stage 08 and
-once placed here: 5 ms over 2,000,000 rows (`context/opa_rewrite/repro/clauses_times_rows.sql`, 30 ms in
+once placed here: 5 ms over 2,000,000 rows (`benchmark/decide/queries/clauses_times_rows.sql`, 30 ms in
 `execution.tree_model` against 25 ms with one pass). Handing a per-row column over as it is would be a second route
 for one shape.
 
@@ -822,7 +822,7 @@ the helper definition's `origin` and `DecideWrittenClause` (the objective when n
 
 A helper decision costs a column, a definition row and its reads; written where it is read, it costs none of them, and
 its members' terms stand in each reader instead. Which helper is written in is the plan's
-(`DecideReducerValueDefinition::form`, `ChooseHelperForms`, stage 05; context/opa_rewrite/decisions.md R42 to R44,
+(`DecideReducerValueDefinition::form`, `ChooseHelperForms`, stage 05; context/docs/pipeline/decisions.md R42 to R44,
 R47),
 and stage 08 writes it (`DecideModelEmitter::HandLink`, `WriteMembersIn`; `../08_execution/done.md` § A helper the plan
 writes where it is read): a `WRITTEN_IN` SUM or AVG whole, a `ONE_MEMBER_WRITTEN_IN` MIN or MAX group by group,
