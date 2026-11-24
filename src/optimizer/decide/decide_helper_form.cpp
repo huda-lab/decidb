@@ -3,9 +3,10 @@
 //
 // src/optimizer/decide/decide_helper_form.cpp
 //
-// Stage 05 — the form of each reducer helper (context/docs/pipeline/05_optimizer/done.md § The form of a reducer helper). A reducer the value rewrite holds
-// in a helper decision is a column, or is written into what reads it. Which is a fact joined over the helper's
-// readers, so it is set here, on the plan, once every rewrite has run; execution repeats the form per group.
+// Stage 05 — the form of each reducer helper (context/docs/pipeline/05_optimizer/done.md § The form of a reducer
+// helper). A reducer the value rewrite holds in a helper decision is a column, or is written into what reads it. Which
+// is a fact joined over the helper's readers, so it is set here, on the plan, once every rewrite has run; execution
+// repeats the form per group.
 //
 //===----------------------------------------------------------------------===//
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
@@ -22,6 +23,7 @@
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
+#include <algorithm>
 
 namespace duckdb {
 

@@ -25,6 +25,7 @@
 #include "duckdb/planner/expression_binder/decide/decide_binder.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
+#include <algorithm>
 
 namespace duckdb {
 

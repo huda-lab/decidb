@@ -120,26 +120,34 @@ def check_standalone(files):
         ]
     cc = json.loads(cc_path.read_text())
 
-    # Flags differ by area -- test targets need Catch's include path, which no
-    # src/ entry carries. Keep the richest flag set seen per top-level area and
-    # compile each file with the flags of its own area.
-    by_area = {}
+    # Flags differ by target -- test targets need Catch's include path, and the parser's transformer needs
+    # libpg_query's. A compile entry's directory, relative to the build directory, is the source directory of its
+    # target, so each file is compiled with the flags of the nearest directory above it that has a target; where
+    # two targets share a directory, the richer flag set.
+    build_root = str(cc_path.parent) + "/"
+    by_dir = {}
     for e in cc:
         args = shlex.split(e["command"]) if "command" in e else e["arguments"]
         f = [a for a in args if a.startswith(("-I", "-D", "-isystem"))]
-        rel = e["file"].replace(str(ROOT) + "/", "")
-        area = rel.split("/")[0]
-        if len(f) > len(by_area.get(area, [])):
-            by_area[area] = f
-    if not by_area:
+        target_dir = e["directory"].replace(build_root, "")
+        if len(f) > len(by_dir.get(target_dir, [])):
+            by_dir[target_dir] = f
+    if not by_dir:
         return ["no usable compile_commands entry found"]
-    fallback = max(by_area.values(), key=len)
+    fallback = max(by_dir.values(), key=len)
+
+    def flags_of(source):
+        directory = pathlib.PurePosixPath(source).parent
+        for candidate in (directory, *directory.parents):
+            if str(candidate) in by_dir:
+                return by_dir[str(candidate)]
+        return fallback
 
     bad = []
     cpps = [f for f in files if f.endswith(".cpp")]
     for i, f in enumerate(cpps, 1):
         print(f"\r  standalone {i}/{len(cpps)}", end="", file=sys.stderr, flush=True)
-        flags = by_area.get(f.split("/")[0], fallback)
+        flags = flags_of(f)
         r = subprocess.run(
             ["clang++", "-std=c++17", "-fsyntax-only", *flags, f], cwd=ROOT, capture_output=True, text=True
         )

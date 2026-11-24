@@ -24,6 +24,7 @@
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
+#include "duckdb/optimizer/decide/decide_optimizer_internal.hpp"
 
 #include <algorithm>
 #include <functional>

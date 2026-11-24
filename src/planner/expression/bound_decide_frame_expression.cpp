@@ -11,7 +11,7 @@ BoundDecideFrameExpression::BoundDecideFrameExpression(LogicalType return_type, 
 }
 
 string BoundDecideFrameExpression::ToString() const {
-	string result = "frame" + to_string(frame) + "(";
+	string result = "frame" + std::to_string(frame) + "(";
 	for (idx_t i = 0; i < children.size(); i++) {
 		result += (i ? ", " : "") + children[i]->ToString();
 	}

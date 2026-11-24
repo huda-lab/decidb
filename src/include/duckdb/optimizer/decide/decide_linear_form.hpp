@@ -10,6 +10,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/unordered_map.hpp"
+#include "duckdb/planner/decide/decide_canonicalizer.hpp"
 
 namespace duckdb {
 class ClientContext;

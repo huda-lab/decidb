@@ -12,6 +12,7 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/parser/parsed_expression.hpp"
+#include <functional>
 
 namespace duckdb {
 

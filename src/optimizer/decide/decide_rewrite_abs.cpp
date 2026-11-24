@@ -14,6 +14,7 @@
 #include "duckdb/planner/decide/decide_term_split.hpp"
 
 #include <cstdlib>
+#include <cmath>
 #include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/enums/decide.hpp"

@@ -14,6 +14,7 @@
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/execution/operator/decide/decide_global_sink_state.hpp"
 #include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
+#include "duckdb/common/decide_profile.hpp"
 
 #include <algorithm>
 #include <cmath>

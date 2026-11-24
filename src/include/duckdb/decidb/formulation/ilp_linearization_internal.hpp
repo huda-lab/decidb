@@ -15,6 +15,7 @@
 #pragma once
 
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
+#include <limits>
 
 namespace duckdb {
 namespace decide_linearize {

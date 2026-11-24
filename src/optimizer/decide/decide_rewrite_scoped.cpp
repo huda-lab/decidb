@@ -43,6 +43,7 @@
 #include "duckdb/planner/decide/decide_product_form.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
+#include <algorithm>
 
 namespace duckdb {
 

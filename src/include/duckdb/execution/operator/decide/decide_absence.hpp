@@ -10,6 +10,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/planner/decide/decide_tree_terms.hpp"
+#include "duckdb/execution/operator/decide/decide_value_extraction.hpp"
 
 namespace duckdb {
 

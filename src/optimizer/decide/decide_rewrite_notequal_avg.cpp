@@ -35,6 +35,8 @@
 
 namespace duckdb {
 
+using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
+
 void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {
 	// Walk the bound clauses and find all COMPARE_NOTEQUAL expressions.
 	// The constraint expression itself is NOT modified — the physical operator

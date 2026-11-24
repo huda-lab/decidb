@@ -1,6 +1,7 @@
 #include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/limits.hpp"
+#include "duckdb/common/numeric_utils.hpp"
 
 namespace duckdb {
 

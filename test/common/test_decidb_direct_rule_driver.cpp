@@ -2,6 +2,7 @@
 #include "test_helpers.hpp"
 
 #include <functional>
+#include <memory>
 
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"

@@ -19,6 +19,7 @@
 #include "duckdb/main/config.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/common/decide_profile.hpp"
 
 #include <algorithm>
 #include <cmath>
