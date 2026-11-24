@@ -292,9 +292,14 @@ jobs:
           SELECT x, item_name, item_price
           FROM items
           DECIDE x(BOOL)
-          SUCH THAT SUM(x * item_weight) <= 50
+          SUCH THAT per (): SUM(x * item_weight) by () <= 50
           MAXIMIZE SUM(x * item_value);
           ```
+
+          `per ():` in front of a constraint makes it one constraint for the whole query,
+          and `by ()` after an aggregate makes it read every row. Both are the defaults,
+          written out here; `per category:` and `by (category)` make one constraint per
+          group, and `when condition:` keeps the rows where the condition holds.
 
           `INT` and `REAL` decisions assign a quantity to every row instead:
 
@@ -302,7 +307,7 @@ jobs:
           SELECT plant, units
           FROM plants
           DECIDE units(INT)
-          SUCH THAT units <= capacity AND SUM(units) >= 500
+          SUCH THAT units <= capacity AND per (): SUM(units) by () >= 500
           MINIMIZE SUM(units * unit_cost);
           ```
 
