@@ -63,11 +63,15 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
 
 ## MODEL-7 — The model-writing time of the clauses benchmark
 
-- **Decision needed.** Whether 7 ms of model-writing time is traced to its commit.
-- **Problem.** `context/opa_rewrite/repro/clauses_times_rows.sql` spends 32 ms in `execution.tree_model` for 40
-  clauses over 2,000,000 rows, 29 ms for one clause; the phase started from 25 ms for 40. Peak memory is equal
-  (1.03 GB) and the query takes about 850 ms. The time is in what one clause already pays over every row (the
-  objective's terms and the bound on `x`), not in the clauses.
-- **Options.** (1) Bisect the phase's commits on the benchmark and remove the cause. (2) Leave it.
-- **Recommendation.** 2, unless a profile shows one plain cause: the difference is under 1% of the query.
-- **Done when.** `DECIDB_PROFILE=1` on the benchmark reads 25 ms or the owner rules it closed.
+- **Decision needed.** Whether the objective's coefficients keep their two passes over a per-row decision.
+- **Problem.** `context/opa_rewrite/repro/clauses_times_rows.sql` spends 30 ms in `execution.tree_model` for 40
+  clauses over 2,000,000 rows and 27 ms for one clause, against 25 ms and 23 ms with one pass; `model.linear_objective`
+  takes 6 ms against 4 ms. The query takes about 850 ms and peak memory is equal (1.03 GB). The cause is the
+  objective's hand-over (`DecideModelEmitter::ObjectiveCoefficients`): the emitter sums each term's column into a
+  coefficient per instance (`SolverInput::objective_coefficients`), and stage 06 copies that into the model's
+  columns. A per-row decision's 2,000,000 coefficients are read twice and held in one more 16 MB array.
+- **Options.** (1) Leave it: every decision's objective coefficients reach stage 06 in one form, and stage 06 reads
+  no data row. (2) Hand a per-row decision's lone dense column over as it is: one pass, and a second form of the
+  hand-over that stage 06 and `ReportAnEmptyObjective` both read.
+- **Recommendation.** 1: the cost is 5 ms in 850 ms, and option 2 adds a second route for one shape.
+- **Done when.** The owner rules; under option 2, `DECIDB_PROFILE=1` on the benchmark reads 25 ms.
