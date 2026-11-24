@@ -75,8 +75,8 @@ bool TryMatchScaledAggregate(const Expression &expr, idx_t decide_index, ScaledA
 //! The additive spine: `+`, binary and unary `-`, and binder casts over decision algebra. Every other node is a
 //! term, handed to `callback` with its accumulated sign. Decompose and ReadCanonicalAtoms both walk it, so the
 //! terms a reader sees are the ones canonicalization placed.
-template <class IS_DECISION, class CALLBACK>
-static void WalkAdditiveSpine(const Expression &expr, int sign, IS_DECISION &&is_decision, CALLBACK &&callback) {
+template <class IS_DECISION, class FUN>
+static void WalkAdditiveSpine(const Expression &expr, int sign, IS_DECISION &&is_decision, FUN &&callback) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &func = expr.Cast<BoundFunctionExpression>();
 		if (func.function.name == "+") {

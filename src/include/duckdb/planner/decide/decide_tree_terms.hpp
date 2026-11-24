@@ -236,8 +236,8 @@ struct BoundDecideClause {
 	}
 
 	//! The body and the `when`, each slot once, in that order.
-	template <class CALLBACK>
-	void EnumerateExpressions(CALLBACK &&callback) {
+	template <class FUN>
+	void EnumerateExpressions(FUN &&callback) {
 		if (body) {
 			callback(body);
 		}
