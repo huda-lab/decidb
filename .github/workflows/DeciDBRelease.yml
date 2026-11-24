@@ -310,7 +310,7 @@ jobs:
 
           ## Security Warnings
 
-          These are **unsigned binaries** for beta testing:
+          These binaries are **unsigned**:
 
           - **macOS**: Right-click → Open → Open (first time only)
           - **Windows**: Click "More info" → "Run anyway"
