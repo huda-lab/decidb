@@ -852,10 +852,14 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   clause folds into its box stands, and the static domain check skips it: a helper holds a
   reducer's value, negative wherever its terms are. A refusal in formulation names a helper
   by its reducer.
-- **A helper the plan writes where it is read** (`DecideHelperForm`, R43, R44). `ValueLinks` runs before any clause
-  or the objective is read, children first. `HandLink` keeps such a helper's members in the emitter
-  (`written_helpers`): a `WRITTEN_IN` SUM or AVG whole, a `ONE_MEMBER_WRITTEN_IN` MIN or MAX group by group where the
-  group has one member, the other groups going to stage 06 as a link. `WriteMembersIn` then rewrites each list of
+- **A helper the plan writes where it is read** (`DecideHelperForm`, R43, R44, R47). `ValueLinks` runs before any
+  clause or the objective is read, children first. `HandLink` keeps such a helper's members in the emitter
+  (`written_helpers`), and `Settle` ends its listing: the groups that pass the form's test are written where they are
+  read, and the others go to stage 06 as a link. A `WRITTEN_IN` SUM or AVG is settled whole and a
+  `ONE_MEMBER_WRITTEN_IN` MIN or MAX by its groups' member counts, both as they are listed. A `ONE_ROW_WRITTEN_IN`
+  SUM or AVG waits for the one clause that reads it: as that clause's records are finished, `SettleRowHelpers` counts
+  the rows that name each instance and writes in the groups one row reads; a helper no row names keeps every column
+  (`SettleUnreadHelpers`, once every clause is read). `WriteMembersIn` then rewrites each list of
   terms that names a written-in instance, replacing the term by the instance's members times its coefficient and
   adding their constants to the row's: a clause's records as `Rows` and `Groups` finish them (an ABS envelope's rows
   among them), a later helper's members, and the objective's terms (`ObjectiveCoefficients`, which then sums

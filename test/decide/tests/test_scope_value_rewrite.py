@@ -132,11 +132,12 @@ def test_two_clauses_share_one_helper(decidb_cli, scope_solver, tmp_path):
 def test_a_row_varying_factor_on_a_reducer(decidb_cli, scope_solver, tmp_path):
     """Deck example 5: each shipment within its depot's share of the depot's total. The
     factor is read on the shipment's row; the helper is one per depot, which every shipment of
-    the depot reads, so it keeps its column and its definition row."""
+    the depot reads. D1 and D2 have two shipments each, so each keeps its column and its
+    definition row; D3's one shipment reads its total alone, which is written into its row."""
     sql = _ship_query("ship <= D.maxShipmentShare * sum(ship) by (D.depotID)")
     assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump")) == {
-        "num_vars": len(SHIPMENTS) + len(DEPOTS),
-        "num_rows": len(SHIPMENTS) + len(DEPOTS),
+        "num_vars": len(SHIPMENTS) + 2,
+        "num_rows": len(SHIPMENTS) + 2,
     }
     model = ScopedModel(joined(), SHIP)
     clauses = [SHIP_BOUND, Scoped((X,), "<=", (_ship_reduce(by=("depotID",), factor=lambda r: r["maxShipmentShare"]),))]
@@ -192,8 +193,8 @@ def test_a_keyed_decision_beside_a_reducer(decidb_cli, scope_solver):
     assert [row["open"] for row in result] == [True, True, True, True, False]
 
 
-# cli_fixture: both backends load the helper and the plain row; link: the five ways the term beside the reducer is,
-# or is not, one value per `by` group (`helpers` is how many helper decisions that adds).
+# cli_fixture: both backends load the helper and the plain row; link: the six ways the term beside the reducer is,
+# or is not, one value per `by` group (`helpers` is how many helper decisions the model holds).
 @pytest.mark.correctness
 @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
 @pytest.mark.parametrize(
@@ -204,8 +205,16 @@ def test_a_keyed_decision_beside_a_reducer(decidb_cli, scope_solver):
             ("depotID",),
             lambda r: r["capacity"],
             ("depotID",),
-            len(DEPOTS),
+            0,
             id="data-under-the-by-key",
+        ),
+        pytest.param(
+            "per D.depotID: sum(ship) by (D.depotID) <= S.demand * open",
+            ("depotID",),
+            lambda r: r["demand"],
+            ("depotID",),
+            2,
+            id="data-that-splits-a-class",
         ),
         pytest.param("sum(ship) by (D.depotID) <= 30 * open", ("depotID",), lambda r: 30, PER_ROW, 0, id="constant"),
         pytest.param(
@@ -213,7 +222,7 @@ def test_a_keyed_decision_beside_a_reducer(decidb_cli, scope_solver):
             ("depotID",),
             lambda r: r["capacity"],
             PER_ROW,
-            len(DEPOTS),
+            0,
             id="data-per-row",
         ),
         pytest.param(
@@ -221,7 +230,7 @@ def test_a_keyed_decision_beside_a_reducer(decidb_cli, scope_solver):
             ("depotID",),
             lambda r: r["capacity"],
             ("shipmentID",),
-            len(DEPOTS),
+            0,
             id="data-under-a-finer-key",
         ),
         pytest.param("sum(ship) <= 60 * open", (), lambda r: 60, PER_ROW, 1, id="by-nothing"),
@@ -234,9 +243,10 @@ def test_a_term_beside_a_reducer_is_one_row_per_group_when_the_by_key_determines
     group: its decision is keyed by the `by` key and its data is a constant. Data the clause's
     `per` does not hold by construction may take several values in a class, each a variant
     (D70), so it takes a helper decision per group, as data read per row, a `per` finer than
-    the `by` key and a `by` the decision's key does not determine do. Such a helper keeps its
-    column: a class the data splits into variants would hold the depot's members once per
-    variant. The answer is the same either way."""
+    the `by` key and a `by` the decision's key does not determine do. The data then says
+    which groups one row reads: a depot with one capacity is written into its row, with no
+    helper decision, and a depot whose two shipments differ in demand keeps its column, since
+    each of its two rows would hold its members. The answer is the same either way."""
     cli = request.getfixturevalue(cli_fixture).with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
     sql = f"""
         SELECT shipmentID, ship, open {from_clause()}
@@ -266,26 +276,25 @@ def test_a_term_beside_a_reducer_is_one_row_per_group_when_the_by_key_determines
             "sum(ship) by (D.depotID) + sum(ship) by (D.region) <= 50",
             (("depotID",), ("region",)),
             50,
-            # One row per (depot, region): D1 East, D2 East and D3 West; a helper and its definition per depot and
-            # per region.
-            {"num_vars": 5 + 3 + 2, "num_rows": 3 + 3 + 2},
+            # One row per (depot, region): D1 East, D2 East and D3 West. Each depot's sum and West's are read by one
+            # row and written into it; East's is read by two, so it has a helper and its definition.
+            {"num_vars": 5 + 1, "num_rows": 3 + 1},
             id="two-keys",
         ),
         pytest.param(
             "sum(ship) by (D.depotID) + sum(ship) by (D.region) + sum(ship) <= 90",
             (("depotID",), ("region",), ()),
             90,
-            # The query's total is a helper as each depot's and each region's sum is.
-            {"num_vars": 5 + 3 + 2 + 1, "num_rows": 3 + 3 + 2 + 1},
+            # The query's total is read by all three rows, so it is a helper as East's sum is.
+            {"num_vars": 5 + 1 + 1, "num_rows": 3 + 1 + 1},
             id="three-keys",
         ),
     ],
 )
 def test_reducers_with_different_by_keys(decidb_cli, scope_solver, tmp_path, clause, reducers, bound, counts):
-    """Each reducer reads its own group; the row adds the helpers, one per group of every
-    key, defined once, and the clause is one row per distinct (depot, region): shipments
-    of one depot read the same groups, so their rows are one. Rows read each helper, so each
-    keeps its column and its definition."""
+    """Each reducer reads its own group, and the clause is one row per distinct (depot,
+    region): shipments of one depot read the same groups, so their rows are one. A group
+    several rows read is a helper, defined once; a group one row reads is written into it."""
     sql = _ship_query(clause)
     assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump")) == counts
     model = ScopedModel(joined(), SHIP)

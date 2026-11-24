@@ -822,10 +822,12 @@ the helper definition's `origin` and `DecideWrittenClause` (the objective when n
 
 A helper decision costs a column, a definition row and its reads; written where it is read, it costs none of them, and
 its members' terms stand in each reader instead. Which helper is written in is the plan's
-(`DecideReducerValueDefinition::form`, `ChooseHelperForms`, stage 05; context/opa_rewrite/decisions.md R42 to R44),
+(`DecideReducerValueDefinition::form`, `ChooseHelperForms`, stage 05; context/opa_rewrite/decisions.md R42 to R44,
+R47),
 and stage 08 writes it (`DecideModelEmitter::HandLink`, `WriteMembersIn`; `../08_execution/done.md` § A helper the plan
-writes where it is read): a `WRITTEN_IN` SUM or AVG whole, and a `ONE_MEMBER_WRITTEN_IN` MIN or MAX group by group,
-where a group has one member (deck p. 112, R44), the one fact the data supplies. Stage 06 decides nothing and expands
+writes where it is read): a `WRITTEN_IN` SUM or AVG whole, a `ONE_MEMBER_WRITTEN_IN` MIN or MAX group by group,
+where a group has one member (deck p. 112, R44), and a `ONE_ROW_WRITTEN_IN` SUM or AVG group by group, where one row
+of its reading clause reads the group (R47): the two facts the data supplies. Stage 06 decides nothing and expands
 nothing:
 
 - **The links** (`reducer_value_links`) hold the groups that keep a column, and each gets its definition.

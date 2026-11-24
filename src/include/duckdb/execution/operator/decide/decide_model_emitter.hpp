@@ -171,15 +171,20 @@ private:
 	//! lists.
 	vector<LinkMembers> link_members;
 	//! A helper the plan writes where it is read: its members, and each instance's group among them. A SUM or AVG is
-	//! written in `whole`; of a MIN or MAX the groups of one member are, and an instance of another group keeps its
-	//! column (INVALID_INDEX).
+	//! written in `whole`. Of the two forms the data settles, the groups that pass the form's test are written in (a
+	//! MIN or MAX group of one member, a SUM or AVG group one row reads), and an instance of another group keeps its
+	//! column (INVALID_INDEX) and its link, which `link` holds until the helper is `settled`.
 	struct WrittenHelper {
 		ReducerValueMembers members;
 		vector<idx_t> group_of_instance;
 		bool whole = false;
+		bool settled = false;
 		string label;
+		ReducerValueLinkSpec link;
 	};
 	vector<WrittenHelper> written_helpers;
+	//! How many of them wait for the clause that reads them (DecideHelperForm::ONE_ROW_WRITTEN_IN).
+	idx_t unsettled_helpers = 0;
 	//! Per plan decision, its entry of `written_helpers`; INVALID_INDEX for every other.
 	vector<idx_t> written_helper_of;
 	//! The helpers listed, their instances, members and members' terms, and how many are handed no link.
@@ -190,6 +195,14 @@ private:
 
 	//! Hands a listed helper to stage 06, or keeps the instances its plan form writes where they are read.
 	void HandLink(ReducerValueLinkSpec &&spec, DecideHelperForm form);
+	//! Ends a kept helper's listing: each group `written_in` names is written where it is read, and the others are
+	//! handed to stage 06 with their columns.
+	void Settle(idx_t entry, const std::function<bool(idx_t)> &written_in);
+	//! Settles each waiting helper a clause's rows name, from how many of those rows read each of its instances: a
+	//! group one row reads is written into that row.
+	void SettleRowHelpers(const ClauseRecords &records);
+	//! Settles each helper no clause's rows named: every group keeps its column.
+	void SettleUnreadHelpers();
 	//! How a data row gives the instance of `variable` it reads, through frame `frame_read` if a frame reads it there;
 	//! of a term's decision, and of each of `terms`'; of no decision (INVALID_INDEX), nothing a reader asks for.
 	DecideInstanceOfRow InstanceOfRow(idx_t variable, idx_t frame_read = DConstants::INVALID_INDEX) const;
@@ -212,7 +225,7 @@ private:
 	                    vector<double> &coefficients, vector<double> &constants, bool absent_reads_nothing) const;
 	//! The same over a clause's records, whose decisions (EvaluatedConstraint::variable_indices) are then those its
 	//! rows name.
-	void WriteMembersIn(EvaluatedConstraint &clause) const;
+	void WriteMembersIn(EvaluatedConstraint &clause);
 
 	//! The rows the clause of `root` keeps, in the input's order, each with the entry standing for it, and numbered by
 	//! its place among them (place_of_row); `rows` takes them. Unplace clears the numbering once the clause is read.

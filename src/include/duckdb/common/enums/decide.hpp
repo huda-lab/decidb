@@ -203,6 +203,9 @@ enum class DecideHelperForm : uint8_t {
 	//! A MIN or MAX whose readers take a linear expression: a column per instance, but a group of one member is that
 	//! member and has no column (deck p. 112).
 	ONE_MEMBER_WRITTEN_IN,
+	//! A SUM or AVG one linear row of a clause reads, where the plan cannot say the clause states one row per group: a
+	//! column per instance, but a group one row reads is written into that row and has no column.
+	ONE_ROW_WRITTEN_IN,
 	//! A SUM or AVG with no column: its members are written into the rows, the objective or the helper that read it
 	//! (the deck's "a SUM passes its members up", pp. 115, 119).
 	WRITTEN_IN,

@@ -58,6 +58,9 @@ recommendation; nobody settles one silently. Rulings about a single task live wi
 | R44 | A MIN or MAX group of one member is that member: a fixed part of the form, tested at the node from the group's member count, the one data fact execution tests (2026-11-23) |
 | R45 | Helpers stay declared at planning. A node allocates no variable, and helper names in `EXPLAIN` and `DIAGNOSE` do not change (2026-11-23) |
 | R46 | R37 settled: terms are split from the finished nodes in Phase 6, prototype first. If the prototype leaves the shared splitter worse, the evidence goes to the owner (2026-11-23) |
+| R47 | A SUM or AVG helper one clause reads in rows the plan cannot count per group is settled by the data, group by group: a group one row reads is written into that row, a group several rows read keeps its column. A second fact tested at the node, beside R44's (2026-11-24) |
+| R48 | A clause's emitted rows stay on its record (`EvaluatedConstraint::emitted_rows`): a function of the record and the column space, both fixed before the first read (2026-11-24) |
+| R49 | The objective's coefficients reach stage 06 in one form, a coefficient per instance; a per-row decision's pay a second pass, 5 ms over 2,000,000 rows (2026-11-24) |
 
 ## Open decisions
 

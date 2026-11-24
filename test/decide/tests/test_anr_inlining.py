@@ -119,13 +119,23 @@ class TestRangeIntoRows:
         body = clause(le(X, Range("sum", FIRST, LAST, X, Over("id")) - Col("w")))
         _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], MAXIMIZE_X)
 
-    def test_a_window_every_row_of_its_timeline_reads_keeps_its_helper(self, decidb_cli, scope_solver, tmp_path):
+    def test_a_window_several_rows_of_its_timeline_read_keeps_its_helper(self, decidb_cli, scope_solver, tmp_path):
         """`from first to last within product` is one window per timeline, which each row of
-        the timeline reads: a helper per product with its definition row, beside a row per
-        row of x."""
+        the timeline reads. A and B have several rows, so each keeps a helper with its
+        definition row beside a row per row of x. C's one row reads its window alone, so the
+        window is written into that row, which is then `x >= x - 10` and states nothing."""
         sql = _edge(f"x >= sum(from first to last: x) {TL} - 10")
-        assert _model(decidb_cli, sql, tmp_path) == {"num_vars": 6 + 3, "num_rows": 6 + 3}
+        assert _model(decidb_cli, sql, tmp_path) == {"num_vars": 6 + 2, "num_rows": 5 + 2}
         body = clause(ge(X, Range("sum", FIRST, LAST, X, TIMELINE) - 10))
+        _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], MAXIMIZE_X)
+
+    def test_a_sum_no_row_reads_keeps_its_helper(self, decidb_cli, scope_solver, tmp_path):
+        """The one clause that reads each product's sum reads it with a factor that is 0 on
+        every row, so no row names it and no count of reading rows settles it: each product
+        keeps its helper and its definition row, beside the six rows `x <= 5`."""
+        sql = _edge("x <= (t.w - t.w) * sum(x) by (t.product) + 5")
+        assert _model(decidb_cli, sql, tmp_path) == {"num_vars": 6 + 3, "num_rows": 6 + 3}
+        body = clause(le(X, (Col("w") - Col("w")) * reduce("sum", X, by=("product",)) + 5))
         _judged(decidb_cli, scope_solver, sql, ROWS, [Decision("x")], [CAP, body], MAXIMIZE_X)
 
     def test_in_the_objective(self, decidb_cli, scope_solver, tmp_path):

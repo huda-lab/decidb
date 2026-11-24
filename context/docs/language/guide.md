@@ -699,8 +699,10 @@ Tuple terms and reducers mix freely on either side. Each comparison takes one of
   not N rows of N entries. A `SUM` or `AVG` helper whose one reading row holds each instance once is written into
   that row and has no column (D89): a group's sum read by a clause `per` that group
   (`per D.depotID: sum(ship) by (D.depotID) <= D.capacity * open`), a sum the objective alone reads, and a range
-  frame's window read by its anchor alone. Example 5's depot sums keep their columns: each depot's shipments read it,
-  a row apiece. The `SUM` and `AVG` reducers of a nest are written in
+  frame's window read by its anchor alone. Where one clause reads a sum in rows only the data can count, the data
+  settles each group: a group one row reads is written into that row, and a group several rows read keeps its column.
+  Example 5's depot sums keep their columns where a depot has several shipments, which read it a row apiece, and a
+  depot of one shipment has none. The `SUM` and `AVG` reducers of a nest are written in
   whatever that costs, as the deck flattens them: each region's sum, whatever its size, into every row that reads it
   (deck pp. 115, 119).
   So is a nested reducer written into the one around it; a
@@ -914,8 +916,8 @@ when the model differs: `≡` for the canonical form, `↳` for what each rewrit
 the rows the solver receives. A helper prints as the expression it stands for, never an internal name; the bound
 of a `norm(e, 0)` derived from data prints as `M`. `EXPLAIN` plans without solving; `EXPLAIN ANALYZE` solves and adds
 actual rows and timing, and under a clause what the data made of it: a `↳` line counting the variants of its classes
-(§7.1, D71), one counting the instances it skipped for having no value (§7.4), and one for a `MIN` or `MAX` whose
-every group holds one member, which is written where it is read. A `SUM` or `AVG` written where it is read says so in
+(§7.1, D71), one counting the instances it skipped for having no value (§7.4), and one for a helper the data
+settled: a `MIN` or `MAX` group of one member, or a `SUM` or `AVG` group one row reads, is written where it is read. A `SUM` or `AVG` written where it is read says so in
 a plain `EXPLAIN` too (`↳ sum(t.w * x) by (t.product) is written where it is read, with no helper decision`; §6.4,
 D89), in place of the line saying it becomes a helper decision.
 

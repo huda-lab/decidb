@@ -695,6 +695,15 @@ void DecideModelEmitter::Constraints() {
 		emitted.row.sized_indicator = sized_indicator_of_clause[c];
 		Route(std::move(emitted), c >= num_constraints);
 	}
+	SettleUnreadHelpers();
+	// The helpers' sizes, which DECIDB_PROFILE reports.
+	if (helper_counts.helpers > 0) {
+		DecideProfileScope::Counter("anr.helpers", static_cast<double>(helper_counts.helpers));
+		DecideProfileScope::Counter("anr.helper_instances", static_cast<double>(helper_counts.instances));
+		DecideProfileScope::Counter("anr.members", static_cast<double>(helper_counts.members));
+		DecideProfileScope::Counter("anr.member_terms", static_cast<double>(helper_counts.terms));
+		DecideProfileScope::Counter("anr.inlined_helpers", static_cast<double>(helper_counts.written_in));
+	}
 }
 
 DecideClauseRef DecideModelEmitter::Written(const DecideConstraint &clause) const {
@@ -1865,14 +1874,6 @@ void DecideModelEmitter::ValueLinks() {
 		}
 		HandLink(std::move(spec), definition.form);
 	}
-	// The helpers' sizes, which DECIDB_PROFILE reports.
-	if (helper_counts.helpers > 0) {
-		DecideProfileScope::Counter("anr.helpers", static_cast<double>(helper_counts.helpers));
-		DecideProfileScope::Counter("anr.helper_instances", static_cast<double>(helper_counts.instances));
-		DecideProfileScope::Counter("anr.members", static_cast<double>(helper_counts.members));
-		DecideProfileScope::Counter("anr.member_terms", static_cast<double>(helper_counts.terms));
-		DecideProfileScope::Counter("anr.inlined_helpers", static_cast<double>(helper_counts.written_in));
-	}
 }
 
 void DecideModelEmitter::HandLink(ReducerValueLinkSpec &&spec, DecideHelperForm form) {
@@ -1890,21 +1891,44 @@ void DecideModelEmitter::HandLink(ReducerValueLinkSpec &&spec, DecideHelperForm 
 	}
 	auto &scope = tree.variable_scopes[spec.value_var];
 	WrittenHelper helper;
-	helper.whole = !IsDecideExtremum(spec.reducer);
-	helper.label = spec.label;
+	helper.whole = form == DecideHelperForm::WRITTEN_IN;
 	helper.group_of_instance.assign(scope.IsGlobal() ? 1 : input.keyed_mappings[scope.keyed_scope_idx].num_classes,
 	                                DConstants::INVALID_INDEX);
-	// A SUM or AVG is its members; a MIN or MAX group of one member is that member (deck p. 112, R44), the one fact
-	// of the data read here. The other groups keep their columns and their links.
+	for (idx_t g = 0; g < members.GroupCount(); g++) {
+		helper.group_of_instance[members.group_instances[g]] = g;
+	}
+	helper.label = spec.label;
+	helper.members = std::move(members);
+	helper.link = std::move(spec);
+	const idx_t entry = written_helpers.size();
+	written_helper_of.resize(tree.variable_scopes.size(), DConstants::INVALID_INDEX);
+	written_helper_of[helper.link.value_var] = entry;
+	written_helpers.push_back(std::move(helper));
+	if (form == DecideHelperForm::ONE_ROW_WRITTEN_IN) {
+		// Which groups one row reads is known once the clause that reads it is written (SettleRowHelpers).
+		unsettled_helpers++;
+		return;
+	}
+	// A SUM or AVG is its members; a MIN or MAX group of one member is that member (deck p. 112, R44), read here from
+	// the group's member count.
+	auto &listed = written_helpers[entry].members;
+	Settle(entry, [&](idx_t g) {
+		return form == DecideHelperForm::WRITTEN_IN || listed.group_begin[g + 1] - listed.group_begin[g] == 1;
+	});
+}
+
+void DecideModelEmitter::Settle(idx_t entry, const std::function<bool(idx_t)> &written_in) {
+	auto &helper = written_helpers[entry];
+	auto &members = helper.members;
+	// The groups that keep their columns and their links.
 	ReducerValueMembers linked;
 	for (idx_t g = 0; g < members.GroupCount(); g++) {
-		const idx_t first = members.group_begin[g], last = members.group_begin[g + 1];
-		if (helper.whole || last - first == 1) {
-			helper.group_of_instance[members.group_instances[g]] = g;
+		if (written_in(g)) {
 			continue;
 		}
+		helper.group_of_instance[members.group_instances[g]] = DConstants::INVALID_INDEX;
 		linked.AddGroup(members.group_instances[g]);
-		for (idx_t m = first; m < last; m++) {
+		for (idx_t m = members.group_begin[g]; m < members.group_begin[g + 1]; m++) {
 			linked.AddMember(members.constants[m]);
 			for (idx_t t = members.member_begin[m]; t < members.member_begin[m + 1]; t++) {
 				linked.AddTerm(members.variables[t], members.instances[t], members.coefficients[t]);
@@ -1913,19 +1937,58 @@ void DecideModelEmitter::HandLink(ReducerValueLinkSpec &&spec, DecideHelperForm 
 	}
 	// The instances with no column, which the column layout reads (SolverInput::written_in).
 	input.written_in.resize(tree.variable_scopes.size());
-	auto &written = input.written_in[spec.value_var];
+	auto &written = input.written_in[helper.link.value_var];
 	for (auto group : helper.group_of_instance) {
 		written.push_back(helper.whole || group != DConstants::INVALID_INDEX);
 	}
-	helper.members = std::move(members);
-	written_helper_of.resize(tree.variable_scopes.size(), DConstants::INVALID_INDEX);
-	written_helper_of[spec.value_var] = written_helpers.size();
-	written_helpers.push_back(std::move(helper));
+	helper.settled = true;
 	if (linked.GroupCount() > 0) {
-		spec.members = std::move(linked);
-		input.reducer_value_links.push_back(std::move(spec));
+		helper.link.members = std::move(linked);
+		input.reducer_value_links.push_back(std::move(helper.link));
 	} else {
 		helper_counts.written_in++;
+	}
+}
+
+void DecideModelEmitter::SettleRowHelpers(const ClauseRecords &records) {
+	// Per helper the rows name, how many rows read each instance.
+	struct Reads {
+		vector<idx_t> rows, last_row;
+	};
+	std::map<idx_t, Reads> read;
+	for (idx_t e = 0; e + 1 < records.term_begin.size(); e++) {
+		for (idx_t t = records.term_begin[e]; t < records.term_begin[e + 1]; t++) {
+			const auto variable = records.variables[t];
+			const idx_t entry =
+			    variable < written_helper_of.size() ? written_helper_of[variable] : DConstants::INVALID_INDEX;
+			if (entry == DConstants::INVALID_INDEX || written_helpers[entry].settled) {
+				continue;
+			}
+			auto &reads = read[entry];
+			if (reads.rows.empty()) {
+				reads.rows.assign(written_helpers[entry].group_of_instance.size(), 0);
+				reads.last_row.assign(reads.rows.size(), DConstants::INVALID_INDEX);
+			}
+			const auto instance = records.instances[t];
+			if (reads.last_row[instance] != e) {
+				reads.last_row[instance] = e;
+				reads.rows[instance]++;
+			}
+		}
+	}
+	for (auto &helper_reads : read) {
+		auto &group_instances = written_helpers[helper_reads.first].members.group_instances;
+		Settle(helper_reads.first, [&](idx_t g) { return helper_reads.second.rows[group_instances[g]] == 1; });
+		unsettled_helpers--;
+	}
+}
+
+void DecideModelEmitter::SettleUnreadHelpers() {
+	for (idx_t entry = 0; entry < written_helpers.size() && unsettled_helpers > 0; entry++) {
+		if (!written_helpers[entry].settled) {
+			Settle(entry, [](idx_t) { return false; });
+			unsettled_helpers--;
+		}
 	}
 }
 
@@ -1954,6 +2017,7 @@ bool DecideModelEmitter::WriteMembersIn(vector<idx_t> &begin, vector<idx_t> &var
 				continue;
 			}
 			auto &helper = written_helpers[entry];
+			D_ASSERT(helper.settled);
 			const idx_t group = helper.group_of_instance[instances[t]];
 			const double coefficient = coefficients[t];
 			if (group == DConstants::INVALID_INDEX && !helper.whole) {
@@ -1986,8 +2050,11 @@ bool DecideModelEmitter::WriteMembersIn(vector<idx_t> &begin, vector<idx_t> &var
 	return true;
 }
 
-void DecideModelEmitter::WriteMembersIn(EvaluatedConstraint &clause) const {
+void DecideModelEmitter::WriteMembersIn(EvaluatedConstraint &clause) {
 	auto &records = clause.records;
+	if (unsettled_helpers > 0) {
+		SettleRowHelpers(records);
+	}
 	if (!WriteMembersIn(records.term_begin, records.variables, records.instances, records.coefficients,
 	                    records.constants, false)) {
 		return;

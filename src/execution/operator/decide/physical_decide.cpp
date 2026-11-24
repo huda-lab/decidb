@@ -419,7 +419,7 @@ void PhysicalDecide::ReportInlinedHelpers(const SolverInput &input) const {
 		auto &definition = tree->Definition(*tree->nodes[node_index])->Cast<DecideReducerValueDefinition>();
 		const auto helper = definition.helper;
 		// A SUM or AVG the plan writes in says so in the plan. What the run adds is the data's: the groups of one
-		// member of a MIN or MAX.
+		// member of a MIN or MAX, and the groups one row reads of a SUM or AVG.
 		if (definition.form == DecideHelperForm::WRITTEN_IN) {
 			continue;
 		}
@@ -431,8 +431,9 @@ void PhysicalDecide::ReportInlinedHelpers(const SolverInput &input) const {
 		// A query-wide MIN or MAX has the one group.
 		const bool query_wide = tree->variable_scopes[helper].IsGlobal();
 		const auto line =
-		    query_wide
-		        ? definition.label
+		    query_wide ? definition.label
+		    : definition.form == DecideHelperForm::ONE_ROW_WRITTEN_IN
+		        ? definition.label + ": each group one row reads is written into that row, with no helper decision"
 		        : definition.label + ": each group of one member is written where it is read, with no helper decision";
 		const auto kind = query_wide ? LogicalDecide::RewriteAccount::Kind::VALUE_HELPER_INLINED
 		                             : LogicalDecide::RewriteAccount::Kind::RUN_TIME;

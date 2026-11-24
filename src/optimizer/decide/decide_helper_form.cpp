@@ -289,10 +289,12 @@ private:
 		// a position (a range of a whole timeline is one instance every row of the timeline reads); the one clause
 		// whose rows lie within the group.
 		const bool windows = IsFrame(i) && decide.bound.frames[Link(i).Frame()].Relative();
-		const bool read_once = reader.outer != DConstants::INVALID_INDEX
-		                           ? member_of_extremum
-		                           : reader.rows == 1 && (IsFrame(i) ? windows : reader.rows_within);
-		return nest[i] || read_once ? DecideHelperForm::WRITTEN_IN : DecideHelperForm::VARIABLE;
+		const bool one_row = reader.outer == DConstants::INVALID_INDEX && reader.rows == 1;
+		if (nest[i] || member_of_extremum || (one_row && (IsFrame(i) ? windows : reader.rows_within))) {
+			return DecideHelperForm::WRITTEN_IN;
+		}
+		// One clause reads it, in rows the plan cannot count per group: the data says which groups one row reads.
+		return one_row ? DecideHelperForm::ONE_ROW_WRITTEN_IN : DecideHelperForm::VARIABLE;
 	}
 	//! A plan says what each helper became: one written in is no helper decision.
 	void TellAccounts() {

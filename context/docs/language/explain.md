@@ -138,7 +138,10 @@ sort to the end.
   D89) and an objective that is 0 (`ReportAnEmptyObjective`). `ParamsToString` prints them after the plan's accounts,
   so EXPLAIN ANALYZE shows them and a plain EXPLAIN, which runs nothing, does not. A helper written where it is read
   (`Kind::VALUE_HELPER_INLINED`) replaces the account saying it becomes a helper decision: at planning for a SUM or
-  AVG the plan writes in (`ChooseHelperForms`), at run time for a MIN or MAX whose every group holds one member.
+  AVG the plan writes in (`ChooseHelperForms`), at run time for a MIN or MAX whose every group holds one member. A
+  helper the data settles group by group says so in a `RUN_TIME` line under its clause: `each group of one member is
+  written where it is read` for a MIN or MAX, `each group one row reads is written into that row` for a SUM or AVG
+  (R47).
 - **JSON** uses the same `GetName()`/`ParamsToString()`, not `Serialize` (which exists for prepared statements).
   DuckDB splits a multi-line value into an array, one entry per line, markers included.
 - **Cardinality.** DECIDE does not override `EstimateCardinality`; it emits every input row, so the child's estimate
