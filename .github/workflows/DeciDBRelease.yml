@@ -251,7 +251,7 @@ jobs:
           pip install decidb
           ```
 
-          Wheels (Linux / macOS / Windows, Python 3.11–3.13) and the source distribution
+          Wheels (Linux / macOS / Windows, Python 3.11–3.15) and the source distribution
           are also attached to this release below.
 
           ## Downloads (CLI)

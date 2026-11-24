@@ -12,7 +12,7 @@ A research project by [HUDA Lab](https://huda-lab.github.io/) at NYU Abu Dhabi.
 pip install decidb
 ```
 
-Wheels are published for Linux x86-64, macOS arm64, and Windows AMD64 on Python 3.11–3.13. DeciDB is a fork of DuckDB, so the Python API is DuckDB's.
+Wheels are published for Linux x86-64, macOS arm64, and Windows AMD64 on Python 3.11–3.15. DeciDB is a fork of DuckDB, so the Python API is DuckDB's.
 
 ## Quick Example
 
