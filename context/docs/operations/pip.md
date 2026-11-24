@@ -157,11 +157,11 @@ The GitHub Actions workflow (`.github/workflows/python-wheels.yml`) uses `cibuil
 
 ### Build Job (`build_wheels`)
 - **Platforms**: ubuntu-22.04 (Linux x86_64), macos-14 (macOS arm64), windows-2022 (AMD64)
-- **Python versions**: cp311, cp312, cp313
+- **Python versions**: cp311, cp312, cp313, cp314, cp315
 - **Smoke test**: Each built wheel imports `decidb`, runs `SELECT 42`, forces the
   bundled HiGHS backend through a typed `DECIDE x(BOOL)` query, checks its result,
   and prints the package version.
-- **Artifacts**: Wheels are uploaded as GitHub Actions artifacts (7-day retention). Each OS produces 3 `.whl` files (one per Python version). The sdist is built separately on Linux.
+- **Artifacts**: Wheels are uploaded as GitHub Actions artifacts (7-day retention). Each OS produces 5 `.whl` files (one per Python version). The sdist is built separately on Linux.
 
 There is no separate wheel-test job in the release workflow. The complete package test
 suite remains available through the default `cibuildwheel` configuration in

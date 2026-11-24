@@ -44,7 +44,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install cibuildwheel
-        run: pip install cibuildwheel==2.21.3
+        run: pip install cibuildwheel==4.3.5
 
       - name: Setup ccache
         if: runner.os != 'Windows'
@@ -59,15 +59,17 @@ jobs:
         working-directory: tools/pythonpkg
         run: python -m cibuildwheel --output-dir wheelhouse
         env:
-          # NEXT RELEASE: shift this window up one version -- drop cp311, add
-          # cp314. A Python with no matching wheel does not fail loudly; pip
-          # silently falls back to the sdist and compiles all of DuckDB on the
-          # user's machine, which takes over an hour and needs a working C++
-          # toolchain. 3.14 was already Homebrew's default python3 at v0.2.0,
-          # so that fallback is not hypothetical. Moving the window also means
-          # updating requires-python and the Programming Language classifiers
-          # in tools/pythonpkg/pyproject.toml -- the three must agree.
-          CIBW_BUILD: "cp311-* cp312-* cp313-*"
+          # One wheel per supported CPython. A Python with no matching wheel
+          # does not fail loudly: pip falls back to the sdist and compiles all
+          # of DuckDB on the user's machine, which takes over an hour and needs
+          # a C++ toolchain. Add each new CPython when it is released; drop one
+          # only at its end of life. Four things must agree: this list, the
+          # cibuildwheel pin above (it must know the newest CPython), and in
+          # tools/pythonpkg the classifiers and requires-python of
+          # pyproject.toml and python_requires of setup.py.
+          CIBW_BUILD: "cp311-* cp312-* cp313-* cp314-* cp315-*"
+          # The glibc floor of the wheels, the same as the CLI release build.
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
           CIBW_SKIP: "*-musllinux* *-manylinux_i686"
           CIBW_ARCHS_LINUX: x86_64
           CIBW_ARCHS_MACOS: arm64
