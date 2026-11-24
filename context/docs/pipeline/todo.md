@@ -44,19 +44,3 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
 - **Done when.** `./test/decide/run_tests.sh -k "value_rewrite or anr or inlin"`;
   `build/release/test/unittest "[decidb]"`; the corpus query of `test/decide/golden/corpus.sql` line 717's
   neighbour (`per grp: sum(x) by (grp) <= budget / 10 * open`) has 6 columns and 3 rows.
-
-## MODEL-24 — The owner of a clause's emitted rows
-
-- **Decision needed.** Where the rows a clause emits are kept between the passes that read them.
-- **Problem.** `ClauseEmittedRows` sums a clause's terms per solver column once and keeps the result on the record
-  (`EvaluatedConstraint::emitted_rows`, `mutable`, dropped by a copy). Three passes read it: implied-bound
-  propagation (`PrepareModel`), the aggregate `<>` expansion (`FormulateModel`) and `SolverModel::Build`, which
-  takes it. A pass that edits a record after the first read leaves the kept rows stale; the one that does
-  (`FormulateModel` sizing a `norm(e, 0)` row) edits rows the first reader skips.
-- **Options.** (1) A stage 06 object holds the rows by clause, passed to `PrepareModel`, `FormulateModel`,
-  `SolveDecide` and `Build`: four signatures and the diagnosis copy carry it, and a key that survives
-  `input.constraints` growing. (2) Each reader sums afresh: no kept state, the per-column sum runs twice for every
-  `<=` and `=` clause. (3) Leave the rows on the record.
-- **Recommendation.** 3. The rows are a function of the record and the column space, both fixed before the first
-  read; 1 moves the same state behind more plumbing and 2 pays time for no reader's gain.
-- **Done when.** Model goldens identical; `./test/decide/run_tests.sh -k "bound or not_equal or diagnose"`.

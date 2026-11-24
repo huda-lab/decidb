@@ -233,8 +233,11 @@ Both ask of a row only its bound and its terms. Whether a `<>` or a quadratic ro
 
 ### Emitted rows
 
-`ClauseEmittedRows` builds a clause's rows once and keeps them on the clause, for every
-path below. `TermsHaveTheirOwnColumns()` returns true
+`ClauseEmittedRows` builds a clause's rows once and keeps them on the clause (`EvaluatedConstraint::emitted_rows`),
+for every path below: implied-bound propagation, the aggregate `<>` expansion and `SolverModel::Build`, which takes
+them. They stay on the record because they are a function of the record and the column space, both fixed before the
+first read; an object of stage 06 holding them would carry the same state through four signatures. The one pass that
+edits a record after the first read (`FormulateModel` sizing a `norm(e, 0)` row) edits rows that read skips. `TermsHaveTheirOwnColumns()` returns true
 only when (a) every decision the rows name (`variable_indices`, each once) is **row-scoped** and (b) no row names a
 column twice (`repeats_columns`). Then each `(term, row)` pair has a column of its
 own, so coefficients are copied straight.
