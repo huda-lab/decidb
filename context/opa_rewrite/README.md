@@ -9,8 +9,8 @@ owner has planned. The work queue (`context/docs/todo.md`) orders the tasks.
   the loose ends the queue has closed.
 - A query is answered by a direct-solve rule (plain DuckDB operators) or by the solver path, which evaluates the
   clauses on a tree of nodes and hands a model to Gurobi or HiGHS.
-- The goal is the deck's one-pass algorithm on a tree the parser builds. The branch has four of its five steps, on a
-  tree built last, at physical planning.
+- The goal is the deck's one-pass algorithm on a tree the parser builds. The branch has its five steps: the model is
+  written at the tree's nodes ([design.md](design.md) § 4). The seven phases are worked and the queue is empty.
 - A review of all DECIDE code (2026-11-18, at `38699104bc`) found the direction right and the parts that decide
   meaning sound, but the pipeline not yet simple. Three causes:
   1. **Old carriers.** Marker strings in expression names, one AND-tree for all clauses, linear-form records and
