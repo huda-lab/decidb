@@ -156,7 +156,7 @@ and the source distribution, so every artifact in one release carries the same v
 The GitHub Actions workflow (`.github/workflows/python-wheels.yml`) uses `cibuildwheel` to build cross-platform wheels. It is triggered by `workflow_dispatch` (manual, requires a version input) or on GitHub release publish.
 
 ### Build Job (`build_wheels`)
-- **Platforms**: ubuntu-22.04 (Linux x86_64), macos-14 (macOS arm64), windows-2022 (AMD64)
+- **Platforms**: ubuntu-22.04 (Linux x86_64), macos-15 (macOS arm64), windows-2022 (AMD64)
 - **Python versions**: cp311, cp312, cp313, cp314, cp315
 - **Smoke test**: Each built wheel imports `decidb`, runs `SELECT 42`, forces the
   bundled HiGHS backend through a typed `DECIDE x(BOOL)` query, checks its result,

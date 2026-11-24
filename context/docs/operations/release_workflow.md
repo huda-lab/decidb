@@ -19,7 +19,7 @@ Actions tab → **DeciDB Release Build** → Run workflow:
 Three parallel platform builds (each gated on `platforms` containing its name) feed a final `create-release` job. A draft release is created only when all three platform jobs succeed, so its generated download table cannot advertise missing files. For a partial build, set `create_release=false`:
 
 ```
-linux-x64 (ubuntu-latest)   macos-universal (macos-14)   windows-x64 (windows-2022)
+linux-x64 (ubuntu-latest)   macos-universal (macos-15)   windows-x64 (windows-2022)
             └───────────────────────┼───────────────────────┘
                                     ▼
                        create-release (ubuntu-latest)
@@ -38,7 +38,7 @@ Each platform job: checkout (full history) → setup Python 3.12 → build → v
 ### Per-platform build notes
 
 - **Linux** (`ubuntu-latest`): builds inside the `manylinux2014_x86_64` Docker image for glibc 2.17+ compatibility (CentOS 7+, Ubuntu 18.04+). Installs `perl-IPC-Cmd` for the OpenSSL build, then runs `make`.
-- **macOS** (`macos-14`): installs Ninja, uses ccache, and builds a universal binary (`OSX_BUILD_UNIVERSAL=1`). The workflow verifies the result with `file build/release/decidb`.
+- **macOS** (`macos-15`): installs Ninja, uses ccache, and builds a universal binary (`OSX_BUILD_UNIVERSAL=1`). The workflow verifies the result with `file build/release/decidb`.
 - **Windows** (`windows-2022`): installs Ninja via choco, uses ccache, builds under MSVC vars (`vcvars64.bat`) with `cmake -G Ninja -B build/release -DCMAKE_BUILD_TYPE=Release -DDISABLE_UNITY=1` then `ninja -C build/release`. Output: `build/release/decidb.exe`.
 
 ### create-release job
