@@ -5,8 +5,9 @@ Each runs over the deck's query -- `FROM Shipment S JOIN Depot D USING (depotID)
 `DECIDE ship(INT), per D.depotID: reserve(REAL)` -- and is checked four ways: both forms
 build the same model (DECIDB_DUMP_MODEL), the model has one row per generated class (plus,
 for example 1, one definition row for the helper the value rewrite adds: read by every
-shipment's row, it keeps its column, as the helpers of examples 5 and 8 do, each read by a
-row per member, D89; examples 3 and 6 bound one decision, so their classes fold
+shipment's row, it keeps its column, as a helper of examples 5 and 8 does where several
+rows read its group, a row per member; a group one row reads is written into that row, D89,
+R47; examples 3 and 6 bound one decision, so their classes fold
 into the reserve column's box), the
 optimum is the oracle's (`_scope_oracle.ScopedModel`, which follows the ANR definition
 literally), and the answer satisfies every clause the language generates. Example 7 is
@@ -124,7 +125,7 @@ EXAMPLES = [
             "<=",
             (Reduce("sum", lambda r: {"ship": 1}, by=("depotID",), factor=lambda r: r["maxShipmentShare"]),),
         ),
-        5 + 3,  # a helper per depot, each with its definition row
+        5 + 2,  # a helper with its definition row for D1 and D2; D3's one shipment reads its sum alone, written in
         MAXIMIZE_SHIP,
         id="5",
     ),  # one row per shipment, each reading its depot's helper
@@ -157,7 +158,7 @@ EXAMPLES = [
             ),
             per=("shipmentID",),
         ),
-        5 + 5,
+        5,  # every shipment arrives alone at its depot on its day, so each sum is written into its one row
         MAXIMIZE_SHIP,
         id="8",
     ),  # one row per shipment, each arriving alone: a helper per group, each with its definition row
