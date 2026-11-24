@@ -167,6 +167,11 @@ into it (`DecideModelEmitter::ObjectiveCoefficients`): the terms' columns over t
 and are freed there, a decision with one instance per class costs one number per class, and a helper written where
 it is read is its members. The objective's constant arrives whole in `objective_constant`.
 
+Every decision's coefficients take this one form, so a per-row decision's are read twice, once summed by stage 08 and
+once placed here: 5 ms over 2,000,000 rows (`context/opa_rewrite/repro/clauses_times_rows.sql`, 30 ms in
+`execution.tree_model` against 25 ms with one pass). Handing a per-row column over as it is would be a second route
+for one shape.
+
 For a keyed variable, every row of a class maps to the same column, and their
 coefficients **accumulate** — which is exactly right: one keyed decision participates
 in the objective across all of its rows. Every merged sum grows through one helper,

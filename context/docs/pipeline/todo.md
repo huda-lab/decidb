@@ -60,18 +60,3 @@ Changes that cross every stage. The plan and its rulings are in `context/opa_rew
 - **Recommendation.** 3. The rows are a function of the record and the column space, both fixed before the first
   read; 1 moves the same state behind more plumbing and 2 pays time for no reader's gain.
 - **Done when.** Model goldens identical; `./test/decide/run_tests.sh -k "bound or not_equal or diagnose"`.
-
-## MODEL-7 — The model-writing time of the clauses benchmark
-
-- **Decision needed.** Whether the objective's coefficients keep their two passes over a per-row decision.
-- **Problem.** `context/opa_rewrite/repro/clauses_times_rows.sql` spends 30 ms in `execution.tree_model` for 40
-  clauses over 2,000,000 rows and 27 ms for one clause, against 25 ms and 23 ms with one pass; `model.linear_objective`
-  takes 6 ms against 4 ms. The query takes about 850 ms and peak memory is equal (1.03 GB). The cause is the
-  objective's hand-over (`DecideModelEmitter::ObjectiveCoefficients`): the emitter sums each term's column into a
-  coefficient per instance (`SolverInput::objective_coefficients`), and stage 06 copies that into the model's
-  columns. A per-row decision's 2,000,000 coefficients are read twice and held in one more 16 MB array.
-- **Options.** (1) Leave it: every decision's objective coefficients reach stage 06 in one form, and stage 06 reads
-  no data row. (2) Hand a per-row decision's lone dense column over as it is: one pass, and a second form of the
-  hand-over that stage 06 and `ReportAnEmptyObjective` both read.
-- **Recommendation.** 1: the cost is 5 ms in 850 ms, and option 2 adds a second route for one shape.
-- **Done when.** The owner rules; under option 2, `DECIDB_PROFILE=1` on the benchmark reads 25 ms.
