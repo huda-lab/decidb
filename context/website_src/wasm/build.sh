@@ -2,7 +2,7 @@
 # Build the DeciDB that runs in the live demo (context/website/demo/): DeciDB compiled to WebAssembly with
 # Emscripten, single-threaded, with HiGHS (Gurobi is loaded at run time and is never present in a browser).
 #
-#   context/website_src/wasm/build.sh                 # from the repository root; builds origin/direct-solve-prototype
+#   context/website_src/wasm/build.sh                 # from the repository root; builds origin/master
 #   DECIDB_REF=origin/other-branch WORK=/tmp/w context/website_src/wasm/build.sh
 #
 # WORK holds the source snapshot, Emscripten and the build (default: build/wasm-demo, which git ignores). The
@@ -11,7 +11,7 @@
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
-REF="${DECIDB_REF:-origin/direct-solve-prototype}"
+REF="${DECIDB_REF:-origin/master}"
 WORK="${WORK:-$REPO/build/wasm-demo}"
 EMSDK_VERSION=3.1.73
 OUT="$REPO/context/website/demo"
