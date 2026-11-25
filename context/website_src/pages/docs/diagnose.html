@@ -1,5 +1,5 @@
 <!--meta
-title: DIAGNOSE internals: DeciDB documentation
+title: DIAGNOSE internals: how DeciDB works
 description: How DeciDB's DIAGNOSE works inside: the router that reads the solver's status, the elastic model behind the smallest edit, and the ray that names a runaway.
 h1: Inside DIAGNOSE
 lede: How a failed solve is routed by its status, how the smallest edit and the runaway decision are computed, and what the two engines share.
@@ -53,9 +53,10 @@ lede: How a failed solve is routed by its status, how the smallest edit and the 
       <li><strong>Optimizer.</strong> A query under the prefix keeps the solver path: query rewriting does not run,
         because a rewritten query has no model to diagnose. The solver backend is chosen here, once, and every
         diagnostic solve later runs on that same backend.</li>
-      <li><strong>Execution.</strong> <code>PhysicalDecide::diagnose</code> arms what the engines need: ray extraction,
-        rows for one-decision clauses that would otherwise become column bounds, and a copy of the model input to
-        formulate the repair model from.</li>
+      <li><strong>Execution.</strong> The flag reaches the operator's plan as <code>DecideTree::diagnose</code>
+        (<code>tree-&gt;diagnose</code>) and arms what the engines need: ray extraction, rows for one-decision clauses
+        that would otherwise become column bounds, and a copy of the model input to formulate the repair model
+        from.</li>
     </ol>
     <p>Why an operator and not a different result? The decision columns are bound into the query's output before the
       solve runs, so a failed solve cannot switch the result's columns at run time. A prefix declares the findings'
@@ -92,15 +93,17 @@ lede: How a failed solve is routed by its status, how the smallest edit and the 
       </tbody>
     </table></div>
     <p><code>SUBOPTIMAL</code> is a feasible answer Gurobi could not prove best; it is delivered with a warning. A time
-      limit or Ctrl-C is not a diagnosis at all: the operator handles it before the router runs, with or without the
-      prefix. <code>UNDIAGNOSED</code> raises the plain error, which states the outcome and, for an infeasible or
-      unbounded query, names the prefix.</p>
-    <p><code>PhysicalDecide::Finalize</code> calls the router once and switches on the terminal. That switch is the
-      only dispatch site. <code>SOLVED</code> stores the solution; <code>UNBOUNDED</code> and <code>INFEASIBLE</code>
-      run their engine and hand its findings up; <code>UNDIAGNOSED</code> throws. Each engine is a free function whose
-      dependencies arrive as callbacks (dependency injection): the infeasible engine's solver call, the unbounded
-      engine's categorical candidates. So an engine can change behind its terminal without touching the router, and is
-      tested without DuckDB's operators. Under the prefix, a query that solves returns one row:</p>
+      limit or Ctrl-C is not a diagnosis at all: <code>SolveDecide</code>, the solve step the operator calls, handles it
+      before the router runs, with or without the prefix. <code>UNDIAGNOSED</code> raises the plain error, which states
+      the outcome and nothing more, such as <em>the DECIDE query is infeasible</em>.</p>
+    <p><code>PhysicalDecide::FinalizeSolveResult</code>, the last step of the operator's <code>Finalize</code>, calls
+      the router once and switches on the terminal. That switch is the only dispatch site. <code>SOLVED</code> stores
+      the solution; <code>UNBOUNDED</code> and <code>INFEASIBLE</code> call their terminal function
+      (<code>UnboundedTerminal</code>, <code>InfeasibleTerminal</code>), which runs the engine and returns its findings
+      to hand up; <code>UNDIAGNOSED</code> throws. Each engine is a free function whose dependencies arrive as callbacks
+      (dependency injection): the infeasible engine's solver call, the unbounded engine's categorical candidates. So an
+      engine can change behind its terminal without touching the router, and is tested without DuckDB's operators.
+      Under the prefix, a query that solves returns one row:</p>
 <!--sql run="diagnose-bag" dec="state"-->DIAGNOSE
 SELECT item, x FROM Items
 DECIDE x(BOOL)
@@ -133,8 +136,12 @@ MAXIMIZE SUM(x * value);<!--/sql-->
       <li><code>src/decidb/solver/ilp_solver.cpp</code>: <code>SolveModel</code>, <code>DisambiguateInfOrUnbd</code>,
         <code>RejectIntegerCeilingOptimum</code>, <code>ThrowDecideSolveError</code></li>
       <li><code>src/decidb/solver/probe_models.cpp</code>: <code>MakeZeroObjectiveProbeModel</code></li>
-      <li><code>src/execution/operator/decide/physical_decide.cpp</code>: <code>PhysicalDecide::Finalize</code>, the
-        switch on the terminal</li>
+      <li><code>src/decidb/solver/decide_solve.cpp</code>: <code>SolveDecide</code>, the stop at a time limit or
+        Ctrl-C</li>
+      <li><code>src/execution/operator/decide/physical_decide.cpp</code>:
+        <code>PhysicalDecide::FinalizeSolveResult</code>, the switch on the terminal</li>
+      <li><code>src/decidb/diagnostics/decide_diagnostic_terminals.cpp</code>: <code>UnboundedTerminal</code> and
+        <code>InfeasibleTerminal</code>, which run the engines</li>
       <li><code>test/common/test_decidb_router.cpp</code>: every leaf with and without the prefix;
         <code>test/decide/tests/test_diagnose_trigger.py</code>: the prefix end to end</li>
     </ul></div>
@@ -243,8 +250,8 @@ MAXIMIZE SUM(x * value);<!--/sql-->
       <code>query</code> scope the key is the clause's repair group alone, so every class of a <code>per</code> clause
       shares one slack, and a bound read from data folds into one offset. In the <code>expanded</code> scope the key
       adds the row's class, so each <code>per</code> class gets its own slack, and a data bound keeps one slack per row.
-      The bag above, under <code>expanded</code>, reports one finding for <code>gear</code>, with <code>gear</code> in
-      the <code>group</code> column.</p>
+      The bag above, under <code>expanded</code>, reports one finding for <code>gear</code>, with
+      <code>category = 'gear'</code> in the <code>group</code> column: the class's key as the query writes it.</p>
     <p>A bound read from data shows the difference best. Two order lines ask for more than their stock:</p>
 <!--sql run="diagnose-lines" dec="suggested_change,amount"-->DIAGNOSE
 SELECT line, ship FROM Lines
@@ -253,8 +260,8 @@ SUCH THAT ship >= ordered AND ship <= available
 MAXIMIZE SUM(ship);<!--/sql-->
     <p>There is no literal to edit, so the <code>query</code> scope reports a <strong>virtual offset</strong>: the
       column plus a constant, sized to the worst shortfall (line L2 orders 25 and has 18). The <code>expanded</code>
-      scope reports each conflicting row at its own values, with its position in the query's rows, counting from 0, in
-      <code>row</code>:</p>
+      scope reports each conflicting row at its own values. The <code>row</code> column says which kept row it is,
+      counting from 1, so line L2 is row 2:</p>
 <!--sql run="diagnose-lines-expanded" dec="suggested_change,amount,row"-->DIAGNOSE
 SELECT line, ship FROM Lines
 DECIDE ship(INT)
@@ -303,10 +310,11 @@ MAXIMIZE SUM(ship);<!--/sql-->
         <tr><td><code>scope</code></td><td>NULL</td><td><code>row</code>, or <code>keyed</code> for a keyed decision's
           classes</td></tr>
         <tr><td><code>edit_source</code></td><td colspan="2">the kind of finding (below)</td></tr>
-        <tr><td><code>group</code></td><td>the <code>per</code> key value of an <code>expanded_group</code>
-          finding</td><td>the slice, such as <code>region = 'West'</code></td></tr>
-        <tr><td><code>row</code></td><td>an <code>expanded_row</code> finding's position in the query's rows, from
-          0</td><td>NULL</td></tr>
+        <tr><td><code>group</code></td><td>an <code>expanded_group</code> finding's class, its <code>per</code> key as
+          the query writes it (<code>category = 'gear'</code>)</td><td>the slice, such as
+          <code>region = 'West'</code></td></tr>
+        <tr><td><code>row</code></td><td>the kept row an <code>expanded_row</code> finding covers, counting from
+          1</td><td>NULL</td></tr>
       </tbody>
     </table></div>
     <dl class="reads">
@@ -334,7 +342,7 @@ MAXIMIZE SUM(ship);<!--/sql-->
         <code>MakeVirtualOffsetEdit</code>, <code>FanOutByClass</code>, <code>CollectUnreachableClauses</code></li>
       <li><code>src/decidb/diagnostics/decide_diagnostic.cpp</code>: <code>BuildInfeasibleDiagnostic</code>,
         <code>BuildElasticInfeasibleDiagnostic</code>, <code>BuildUnreachableBoundDiagnostic</code></li>
-      <li><code>src/execution/operator/decide/physical_decide.cpp</code>: <code>FormulateElasticModel</code>,
+      <li><code>src/decidb/diagnostics/decide_diagnostic_terminals.cpp</code>: <code>FormulateElasticModel</code>,
         <code>OpenElasticColumnBox</code></li>
       <li><code>src/include/duckdb/common/enums/decide.hpp</code>: <code>ConstraintKind</code>,
         <code>IsRelaxableForElastic</code>, <code>ElasticShape</code></li>
@@ -372,8 +380,8 @@ subject to  aⱼ·d  (<=, =, >=) 0    each linear row, its bound replaced by 0
       is already a suspect, with no further filter.</p>
     <p>A column inside a square, a product, a native general constraint or an indicator is held at 0. Along such a ray
       every non-linear part keeps its value, so the ray is a true escape and never an artifact of relaxing a square.
-      The cost: a runaway inside a square finds no ray, and the engine reports one <code>undiagnosed</code> finding
-      saying a non-linear term prevents naming the decision.</p>
+      The cost: a runaway inside a square finds no ray, and the engine reports one <code>undiagnosed</code> finding:
+      <em>a non-linear term prevents naming the variable.</em></p>
     <p>The integer ceiling the facade catches (<a href="#statuses">From status to terminal</a>) needs no ray model:
       the pinned column is the escaping direction, and the facade hands it over as the ray.</p>
 
@@ -403,7 +411,8 @@ MAXIMIZE SUM(ship * margin);<!--/sql-->
       covers every runaway and the cap is scoped to it. The objective reads <code>margin</code>, but each margin value
       holds one escaping route out of three, below the threshold, so it explains nothing and is not reported.</p>
     <p>Column names come from the clause's own column references and, for the rest, from the names the binder
-      resolved (<code>LogicalDecide::source_columns</code>), so a column reads the same through a table, a
+      resolved (<code>source_columns</code> in the operator's bound part, <code>BoundDecide</code>), so a column reads
+      the same through a table, a
       <code>VALUES</code> alias list or a CTE. A computed column with no <code>AS</code> name gets none and is never
       used as a slice.</p>
     <div class="note"><strong>A decision, not a clause</strong><p>The ray names a missing bound. It cannot blame a
@@ -416,8 +425,8 @@ MAXIMIZE SUM(ship * margin);<!--/sql-->
       <li><code>src/decidb/diagnostics/decide_diagnostic_engines.cpp</code>: <code>DiagnoseUnbounded</code></li>
       <li><code>src/decidb/diagnostics/decide_diagnostic.cpp</code>: <code>CharacterizeEscape</code>,
         <code>BuildUnboundedDiagnostic</code>, <code>BuildUndiagnosedDiagnostic</code></li>
-      <li><code>src/execution/operator/decide/physical_decide.cpp</code>: <code>UnboundedCandidateProvider</code>, the
-        categorical candidates</li>
+      <li><code>src/decidb/diagnostics/decide_diagnostic_terminals.cpp</code>: <code>UnboundedCandidateProvider</code>,
+        the categorical candidates</li>
       <li><code>src/execution/physical_plan/plan_decide.cpp</code>: column names, and which columns the clause reads</li>
       <li><code>src/include/duckdb/decidb/diagnostics/diagnostic_constants.hpp</code>:
         <code>DIAGNOSTIC_RAY_EPSILON</code>, <code>INTEGER_SOLVER_CEILING</code></li>
@@ -449,7 +458,7 @@ MAXIMIZE SUM(ship * margin);<!--/sql-->
     <p>A diagnosis reports in terms of clauses, but the solver sees rows and columns. <strong>Provenance</strong> is
       the record, on every row and column, of where it came from. Each model row carries a
       <code>ConstraintProvenance</code>, stamped where the model builder emits the row, with separate identities for
-      separate questions:</p>
+      separate questions. The first three sit together in the row's origin (<code>DecideRowOrigin</code>):</p>
     <dl class="reads">
       <dt><code>source_clause_id</code></dt><dd>which written clause to quote.</dd>
       <dt><code>repair_group_id</code></dt><dd>which rows share one slack.</dd>
@@ -469,10 +478,10 @@ DECIDE ship(REAL), open(BOOL)
 SUCH THAT ship BETWEEN 0 AND capacity * open
       AND ship >= demand
 MINIMIZE SUM(open)<!--/explain-->
-    <p>So the binder records each clause's written text in a source registry (<code>ConstraintSourceInfo</code>)
-      before canonicalization runs, and a finding quotes that text, as a compiler underlines the source in an error
-      rather than reprinting its syntax tree. An offset added to a bound means the same in either form, so the repair
-      reads against the written clause:</p>
+    <p>So the binder records where each clause is written, its span in the query, in a source registry
+      (<code>ConstraintSourceInfo</code>) before canonicalization runs. A finding cuts the clause's text from the query
+      at that span, as a compiler underlines the source in an error rather than reprinting its syntax tree. An offset
+      added to a bound means the same in either form, so the repair reads against the written clause:</p>
 <!--sql run="diagnose-depots" dec="suggested_change,amount"-->DIAGNOSE
 SELECT depot, ship, open FROM Depots
 DECIDE ship(REAL), open(BOOL)
@@ -517,10 +526,12 @@ MINIMIZE SUM(open);<!--/sql-->
         <code>SolverStatus</code></li>
       <li><code>src/include/duckdb/decidb/solver/solver_config.hpp</code>:
         <code>ResolveDecideDiagnosticTimeLimit</code>, the 60-second cap</li>
-      <li><code>src/include/duckdb/decidb/formulation/ilp_model.hpp</code>: <code>ConstraintProvenance</code>,
-        <code>ColumnProvenance</code>; <code>src/decidb/formulation/ilp_model_builder.cpp</code>:
-        <code>StampConstraintProvenance</code>, <code>BuildColumnProvenance</code></li>
-      <li><code>src/include/duckdb/common/decide_source_info.hpp</code>: <code>ConstraintSourceInfo</code>;
+      <li><code>src/include/duckdb/decidb/formulation/solver_input.hpp</code>: <code>ConstraintProvenance</code>;
+        <code>src/include/duckdb/decidb/formulation/ilp_model.hpp</code>: <code>ColumnProvenance</code>;
+        <code>src/decidb/formulation/ilp_model_builder.cpp</code>: <code>StampConstraintProvenance</code>,
+        <code>BuildColumnProvenance</code></li>
+      <li><code>src/include/duckdb/common/decide_source_info.hpp</code>: <code>ConstraintSourceInfo</code>,
+        <code>DecideRowOrigin</code>;
         <code>src/planner/decide/decide_source_provenance.cpp</code>: <code>InitializeConstraintSourceInfo</code></li>
       <li><code>src/decidb/diagnostics/decide_diagnostic.cpp</code>: <code>TakeDecideDiagnostic</code>,
         <code>GetDecideDiagnoseSchema</code>, <code>RenderDecideDiagnostic</code>,

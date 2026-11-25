@@ -117,6 +117,17 @@ FIXTURES["n1"] = {
     "setup": """CREATE TABLE Signals (name VARCHAR, score DOUBLE);
 INSERT INTO Signals VALUES ('alpha', 3), ('beta', 4), ('gamma', 0);"""
 }
+# the guide's ordered-data example: four weeks of demand for a plant that makes 60 a week
+FIXTURES["weeks"] = {
+    "setup": """CREATE TABLE Weeks (week INT, demand INT, capacity INT, make_cost DOUBLE);
+INSERT INTO Weeks VALUES (1, 30, 60, 3.0), (2, 70, 60, 3.0), (3, 40, 60, 4.0), (4, 70, 60, 4.0);""",
+    "template": """SELECT week, make
+FROM Weeks
+DECIDE make(INT)
+SUCH THAT make <= capacity
+      AND {CLAUSES}
+MINIMIZE SUM(make * make_cost);""",
+}
 
 # the documentation pages' own databases: each docs_fixtures/<name>.py defines FIXTURES = {...}; a name may not repeat
 for _path in sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs_fixtures", "*.py"))):

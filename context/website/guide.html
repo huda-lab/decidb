@@ -57,7 +57,7 @@
     <a class="skip-link" href="#top">Skip to content</a>
     <a class="nav__logo" href="index.html"><img class="logo logo--light" src="assets/images/logo.svg" alt="DeciDB" width="140" height="42"><img class="logo logo--dark" src="assets/images/logo-dark.svg" alt="DeciDB" width="140" height="42" loading="lazy"><img class="logo logo--mark" src="assets/images/mark.svg" alt="DeciDB" width="40" height="32" loading="lazy"></a>
     <nav class="nav__links" aria-label="Main">
-      <div class="nav__item"><a class="nav__link" href="getting-started.html">Get started</a></div><div class="nav__item"><a class="nav__link" href="demo.html">Live demo</a></div><div class="nav__item"><a class="nav__link" href="guide.html" aria-current="page">Guide</a></div><div class="nav__item"><a class="nav__link" href="examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="about.html">About</a></div><div class="nav__item"><a class="nav__link" href="docs/index.html"><span class="nav__full">Documentation</span><span class="nav__short" aria-hidden="true">Docs</span></a></div><div class="nav__item"><a class="nav__link" href="features.html"><span class="nav__full">Novel features</span><span class="nav__short" aria-hidden="true">Features</span></a></div>
+      <div class="nav__item"><a class="nav__link" href="guide.html" aria-current="page">Guide</a></div><div class="nav__item"><a class="nav__link" href="examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="demo.html">Live demo</a></div><div class="nav__item"><a class="nav__link" href="docs/index.html">How it works</a></div><div class="nav__item"><a class="nav__link" href="about.html">About</a></div>
     </nav>
     <div class="nav__actions">
       <button class="btn btn--secondary theme-toggle" type="button" aria-pressed="false" data-theme-toggle hidden><svg class="theme-toggle__sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="theme-toggle__moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg><span class="theme-toggle__label">Dark theme</span></button>
@@ -87,6 +87,7 @@
         <li><a href="#such-that">2. SUCH THAT</a></li>
         <li class="sub"><a href="#when">Some rows: when</a></li>
         <li class="sub"><a href="#per">Each group: per and by</a></li>
+        <li class="sub"><a href="#ordered">Ordered data: at, over</a></li>
         <li><a href="#objective">3. MAXIMIZE, MINIMIZE</a></li>
         <li><a href="#result">The result</a></li>
         <li><a href="#solvers">Solvers</a></li>
@@ -96,7 +97,7 @@
         <li class="sub"><a href="#nulls">NULL values</a></li>
         <li class="sub"><a href="#settings">Settings</a></li>
         <li class="sub"><a href="#migrating">Migrating from 0.2</a></li>
-        <li class="sub"><a href="#roadmap">Not supported yet</a></li>
+        <li class="sub"><a href="#roadmap">Not built yet</a></li>
       </ul>
     </nav>
 
@@ -140,11 +141,13 @@
 <div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Syntax</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> columns
 <span class="tk-k">FROM</span> tables [<span class="tk-k">JOIN</span> ...] [<span class="tk-k">WHERE</span> ...]
 <span class="tk-d">DECIDE</span> [<span class="tk-d">per</span> key:] name(type) [, ...]
-<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> [<span class="tk-d">when</span> condition] [<span class="tk-d">per</span> key:] constraint [<span class="tk-k">AND</span> ...]
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> [[<span class="tk-d">when</span> condition] [<span class="tk-d">per</span> key]:] constraint [<span class="tk-k">AND</span> ...]
 [<span class="tk-d">MAXIMIZE</span> | <span class="tk-d">MINIMIZE</span> [<span class="tk-d">when</span> condition:] expression]</code></pre></div>
-        <p>Square brackets mark optional parts. <code><span class="tk-d">SUCH</span> <span class="tk-d">THAT</span></code> is required; the objective is not.
+        <p>Square brackets mark optional parts. <code><span class="tk-d">SUCH</span> <span class="tk-d">THAT</span></code> is required; the objective is not. A
+          <code><span class="tk-d">when</span></code> or <code><span class="tk-d">per</span></code> in front of a constraint ends with a colon.
           <code><span class="tk-d">DECIDE</span></code> may also come between <code><span class="tk-k">SELECT</span></code> and <code><span class="tk-k">FROM</span></code>, the order the DeciDB
-          paper uses; both orders mean the same.</p>
+          paper uses; both orders mean the same. Inside these clauses <code><span class="tk-d">when</span></code>, <code><span class="tk-d">per</span></code> and
+          <code><span class="tk-d">by</span></code> are keywords, so a column with one of those names is quoted there: <code>x &lt;= &quot;<span class="tk-d">per</span>&quot;</code>.</p>
       </section>
 
       <!-- ============================================================ DECIDE -->
@@ -181,7 +184,7 @@
 <span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">ship</span> &lt;= S.demand * <span class="tk-v">open</span>
       <span class="tk-k">AND</span> <span class="tk-v">ship</span> &lt;= <span class="tk-v">biggest</span>
       <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) &gt;= <span class="tk-n">150</span>
-<span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(S.unit_cost * <span class="tk-v">ship</span>) + <span class="tk-f">SUM</span>(D: D.opening_cost * <span class="tk-v">open</span>) + <span class="tk-n">10</span> * <span class="tk-v">biggest</span>;</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>7 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">shipmentID</th><th scope="col" class="">depotID</th><th scope="col" class="num dec">ship</th><th scope="col" class="num dec">open</th><th scope="col" class="num dec">biggest</th></tr></thead><tbody><tr><td>S1</td><td>D1</td><td class="num dec">0</td><td class="num dec">0</td><td class="num dec">40</td></tr><tr><td>S2</td><td>D1</td><td class="num dec">0</td><td class="num dec">0</td><td class="num dec">40</td></tr><tr><td>S3</td><td>D2</td><td class="num dec">40</td><td class="num dec">1</td><td class="num dec">40</td></tr><tr><td>S4</td><td>D3</td><td class="num dec">35</td><td class="num dec">1</td><td class="num dec">40</td></tr><tr><td>S5</td><td>D3</td><td class="num dec">20</td><td class="num dec">1</td><td class="num dec">40</td></tr><tr><td>S6</td><td>D4</td><td class="num dec">40</td><td class="num dec">1</td><td class="num dec">40</td></tr><tr><td>S7</td><td>D2</td><td class="num dec">15</td><td class="num dec">1</td><td class="num dec">40</td></tr></tbody></table></div></div></div>
+<span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(S.unit_cost * <span class="tk-v">ship</span>) + <span class="tk-f">SUM</span>(<span class="tk-d">per</span> D: D.opening_cost * <span class="tk-v">open</span>) + <span class="tk-n">10</span> * <span class="tk-v">biggest</span>;</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>7 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">shipmentID</th><th scope="col" class="">depotID</th><th scope="col" class="num dec">ship</th><th scope="col" class="num dec">open</th><th scope="col" class="num dec">biggest</th></tr></thead><tbody><tr><td>S1</td><td>D1</td><td class="num dec">0</td><td class="num dec">0</td><td class="num dec">40</td></tr><tr><td>S2</td><td>D1</td><td class="num dec">0</td><td class="num dec">0</td><td class="num dec">40</td></tr><tr><td>S3</td><td>D2</td><td class="num dec">40</td><td class="num dec">1</td><td class="num dec">40</td></tr><tr><td>S4</td><td>D3</td><td class="num dec">35</td><td class="num dec">1</td><td class="num dec">40</td></tr><tr><td>S5</td><td>D3</td><td class="num dec">20</td><td class="num dec">1</td><td class="num dec">40</td></tr><tr><td>S6</td><td>D4</td><td class="num dec">40</td><td class="num dec">1</td><td class="num dec">40</td></tr><tr><td>S7</td><td>D2</td><td class="num dec">15</td><td class="num dec">1</td><td class="num dec">40</td></tr></tbody></table></div></div></div>
         <p><code>ship</code> differs on every row. <code>open</code> repeats on every shipment of the same depot, because
           it is one decision. <code>biggest</code> is the same on every row: the largest single shipment, which the
           objective keeps small.</p>
@@ -218,6 +221,9 @@
         </table></div>
         <p>Bounds can come from the data: a column, an expression, or a subquery.</p>
 <div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= (<span class="tk-k">SELECT</span> <span class="tk-f">MAX</span>(weight) * <span class="tk-n">2</span> <span class="tk-k">FROM</span> Items)</code></pre></div>
+        <p>A bound that differs from row to row, such as <code><span class="tk-f">SUM</span>(x) &lt;= cap</code>, holds at its tightest: the
+          smallest <code>cap</code> for <code>&lt;=</code>, the largest for <code>&gt;=</code>. With <code>=</code> a bound
+          that differs is refused, since a total cannot equal two numbers.</p>
         <div class="note"><strong>No OR between constraints</strong>
           <p>Every constraint must hold. When an answer may follow one rule or another, that choice is itself a
             decision: add a <code><span class="tk-t">BOOL</span></code> that switches between them.</p></div>
@@ -264,13 +270,64 @@
 <span class="tk-k">AND</span> <span class="tk-d">per</span> D.depotID: <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.depotID) &lt;= D.capacity
 <span class="tk-k">AND</span> <span class="tk-v">ship</span> &lt;= <span class="tk-n">0.6</span> * <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.depotID)
 <span class="tk-k">AND</span> <span class="tk-d">per</span> D.depotID: <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) &lt;= D.capacity</code></pre></div>
-        <h3 id="refused">When a group rule is refused</h3>
-        <p>A rule written once per group can only read values that are the same across the group. If it reads one that
-          varies, DeciDB stops before solving and names it:</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">per</span> D.depotID: <span class="tk-v">ship</span> &lt;= <span class="tk-n">10</span>    <span class="tk-c">-- ship is one decision per row, and a depot has several</span></code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>refused before solving</span></div><pre>Invalid Input Error: DECIDE: per D.depotID does not determine the decision ship (declared per row). D.depotID = &#x27;D1&#x27; covers more than one ship.</pre></div></div>
-        <p>Put the varying value inside a sum, so the rule reads one total per depot:</p>
-<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">per</span> D.depotID: <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.depotID) &lt;= <span class="tk-n">10</span></code></pre></div>
-        <p>or drop <code><span class="tk-d">per</span></code> to write the rule on every row (<code>ship &lt;= <span class="tk-n">10</span></code>).</p>
+        <p>Without <code><span class="tk-d">per</span></code>, a rule holds on each row, and rows that would give the same rule share one, so a
+          rule on a total is written once. Without <code><span class="tk-d">by</span></code>, a sum reads every row. Both defaults can be written
+          out, as the release notes do: <code><span class="tk-d">per</span> ():</code> for one rule over the whole query, <code><span class="tk-d">by</span> ()</code> for a
+          sum over every row. This is the first rule above, written in full:</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">per</span> (): <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> () &lt;= <span class="tk-n">300</span></code></pre></div>
+        <h3 id="varies"><a class="anchor" href="#varies">When a value differs inside a group</a></h3>
+        <p>A rule written once per group may read a value that is not the same on every row of the group. DeciDB then
+          writes the rule once for each different value. A depot has several shipments, each with its own
+          <code>ship</code>, so this rule is one rule per shipment, the same as <code>ship &lt;= <span class="tk-n">10</span></code> on every
+          row:</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">per</span> D.depotID: <span class="tk-v">ship</span> &lt;= <span class="tk-n">10</span></code></pre></div>
+        <p>The North region has two depots, with capacities 100 and 80. Over that region, this rule is written once for
+          each capacity, so the smaller one, 80, is the limit that holds:</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">per</span> D.region: <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) &lt;= D.capacity</code></pre></div>
+        <p>To limit each depot's own total instead, sum inside the group:
+          <code><span class="tk-d">per</span> D.depotID: <span class="tk-f">SUM</span>(ship) <span class="tk-d">by</span> (D.depotID) &lt;= <span class="tk-n">10</span></code>.</p>
+
+        <h3 id="nested"><a class="anchor" href="#nested">A reducer inside a reducer</a></h3>
+        <p>A reducer is a function such as <code>SUM</code> or <code>MAX</code> that turns many rows into one value.
+          One may read the results of another, to any depth. This rule takes each depot's largest shipment, then adds
+          those up:</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-f">SUM</span>(<span class="tk-d">per</span> D.depotID: <span class="tk-f">MAX</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.depotID)) &lt;= <span class="tk-n">50</span></code></pre></div>
+        <p>The inner reducer is computed once per group of its <code><span class="tk-d">by</span></code>, and the outer one adds one value per
+          depot. <code>SUM</code>, <code>AVG</code>, <code>MIN</code> and <code>MAX</code> nest this way in rules and in
+          the objective.</p>
+
+        <h3 id="ordered"><a class="anchor" href="#ordered">Ordered data: <code>at</code> and <code>over</code></a></h3>
+        <p>Some rules read another row in order, such as last week's stock. <code>at(previous: e) over (week)</code>
+          reads <code>e</code> on the row before, with the rows ordered by <code>week</code>. <code>else <span class="tk-n">0</span></code> gives
+          the value to use where there is no row before. Here a plant can make 60 units a week, and stock carries over
+          from one week to the next:</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> week, demand, <span class="tk-v">make</span>, <span class="tk-v">stock</span>
+<span class="tk-k">FROM</span> Weeks
+<span class="tk-d">DECIDE</span> <span class="tk-v">make</span>(<span class="tk-t">INT</span>), <span class="tk-v">stock</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">make</span> &lt;= capacity
+      <span class="tk-k">AND</span> <span class="tk-v">stock</span> = at(previous else <span class="tk-n">0</span>: <span class="tk-v">stock</span>) over (week) + <span class="tk-v">make</span> - demand
+<span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">make</span> * make_cost + <span class="tk-n">0.25</span> * <span class="tk-v">stock</span>)
+<span class="tk-k">ORDER</span> <span class="tk-k">BY</span> week;</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>4 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="num">week</th><th scope="col" class="num">demand</th><th scope="col" class="num dec">make</th><th scope="col" class="num dec">stock</th></tr></thead><tbody><tr><td class="num">1</td><td class="num">30</td><td class="num dec">60</td><td class="num dec">30</td></tr><tr><td class="num">2</td><td class="num">70</td><td class="num dec">60</td><td class="num dec">20</td></tr><tr><td class="num">3</td><td class="num">40</td><td class="num dec">30</td><td class="num dec">10</td></tr><tr><td class="num">4</td><td class="num">70</td><td class="num dec">60</td><td class="num dec">0</td></tr></tbody></table></div></div></div>
+        <p>Weeks 2 and 4 need more than 60, so the plant makes extra ahead of them and keeps it in stock. It makes the
+          stock for week 4 in week 3, not in the cheaper weeks 1 and 2, because those already run at capacity.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th scope="col">Write</th><th scope="col">Reads</th></tr></thead>
+          <tbody>
+            <tr><td><code>at(<span class="tk-n">2</span> previous: e)</code>, <code>at(next: e)</code></td><td><code>e</code> two rows before, or one row after</td></tr>
+            <tr><td><code>at(first: e)</code>, <code>at(last: e)</code></td><td><code>e</code> on the first or the last row</td></tr>
+            <tr><td><code><span class="tk-f">SUM</span>(from first to previous: e)</code></td><td>every row from the first to the one before; <code>AVG</code>, <code>MIN</code> and <code>MAX</code> work too, and <code>COUNT</code> over data</td></tr>
+            <tr><td><code><span class="tk-f">SUM</span>(from first to last every <span class="tk-n">2</span>: e)</code></td><td>every second row</td></tr>
+            <tr><td><code><span class="tk-f">SUM</span>(from previous to next all: e)</code></td><td>nothing at all when one of those rows is missing</td></tr>
+            <tr><td><code>over (week desc)</code></td><td>the rows in reverse order</td></tr>
+            <tr><td><code>over (week cyclic)</code></td><td>the rows in a circle: the row before the first is the last</td></tr>
+            <tr><td><code>over (week within product)</code></td><td>each product's rows in their own order</td></tr>
+          </tbody>
+        </table></div>
+        <p>Where the row a frame reads does not exist and there is no <code>else</code>, the frame has no value, and the
+          rule is skipped on that row, as for a NULL. A range reads the rows that exist. Any three weeks in a row, with
+          the last week followed by the first, make at least 150:</p>
+<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-f">SUM</span>(from previous to next: <span class="tk-v">make</span>) over (week cyclic) &gt;= <span class="tk-n">150</span></code></pre></div>
+        <p>One frame reads at most 10,000,000 values; <code><span class="tk-k">SET</span> decide_frame_limit</code> changes that.</p>
       </section>
 
       <!-- ============================================================ OBJECTIVE -->
@@ -282,17 +339,21 @@
 <span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(S.unit_cost * ship)                 <span class="tk-c">-- the lowest cost</span>
 <span class="tk-d">MAXIMIZE</span> <span class="tk-d">when</span> S.priority: <span class="tk-f">SUM</span>(ship)              <span class="tk-c">-- the most shipped, counting priority rows only</span></code></pre></div>
         <p>A query has one objective, computed once over all its rows. <code><span class="tk-d">when</span></code> in front of it limits the rows
-          it reads.</p>
+          it reads. A value it reads outside a sum must therefore be the same on every row: <code><span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(x) +
+          cap</code> is refused when <code>cap</code> differs between rows.</p>
 
         <h3 id="fixed-costs">Costs counted once</h3>
         <p>Over a join, a depot's opening cost appears on every shipment row of that depot, so
-          <code><span class="tk-f">SUM</span>(D.opening_cost * open)</code> would count it once per shipment. <code><span class="tk-f">SUM</span>(D: e)</code> counts it once
+          <code><span class="tk-f">SUM</span>(D.opening_cost * open)</code> would count it once per shipment. <code><span class="tk-f">SUM</span>(<span class="tk-d">per</span> D: e)</code> counts it once
           per depot:</p>
 <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> S.shipmentID, D.depotID, <span class="tk-v">open</span>, <span class="tk-v">ship</span>
 <span class="tk-k">FROM</span> Shipment S <span class="tk-k">JOIN</span> Depot D <span class="tk-k">USING</span> (depotID)
 <span class="tk-d">DECIDE</span> <span class="tk-d">per</span> D: <span class="tk-v">open</span>(<span class="tk-t">BOOL</span>), <span class="tk-v">ship</span>(<span class="tk-t">INT</span>)
 <span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">ship</span> &lt;= S.demand * <span class="tk-v">open</span> <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) &gt;= <span class="tk-n">120</span>
-<span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(S.unit_cost * <span class="tk-v">ship</span>) + <span class="tk-f">SUM</span>(D: D.opening_cost * <span class="tk-v">open</span>);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>7 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">shipmentID</th><th scope="col" class="">depotID</th><th scope="col" class="num dec">open</th><th scope="col" class="num dec">ship</th></tr></thead><tbody><tr><td>S1</td><td>D1</td><td class="num dec">0</td><td class="num dec">0</td></tr><tr><td>S2</td><td>D1</td><td class="num dec">0</td><td class="num dec">0</td></tr><tr><td>S3</td><td>D2</td><td class="num dec">1</td><td class="num dec">25</td></tr><tr><td>S4</td><td>D3</td><td class="num dec">1</td><td class="num dec">35</td></tr><tr><td>S5</td><td>D3</td><td class="num dec">1</td><td class="num dec">0</td></tr><tr><td>S6</td><td>D4</td><td class="num dec">1</td><td class="num dec">45</td></tr><tr><td>S7</td><td>D2</td><td class="num dec">1</td><td class="num dec">15</td></tr></tbody></table></div></div></div>
+<span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(S.unit_cost * <span class="tk-v">ship</span>) + <span class="tk-f">SUM</span>(<span class="tk-d">per</span> D: D.opening_cost * <span class="tk-v">open</span>);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>7 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">shipmentID</th><th scope="col" class="">depotID</th><th scope="col" class="num dec">open</th><th scope="col" class="num dec">ship</th></tr></thead><tbody><tr><td>S1</td><td>D1</td><td class="num dec">0</td><td class="num dec">0</td></tr><tr><td>S2</td><td>D1</td><td class="num dec">0</td><td class="num dec">0</td></tr><tr><td>S3</td><td>D2</td><td class="num dec">1</td><td class="num dec">25</td></tr><tr><td>S4</td><td>D3</td><td class="num dec">1</td><td class="num dec">35</td></tr><tr><td>S5</td><td>D3</td><td class="num dec">1</td><td class="num dec">0</td></tr><tr><td>S6</td><td>D4</td><td class="num dec">1</td><td class="num dec">45</td></tr><tr><td>S7</td><td>D2</td><td class="num dec">1</td><td class="num dec">15</td></tr></tbody></table></div></div></div>
+        <p>Keep <code>e</code> to the depot's own values. If it also reads something that differs between a depot's
+          shipments, such as <code>S.unit_cost</code> or <code>ship</code>, the sum counts one term for each different
+          value, as <a href="#varies">a group rule does</a>.</p>
 
         <h3 id="worst-case">The worst case</h3>
         <p>To balance work, make the largest load as small as possible. <code><span class="tk-f">max</span>(<span class="tk-d">per</span> M.machine: ...)</code> takes each
@@ -334,18 +395,33 @@
         <p class="lead">A DECIDE query returns rows like any query, with every decision filled in. You can join it, filter
           it, or use it in a larger query.</p>
         <h3 id="no-answer">When there is no answer</h3>
-        <p>If no choice can satisfy every constraint, the query stops with an error that says what to do next:</p>
+        <p>If no choice can satisfy every constraint, the query stops with an error that says so:</p>
 <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span> <span class="tk-k">FROM</span> Items
 <span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
 <span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">40</span> <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) &gt;= <span class="tk-n">4</span>
-<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>the solver found no answer</span></div><pre>Invalid Input Error: DECIDE optimization is infeasible. Prefix the query with DIAGNOSE to see which clause to change.</pre></div></div>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>the solver found no answer</span></div><pre>Invalid Input Error: the DECIDE query is infeasible</pre></div></div>
         <p>Put <a href="features.html#diagnose"><code><span class="tk-d">DIAGNOSE</span></code></a> in front of the query to see which clause to
           change and by how much. A query whose objective could grow forever stops the same way, and
           <code><span class="tk-d">DIAGNOSE</span></code> names the decision that needs a limit.</p>
+        <h3 id="warnings">Warnings</h3>
+        <p>Some queries run as written but may not do what you meant. DeciDB answers them and prints a warning on the
+          error stream:</p>
+        <ul>
+          <li>a rule left with nothing to constrain, because the value it reads is missing on every row:
+            <code><span class="tk-d">DECIDE</span> warning: <span class="tk-s">&#x27;make &lt;= at(5 previous: make) over (week)&#x27;</span> constrains nothing: each of its <span class="tk-n">4</span>
+            instances has no value, so each is skipped.</code></li>
+          <li>an objective that is 0 whatever the decisions, such as a sum whose weights are all zero or NULL, so any
+            answer that follows the rules is the best;</li>
+          <li>a very large or very small number, such as <code><span class="tk-n">1e10</span></code>, which can make the answer inaccurate.</li>
+        </ul>
+        <p>A query answered by <a href="features.html#rewriting">query rewriting</a> prints none of them.</p>
         <h3 id="long-solve">A long solve</h3>
-        <p>When a solve reaches its time limit or you press Ctrl-C, DeciDB reports how far it got. At a terminal it
-          offers to keep solving (Enter) or stop with the best answer so far (<code>s</code>). <code><span class="tk-k">SET</span> decide_mip_gap =
-          <span class="tk-n">1e-4</span></code> accepts an answer within 0.01% of the best one, which is often much faster.</p>
+        <p>Each solve stops after 300 seconds; the environment variable <code>DECIDB_TIME_LIMIT</code> sets another
+          limit, in seconds. When the limit is reached, DeciDB reports how far the solver got. At a terminal it then offers
+          to keep solving (Enter) or to stop with the best answer so far (<code>s</code>); anywhere else, such as Python or
+          a script, the query stops with an error. Ctrl-C returns the best answer found so far, marked as not proven
+          best, or an error if there is none yet. <code><span class="tk-k">SET</span> decide_mip_gap = <span class="tk-n">1e-4</span></code> accepts an answer within 0.01%
+          of the best one, which is often much faster.</p>
       </section>
 
       <!-- ============================================================ SOLVERS -->
@@ -354,23 +430,30 @@
         <p class="lead">You never name a solver or a problem type. DeciDB works out the type from your decisions and
           clauses and picks a solver that can take it.</p>
         <p>The bundled HiGHS solver needs no setup. When the Gurobi library and a license are present, DeciDB uses
-          Gurobi instead: it is faster on these models and takes a few that HiGHS cannot.</p>
+          Gurobi instead: it is faster on these models and takes a few that HiGHS cannot
+          (<a href="getting-started.html#install-gurobi">setting up Gurobi</a>).</p>
         <div class="table-wrap"><table>
           <thead><tr><th scope="col">Your query has</th><th scope="col">Type</th><th scope="col">HiGHS</th><th scope="col">Gurobi</th></tr></thead>
           <tbody>
             <tr><td><code><span class="tk-t">REAL</span></code> decisions, sums and bounds</td><td>LP</td><td class="yes">yes</td><td class="yes">yes</td></tr>
             <tr><td>some <code><span class="tk-t">INT</span></code> or <code><span class="tk-t">BOOL</span></code> decisions</td><td>ILP, MILP</td><td class="yes">yes</td><td class="yes">yes</td></tr>
             <tr><td>no objective</td><td>feasibility</td><td class="yes">yes</td><td class="yes">yes</td></tr>
-            <tr><td><code><span class="tk-d">MINIMIZE</span></code> a sum of squares, <code><span class="tk-t">REAL</span></code> decisions</td><td>convex QP</td><td class="yes">usually</td><td class="yes">yes</td></tr>
+            <tr><td><code><span class="tk-d">MINIMIZE</span></code> a sum of squares, <code><span class="tk-t">REAL</span></code> decisions</td><td>convex QP</td><td class="yes">when each square reads one decision and has a fixed weight</td><td class="yes">yes</td></tr>
             <tr><td>a sum of squares with <code><span class="tk-t">INT</span></code> or <code><span class="tk-t">BOOL</span></code> decisions</td><td>MIQP</td><td class="no">no</td><td class="yes">yes</td></tr>
             <tr><td><code><span class="tk-d">MAXIMIZE</span></code> a sum of squares, or a product <code>x * y</code> of two decisions</td><td>non-convex QP</td><td class="no">no</td><td class="yes">yes</td></tr>
             <tr><td>a square or a product inside <code><span class="tk-d">SUCH</span> <span class="tk-d">THAT</span></code></td><td>QCQP</td><td class="no">no</td><td class="yes">yes</td></tr>
           </tbody>
         </table></div>
-        <p>A product with one <code><span class="tk-t">BOOL</span></code> factor (<code>b * x</code>) is exact on both solvers. A query the available
-          solver cannot take is refused before any row is read, with a message that names the solver it needs. Some
-          queries need no solver at all: see <a href="features.html#rewriting">query rewriting</a>. How DeciDB builds the
-          model and hands it to each solver is in the <a href="docs/solving.html">documentation</a>.</p>
+        <p>A product with one <code><span class="tk-t">BOOL</span></code> factor (<code>b * x</code>) is exact on both solvers when <code>x</code>
+          has a finite upper bound. On HiGHS, three more forms need a finite bound on the decisions they read, written in
+          <code><span class="tk-d">SUCH</span> <span class="tk-d">THAT</span></code> or implied by other constraints: an <code>ABS</code> held from below
+          (<code><span class="tk-f">abs</span>(x - <span class="tk-n">5</span>) &gt;= <span class="tk-n">2</span></code>), a <code>&lt;&gt;</code> whose value lies inside the range, and a
+          <code>MIN</code> or <code>MAX</code> pushed the hard way (<code><span class="tk-f">MAX</span>(x) &gt;= <span class="tk-n">3</span></code>, <code><span class="tk-d">MINIMIZE</span>
+          <span class="tk-f">MIN</span>(x)</code>). The message names the decision that needs the bound.</p>
+        <p>A query the installed solver cannot take is refused before any row is read, with a message that ends "is not
+          supported on this installation". Some queries need no solver at all: see
+          <a href="features.html#rewriting">query rewriting</a>. How DeciDB builds the model and hands it to each solver
+          is in <a href="docs/solving.html">How it works</a>.</p>
       </section>
 
       <!-- ============================================================ EXPLAIN -->
@@ -391,14 +474,18 @@
     <span class="tk-v">ship</span> &lt;= S.demand
     <span class="tk-d">per</span> D.depotID: <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) &lt;= D.capacity
     <span class="tk-f">abs</span>(<span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) - <span class="tk-n">40</span>) &lt;= <span class="tk-n">30</span>
-      <span class="tk-g">↳</span> <span class="tk-f">abs</span>(<span class="tk-f">sum</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) - <span class="tk-n">40</span>) becomes an auxiliary variable
       <span class="tk-g">↳</span> <span class="tk-f">sum</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) becomes a helper decision <span class="tk-d">per</span> group
+      <span class="tk-g">↳</span> <span class="tk-f">abs</span>(<span class="tk-f">sum</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) - <span class="tk-n">40</span>) becomes a helper decision
       <span class="tk-g">↳</span> <span class="tk-f">abs</span>(<span class="tk-f">sum</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) - <span class="tk-n">40</span>) - <span class="tk-f">sum</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) &gt;= -<span class="tk-n">40</span>
-      <span class="tk-g">↳</span> <span class="tk-f">abs</span>(<span class="tk-f">sum</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) - <span class="tk-n">40</span>) + <span class="tk-f">sum</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) &gt;= <span class="tk-n">0</span> + <span class="tk-n">40</span></code></pre></div>
-        <p>A line marked <code>↳</code> shows what DeciDB added to model a clause, such as a helper value for
-          <code>abs</code>. A query answered by <a href="features.html#rewriting">query rewriting</a> names the rule
-          instead. <code><span class="tk-k">EXPLAIN</span> ANALYZE</code> and <code><span class="tk-k">EXPLAIN</span> (<span class="tk-k">FORMAT</span> JSON)</code> work too. The
-          <a href="docs/life-of-a-query.html">documentation</a> follows one query through every step DeciDB takes.</p>
+      <span class="tk-g">↳</span> <span class="tk-f">abs</span>(<span class="tk-f">sum</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) - <span class="tk-n">40</span>) + <span class="tk-f">sum</span>(<span class="tk-v">ship</span>) <span class="tk-d">by</span> (D.region) &gt;= <span class="tk-n">40</span></code></pre></div>
+        <p>A line marked <code>≡</code> shows a clause in the form DeciDB solves, when that differs from what you
+          wrote: <code><span class="tk-n">5</span> &gt;= x</code> becomes <code>x &lt;= <span class="tk-n">5</span></code>. A line marked <code>↳</code> shows what DeciDB
+          added to model a clause, such as a helper value for <code>abs</code>. A query answered by
+          <a href="features.html#rewriting">query rewriting</a> names the rule instead. <code><span class="tk-k">EXPLAIN</span> ANALYZE</code> also
+          solves the query, and adds under a clause how many constraints its <code><span class="tk-d">per</span></code> wrote
+          (<code>↳ <span class="tk-d">per</span> g: <span class="tk-n">3</span> constraints</code>) and how many rows it skipped for a missing value.
+          <code><span class="tk-k">EXPLAIN</span> (<span class="tk-k">FORMAT</span> JSON)</code> works too.
+          <a href="docs/life-of-a-query.html">Life of a query</a>, in How it works, follows one query through every step DeciDB takes.</p>
       </section>
 
       <!-- ============================================================ REFERENCE -->
@@ -415,13 +502,19 @@
             <tr><td><code><span class="tk-f">MIN</span>(e)</code>, <code><span class="tk-f">MAX</span>(e)</code></td><td>the smallest or largest value</td></tr>
             <tr><td><code><span class="tk-f">norm</span>(e, p)</code></td><td>a distance: <code><span class="tk-n">1</span></code>, <code><span class="tk-n">2</span></code>, <code><span class="tk-s">&#x27;inf&#x27;</span></code> or <code><span class="tk-n">0</span></code> (see <a href="#distances">distances</a>)</td></tr>
             <tr><td><code><span class="tk-f">count</span>(*)</code></td><td>the number of rows; count chosen rows with <code><span class="tk-f">SUM</span>(x)</code></td></tr>
-            <tr><td><code><span class="tk-f">SUM</span>(D: e)</code></td><td>one term per row of table <code>D</code>, not per joined row (see <a href="#fixed-costs">costs counted once</a>)</td></tr>
+            <tr><td><code><span class="tk-f">SUM</span>(<span class="tk-d">per</span> D: e)</code></td><td>one term per row of table <code>D</code>, not per joined row (see <a href="#fixed-costs">costs counted once</a>)</td></tr>
+            <tr><td><code><span class="tk-f">SUM</span>(<span class="tk-d">per</span> g: <span class="tk-f">MAX</span>(e) <span class="tk-d">by</span> (g))</code></td><td>a reducer over another reducer's results (see <a href="#nested">a reducer inside a reducer</a>)</td></tr>
+            <tr><td><code>at(previous else <span class="tk-n">0</span>: e) over (t)</code></td><td><code>e</code> on the row before, in the order of <code>t</code> (see <a href="#ordered">ordered data</a>)</td></tr>
           </tbody>
         </table></div>
-        <p>Every reducer takes <code><span class="tk-d">by</span> (...)</code> after it and <code><span class="tk-d">when</span></code> inside it, and a number may scale it
-          (<code><span class="tk-n">2</span> * <span class="tk-f">SUM</span>(x)</code>). Inside a reducer, a decision may be multiplied by data, squared
-          (<code><span class="tk-f">POWER</span>(e, <span class="tk-n">2</span>)</code>) or wrapped in <code>ABS</code>; a division by a decision or a cast of one is refused,
-          with a message quoting the clause.</p>
+        <p><code>SUM</code>, <code>AVG</code>, <code>MIN</code> and <code>MAX</code> take <code><span class="tk-d">by</span> (...)</code> after
+          them and <code><span class="tk-d">when</span></code> or <code><span class="tk-d">per</span></code> inside; <code>norm</code> and <code><span class="tk-f">count</span>(*)</code> take only
+          <code><span class="tk-d">by</span></code>. A number may scale a reducer (<code><span class="tk-n">2</span> * <span class="tk-f">SUM</span>(x)</code>), and so may a <code><span class="tk-t">BOOL</span></code>
+          decision (<code>b * <span class="tk-f">SUM</span>(x)</code>); an <code><span class="tk-t">INT</span></code> or <code><span class="tk-t">REAL</span></code> one may not, so write
+          <code><span class="tk-f">SUM</span>(s * x)</code>. Inside a reducer, a decision may be multiplied by data or by one other decision,
+          squared (<code><span class="tk-f">POWER</span>(e, <span class="tk-n">2</span>)</code>) or wrapped in <code>ABS</code>. Anything else over a decision is refused:
+          another function such as <code>sqrt</code>, <code><span class="tk-k">CASE</span></code> or <code>COALESCE</code>, a term of degree 3 or
+          more, a division by a decision, and a cast of one.</p>
 <div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-f">AVG</span>(<span class="tk-v">x</span> * value) &gt;= <span class="tk-n">20</span> <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">2</span> * <span class="tk-f">count</span>(*) * <span class="tk-n">5</span></code></pre></div>
 
         <h3 id="nulls"><a class="anchor" href="#nulls">NULL values</a></h3>
@@ -436,28 +529,35 @@
             <tr><td>in an objective term</td><td>the term is left out</td></tr>
           </tbody>
         </table></div>
-        <p>To treat NULL as a value instead, say so: <code><span class="tk-f">SUM</span>(x * <span class="tk-f">COALESCE</span>(w, <span class="tk-n">0</span>))</code>.</p>
+        <p>To treat NULL as a value instead, say so: <code><span class="tk-f">SUM</span>(x * <span class="tk-f">COALESCE</span>(w, <span class="tk-n">0</span>))</code>. A NaN, or an infinite value
+          that multiplies a decision, is an error rather than a skipped row.</p>
 
         <h3 id="settings"><a class="anchor" href="#settings">Settings</a></h3>
         <div class="table-wrap"><table>
           <thead><tr><th scope="col">Setting</th><th scope="col">Default</th><th scope="col">Effect</th></tr></thead>
           <tbody>
-            <tr><td><code>decide_direct_solve</code></td><td><code>auto</code></td><td><a href="features.html#control">query rewriting</a>: <code>auto</code>, <code>off</code> or <code>require</code></td></tr>
-            <tr><td><code>decide_mip_gap</code></td><td><code><span class="tk-n">0</span></code></td><td>accept an answer within this relative gap of the best one</td></tr>
-            <tr><td><code>decide_l0_tolerance</code></td><td><code><span class="tk-n">1e-4</span></code></td><td>the size at which <code><span class="tk-f">norm</span>(e, <span class="tk-n">0</span>)</code> counts a value as changed</td></tr>
-            <tr><td><code>diagnose_decide_infeasible_slack_scope</code></td><td><code>query</code></td><td><a href="features.html#diagnose">DIAGNOSE</a>: one suggestion per clause, or <code>expanded</code>, one per row or group</td></tr>
+            <tr><td><code>decide_<wbr>direct_<wbr>solve</code></td><td><code>auto</code></td><td><a href="features.html#control">query rewriting</a>: <code>auto</code>, <code>off</code> or <code>require</code></td></tr>
+            <tr><td><code>decide_<wbr>mip_<wbr>gap</code></td><td><code><span class="tk-n">0</span></code></td><td>accept an answer within this relative gap of the best one</td></tr>
+            <tr><td><code>decide_<wbr>l0_<wbr>tolerance</code></td><td><code><span class="tk-n">1e-4</span></code></td><td>the size at which <code><span class="tk-f">norm</span>(e, <span class="tk-n">0</span>)</code> counts a value as changed</td></tr>
+            <tr><td><code>decide_<wbr>frame_<wbr>limit</code></td><td>10,000,000</td><td>the most values one <a href="#ordered">frame</a> may read</td></tr>
+            <tr><td><code>diagnose_<wbr>decide_<wbr>infeasible_<wbr>slack_<wbr>scope</code></td><td><code>query</code></td><td><a href="features.html#diagnose">DIAGNOSE</a>: one suggestion per clause, or <code>expanded</code>, one per row or group</td></tr>
+            <tr><td><code>diagnose_<wbr>decide_<wbr>escape_<wbr>rate</code></td><td><code><span class="tk-n">0.8</span></code></td><td>DIAGNOSE names a category of rows when at least this share of its decisions grow without limit</td></tr>
+            <tr><td><code>diagnose_<wbr>decide_<wbr>categorical_<wbr>ratio</code></td><td><code><span class="tk-n">0.1</span></code></td><td>a column counts as a category when its distinct values are at most this share of the rows</td></tr>
+            <tr><td><code>diagnose_<wbr>decide_<wbr>min_<wbr>categories</code></td><td><code><span class="tk-n">20</span></code></td><td>a column with this many distinct values or fewer always counts as a category</td></tr>
           </tbody>
         </table></div>
+        <p>Set each with <code><span class="tk-k">SET</span> name = value</code>. The time limit is the environment variable
+          <code>DECIDB_TIME_LIMIT</code>, in seconds (300 by default; see <a href="#long-solve">a long solve</a>).</p>
 
         <h3 id="migrating"><a class="anchor" href="#migrating">Migrating from 0.2</a></h3>
         <p>DeciDB 0.2 wrote scopes after a constraint (<code><span class="tk-f">SUM</span>(x) &lt;= <span class="tk-n">2</span> PER sector</code>) and tied declarations to a
           table (<code>T.x(<span class="tk-t">INT</span>)</code>, <code>scalar x(<span class="tk-t">INT</span>)</code>). Scopes now go in front, and a sum says which rows it
-          reads with <code><span class="tk-d">by</span></code>. Each old spelling is refused with a message that writes the new one from your own
-          query:</p>
+          reads with <code><span class="tk-d">by</span></code>. Each old spelling now stops the query with an error before it runs, most of them a
+          syntax error:</p>
 <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> ticker, <span class="tk-v">pick</span> <span class="tk-k">FROM</span> Stocks
 <span class="tk-d">DECIDE</span> <span class="tk-v">pick</span>(<span class="tk-t">BOOL</span>)
 <span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">pick</span>) &lt;= <span class="tk-n">2</span> PER sector
-<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">pick</span> * expected_return);</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>refused before solving</span></div><pre>Parser Error: DECIDE: the postfix PER is removed; write per sector: in front of the constraint and by (sector) after each of its reducers</pre></div></div>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">pick</span> * expected_return);</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>refused before solving</span></div><pre>Parser Error: syntax error at or near &quot;PER&quot;</pre></div></div>
         <div class="table-wrap"><table>
           <thead><tr><th scope="col">Old spelling</th><th scope="col">Write instead</th></tr></thead>
           <tbody>
@@ -475,15 +575,22 @@
           rows, once per <code>g</code>; write <code><span class="tk-d">by</span> (g)</code> for each group's own total. And a NULL in the data no
           longer stops the query: it is <a href="#nulls">skipped</a>.</p>
 
-        <h3 id="roadmap"><a class="anchor" href="#roadmap">Not supported yet</a></h3>
-        <p>These are planned. A query that uses one is refused with a message, never answered differently:</p>
+        <h3 id="roadmap"><a class="anchor" href="#roadmap">Not built yet</a></h3>
+        <p>DeciDB does not build these yet; most come from the DECIDE language proposal. A query that uses one is refused
+          with a message, never answered differently:</p>
         <ul>
-          <li>sums nested inside sums to any depth (today <code><span class="tk-f">max</span>(<span class="tk-d">per</span> g: <span class="tk-f">SUM</span>(e) <span class="tk-d">by</span> (g))</code> is the one nested
-            form);</li>
-          <li>rules on ordered data, such as the previous day's value;</li>
-          <li>constraints that apply only <code>if</code> a decision is 1, such as a capacity only if a depot opens;</li>
-          <li>bounds and allowed values written in the declaration;</li>
-          <li>several objectives in order of priority.</li>
+          <li>a rule that holds only when a condition on decisions holds (the proposal's <code>if</code>). With a
+            yes-or-no decision, multiplying by it often says the same: <code>ship &lt;= S.demand * open</code>;</li>
+          <li>bounds and allowed values written in the declaration, such as <code>x(<span class="tk-t">INT</span>) between <span class="tk-n">0</span> and <span class="tk-n">5</span></code>: write
+            them in <code><span class="tk-d">SUCH</span> <span class="tk-d">THAT</span></code>. The proposal's other decision types, <code>SEMIREAL</code>,
+            <code>SEMIINT</code> and <code>TEXT</code>, are not built either;</li>
+          <li>several objectives in order of priority (<code><span class="tk-d">MINIMIZE</span> e1 <span class="tk-k">THEN</span> <span class="tk-d">MAXIMIZE</span> e2</code>), and
+            <code>SATISFY</code> (leave the objective out instead);</li>
+          <li>a table name on a decision, such as <code>D.open</code>: write the decision's own name;</li>
+          <li><code>norm</code> inside a reducer, or a reducer inside <code>norm</code>;</li>
+          <li>a distance that is the square root of a sum of squares. <code><span class="tk-f">norm</span>(e, <span class="tk-n">2</span>)</code> is the sum of squares itself,
+            so bound it by the square of the distance: <code><span class="tk-f">norm</span>(x - w, <span class="tk-n">2</span>) &lt;= <span class="tk-n">25</span></code> keeps <code>x</code> within 5
+            of <code>w</code>.</li>
         </ul>
       </section>
     </article>
@@ -506,7 +613,7 @@
           <a class="nav__logo" href="index.html"><img src="assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
           <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
-        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="getting-started.html">Get started</a></li><li><a href="demo.html">Live demo</a></li><li><a href="guide.html">Guide</a></li><li><a href="docs/index.html">Documentation</a></li><li><a href="features.html">Novel features</a></li><li><a href="examples.html">Examples</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="getting-started.html">Install</a></li><li><a href="guide.html">Guide</a></li><li><a href="features.html">Novel features</a></li><li><a href="examples.html">Examples</a></li><li><a href="demo.html">Live demo</a></li><li><a href="docs/index.html">How it works</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="examples/knapsack.html">Knapsack</a></li><li><a href="examples/facility-location.html">Depots</a></li><li><a href="examples/fair-allocation.html">Fair allocation</a></li><li><a href="examples/diagnose.html">DIAGNOSE</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Project</h3><ul><li><a href="about.html">About</a></li><li><a href="about.html#research">Papers</a></li><li><a href="https://github.com/huda-lab/decidb">GitHub</a></li><li><a href="https://huda-lab.github.io/">HUDA Lab</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Contact</h3><ul><li><a href="mailto:support@decidb.com">Email the team</a></li><li><a href="https://github.com/huda-lab/decidb/issues">Report an issue</a></li></ul></div>

@@ -5,11 +5,11 @@
 <script>(function(){var r=document.documentElement,t;try{t=localStorage.getItem('decidb-theme')}catch(e){}if(!r.dataset.theme)r.dataset.theme=t==='dark'?'dark':'light'})()</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <script>document.documentElement.classList.add('m-enter');setTimeout(()=>document.documentElement.classList.add('m-enter-done'),700)</script>
-<title>Install DeciDB: your first DECIDE query</title>
-<meta name="description" content="Install DeciDB and write your first DECIDE query: decisions, constraints, objectives and the scope words per, when and by.">
+<title>Install DeciDB</title>
+<meta name="description" content="Install DeciDB as a command-line shell or a Python package, or build it from source, then run a first DECIDE query.">
 <meta property="og:type" content="website">
-<meta property="og:title" content="Install DeciDB: your first DECIDE query">
-<meta property="og:description" content="Install DeciDB and write your first DECIDE query: decisions, constraints, objectives and the scope words per, when and by.">
+<meta property="og:title" content="Install DeciDB">
+<meta property="og:description" content="Install DeciDB as a command-line shell or a Python package, or build it from source, then run a first DECIDE query.">
 <meta property="og:image" content="assets/images/share.jpg">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="assets/images/mark.svg" type="image/svg+xml">
@@ -57,7 +57,7 @@
     <a class="skip-link" href="#top">Skip to content</a>
     <a class="nav__logo" href="index.html"><img class="logo logo--light" src="assets/images/logo.svg" alt="DeciDB" width="140" height="42"><img class="logo logo--dark" src="assets/images/logo-dark.svg" alt="DeciDB" width="140" height="42" loading="lazy"><img class="logo logo--mark" src="assets/images/mark.svg" alt="DeciDB" width="40" height="32" loading="lazy"></a>
     <nav class="nav__links" aria-label="Main">
-      <div class="nav__item"><a class="nav__link" href="getting-started.html" aria-current="page">Get started</a></div><div class="nav__item"><a class="nav__link" href="demo.html">Live demo</a></div><div class="nav__item"><a class="nav__link" href="guide.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="about.html">About</a></div><div class="nav__item"><a class="nav__link" href="docs/index.html"><span class="nav__full">Documentation</span><span class="nav__short" aria-hidden="true">Docs</span></a></div><div class="nav__item"><a class="nav__link" href="features.html"><span class="nav__full">Novel features</span><span class="nav__short" aria-hidden="true">Features</span></a></div>
+      <div class="nav__item"><a class="nav__link" href="guide.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="demo.html">Live demo</a></div><div class="nav__item"><a class="nav__link" href="docs/index.html">How it works</a></div><div class="nav__item"><a class="nav__link" href="about.html">About</a></div>
     </nav>
     <div class="nav__actions">
       <button class="btn btn--secondary theme-toggle" type="button" aria-pressed="false" data-theme-toggle hidden><svg class="theme-toggle__sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="theme-toggle__moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg><span class="theme-toggle__label">Dark theme</span></button>
@@ -72,8 +72,8 @@
 <main id="top">
 <section class="hero hero--page" data-enter aria-labelledby="page-h">
   <div class="wrap"><div class="hero-text hero-split grid">
-    <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">Home</a><span aria-hidden="true">/</span>Get started</nav><h1 id="page-h">Get started</h1><p class="hero__lead">Install DeciDB, run a first optimization query, and learn the parts every DECIDE query has.</p><div class="btn-row"><a class="btn btn--primary" href="#install">Install DeciDB</a><a class="btn btn--secondary" href="#first-query">Your first query</a></div></div>
-    <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="11" data-ui-pause-host><div class="ui ui-hw hw hw--page " role="img" aria-label="Install DeciDB, open the shell and run the first query: it takes the laptop, camera, lens."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · shop.db</span></div><div class="hw__page"><pre class="hw__cmd"><code><span class="hw__prompt">$</span> pip install decidb
+    <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="index.html">Home</a><span aria-hidden="true">/</span>Install</nav><h1 id="page-h">Install DeciDB</h1><p class="hero__lead">Download the command-line shell or the Python package, then run a first DECIDE query to check it works.</p><div class="btn-row"><a class="btn btn--primary" href="#install">See the downloads</a><a class="btn btn--secondary" href="#first-query">Run a first query</a></div></div>
+    <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="11" data-ui-pause-host><div class="ui ui-hw hw hw--page " role="img" aria-label="Install DeciDB, open the shell and run the first query: it takes the laptop, camera, lens."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · shop.db</span></div><div class="hw__page"><pre class="hw__cmd"><code><span class="hw__prompt">$</span> unzip decidb_cli-osx-universal.zip
 <span class="hw__prompt">$</span> ./decidb shop.db</code></pre><pre class="hw__sql"><code><span class="tk-k">SELECT</span> item, value, weight, <span class="tk-v">x</span> <span class="tk-k">AS</span> take
 <span class="tk-k">FROM</span> Items
 <span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
@@ -89,11 +89,7 @@
       <ul>
         <li><a href="#install">Install</a></li>
         <li><a href="#first-query">Your first query</a></li>
-        <li><a href="#anatomy">Anatomy of a DECIDE query</a></li>
-        <li><a href="#decisions">Decisions</a></li>
-        <li><a href="#groups">Rules about groups</a></li>
         <li><a href="#python">From Python</a></li>
-        <li><a href="#solvers">Solvers</a></li>
         <li><a href="#next">Next steps</a></li>
       </ul>
     </nav>
@@ -120,16 +116,22 @@
         <div class="note"><strong>Unsigned binaries</strong>
           <p>On macOS, right-click the binary, choose Open and confirm. On Windows, choose "More info" and then "Run
             anyway" in SmartScreen.</p></div>
-        <div class="note"><strong>Release 0.2 and this site</strong>
-          <p>The current release, 0.2, uses the earlier spellings, such as <code>PER</code> after a constraint. The
-            queries on this site use the new ones; the guide's <a href="guide.html#migrating">migration
-            table</a> lists each change.</p></div>
+        <div class="note"><strong>Coming from 0.2</strong>
+          <p>Release 1.0 uses the spellings on this site. A query written for 0.2, such as one with <code>PER</code>
+            after a constraint, is a syntax error in 1.0; the guide's <a href="guide.html#migrating">migration
+            table</a> gives the new spelling of each.</p></div>
         <h3 id="install-python">Python</h3>
-        <p>Wheels are published for Python 3.11, 3.12 and 3.13 on macOS (Apple Silicon), Linux (x86-64) and Windows
+        <p>Wheels are published for Python 3.11 to 3.15 on macOS (Apple Silicon), Linux (x86-64) and Windows
           (x86-64).</p>
 <div class="code" data-lang="bash"><div class="code__head"><span class="code__title">Shell</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-f">pip</span> install decidb</code></pre></div>
 <div class="code" data-lang="python"><div class="code__head"><span class="code__title">Python</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">import</span> decidb
-decidb.<span class="tk-f">connect</span>().<span class="tk-f">sql</span>(<span class="tk-s">&quot;SELECT 42&quot;</span>).<span class="tk-f">fetchall</span>()</code></pre></div>
+con = decidb.<span class="tk-f">connect</span>()
+con.<span class="tk-f">sql</span>(<span class="tk-s">&quot;SELECT 42&quot;</span>).<span class="tk-f">fetchall</span>()</code></pre></div>
+        <h3 id="install-gurobi">Gurobi (optional)</h3>
+        <p>Every build solves with HiGHS, which is bundled. DeciDB also uses Gurobi 9.5 to 13 when it finds one, with
+          its license: Gurobi is faster on large models and takes a few that HiGHS cannot (see the guide's
+          <a href="guide.html#solvers">solvers</a>). DeciDB finds Gurobi through <code>GUROBI_HOME</code>, the library
+          path, or Gurobi's default install folder.</p>
         <h3 id="install-source">Build from source</h3>
         <p>You need a C++17 compiler, CMake 3.15+, Python 3 and Git; Ninja is used when present.</p>
 <div class="code" data-lang="bash"><div class="code__head"><span class="code__title">Shell</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-f">git</span> clone https://github.com/huda-lab/decidb.git
@@ -160,83 +162,7 @@ decidb.<span class="tk-f">connect</span>().<span class="tk-f">sql</span>(<span c
         <p>The query returns every row, with the decision <code>x</code> filled in: 1 for the laptop, camera and
           lens, 0 for the rest. Together they weigh 42 kg and are worth 235, and no other choice under 50 kg is worth
           more.</p>
-      </section>
-
-      <section id="anatomy">
-        <h2>Anatomy of a DECIDE query</h2>
-        <p>A DECIDE query is a <code><span class="tk-k">SELECT</span></code> with three more clauses. In the query above:</p>
-        <dl class="reads">
-          <dt><code><span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)</code></dt>
-          <dd>declares the decisions: here one yes-or-no value <code>x</code> per row. Every decision has a name and a
-            type in parentheses.</dd>
-          <dt><code><span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(x * weight) &lt;= <span class="tk-n">50</span></code></dt>
-          <dd>states the constraints, joined by <code><span class="tk-k">AND</span></code>. A constraint with a sum holds over many rows; one
-            without, such as <code>x &lt;= cap</code>, holds on every row.</dd>
-          <dt><code><span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(x * value)</code></dt>
-          <dd>states the objective. Write <code><span class="tk-d">MINIMIZE</span></code> for a cost, or leave it out to ask for any answer that
-            satisfies the constraints.</dd>
-          <dt><code><span class="tk-k">SELECT</span></code>, <code><span class="tk-k">FROM</span></code>, <code><span class="tk-k">WHERE</span></code></dt>
-          <dd>are ordinary SQL. <code><span class="tk-k">FROM</span></code> and <code><span class="tk-k">WHERE</span></code> run first and pick the rows that get decisions;
-            <code><span class="tk-k">SELECT</span></code> and <code><span class="tk-k">ORDER</span> <span class="tk-k">BY</span></code> run after the solve and read the decisions like columns.</dd>
-        </dl>
-        <p>The declaration can also sit between <code><span class="tk-k">SELECT</span></code> and <code><span class="tk-k">FROM</span></code>, the order the DeciDB paper
-          uses. Both orders mean the same:</p>
-<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span>
-<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
-<span class="tk-k">FROM</span> Items
-<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">50</span>
-<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre></div>
-      </section>
-
-      <section id="decisions">
-        <h2>Decisions</h2>
-        <div class="table-wrap"><table>
-          <thead><tr><th scope="col">Type</th><th scope="col">Values</th><th scope="col">Returned as</th><th scope="col">Use it for</th></tr></thead>
-          <tbody>
-            <tr><td><code><span class="tk-t">BOOL</span></code></td><td>0 or 1</td><td><code><span class="tk-t">INTEGER</span></code></td><td>pick or skip, open or closed</td></tr>
-            <tr><td><code><span class="tk-t">INT</span></code></td><td>0, 1, 2, … by default</td><td><code><span class="tk-t">BIGINT</span></code></td><td>whole quantities</td></tr>
-            <tr><td><code><span class="tk-t">REAL</span></code></td><td>0 or more by default</td><td><code><span class="tk-t">DOUBLE</span></code></td><td>amounts, shares, positions</td></tr>
-          </tbody>
-        </table></div>
-        <p>Zero is a default lower bound, not a floor: a constraint such as <code>x &gt;= -<span class="tk-n">10</span></code> or
-          <code>x <span class="tk-k">BETWEEN</span> -<span class="tk-n">5</span> <span class="tk-k">AND</span> <span class="tk-n">5</span></code> lets an <code><span class="tk-t">INT</span></code> or <code><span class="tk-t">REAL</span></code> decision go negative.</p>
-        <p>A decision can also be shared. <code><span class="tk-d">per</span> K:</code> in front of a declaration makes one decision per distinct
-          value of <code>K</code>, and <code><span class="tk-d">per</span> ():</code> makes exactly one for the whole query. Over shipments joined
-          to the depots they leave from:</p>
-<div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> S.shipmentID, D.depotID, <span class="tk-v">ship</span>, <span class="tk-v">open</span>, <span class="tk-v">biggest</span>
-<span class="tk-k">FROM</span> Shipment S <span class="tk-k">JOIN</span> Depot D <span class="tk-k">USING</span> (depotID)
-<span class="tk-d">DECIDE</span> <span class="tk-v">ship</span>(<span class="tk-t">INT</span>), <span class="tk-d">per</span> D: <span class="tk-v">open</span>(<span class="tk-t">BOOL</span>), <span class="tk-d">per</span> (): <span class="tk-v">biggest</span>(<span class="tk-t">INT</span>)
-<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">ship</span> &lt;= S.demand * <span class="tk-v">open</span>
-      <span class="tk-k">AND</span> <span class="tk-v">ship</span> &lt;= <span class="tk-v">biggest</span>
-      <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">ship</span>) &gt;= <span class="tk-n">150</span>
-<span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(S.unit_cost * <span class="tk-v">ship</span>) + <span class="tk-f">SUM</span>(D: D.opening_cost * <span class="tk-v">open</span>) + <span class="tk-n">10</span> * <span class="tk-v">biggest</span>;</code></pre></div>
-        <p><code>ship</code> is one decision per shipment row, <code>open</code> one per depot, shared by that depot's
-          shipments, and <code>biggest</code> one for the whole query: the largest single shipment, which the objective
-          keeps small. <a href="guide.html#decide">More on decisions</a>.</p>
-      </section>
-
-      <section id="groups">
-        <h2>Rules about groups</h2>
-        <p>Constraints often apply group by group. Three keywords, written in front of a constraint or after a reducer,
-          say which rows a rule covers:</p>
-        <div class="table-wrap"><table>
-          <thead><tr><th scope="col">Write</th><th scope="col">Meaning</th></tr></thead>
-          <tbody>
-            <tr><td><code><span class="tk-d">when</span> category = <span class="tk-s">&#x27;A&#x27;</span>: <span class="tk-f">SUM</span>(x) &gt;= <span class="tk-n">2</span></code></td><td>Look only at the rows where the condition holds.</td></tr>
-            <tr><td><code><span class="tk-d">per</span> sector: <span class="tk-f">SUM</span>(x) <span class="tk-d">by</span> (sector) &lt;= <span class="tk-n">2</span></code></td><td>One constraint per sector; each sum reads its own sector's rows.</td></tr>
-            <tr><td><code><span class="tk-f">SUM</span>(<span class="tk-d">when</span> morning: x * hours) &lt;= <span class="tk-n">20</span></code></td><td>A condition on one sum only.</td></tr>
-            <tr><td><code>x &lt;= <span class="tk-n">0.25</span> * <span class="tk-f">SUM</span>(x) <span class="tk-d">by</span> (region)</code></td><td>Each row at most a quarter of its region's total.</td></tr>
-          </tbody>
-        </table></div>
-        <p>Try one on the bag: at most one tech item.</p>
-<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">At most one tech item</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, category, value, weight, <span class="tk-v">x</span>
-<span class="tk-k">FROM</span> Items
-<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
-<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">50</span>
-      <span class="tk-k">AND</span> <span class="tk-d">when</span> category = <span class="tk-s">&#x27;tech&#x27;</span>: <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) &lt;= <span class="tk-n">1</span>
-<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>5 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">item</th><th scope="col" class="">category</th><th scope="col" class="num">value</th><th scope="col" class="num">weight</th><th scope="col" class="num dec">x</th></tr></thead><tbody><tr class="on"><td>Laptop</td><td>tech</td><td class="num">100</td><td class="num">20</td><td class="num dec">1</td></tr><tr><td>Camera</td><td>tech</td><td class="num">60</td><td class="num">10</td><td class="num dec">0</td></tr><tr><td>Drone</td><td>tech</td><td class="num">120</td><td class="num">30</td><td class="num dec">0</td></tr><tr class="on"><td>Tripod</td><td>gear</td><td class="num">40</td><td class="num">15</td><td class="num dec">1</td></tr><tr class="on"><td>Lens</td><td>gear</td><td class="num">75</td><td class="num">12</td><td class="num dec">1</td></tr></tbody></table></div></div></div>
-        <p>The <a href="guide.html#per">guide</a> covers group rules step by step, and the
-          <a href="examples.html">examples</a> show each pattern on a full problem.</p>
+        <p>The <a href="guide.html">guide</a> takes this query apart clause by clause and builds on it.</p>
       </section>
 
       <section id="python">
@@ -255,22 +181,12 @@ answer = con.<span class="tk-f">sql</span>(<span class="tk-s">&quot;&quot;&quot;
 &quot;&quot;&quot;</span>).<span class="tk-f">df</span>()</code></pre></div>
       </section>
 
-      <section id="solvers">
-        <h2>Solvers</h2>
-        <p>DeciDB carries the bundled HiGHS solver and needs nothing else for linear, integer and convex quadratic
-          models. When the Gurobi library and a license are present, DeciDB uses Gurobi: it is faster on these workloads
-          and also takes non-convex and mixed-integer quadratic models and quadratic constraints. A model that only
-          Gurobi can solve is refused, with a message, when Gurobi is not available. Some problems need neither:
-          <a href="features.html#rewriting">query rewriting</a> answers them with sorting, ranking and aggregation instead. The
-          <a href="guide.html#solvers">guide</a> lists which solver takes which kind of query.</p>
-      </section>
-
       <section id="next">
         <h2>Next steps</h2>
         <div class="refs refs--3">
           <a class="ref" href="guide.html"><h3>Guide</h3><p>Each clause in the order you write it: DECIDE, SUCH THAT, then the objective.</p></a>
-          <a class="ref" href="features.html"><h3>Novel features</h3><p>Query rewriting, and DIAGNOSE for a query with no answer.</p></a>
           <a class="ref" href="examples.html"><h3>Examples</h3><p>Twenty complete problems with data, query and answer.</p></a>
+          <a class="ref" href="demo.html"><h3>Live demo</h3><p>Edit and run DECIDE queries in the browser, with nothing to install.</p></a>
         </div>
       </section>
     </article>
@@ -293,7 +209,7 @@ answer = con.<span class="tk-f">sql</span>(<span class="tk-s">&quot;&quot;&quot;
           <a class="nav__logo" href="index.html"><img src="assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
           <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
-        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="getting-started.html">Get started</a></li><li><a href="demo.html">Live demo</a></li><li><a href="guide.html">Guide</a></li><li><a href="docs/index.html">Documentation</a></li><li><a href="features.html">Novel features</a></li><li><a href="examples.html">Examples</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="getting-started.html">Install</a></li><li><a href="guide.html">Guide</a></li><li><a href="features.html">Novel features</a></li><li><a href="examples.html">Examples</a></li><li><a href="demo.html">Live demo</a></li><li><a href="docs/index.html">How it works</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="examples/knapsack.html">Knapsack</a></li><li><a href="examples/facility-location.html">Depots</a></li><li><a href="examples/fair-allocation.html">Fair allocation</a></li><li><a href="examples/diagnose.html">DIAGNOSE</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Project</h3><ul><li><a href="about.html">About</a></li><li><a href="about.html#research">Papers</a></li><li><a href="https://github.com/huda-lab/decidb">GitHub</a></li><li><a href="https://huda-lab.github.io/">HUDA Lab</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Contact</h3><ul><li><a href="mailto:support@decidb.com">Email the team</a></li><li><a href="https://github.com/huda-lab/decidb/issues">Report an issue</a></li></ul></div>

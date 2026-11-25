@@ -1,5 +1,5 @@
 <!--meta
-title: Model, solvers and execution: DeciDB documentation
+title: Model, solvers and execution: how DeciDB works
 description: How DeciDB builds the solver model from a DECIDE query's rows, chooses and runs Gurobi or HiGHS, and writes each decision's value back into the result rows.
 h1: Model, solvers, execution
 lede: How the DECIDE operator turns its input rows into a solver model, runs Gurobi or HiGHS on it, and writes each decision's value back into its row.
@@ -24,7 +24,7 @@ lede: How the DECIDE operator turns its input rows into a solver model, runs Gur
     <li class="sub"><a href="#time-limits">Time limits and the gap</a></li>
     <li><a href="#execution">Execution</a></li>
     <li class="sub"><a href="#materialization">Materialization</a></li>
-    <li class="sub"><a href="#scope-checks">Scope checks at run time</a></li>
+    <li class="sub"><a href="#value-checks">Value checks at run time</a></li>
     <li class="sub"><a href="#keyed-mapping">Keyed decisions: rows to classes</a></li>
     <li class="sub"><a href="#coefficients">Coefficient evaluation</a></li>
     <li class="sub"><a href="#readback">Reading the solution back</a></li>
@@ -46,12 +46,15 @@ lede: How the DECIDE operator turns its input rows into a solver model, runs Gur
       <li><strong>Materialize.</strong> <code>Sink</code> buffers every input row. The operator is a pipeline breaker:
         a blocking operator that reads all of its input before it emits a row. It has to be one, because the best value
         of one decision depends on every row.</li>
-      <li><strong>Evaluate.</strong> <code>Finalize</code> maps each row to its class for every keyed decision, makes
-        the scope checks that need those classes, and evaluates every coefficient, bound, filter and group key on the
-        buffered rows. The result is a <code>SolverInput</code>: numbers, with no expression left in it.</li>
-      <li><strong>Formulate (stage 06).</strong> <code>SolverModel::Build</code> and the linearization passes turn the
-        <code>SolverInput</code> into a <code>SolverModel</code>: columns with types and bounds, a linear objective, an
-        optional Q matrix, and rows.</li>
+      <li><strong>Evaluate.</strong> <code>Finalize</code> calls <code>EvaluateTree</code>. The DECIDE tree is the
+        plan's clauses, lowered into nodes when the physical plan was built
+        (<a href="canonical-form.html#lowering">lowering into the tree</a>). One pass reads the buffered rows top-down
+        through the tree; then each node's programs run bottom-up. Together they map each row to its class for every
+        key, make the value checks, and evaluate every coefficient, bound, filter and group key. The result is a
+        <code>SolverInput</code>: numbers, with no expression left in it.</li>
+      <li><strong>Formulate (stage 06).</strong> <code>FormulateModel</code> runs the linearization passes on the
+        <code>SolverInput</code>, and <code>SolverModel::Build</code> turns it into a <code>SolverModel</code>: columns
+        with types and bounds, a linear objective, an optional Q matrix, and rows.</li>
       <li><strong>Solve (stage 07).</strong> <code>SolveModel</code> hands the model to the backend chosen at plan time,
         Gurobi or HiGHS, and normalizes its answer into a <code>SolverResult</code>.</li>
       <li><strong>Read back (stage 08).</strong> <code>GetData</code> scans the buffered rows again and appends each
@@ -113,9 +116,11 @@ MAXIMIZE SUM(x * value) - SUM(per category: 30 * open) - cap<!--/explain-->
           <td>appended after the three blocks above</td></tr>
       </tbody>
     </table></div>
-    <p>One function, <code>VarIndexer::Get(decision, row)</code>, resolves a data row to a column. The objective, every
-      row of the model and the readback all go through it. That is why rows share a keyed or query-wide column with no
-      special case anywhere: they resolve to the same index, and what they add to it accumulates.</p>
+    <p>Execution writes each term as a decision and one of its instances, and one function,
+      <code>VarIndexer::InstanceColumn(decision, instance)</code>, turns that pair into a column. The objective and every
+      row of the model go through it, and the readback first finds a data row's instance (<code>InstanceOf</code>). That
+      is why rows share a keyed or query-wide column with no special case anywhere: they name the same instance, and
+      what they add to its column accumulates.</p>
     <p>A class id is the rank of the class's key value, sorted the way <code>ORDER BY</code> sorts the key. It does not
       depend on the order rows arrive in, so the same data in a different order builds the same columns.</p>
 
@@ -157,7 +162,8 @@ MAXIMIZE SUM(x * value) - SUM(per category: 30 * open) - cap<!--/explain-->
       its class's rows.</p>
     <p>A term with no decision in it, such as a data column or a constant, moves no optimum. It goes into the objective's
       constant, which no backend receives. The solver session adds it back to every objective value it reads, so a
-      reported objective is the one the query wrote.</p>
+      reported objective is the one the query wrote. The objective is produced once, so a data term must take one value
+      over the kept rows; one that takes more stops the query (<a href="#value-checks">value checks</a>).</p>
     <p>A decision beside the reducers (the aggregates over decisions, such as <code>SUM</code>) counts once. In
       <code>SUM(x * weight) &lt;= cap</code>, <code>cap</code> stands on every row of the clause, but execution keeps
       its coefficient on one row and zeroes the rest (<code>CountOnce</code>). The row holds −1 times <code>cap</code>,
@@ -176,10 +182,11 @@ MAXIMIZE SUM(x * value) - SUM(per category: 30 * open) - cap<!--/explain-->
       </tbody>
     </table></div>
     <p>Terms that hold no decision move to the right-hand side. <code>&lt;=</code>, <code>&gt;=</code> and
-      <code>=</code> map directly (<code>ApplyComparisonSense</code>). A strict comparison steps its bound to the next
+      <code>=</code> map directly (<code>ApplyComparison</code>). A strict comparison steps its bound to the next
       integer: <code>&gt; K</code> becomes <code>&gt;= floor(K) + 1</code>, and <code>&lt; K</code> becomes
-      <code>&lt;= ceil(K) − 1</code>. That step is exact only when the left side takes whole values, and the binder
-      admits a strict comparison on no other left side (<a href="front-end.html#binder">the binder</a>).</p>
+      <code>&lt;= ceil(K) − 1</code>. That step is exact only when the left side takes whole values, and the shape check
+      refuses a strict comparison on any other left side (<a href="canonical-form.html#shape-check">the shape
+      check</a>).</p>
     <p>After folding and cancellation, a row can be left with no coefficient. One that always holds, such as
       <code>0 &lt;= 3</code>, is dropped. One that never holds, as <code>SUM(0 * x) &lt;= -1</code> writes, is kept with
       its source clause. <code>SolverModel::ProvesInfeasible</code> then answers INFEASIBLE without calling a solver, and
@@ -265,14 +272,16 @@ MINIMIZE SUM(POWER(x - score, 2))<!--/model-->
     <h3 id="linearization"><a class="anchor" href="#linearization">Linearization: Big-M from the data</a></h3>
     <p>Some constructs are not linear: <code>&lt;&gt;</code>, a <code>MIN</code> or <code>MAX</code> that has to be
       pinned to one member, <code>ABS</code> under <code>MAXIMIZE</code>, and a product of a <code>BOOL</code> and a
-      number. Stage 05 has chosen an encoding for each and tagged the clause. Stage 06 writes the rows, because the
-      constants they need come from evaluated data.</p>
+      number. Stage 05 has recorded each one and allocated no binary. Stage 06 writes the rows, because the constants
+      they need come from evaluated data.</p>
     <p>The standard encoding is Big-M: a row that must hold only when a binary switch <var>z</var> is on gets a term
       M·<var>z</var>, with M large enough that the row is slack when the switch is off. DeciDB has no preset M. Each M is
       computed from the range the row's terms can reach, given the boxes of their columns. When a contributing decision
-      has no finite bound, no M exists, and the query is refused with a message that names the decision to bound. A
-      guessed constant would be worse: if the true range exceeds it, the solver cuts off feasible answers and reports a
-      wrong optimum with no sign of error. The refusal is the same on both backends.</p>
+      has no finite bound, no M exists. A backend that states the construct whole (<a href="#capabilities">below</a>)
+      still answers; any other refuses the query with a message that names the decision to bound. On HiGHS,
+      <code>MAX(x) &gt;= 3</code> over an unbounded <code>INT</code> reads "'x' has no finite bound, which MIN or MAX
+      needs", and Gurobi answers it. A guessed constant would be worse: if the true range exceeds it, the solver cuts
+      off feasible answers and reports a wrong optimum with no sign of error.</p>
     <p>ABS is linearized first. Its pass narrows the ABS helper column to the range it can reach, and every later pass
       sizes its M from column boxes, so a MIN, MAX or <code>&lt;&gt;</code> over an ABS finds a finite column.</p>
     <div class="table-wrap"><table>
@@ -423,11 +432,10 @@ MAXIMIZE SUM(x * value)<!--/model-->
       rule, and a stopped point would be returned as optimal. Refusing is the only way to keep that answer out.</p>
     <p>The refusal comes at plan time, when the physical plan is built and before any row is read
       (<code>RequireDecideSolverSupport</code>), so a query that cannot run costs no scan and no model build. The message
-      names what the query does, the solver that can run it, and an edit that avoids the need. The solver list comes
-      from the registry's model-class table, which needs no library, so Gurobi is named even on a machine without it.
-      The message never blames the query: the same SQL runs where Gurobi is installed. With
+      states what the query does and that this installation does not support it. It names no solver and never blames
+      the query: the same SQL runs where a backend that takes the class is installed. With
       <code>DECIDB_FORCE_SOLVER=highs</code> on a machine that has Gurobi, a maximized sum of squares reads:</p>
-    <!--sql check="n1" env="DECIDB_FORCE_SOLVER=highs" expect="which needs Gurobi" show title="A maximized sum of squares on HiGHS"-->SELECT name, x
+    <!--sql check="n1" env="DECIDB_FORCE_SOLVER=highs" expect="maximizing a squared decision is not supported on this installation" show title="A maximized sum of squares on HiGHS"-->SELECT name, x
 FROM Signals
 DECIDE x(REAL)
 SUCH THAT SUM(x) <= 5
@@ -504,7 +512,7 @@ MAXIMIZE SUM(POWER(x, 2))<!--/sql-->
         add one of its own.</li>
       <li><strong>Warn.</strong> When a coefficient is 1e6 or more, a bound or right-hand side is about 4.5e9 or more,
         or a nonzero objective coefficient is 1e-6 or less, stderr gets one line, once per query: <code>DECIDE: a very
-        large or very small number may make this answer inaccurate. Scale its data toward 1.</code> The thresholds follow
+        large or very small number may make this answer inaccurate.</code> The thresholds follow
         from DeciDB's solver tolerances of 1e-6. The model and the answer do not change.</li>
       <li><strong>Answer without a solver.</strong> When <code>ProvesInfeasible</code> holds, the result is INFEASIBLE,
         and no backend loads the model.</li>
@@ -574,49 +582,51 @@ MAXIMIZE SUM(POWER(x, 2))<!--/sql-->
     <div class="table-wrap"><table>
       <thead><tr><th>Method</th><th>What it does</th></tr></thead>
       <tbody>
-        <tr><td><code>BuildKeyedMappings</code></td><td>maps every row to its class, for each keyed decision</td></tr>
-        <tr><td><code>RunScopeChecks</code></td><td>the scope check that needs those maps</td></tr>
-        <tr><td><code>EvaluateConstraints</code>, <code>EvaluateObjective</code>, <code>EvaluateComposedClauses</code>,
-          <code>EvaluateReducerValueLinks</code></td><td>coefficients, bounds, filters and groups, for every clause</td></tr>
-        <tr><td><code>BuildSolverInput</code></td><td>assembles the <code>SolverInput</code> and settles every column's
+        <tr><td><code>EvaluateTree</code></td><td>reads the buffered rows once, top-down through the tree
+          (<code>DecideDescent</code>), which maps every row to its class for each key; runs each node's programs
+          bottom-up (<code>DecideTreeColumns</code>), which makes the value checks; and writes every clause, the
+          objective and the helpers' members into the <code>SolverInput</code> (<code>DecideModelEmitter</code>)</td></tr>
+        <tr><td><code>BuildSolverInput</code></td><td>completes the <code>SolverInput</code> and settles every column's
           box</td></tr>
         <tr><td><code>FormulateModel</code></td><td>the linearization of stage 06, against that box</td></tr>
-        <tr><td><code>FinalizeSolveResult</code></td><td>the solve of stage 07, then what its status leads to</td></tr>
+        <tr><td><code>FinalizeSolveResult</code></td><td>the solve of stage 07 (<code>SolveDecide</code>), then what its
+          status leads to</td></tr>
       </tbody>
     </table></div>
 
-    <h3 id="scope-checks"><a class="anchor" href="#scope-checks">Scope checks at run time</a></h3>
-    <p>Some rules of the language are about data, not syntax. <code>per K:</code> in front of a clause says that what
-      the clause reads once per class is the same on every row of the class, and a bound has to be a number. These are
-      scope checks. They run on the data before any coefficient is read, and the first failure stops the query.</p>
-    <p>Most of them never reach the operator. The optimizer installs them as a plan under the DECIDE node: each check is
-      an aggregate over its own read of the source that comes to one row, its message or NULL, and a projection over all
-      of them raises the first message. The source's rows reach the operator only once that one-row verdict holds:
-      verify, then stream, the way DuckDB plans an uncorrelated scalar subquery. The same code installs the checks for
-      query rewriting (<a href="rewriting.html#plan">rewriting plans</a>), so both paths refuse the same data in the same
-      words. The side tables that compute a bound-side reducer, such as <code>max(cap) by (g)</code>, sit in the same
-      plan. EXPLAIN shows all of it as operators under DECIDE.</p>
-    <p>One check needs a map the operator builds, so <code>RunScopeChecks</code> makes it: a clause scoped
-      <code>per K:</code> that reads a keyed decision must find one instance of that decision in each class of K. Here the
-      clause is scoped by shift date, but <code>keep</code> is decided per nurse, and three nurses work on December 1:</p>
-    <!--sql check="keyed-decisions" expect="covers more than one keep" show-->SELECT n.name, s.shift_date, keep
-FROM nurses n JOIN shifts s ON n.id = s.nurse_id
-DECIDE per n: keep(BOOL)
-SUCH THAT per s.shift_date: keep <= 1
-MAXIMIZE SUM(per n: keep * n.skill_score)<!--/sql-->
-    <p>When several classes fail, the message names the least by key value, so it does not depend on row order.</p>
+    <h3 id="value-checks"><a class="anchor" href="#value-checks">Value checks at run time</a></h3>
+    <p>Some rules of the language are about data, not syntax. A bound has to be a number, an <code>=</code> bound must
+      take one value in each of its groups, and the objective is produced once. The first two are value checks
+      (<code>LogicalDecide::value_checks</code>), which the optimizer's bound-side and ABS rewrites add. The tree makes
+      them on the rows it reads, before any clause is read (<code>DecideTreeColumns::CheckData</code>), and the first
+      failure stops the query.</p>
+    <p>On the solver path no plan sits under DECIDE for this: EXPLAIN shows only DECIDE and its input. The tree also
+      computes each bound-side reducer, such as <code>max(cap) by (g)</code>, as a node of its own. A query-rewriting
+      plan has no tree, so it makes the same checks as a plan on the source rows (<code>DirectAddRowChecks</code>) and
+      computes each bound-side reducer as a side table. Both paths refuse the same data in the same words
+      (<a href="rewriting.html#plan">rewriting plans</a>).</p>
+    <p>A <code>per K:</code> clause that reads a value which differs inside a class is no error: it becomes one
+      constraint per variant (<a href="canonical-form.html#variants">variants</a>). The objective has one class, so
+      a value in it that differs over the kept rows stops the query when the model emitter reads the objective:</p>
+<!--sql check="items" expect="so the objective would be produced more than once" show-->SELECT item, x
+FROM Items
+DECIDE x(INT)
+SUCH THAT x <= 3
+MAXIMIZE SUM(x * value) + weight<!--/sql-->
+    <p>The message names the least and the greatest value, in the order <code>ORDER BY</code> places them, so it does
+      not depend on row order.</p>
 
     <h3 id="keyed-mapping"><a class="anchor" href="#keyed-mapping">Keyed decisions: rows to classes</a></h3>
-    <p><code>BuildKeyedMappings</code> gives each row its class for every keyed decision. It evaluates the key's
-      expressions on the buffered rows and finds each row's group in DuckDB's aggregate hash table, used with no
-      aggregates (<code>GroupedAggregateHashTable::FindOrCreateGroups</code>), as <code>GROUP BY</code> uses it. Each
-      group remembers its first row, and its key values are read back from that row only when a message names the
-      group (late materialization). The groups are then numbered by value with DuckDB's order-preserving sort key, as
-      <code>ORDER BY</code> compares rows. The result is a <code>KeyedMapping</code>: a class count and a
-      <code>row_to_class</code> vector, the map <code>VarIndexer</code> reads.</p>
-    <p>A key is computed once per query and cached (<code>PerGroupCache</code>), so every clause, check and objective
-      term that groups by it shares one numbering. A key over a collated column groups under its collation, as
-      <code>GROUP BY</code> does.</p>
+    <p>The descent gives each row its class for every key. It evaluates the key's expressions on the rows that reach
+      a node and finds each row's group in DuckDB's aggregate hash table, used with no aggregates
+      (<code>GroupedAggregateHashTable::FindOrCreateGroups</code>), as <code>GROUP BY</code> uses it. Each group
+      remembers its first row, and its key values are read back from that row only when a message names the group
+      (late materialization). The groups are then numbered by value with DuckDB's order-preserving sort key, as
+      <code>ORDER BY</code> compares rows. For a keyed decision the result is a <code>KeyedMapping</code>: a class
+      count and a <code>row_to_class</code> vector, the map <code>VarIndexer</code> reads.</p>
+    <p>A key's groups are one dictionary (<code>DecideKeyMap</code>), filled once by the descent, so every clause,
+      check and objective term that groups by it shares one numbering. A key over a collated column groups under its
+      collation, as <code>GROUP BY</code> does.</p>
     <p>A row with NULL in a key column the query wrote is in no class: it has no decision. It maps to one spare class,
       <code>absent_class</code> (the Null Object pattern), so every row still resolves to a column. The model pins that
       column to 0, a reducer skips the row, and the result shows NULL there. The
@@ -631,24 +641,27 @@ MAXIMIZE SUM(per n: keep * n.skill_score)<!--/sql-->
       compute it.</p>
     <p>Each clause is read in this order:</p>
     <ol class="steps">
-      <li><strong>Kept rows.</strong> The clause's <code>when</code> is read first, on every row (<code>KeptRows</code>).
-        Nothing else is computed on a row it drops.</li>
+      <li><strong>Kept rows.</strong> The clause's <code>when</code> is read first, on every row, as the descent passes
+        rows down the tree (<code>DecideDescent::Gate</code>); the emitter then lists the rows the clause kept
+        (<code>DecideModelEmitter::Keep</code>). Nothing else is computed on a row the <code>when</code> drops.</li>
       <li><strong>Groups.</strong> A <code>by</code> key gives each kept row its group, and <code>per K:</code> over a
         clause with no reducer keeps one row per class. The result is one vector, <code>row_group_ids</code>, that sends
         each row to the model row it feeds, or to none.</li>
       <li><strong>Term filters.</strong> A reducer's own <code>when</code> becomes a mask on its own terms. A reducer's
-        own <code>per</code>, and the colon form <code>SUM(D: e)</code>, keep the first row of each class and zero the
-        rest (<code>BuildQualifierKeepMask</code>). A scope check has proved every row of the class carries the same
-        value, so any row gives the same answer.</li>
-      <li><strong>AVG.</strong> The optimizer has rewritten <code>AVG</code> as <code>SUM</code>. Each such term is
-        divided here by the number of rows its reducer reads in the row's group (<code>ScaleAvgRows</code>).</li>
+        own <code>per</code> keeps the first row of each class and zeroes the rest (<code>FirstOfEachInstance</code>).
+        A reducer whose body reads more than its key holds has variants of its own
+        (<a href="canonical-form.html#variants">variants</a>), so every row of a kept class carries the same value,
+        and any row gives the same answer.</li>
+      <li><strong>AVG.</strong> An <code>AVG</code> stays an <code>AVG</code>, and the linear form has marked its
+        terms. Each such term is divided here by the number of rows its reducer reads in the row's group
+        (<code>ScaleAvgRows</code>).</li>
       <li><strong>Count once.</strong> A term outside every reducer keeps its coefficient on one row of each group
-        (<code>CountOnce</code>).</li>
+        (<code>CountOnce</code>; in the objective, <code>CountTupleTermsOnce</code>).</li>
     </ol>
     <p>Values are checked as they are read. A NULL coefficient or bound skips the instance it reaches: the row of a
       clause with no reducer, the group of one with a reducer (<a href="../guide.html#nulls">NULLs in the Guide</a>). A
-      NaN or infinite coefficient raises an error that names the expression as written and the <code>when</code> that
-      would skip such rows. An infinite bound is allowed,
+      NaN or infinite coefficient raises an error that names the value as written, with a caret on it:
+      <code>'w' is NaN or infinite on some rows</code>. An infinite bound is allowed,
       because it has a meaning: <code>x &lt;= +inf</code> holds for every value, and <code>x &gt;= +inf</code> for
       none.</p>
     <p>The output is the <code>SolverInput</code>. A coefficient column with one value on every row, such as a constant
@@ -662,8 +675,10 @@ MAXIMIZE SUM(per n: keep * n.skill_score)<!--/sql-->
     <h3 id="readback"><a class="anchor" href="#readback">Reading the solution back</a></h3>
     <p><code>GetData</code> scans the buffered rows a second time, in the order they are stored. Its source runs on one
       thread, so the running row offset matches the row numbers the model is built on. The input columns are
-      referenced into the output without a copy. Row r of decision d reads <code>solution[VarIndexer::Get(d, r)]</code>,
-      through the same function that built the model. A per-row decision gets a value of its own on each row. A keyed
+      referenced into the output without a copy. Row r of decision d reads
+      <code>solution[VarIndexer::ColumnOrNone(d, r)]</code>, through the same instances that built the model; a row whose
+      instance has no column, such as a row with a NULL key, shows NULL. A per-row decision gets a value of its own on
+      each row. A keyed
       decision gets one value per class, repeated on every row of the class. A query-wide decision gets one value,
       repeated on every row.</p>
     <!--sql title="The running example's answer" run="items" dec="x,open,cap" on="x"-->SELECT item, category, x, open, cap
@@ -721,15 +736,24 @@ DECIDE hit the <limit> time limit without finding a solution yet.
 
     <div class="src"><strong>In the source</strong><ul>
       <li><code>src/execution/operator/decide/physical_decide.cpp</code>: <code>Finalize</code> and its phases,
-        <code>BuildGroupIds</code>, <code>KeptRows</code>, <code>CountOnce</code>, <code>ScaleAvgRows</code>,
-        <code>DecideSolutionToInteger</code>, <code>PrintDecideTimeoutReport</code>, the continuation prompt</li>
-      <li><code>src/optimizer/decide/direct/direct_row_checks.cpp</code>: the scope checks as a plan under DECIDE
-        (<code>DirectInstallRowChecks</code>)</li>
+        <code>EvaluateTree</code>, <code>DecideSolutionToInteger</code></li>
+      <li><code>src/execution/operator/decide/decide_descent.cpp</code>: <code>DecideDescent</code>, the top-down
+        pass; <code>decide_key_map.cpp</code>: <code>DecideKeyMap</code></li>
+      <li><code>src/execution/operator/decide/decide_tree_columns.cpp</code>: <code>DecideTreeColumns</code>,
+        <code>CheckData</code>, <code>FirstOfEachInstance</code></li>
+      <li><code>src/execution/operator/decide/decide_model_emitter.cpp</code>: <code>DecideModelEmitter</code>,
+        <code>Keep</code></li>
+      <li><code>src/execution/operator/decide/decide_value_extraction.cpp</code>: <code>CountOnce</code>,
+        <code>CountTupleTermsOnce</code>, <code>ScaleAvgRows</code></li>
+      <li><code>src/decidb/solver/decide_solve.cpp</code>: <code>SolveDecide</code>,
+        <code>PrintDecideTimeoutReport</code>, the continuation prompt</li>
+      <li><code>src/optimizer/decide/direct/direct_row_checks.cpp</code>: the value checks of a query-rewriting plan
+        (<code>DirectAddRowChecks</code>)</li>
       <li><code>src/include/duckdb/decidb/formulation/solver_input.hpp</code>: <code>KeyedMapping</code>,
         <code>CoefficientColumn</code>, <code>EvaluatedConstraint</code></li>
-      <li><code>src/include/duckdb/planner/decide/decide_prepared_model.hpp</code>: the terms execution receives</li>
-      <li><code>test/decide/tests/test_keyed_scope.py</code>, <code>test_scope_check_plan.py</code>,
-        <code>test_scope_determination.py</code></li>
+      <li><code>src/include/duckdb/planner/decide/decide_tree_terms.hpp</code>: the terms execution receives</li>
+      <li><code>test/decide/tests/test_keyed_scope.py</code>, <code>test_scope_variants.py</code>,
+        <code>test_scope_objective.py</code>, <code>test_one_pass_tree.py</code></li>
       <li><code>test/decide/tests/test_query_diagnostics_slow.py</code>: the report, the prompt through a
         pseudo-terminal, and Ctrl-C on both backends</li>
     </ul></div>

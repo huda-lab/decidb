@@ -57,7 +57,7 @@
     <a class="skip-link" href="#top">Skip to content</a>
     <a class="nav__logo" href="index.html"><img class="logo logo--light" src="assets/images/logo.svg" alt="DeciDB" width="140" height="42"><img class="logo logo--dark" src="assets/images/logo-dark.svg" alt="DeciDB" width="140" height="42" loading="lazy"><img class="logo logo--mark" src="assets/images/mark.svg" alt="DeciDB" width="40" height="32" loading="lazy"></a>
     <nav class="nav__links" aria-label="Main">
-      <div class="nav__item"><a class="nav__link" href="getting-started.html">Get started</a></div><div class="nav__item"><a class="nav__link" href="demo.html">Live demo</a></div><div class="nav__item"><a class="nav__link" href="guide.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="about.html">About</a></div><div class="nav__item"><a class="nav__link" href="docs/index.html"><span class="nav__full">Documentation</span><span class="nav__short" aria-hidden="true">Docs</span></a></div><div class="nav__item"><a class="nav__link" href="features.html" aria-current="page"><span class="nav__full">Novel features</span><span class="nav__short" aria-hidden="true">Features</span></a></div>
+      <div class="nav__item"><a class="nav__link" href="guide.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="demo.html">Live demo</a></div><div class="nav__item"><a class="nav__link" href="docs/index.html">How it works</a></div><div class="nav__item"><a class="nav__link" href="about.html">About</a></div>
     </nav>
     <div class="nav__actions">
       <button class="btn btn--secondary theme-toggle" type="button" aria-pressed="false" data-theme-toggle hidden><svg class="theme-toggle__sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="theme-toggle__moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg><span class="theme-toggle__label">Dark theme</span></button>
@@ -111,8 +111,8 @@
           compute. When DeciDB recognizes one, it rewrites the query into those operations and never
           starts a solver. You write the same SQL; it returns sooner.</p>
         <div class="note note--direct"><strong>Faster, exact, and no license needed</strong>
-          <p>A fair allocation over 800,000 decisions takes 0.026 s rewritten, against 2,158 s in Gurobi. Every rewritten
-            class was faster than Gurobi at every size measured. The answer is exact, with no solver tolerance, and a
+          <p>A fair allocation over 800,000 decisions takes 0.026 s rewritten, against 2,158 s in Gurobi. Rewriting beat
+            Gurobi in every benchmark but one, a budget problem at 100,000 rows, where it took about 10% longer. The answer is exact, with no solver tolerance, and a
             quadratic class needs no Gurobi license.</p></div>
         <p>A query DeciDB cannot prove to be one of these shapes goes to the solver unchanged, so rewriting never changes
           what a query means.</p>
@@ -176,7 +176,7 @@
         </table></div>
         <p>When several answers are equally good, the rewritten query may return a different one than the solver would;
           the objective is the same.</p>
-        <p>How DeciDB proves a query's shape and builds the plan that replaces the solver is in the documentation:
+        <p>How DeciDB proves a query's shape and builds the plan that replaces the solver is in How it works:
           <a href="docs/rewriting.html">query rewriting</a> and <a href="docs/rewrite-rules.html">the rewrite rules</a>.</p>
       </section>
 
@@ -189,7 +189,7 @@
 <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span> <span class="tk-k">FROM</span> Items
 <span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
 <span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">40</span> <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) &gt;= <span class="tk-n">4</span>
-<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>the solver found no answer</span></div><pre>Invalid Input Error: DECIDE optimization is infeasible. Prefix the query with DIAGNOSE to see which clause to change.</pre></div></div>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>the solver found no answer</span></div><pre>Invalid Input Error: the DECIDE query is infeasible</pre></div></div>
         <p>The same query with <code><span class="tk-d">DIAGNOSE</span></code> in front returns what to change instead of the rows:</p>
 <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-d">DIAGNOSE</span>
 <span class="tk-k">SELECT</span> item, <span class="tk-v">x</span> <span class="tk-k">FROM</span> Items
@@ -204,21 +204,51 @@
           <thead><tr><th scope="col">Column</th><th scope="col">Holds</th></tr></thead>
           <tbody>
             <tr><td><code>state</code></td><td><code>infeasible</code>, <code>unbounded</code> or <code>feasible</code></td></tr>
-            <tr><td><code>clause</code></td><td>the clause as you wrote it</td></tr>
+            <tr><td><code>clause</code></td><td>the clause as you wrote it, or the decision that grows without limit</td></tr>
             <tr><td><code>suggested_change</code></td><td>the smallest edit that makes the query answerable</td></tr>
-            <tr><td><code>amount</code></td><td>how far the bound moves, or the objective you would reach</td></tr>
-            <tr><td><code>edit_source</code></td><td>the kind of finding, such as <code>achievable_objective</code></td></tr>
+            <tr><td><code>amount</code></td><td>how far the bound moves, how many values grow without limit, or the objective you would reach</td></tr>
+            <tr><td><code>total</code></td><td>out of how many values, for a decision that grows without limit</td></tr>
+            <tr><td><code>scope</code></td><td><code>row</code>, or <code>keyed</code> for a decision declared with <code><span class="tk-d">per</span></code>, beside that count</td></tr>
+            <tr><td><code>edit_source</code></td><td>the kind of finding (below)</td></tr>
+            <tr><td><code>group</code></td><td>the group a finding covers, as the query writes it (<code>category = <span class="tk-s">&#x27;gear&#x27;</span></code>)</td></tr>
+            <tr><td><code>row</code></td><td>the row a finding covers, counted from 1</td></tr>
+          </tbody>
+        </table></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th scope="col">Kind</th><th scope="col">The finding</th></tr></thead>
+          <tbody>
+            <tr><td><code>source_literal</code></td><td>a number you wrote, loosened in place</td></tr>
+            <tr><td><code>virtual_offset</code></td><td>a bound read from the data, moved by an amount (<code>x &lt;= col + <span class="tk-n">5</span></code>)</td></tr>
+            <tr><td><code>expanded_row</code>, <code>expanded_group</code></td><td>one row's or one group's own change</td></tr>
+            <tr><td><code>remove_only</code></td><td>a clause that can only be deleted, such as a <code>&lt;&gt;</code> or an <code><span class="tk-k">IN</span></code></td></tr>
+            <tr><td><code>unreachable_bound</code></td><td>a bound no answer can reach</td></tr>
+            <tr><td><code>rigid_conflict</code></td><td>no loosening of the clauses you wrote makes the query answerable</td></tr>
+            <tr><td><code>runaway_+inf</code>, <code>runaway_-inf</code></td><td>a decision that grows without limit</td></tr>
+            <tr><td><code>achievable_objective</code></td><td>the objective once the changes are made</td></tr>
+            <tr><td><code>unbounded_after_fix</code></td><td>the change works, but the objective then grows without limit</td></tr>
+            <tr><td><code>undiagnosed</code></td><td>the state is known, but no cause was found</td></tr>
           </tbody>
         </table></div>
         <p>A query that already has an answer returns one row with <code>state = <span class="tk-s">&#x27;feasible&#x27;</span></code>. To get one suggestion
-          per row or group instead of per clause, <code><span class="tk-k">SET</span> diagnose_decide_infeasible_slack_scope = <span class="tk-s">&#x27;expanded&#x27;</span></code>.
-          <code><span class="tk-d">DIAGNOSE</span></code> costs nothing until you write it, and it always uses a solver.</p>
+          per row or group instead of per clause, <code><span class="tk-k">SET</span> diagnose_decide_infeasible_slack_scope = <span class="tk-s">&#x27;expanded&#x27;</span></code>;
+          <code>group</code> and <code>row</code> then say which. The result is a table like any other, so a query can
+          filter it:</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> clause, suggested_change, amount
+<span class="tk-k">FROM</span> (<span class="tk-d">DIAGNOSE</span>
+      <span class="tk-k">SELECT</span> item, <span class="tk-v">x</span> <span class="tk-k">FROM</span> Items
+      <span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
+      <span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">40</span> <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) &gt;= <span class="tk-n">4</span>
+      <span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value))
+<span class="tk-k">WHERE</span> edit_source = <span class="tk-s">&#x27;source_literal&#x27;</span>;</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>1 row</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">clause</th><th scope="col" class="dec">suggested_change</th><th scope="col" class="num dec">amount</th></tr></thead><tbody><tr><td>SUM(x * weight) &lt;= 40</td><td class="dec">SUM(x * weight) &lt;= 57</td><td class="num dec">17.0</td></tr></tbody></table></div></div></div>
+        <p><code><span class="tk-d">DIAGNOSE</span></code> takes a query with exactly one <code><span class="tk-d">DECIDE</span></code>. A query that fails before it is
+          solved, from a syntax error to a model the installed solver cannot take, stops with the same error as without
+          <code><span class="tk-d">DIAGNOSE</span></code>. It costs nothing until you write it, and it always uses a solver.</p>
 
         <h3 id="unbounded"><a class="anchor" href="#unbounded">No limit on the objective</a></h3>
         <p>When nothing stops the objective from growing forever, the query stops and <code><span class="tk-d">DIAGNOSE</span></code> names the
           decision that needs a limit, with how many of its values escape. The
           <a href="examples/diagnose.html">DIAGNOSE example</a> shows the full answer for the bag above.</p>
-        <p>How DeciDB finds the smallest change is in the documentation: <a href="docs/diagnose.html">inside DIAGNOSE</a>.</p>
+        <p>How DeciDB finds the smallest change is in How it works: <a href="docs/diagnose.html">inside DIAGNOSE</a>.</p>
       </section>
     </article>
   </div>
@@ -240,7 +270,7 @@
           <a class="nav__logo" href="index.html"><img src="assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
           <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
-        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="getting-started.html">Get started</a></li><li><a href="demo.html">Live demo</a></li><li><a href="guide.html">Guide</a></li><li><a href="docs/index.html">Documentation</a></li><li><a href="features.html">Novel features</a></li><li><a href="examples.html">Examples</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="getting-started.html">Install</a></li><li><a href="guide.html">Guide</a></li><li><a href="features.html">Novel features</a></li><li><a href="examples.html">Examples</a></li><li><a href="demo.html">Live demo</a></li><li><a href="docs/index.html">How it works</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="examples/knapsack.html">Knapsack</a></li><li><a href="examples/facility-location.html">Depots</a></li><li><a href="examples/fair-allocation.html">Fair allocation</a></li><li><a href="examples/diagnose.html">DIAGNOSE</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Project</h3><ul><li><a href="about.html">About</a></li><li><a href="about.html#research">Papers</a></li><li><a href="https://github.com/huda-lab/decidb">GitHub</a></li><li><a href="https://huda-lab.github.io/">HUDA Lab</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Contact</h3><ul><li><a href="mailto:support@decidb.com">Email the team</a></li><li><a href="https://github.com/huda-lab/decidb/issues">Report an issue</a></li></ul></div>

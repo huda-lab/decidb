@@ -5,10 +5,10 @@
 <script>(function(){var r=document.documentElement,t;try{t=localStorage.getItem('decidb-theme')}catch(e){}if(!r.dataset.theme)r.dataset.theme=t==='dark'?'dark':'light'})()</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <script>document.documentElement.classList.add('m-enter');setTimeout(()=>document.documentElement.classList.add('m-enter-done'),700)</script>
-<title>How DeciDB works: DeciDB documentation</title>
+<title>How DeciDB works</title>
 <meta name="description" content="How DeciDB adds constrained optimization to DuckDB: where it hooks in, the eight stages of a DECIDE query, where the code lives and what to read first.">
 <meta property="og:type" content="website">
-<meta property="og:title" content="How DeciDB works: DeciDB documentation">
+<meta property="og:title" content="How DeciDB works">
 <meta property="og:description" content="How DeciDB adds constrained optimization to DuckDB: where it hooks in, the eight stages of a DECIDE query, where the code lives and what to read first.">
 <meta property="og:image" content="../assets/images/share.jpg">
 <meta name="twitter:card" content="summary_large_image">
@@ -57,7 +57,7 @@
     <a class="skip-link" href="#top">Skip to content</a>
     <a class="nav__logo" href="../index.html"><img class="logo logo--light" src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42"><img class="logo logo--dark" src="../assets/images/logo-dark.svg" alt="DeciDB" width="140" height="42" loading="lazy"><img class="logo logo--mark" src="../assets/images/mark.svg" alt="DeciDB" width="40" height="32" loading="lazy"></a>
     <nav class="nav__links" aria-label="Main">
-      <div class="nav__item"><a class="nav__link" href="../getting-started.html">Get started</a></div><div class="nav__item"><a class="nav__link" href="../demo.html">Live demo</a></div><div class="nav__item"><a class="nav__link" href="../guide.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="../examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="../examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="../examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="../examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="../examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="../examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="../examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="../examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="../examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="../examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="../features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="../about.html">About</a></div><div class="nav__item"><a class="nav__link" href="../docs/index.html" aria-current="page"><span class="nav__full">Documentation</span><span class="nav__short" aria-hidden="true">Docs</span></a></div><div class="nav__item"><a class="nav__link" href="../features.html"><span class="nav__full">Novel features</span><span class="nav__short" aria-hidden="true">Features</span></a></div>
+      <div class="nav__item"><a class="nav__link" href="../guide.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="../examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="../examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="../examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="../examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="../examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="../examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="../examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="../examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="../examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="../examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="../features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="../demo.html">Live demo</a></div><div class="nav__item"><a class="nav__link" href="../docs/index.html" aria-current="page">How it works</a></div><div class="nav__item"><a class="nav__link" href="../about.html">About</a></div>
     </nav>
     <div class="nav__actions">
       <button class="btn btn--secondary theme-toggle" type="button" aria-pressed="false" data-theme-toggle hidden><svg class="theme-toggle__sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="theme-toggle__moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg><span class="theme-toggle__label">Dark theme</span></button>
@@ -72,11 +72,11 @@
 <main id="top">
 <section class="hero hero--page" data-enter aria-labelledby="page-h">
   <div class="wrap"><div class="hero-text hero-split grid">
-    <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a><span aria-hidden="true">/</span>Documentation</nav><h1 id="page-h">How DeciDB works</h1><p class="hero__lead">DeciDB is DuckDB with one more path through it. This page shows where that path joins DuckDB, its eight stages, and where to read next.</p></div>
+    <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a><span aria-hidden="true">/</span>How it works</nav><h1 id="page-h">How DeciDB works</h1><p class="hero__lead">DeciDB is DuckDB with one more path through it. This page shows where that path joins DuckDB, its eight stages, and where to read next.</p></div>
     <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="23" data-ui-pause-host><div class="ui ui-hw hw hw--page hw--mid" role="img" aria-label="The DECIDE path, from the parser to execution."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · the DECIDE path</span></div><div class="hw__page"><div class="hw__stages" data-ly-steps="260"><div class="hw__stage is-on" data-step><span class="hw__num">01</span><b>Parser</b><span>the grammar and the DECIDE keywords</span></div><div class="hw__stage is-on" data-step><span class="hw__num">02</span><b>Binder</b><span>names, scopes and types</span></div><div class="hw__stage is-on" data-step><span class="hw__num">03</span><b>Logical plan</b><span>the LogicalDecide operator</span></div><div class="hw__stage is-on" data-step><span class="hw__num">04</span><b>Canonicalizer</b><span>one shape for every clause</span></div><div class="hw__stage is-on" data-step><span class="hw__num">05</span><b>Optimizer</b><span>the formulation</span></div><div class="hw__stage hw__stage--exit is-on" data-step><span class="hw__num">↳</span><b>Query rewriting</b><span>relational operators, no solver</span></div><div class="hw__stage is-on" data-step><span class="hw__num">06</span><b>Model</b><span>variables, coefficients, bounds</span></div><div class="hw__stage is-on" data-step><span class="hw__num">07</span><b>Solver</b><span>Gurobi or HiGHS</span></div><div class="hw__stage hw__stage--exit is-on" data-step><span class="hw__num">↳</span><b>DIAGNOSE</b><span>what to change when there is no answer</span></div><div class="hw__stage is-on" data-step><span class="hw__num">08</span><b>Execution</b><span>the decisions, back as columns</span></div></div></div></div></div>
   </div></div>
 </section>
-<div class="container"><div class="doc-layout doc-layout--docs"><nav class="docnav" aria-label="Documentation pages"><div class="toc-title">Documentation</div><p class="docnav__group">Start here</p><ul><li><a href="index.html" aria-current="page">Overview</a></li><li><a href="life-of-a-query.html">Life of a query</a></li></ul><p class="docnav__group">The pipeline</p><ul><li><a href="front-end.html">Parser, binder and plan</a></li><li><a href="canonical-form.html">Canonicalizer and optimizer</a></li><li><a href="solving.html">Model, solvers and execution</a></li></ul><p class="docnav__group">Novel features</p><ul><li><a href="rewriting.html">Query rewriting</a></li><li><a href="rewrite-rules.html">The rewrite rules</a></li><li><a href="diagnose.html">DIAGNOSE</a></li></ul><p class="docnav__group">Quality</p><ul><li><a href="testing.html">Testing</a></li><li><a href="performance.html">Performance</a></li></ul></nav>
+<div class="container"><div class="doc-layout doc-layout--docs"><nav class="docnav" aria-label="How it works pages"><div class="toc-title">How it works</div><p class="docnav__group">Start here</p><ul><li><a href="index.html" aria-current="page">Overview</a></li><li><a href="life-of-a-query.html">Life of a query</a></li></ul><p class="docnav__group">The pipeline</p><ul><li><a href="front-end.html">Parser, binder and plan</a></li><li><a href="canonical-form.html">Canonicalizer and optimizer</a></li><li><a href="solving.html">Model, solvers and execution</a></li></ul><p class="docnav__group">Novel features</p><ul><li><a href="rewriting.html">Query rewriting</a></li><li><a href="rewrite-rules.html">The rewrite rules</a></li><li><a href="diagnose.html">DIAGNOSE</a></li></ul><p class="docnav__group">Quality</p><ul><li><a href="testing.html">Testing</a></li><li><a href="performance.html">Performance</a></li></ul></nav>
 <nav class="toc" aria-label="On this page">
   <div class="toc-title">On this page</div>
   <ul>
@@ -124,17 +124,18 @@
     <ol class="steps">
       <li><strong>Keywords.</strong> <code><span class="tk-d">DECIDE</span></code>, <code><span class="tk-d">SUCH</span></code> (as in <code><span class="tk-d">SUCH</span> <span class="tk-d">THAT</span></code>),
         <code><span class="tk-d">MAXIMIZE</span></code>, <code><span class="tk-d">MINIMIZE</span></code> and <code><span class="tk-d">DIAGNOSE</span></code> are reserved words. The clause's
-        <code><span class="tk-d">when</span></code>, <code><span class="tk-d">per</span></code> and <code><span class="tk-d">by</span></code> are not: the lexer turns them into DECIDE-only tokens
-        inside the clause (<a href="#gated-tokens">below</a>).</li>
+        <code><span class="tk-d">when</span></code>, <code><span class="tk-d">per</span></code> and <code><span class="tk-d">by</span></code> are not, nor are the frame words <code>at</code>,
+        <code>over</code> and <code>within</code>: the lexer turns them into DECIDE-only tokens inside the clause
+        (<a href="#gated-tokens">below</a>).</li>
       <li><strong>Grammar.</strong> New productions in DuckDB's Bison grammar read the clause. The parser stores it in
-        five new fields of DuckDB's <code>SelectNode</code>: the decisions, the constraints, the sense, the objective,
-        and the clause's own text for error messages.</li>
+        one new field of DuckDB's <code>SelectNode</code>, a <code>ParsedDecide</code> that holds the decisions, the
+        constraints, the sense, the objective, and the clause's own text for error messages.</li>
       <li><strong>Binder.</strong> DuckDB's binder for a <code><span class="tk-k">SELECT</span></code> has one DECIDE branch: a call to
         <code>DecideDeclarationsBinder::BindDeclarations</code>, which binds the whole clause with DeciDB's own
         expression binders.</li>
       <li><strong>A logical operator.</strong> <code>LogicalDecide</code>, a new operator type
         (<code>LOGICAL_DECIDE</code>), sits above the scan and any filter. It carries the decisions, the constraints and
-        the objective through planning. DuckDB's serializer, generated from <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/storage/serialization/logical_operator.json"><code>logical_operator.json</code></a>, writes it
+        the objective through planning. DuckDB's serializer, generated from <a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/include/duckdb/storage/serialization/logical_operator.json"><code>logical_operator.json</code></a>, writes it
         as it writes every operator.</li>
       <li><strong>An optimizer pass.</strong> <code>DecideOptimizer</code> runs as one entry in DuckDB's list of
         optimizer passes (<code>OptimizerType::DECIDE_OPTIMIZER</code>), after DuckDB's filter pushdown. It decides how
@@ -154,17 +155,21 @@
       <code><span class="tk-d">per</span></code> is a legal column name. Making them reserved words would break existing queries.</p>
     <p>DeciDB settles this in the lexer, the step that cuts SQL text into tokens before the grammar sees it. The lexer
       keeps a flag. The <code><span class="tk-d">DECIDE</span></code> or <code><span class="tk-d">SUCH</span></code> token sets it, and the grammar clears it when the clause
-      ends. Only while the flag is set does the lexer turn the three words into DECIDE-only tokens:</p>
+      ends. Only while the flag is set does the lexer turn these words into DECIDE-only tokens:</p>
     <ul>
-      <li><code><span class="tk-k">WHEN</span></code> becomes <code>WHEN_DECIDE</code>, or <code>WHEN_DECIDE_OBJECTIVE</code> after
-        <code><span class="tk-d">MAXIMIZE</span></code> or <code><span class="tk-d">MINIMIZE</span></code>. A <code><span class="tk-k">CASE</span></code> inside the clause raises a depth counter, so
-        its own <code><span class="tk-k">WHEN</span></code> stays SQL's.</li>
+      <li><code><span class="tk-k">WHEN</span></code> becomes <code>WHEN_DECIDE</code>. A <code><span class="tk-k">CASE</span></code> inside the clause raises a depth
+        counter, so its own <code><span class="tk-k">WHEN</span></code> stays SQL's.</li>
       <li><code>PER</code> becomes <code>PER_DECIDE_PAREN</code> before <code>(</code>, <code>PER_DECIDE_ROW</code> before
         <code>ROW</code>, and <code>PER_DECIDE</code> otherwise. One token of lookahead tells <code><span class="tk-d">per</span> ()</code>,
         <code><span class="tk-d">per</span> row</code> and <code><span class="tk-d">per</span> key</code> apart, which the grammar alone cannot.</li>
       <li><code><span class="tk-k">BY</span></code> becomes <code>BY_DECIDE</code> directly after <code>)</code>, as in <code><span class="tk-f">SUM</span>(x) <span class="tk-d">by</span> (g)</code>.
         <code><span class="tk-k">GROUP</span> <span class="tk-k">BY</span></code>, <code><span class="tk-k">ORDER</span> <span class="tk-k">BY</span></code> and <code><span class="tk-k">PARTITION</span> <span class="tk-k">BY</span></code> always follow a keyword, so they stay
         SQL's.</li>
+      <li><code>AT</code> becomes <code>AT_DECIDE</code> before <code>(</code>, <code><span class="tk-k">OVER</span></code> becomes
+        <code>OVER_DECIDE</code> directly after <code>)</code>, and <code>WITHIN</code> inside that <code><span class="tk-k">OVER</span> (...)</code>
+        becomes <code>WITHIN_DECIDE</code>. They spell a frame selector, such as <code>at(previous: x) over
+        (t.period)</code>, which reads a value at another row. These three apply only after <code><span class="tk-d">SUCH</span> <span class="tk-d">THAT</span></code> and
+        outside any subquery written there, so a SQL window keeps its <code><span class="tk-k">OVER</span></code> and <code>WITHIN <span class="tk-k">GROUP</span></code>.</li>
     </ul>
     <p>Outside a DECIDE clause the flag is clear and nothing changes. The lexer saves the flag before a nested clause
       and restores it after, so a DECIDE query written as a subquery inside another one hands the outer clause back its
@@ -176,7 +181,7 @@
       <li><strong>The scope words are tokens only inside the clause</strong>, as above.</li>
       <li><strong>Every grammar conflict is local to DECIDE.</strong> Bison expects four shift-reduce conflicts, all from
         the optional declaration slot of the clause, and both readings build the same node. The <code><span class="tk-k">WHEN</span></code>
-        conflicts are settled by precedence on tokens the lexer emits only inside DECIDE.</li>
+        conflict is settled by precedence on a token the lexer emits only inside DECIDE.</li>
       <li><strong>A decision's type is read as a name</strong>, not a keyword. DuckDB quotes every keyword when it
         prints a name, so a keyword <code><span class="tk-t">BOOL</span></code> would quote every column named <code>bool</code>.</li>
       <li><strong>A stored query writes the DECIDE fields only when they are set</strong>, so a database file or view
@@ -187,24 +192,26 @@
 
     <h3 id="duckdb-edits"><a class="anchor" href="#duckdb-edits">Edits to DuckDB itself</a></h3>
     <p>Query rewriting replaces a DECIDE node with ordinary DuckDB operators, so its plans run only as fast as DuckDB's
-      own rules make them. Seven edits to DuckDB's expression rewriter, statistics propagation and perfect hash join
-      make those plans run as DuckDB would run the same answer written by hand in SQL. None of them names DECIDE, each
-      helps any query with the shape it handles, and a standard query returns the same rows. One more edit corrects a
-      DuckDB defect in how catalog names are ordered. Each edit, its reason and its test are on
-      <a href="rewriting.html#duckdb-edits">Query rewriting</a>.</p>
+      own rules make them. Ten edits to DuckDB make those plans run as DuckDB would run the same answer written by
+      hand in SQL. The first eight, to the expression rewriter, statistics propagation, the perfect hash join and
+      unused-column removal, name nothing of DECIDE: each helps any query with the shape it handles, and a standard
+      query returns the same rows. The last two hook query rewriting's own passes into unused-column removal, and a
+      standard query reaches neither. Two more edits fix DuckDB defects: the order of catalog names, and a hang while a
+      thread waits for a batch of tasks. A few small ones let an error point at the place in the query it is about.
+      Each edit, its reason and its test are on <a href="rewriting.html#duckdb-edits">Query rewriting</a>.</p>
 
     <div class="src"><strong>In the source</strong><ul>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/third_party/libpg_query/grammar/keywords/reserved_keywords.list"><code>third_party/libpg_query/grammar/keywords/reserved_keywords.list</code></a>: the reserved words</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/third_party/libpg_query/src_backend_parser_parser.cpp"><code>third_party/libpg_query/src_backend_parser_parser.cpp</code></a>: <code>base_yylex</code>, the gated
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/third_party/libpg_query/grammar/keywords/reserved_keywords.list"><code>third_party/libpg_query/grammar/keywords/reserved_keywords.list</code></a>: the reserved words</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/third_party/libpg_query/src_backend_parser_parser.cpp"><code>third_party/libpg_query/src_backend_parser_parser.cpp</code></a>: <code>base_yylex</code>, the gated
         tokens</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/third_party/libpg_query/grammar/grammar.y"><code>third_party/libpg_query/grammar/grammar.y</code></a>: the token declarations and the
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/third_party/libpg_query/grammar/grammar.y"><code>third_party/libpg_query/grammar/grammar.y</code></a>: the token declarations and the
         <code>%expect <span class="tk-n">4</span></code> conflict budget, with its reasons</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/third_party/libpg_query/grammar/statements/select.y"><code>third_party/libpg_query/grammar/statements/select.y</code></a>: the DECIDE productions</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/planner/binder/query_node/bind_select_node.cpp"><code>src/planner/binder/query_node/bind_select_node.cpp</code></a>: the binder's DECIDE branch</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/planner/operator/decide/logical_decide.hpp"><code>src/include/duckdb/planner/operator/decide/logical_decide.hpp</code></a>: <code>LogicalDecide</code></li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/optimizer.cpp"><code>src/optimizer/optimizer.cpp</code></a>: where <code>DecideOptimizer</code> runs among DuckDB's passes</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/execution/physical_plan/plan_decide.cpp"><code>src/execution/physical_plan/plan_decide.cpp</code></a>,
-        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/execution/operator/decide/physical_decide.cpp"><code>src/execution/operator/decide/physical_decide.cpp</code></a>: <code>PhysicalDecide</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/third_party/libpg_query/grammar/statements/select.y"><code>third_party/libpg_query/grammar/statements/select.y</code></a>: the DECIDE productions</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/planner/binder/query_node/bind_select_node.cpp"><code>src/planner/binder/query_node/bind_select_node.cpp</code></a>: the binder's DECIDE branch</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/include/duckdb/planner/operator/decide/logical_decide.hpp"><code>src/include/duckdb/planner/operator/decide/logical_decide.hpp</code></a>: <code>LogicalDecide</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/optimizer.cpp"><code>src/optimizer/optimizer.cpp</code></a>: where <code>DecideOptimizer</code> runs among DuckDB's passes</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/execution/physical_plan/plan_decide.cpp"><code>src/execution/physical_plan/plan_decide.cpp</code></a>,
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/execution/operator/decide/physical_decide.cpp"><code>src/execution/operator/decide/physical_decide.cpp</code></a>: <code>PhysicalDecide</code></li>
     </ul></div>
   </section>
 
@@ -216,27 +223,28 @@
     <div class="table-wrap"><table>
       <thead><tr><th scope="col">Stage</th><th scope="col">Owns</th><th scope="col">Explained in</th></tr></thead>
       <tbody>
-        <tr><td>01 Parser</td><td>The grammar, the gated keywords, and the refusal of spellings the language
-          removed</td><td><a href="front-end.html#parser">Parser, binder and plan</a></td></tr>
+        <tr><td>01 Parser</td><td>The grammar, the gated keywords, and the parsed form of the clause
+          (<code>ParsedDecide</code>)</td><td><a href="front-end.html#parser">Parser, binder and plan</a></td></tr>
         <tr><td>02 Binder</td><td>Decisions and their keys, where <code><span class="tk-d">when</span></code>, <code><span class="tk-d">per</span></code> and
           <code><span class="tk-d">by</span></code> may stand, types, reducers, and the refusals only binding can make</td>
           <td><a href="front-end.html#binder">Parser, binder and plan</a></td></tr>
-        <tr><td>03 Logical plan</td><td><code>LogicalDecide</code>, subqueries in a clause, the only two ways to add a
-          clause after planning, serialization</td>
+        <tr><td>03 Logical plan</td><td><code>LogicalDecide</code>, subqueries in a clause, the only ways to add or
+          change a clause after planning, serialization</td>
           <td><a href="front-end.html#logical-plan">Parser, binder and plan</a></td></tr>
         <tr><td>04 Canonicalizer</td><td>The one shape of every clause: decisions on the left, the bound on the right,
           one spelling per product, and the check of each clause's algebra and degree</td>
           <td><a href="canonical-form.html#canonicalizer">Canonicalizer and optimizer</a></td></tr>
         <tr><td>05 Optimizer</td><td>How each construct reaches the solver (Big-M, McCormick, MIN and MAX, AVG,
-          <code>&lt;&gt;</code>), the choice of solver, and the entry to query rewriting</td>
+          <code>&lt;&gt;</code>), the choice of solver, the entry to query rewriting, and the lowering of each clause
+          into terms in the clause tree</td>
           <td><a href="canonical-form.html#optimizer">Canonicalizer and optimizer</a></td></tr>
         <tr><td>06 Model</td><td>From evaluated clauses to a model that names no solver: variable layout,
           coefficients, bounds, the quadratic matrix</td>
           <td><a href="solving.html#model">Model, solvers and execution</a></td></tr>
         <tr><td>07 Solver</td><td>Gurobi and HiGHS behind one interface, their statuses mapped to one set, time
           limits</td><td><a href="solving.html#solvers">Model, solvers and execution</a></td></tr>
-        <tr><td>08 Execution</td><td>Buffering the rows, evaluating coefficients, mapping keyed decisions, reading the
-          answer back as columns</td><td><a href="solving.html#execution">Model, solvers and execution</a></td></tr>
+        <tr><td>08 Execution</td><td>Buffering the rows, evaluating the clause tree over them, mapping keyed
+          decisions, reading the answer back as columns</td><td><a href="solving.html#execution">Model, solvers and execution</a></td></tr>
       </tbody>
     </table></div>
     <p>Two exits leave this path: query rewriting inside stage 05, and DIAGNOSE after stage 07. They are the
@@ -245,11 +253,14 @@
 
     <h3 id="when-stages-run"><a class="anchor" href="#when-stages-run">When each stage runs</a></h3>
     <p>The numbers give the order of ownership, not of time. Stages 01 to 05 run while DuckDB prepares the statement,
-      before a row is read. Stage 08 runs when the plan executes, in three phases:</p>
+      before a row is read. When DuckDB builds the physical plan, stage 05's last step lowers each clause into the
+      clause tree: a tree whose nodes are the clauses' scopes, reducers, frames and helper functions, each recording what
+      it reads per row.
+      Stage 08 runs when the plan executes, in three phases:</p>
     <ol class="steps">
       <li><strong>Sink.</strong> <code>PhysicalDecide</code> buffers every input row.</li>
-      <li><strong>Finalize.</strong> It evaluates every coefficient over the buffer, then builds the model (stage 06)
-        and solves it (stage 07).</li>
+      <li><strong>Finalize.</strong> It reads the buffer once, from the top of the clause tree, into each node. Then it
+        computes each node from its children, builds the model (stage 06) and solves it (stage 07).</li>
       <li><strong>Source.</strong> It scans the buffer again and appends each decision's value to its row.</li>
     </ol>
     <p>So stages 06 and 07 run inside stage 08. They are separate stages because they keep separate contracts: stage 06
@@ -260,8 +271,8 @@
     <ul>
       <li><strong>Shape is decided once.</strong> Which side of a comparison a term sits on, and how a product is
         spelled, is decided by stage 04 and by no other stage. The optimizer reads canonical clauses and returns
-        canonical clauses: every clause it adds re-enters through <code>LogicalDecide::AddConstraint</code> or
-        <code>SetObjective</code>, which canonicalize it again. This is a canonical form in the compiler sense, as an
+        canonical clauses: every clause it adds or changes re-enters through <code>LogicalDecide::AddClause</code>,
+        <code>CanonicalizeClause</code> or <code>SetObjective</code>, which canonicalize it again. This is a canonical form in the compiler sense, as an
         LLVM canonicalization pass writes one form per meaning.</li>
       <li><strong>A promise is checked where it is read.</strong> When a stage relies on what an earlier one guarantees
         (the shape check refuses a degree above 2, the canonicalizer writes each marker once), the reader checks it with
@@ -277,15 +288,15 @@
     </ul>
 
     <div class="src"><strong>In the source</strong><ul>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/planner/binder/query_node/plan_select_node.cpp"><code>src/planner/binder/query_node/plan_select_node.cpp</code></a>: builds <code>LogicalDecide</code> and runs
-        stage 04 on what the user wrote</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/planner/operator/decide/logical_decide.cpp"><code>src/planner/operator/decide/logical_decide.cpp</code></a>: <code>AddConstraint</code> and
-        <code>SetObjective</code>, the only ways in after planning</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/execution/operator/decide/physical_decide.cpp"><code>src/execution/operator/decide/physical_decide.cpp</code></a>: <code>Sink</code>, <code>Finalize</code>,
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/planner/binder/query_node/plan_decide.cpp"><code>src/planner/binder/query_node/plan_decide.cpp</code></a>: <code>Binder::PlanDecide</code> builds
+        <code>LogicalDecide</code> and runs stage 04 on what the user wrote</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/planner/operator/decide/logical_decide.cpp"><code>src/planner/operator/decide/logical_decide.cpp</code></a>: <code>AddClause</code>,
+        <code>CanonicalizeClause</code> and <code>SetObjective</code>, the only ways in after planning</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/execution/operator/decide/physical_decide.cpp"><code>src/execution/operator/decide/physical_decide.cpp</code></a>: <code>Sink</code>, <code>Finalize</code>,
         <code>GetData</code></li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/planner/decide/decide_source_provenance.cpp"><code>src/planner/decide/decide_source_provenance.cpp</code></a>: <code>RenderDecideSource</code>, the one
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/planner/decide/decide_source_provenance.cpp"><code>src/planner/decide/decide_source_provenance.cpp</code></a>: <code>RenderDecideSource</code>, the one
         renderer of user text</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_solver_gate.cpp"><code>src/optimizer/decide/decide_solver_gate.cpp</code></a>: <code>RequireDecideSolverSupport</code>, the
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/decide_solver_gate.cpp"><code>src/optimizer/decide/decide_solver_gate.cpp</code></a>: <code>RequireDecideSolverSupport</code>, the
         refusal of a model the chosen solver cannot take</li>
     </ul></div>
   </section>
@@ -299,9 +310,10 @@
     <h3 id="exit-rewriting"><a class="anchor" href="#exit-rewriting">Query rewriting</a></h3>
     <p>Some optimization problems are solved exactly by sorting, ranking and running totals. Picking the most valuable
       item in each category is one: rank the items of each category by value and take the first. Before stage 05 writes
-      anything for a solver, it reads the DECIDE node into an intermediate representation (IR), a neutral form of the
-      query that the rewrite rules read instead of the operator. It offers the IR to every registered rule. A rule
-      applies only when it can prove that its algorithm returns the optimum, and at most one rule may apply. When one
+      anything for a solver, it offers the DECIDE node to every registered rule. A rule reads the node's clauses and
+      objective through shared reader functions. A reader returns false for anything it cannot read exactly, and the
+      rule then declines. A rule applies only when it can prove that its algorithm returns the optimum, and at most one
+      rule may apply. When one
       does, its plan of ordinary DuckDB operators replaces the DECIDE node, and no model is built. The engine calls this
       feature direct solve.</p>
 <div class="code" data-lang="sql"><div class="code__head"><span class="code__title">The best item per category: no DECIDE node</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, category, <span class="tk-v">x</span>
@@ -333,7 +345,7 @@
 <span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>)
 <span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * weight) &lt;= <span class="tk-n">40</span>
       <span class="tk-k">AND</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) &gt;= <span class="tk-n">4</span>
-<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>the solver found no answer</span></div><pre>Invalid Input Error: DECIDE optimization is infeasible. Prefix the query with DIAGNOSE to see which clause to change.</pre></div></div>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value);</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>the solver found no answer</span></div><pre>Invalid Input Error: the DECIDE query is infeasible</pre></div></div>
     <p>With the <code><span class="tk-d">DIAGNOSE</span></code> prefix the failed solve does not end the query. A router reads the solver's
       status and sends it to one engine. An infeasible model goes to the elastic engine, which adds a slack to each
       clause and finds the smallest change that makes the model feasible again (the standard elastic model). An
@@ -344,14 +356,14 @@
       features</a>.</p>
 
     <div class="src"><strong>In the source</strong><ul>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_answer_choice.cpp"><code>src/optimizer/decide/decide_answer_choice.cpp</code></a>: <code>ChooseDecideAnswer</code>, a rewrite or the
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/decide_answer_choice.cpp"><code>src/optimizer/decide/decide_answer_choice.cpp</code></a>: <code>ChooseDecideAnswer</code>, a rewrite or the
         solver</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_rule_driver.cpp"><code>src/optimizer/decide/direct/direct_rule_driver.cpp</code></a>: <code>ApplyDirectSolveRules</code>, the
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/direct_rule_driver.cpp"><code>src/optimizer/decide/direct/direct_rule_driver.cpp</code></a>: <code>ApplyDirectSolveRules</code>, the
         loop over the rules</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_result_adapter.cpp"><code>src/optimizer/decide/direct/direct_result_adapter.cpp</code></a>:
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/direct_result_adapter.cpp"><code>src/optimizer/decide/direct/direct_result_adapter.cpp</code></a>:
         <code>LogicalDirectResultAdapter</code></li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/diagnostics/decide_router.cpp"><code>src/decidb/diagnostics/decide_router.cpp</code></a>: <code>RouteSolveResult</code>, the router</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/diagnostics/decide_diagnostic_engines.cpp"><code>src/decidb/diagnostics/decide_diagnostic_engines.cpp</code></a>: <code>BuildElasticModel</code> and
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/decidb/diagnostics/decide_router.cpp"><code>src/decidb/diagnostics/decide_router.cpp</code></a>: <code>RouteSolveResult</code>, the router</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/decidb/diagnostics/decide_diagnostic_engines.cpp"><code>src/decidb/diagnostics/decide_diagnostic_engines.cpp</code></a>: <code>BuildElasticModel</code> and
         <code>DiagnoseUnbounded</code></li>
     </ul></div>
   </section>
@@ -360,52 +372,56 @@
   <section id="code-map">
     <h2><a class="anchor" href="#code-map">Where the code lives</a></h2>
     <p class="lead">DeciDB's code sits in DuckDB's tree beside the layer it extends: a folder named <code>decide</code>
-      inside DuckDB's parser, planner, optimizer and execution folders, and its own <a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/src/decidb"><code>src/decidb/</code></a> for the
+      inside DuckDB's parser, planner, optimizer and execution folders, and its own <a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/src/decidb"><code>src/decidb/</code></a> for the
       model, the solvers and DIAGNOSE.</p>
-    <p>Headers mirror the sources under <a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/src/include/duckdb"><code>src/include/duckdb/</code></a>.</p>
+    <p>Headers mirror the sources under <a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/src/include/duckdb"><code>src/include/duckdb/</code></a>.</p>
     <div class="table-wrap"><table>
       <thead><tr><th scope="col">Path</th><th scope="col">Holds</th><th scope="col">Stage</th></tr></thead>
       <tbody>
-        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/third_party/libpg_query/grammar"><code>third_party/libpg_query/grammar/</code></a></td><td>The DECIDE grammar, tokens and keywords</td>
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/third_party/libpg_query/grammar"><code>third_party/libpg_query/grammar/</code></a></td><td>The DECIDE grammar, tokens and keywords</td>
           <td>01</td></tr>
-        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/src/parser/decide"><code>src/parser/decide/</code></a></td><td>Predicates over the parsed clause; the refusal of removed
-          spellings</td><td>01</td></tr>
-        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/src/planner/expression_binder/decide"><code>src/planner/expression_binder/decide/</code></a></td><td>The DECIDE binders: declarations,
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/src/parser/decide"><code>src/parser/decide/</code></a></td><td>The parsed form of the clause: <code>ParsedDecide</code> and its
+          declarations, clauses and scopes</td><td>01</td></tr>
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/src/planner/expression_binder/decide"><code>src/planner/expression_binder/decide/</code></a></td><td>The DECIDE binders: declarations,
           <code><span class="tk-d">SUCH</span> <span class="tk-d">THAT</span></code>, the objective, reducers and scopes</td><td>02</td></tr>
-        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/src/planner/operator/decide"><code>src/planner/operator/decide/</code></a></td><td><code>LogicalDecide</code> and the DIAGNOSE plan
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/planner/binder/query_node/plan_decide.cpp"><code>src/planner/binder/query_node/plan_decide.cpp</code></a></td><td><code>Binder::PlanDecide</code>:
+          builds <code>LogicalDecide</code>, flattens its subqueries, calls the canonicalizer</td><td>03, 04</td></tr>
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/src/planner/operator/decide"><code>src/planner/operator/decide/</code></a></td><td><code>LogicalDecide</code> and the DIAGNOSE plan
           node</td><td>03</td></tr>
-        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/src/planner/decide"><code>src/planner/decide/</code></a></td><td>The canonicalizer, the product spelling, the shape check, source
-          spans and the message renderer</td><td>03, 04</td></tr>
-        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/src/optimizer/decide"><code>src/optimizer/decide/</code></a></td><td>The optimizer passes (<a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/src/optimizer/decide"><code>decide_rewrite_*.cpp</code></a>), the
-          choice of answer and solver, the flattening into terms</td><td>05</td></tr>
-        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/src/optimizer/decide/direct"><code>src/optimizer/decide/direct/</code></a></td><td>Query rewriting: the IR, the rule driver, one file per
-          rule, the plan fragments and the result adapter</td><td>05</td></tr>
-        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/execution/physical_plan/plan_decide.cpp"><code>src/execution/physical_plan/plan_decide.cpp</code></a></td><td>From <code>LogicalDecide</code> to
-          <code>PhysicalDecide</code></td><td>03, 08</td></tr>
-        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/src/decidb/formulation"><code>src/decidb/formulation/</code></a></td><td><code>SolverModel::Build</code>, Big-M and the other
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/src/planner/decide"><code>src/planner/decide/</code></a></td><td>The canonicalizer, the product spelling, the shape check, source
+          spans, the message renderer, and the clause tree</td><td>03, 04, 08</td></tr>
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/src/optimizer/decide"><code>src/optimizer/decide/</code></a></td><td>The optimizer passes (<a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/src/optimizer/decide"><code>decide_rewrite_*.cpp</code></a>), the
+          choice of answer and solver, the lowering of each clause into terms</td><td>05</td></tr>
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/src/optimizer/decide/direct"><code>src/optimizer/decide/direct/</code></a></td><td>Query rewriting: the readers, the rule driver, one file
+          per rule, the plan fragments and the result adapter</td><td>05</td></tr>
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/execution/physical_plan/plan_decide.cpp"><code>src/execution/physical_plan/plan_decide.cpp</code></a></td><td>From <code>LogicalDecide</code> to
+          <code>PhysicalDecide</code>: builds the clause tree and checks the model against the solver</td>
+          <td>05, 08</td></tr>
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/src/decidb/formulation"><code>src/decidb/formulation/</code></a></td><td><code>SolverModel::Build</code>, Big-M and the other
           lowerings into solver rows</td><td>06</td></tr>
-        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/src/decidb/solver"><code>src/decidb/solver/</code></a></td><td>The solve facade, the backend registry, statuses, time
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/src/decidb/solver"><code>src/decidb/solver/</code></a></td><td>The solve facade, the backend registry, statuses, time
           limits</td><td>07</td></tr>
-        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/src/decidb/gurobi"><code>src/decidb/gurobi/</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/src/decidb/naive"><code>src/decidb/naive/</code></a></td><td>The Gurobi backend (loaded at run
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/src/decidb/gurobi"><code>src/decidb/gurobi/</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/src/decidb/naive"><code>src/decidb/naive/</code></a></td><td>The Gurobi backend (loaded at run
           time) and the HiGHS backend (built in)</td><td>07</td></tr>
-        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/third_party/highs"><code>third_party/highs/</code></a></td><td>The vendored HiGHS solver</td><td>07</td></tr>
-        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/src/decidb/diagnostics"><code>src/decidb/diagnostics/</code></a></td><td>The DIAGNOSE router, engines and report</td>
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/third_party/highs"><code>third_party/highs/</code></a></td><td>The vendored HiGHS solver</td><td>07</td></tr>
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/src/decidb/diagnostics"><code>src/decidb/diagnostics/</code></a></td><td>The DIAGNOSE router, engines and report</td>
           <td>after 07</td></tr>
-        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/src/execution/operator/decide"><code>src/execution/operator/decide/</code></a></td><td><code>PhysicalDecide</code> and the DIAGNOSE
-          operator</td><td>08</td></tr>
-        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/decide"><code>test/decide/</code></a></td><td>The Python suite, its oracles and the golden model dumps</td>
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/src/execution/operator/decide"><code>src/execution/operator/decide/</code></a></td><td><code>PhysicalDecide</code>, the DIAGNOSE operator,
+          and the evaluation of the clause tree over the buffered rows</td><td>08</td></tr>
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/test/decide"><code>test/decide/</code></a></td><td>The Python suite, its oracles and the golden model dumps</td>
           <td>all</td></tr>
-        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/common"><code>test/common/test_decidb_*.cpp</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/decidb"><code>test/decidb/</code></a></td><td>C++ unit tests and SQL
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/test/common"><code>test/common/test_decidb_*.cpp</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/test/decidb"><code>test/decidb/</code></a></td><td>C++ unit tests and SQL
           logic tests</td><td>all</td></tr>
-        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/benchmark/decide"><code>benchmark/decide/</code></a></td><td>Benchmarks and their results</td><td>all</td></tr>
-        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/context/docs"><code>context/docs/</code></a></td><td>The internal documentation these pages draw on</td><td>all</td></tr>
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/benchmark/decide"><code>benchmark/decide/</code></a></td><td>Benchmarks and their results</td><td>all</td></tr>
+        <tr><td><a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/context/docs"><code>context/docs/</code></a></td><td>The internal documentation these pages draw on</td><td>all</td></tr>
       </tbody>
     </table></div>
-    <p>One header serves every stage: <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/common/enums/decide.hpp"><code>src/include/duckdb/common/enums/decide.hpp</code></a> holds the scope kinds,
-      the senses, and every tag the stages use to mark bound expressions.</p>
+    <p>One header serves every stage: <a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/include/duckdb/common/enums/decide.hpp"><code>src/include/duckdb/common/enums/decide.hpp</code></a> holds the enums the
+      stages share, such as the scope kinds, the senses, the decision types and the reducer kinds, and the name
+      prefixes of auxiliary variables.</p>
     <div class="src"><strong>In the source</strong><ul>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/context/docs/pipeline/code_structure.md"><code>context/docs/pipeline/code_structure.md</code></a>: the file-by-file map, with each file's stage</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/context/docs/README.md"><code>context/docs/README.md</code></a>: the map of the internal docs</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/context/docs/pipeline/code_structure.md"><code>context/docs/pipeline/code_structure.md</code></a>: the file-by-file map, with each file's stage</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/context/docs/README.md"><code>context/docs/README.md</code></a>: the map of the internal docs</li>
     </ul></div>
   </section>
 
@@ -422,8 +438,9 @@
       <dd>A decision with one value per class of a key, <code><span class="tk-d">per</span> K: x(TYPE)</code>, shared by every row of the class.
         <code><span class="tk-d">per</span> (): x(TYPE)</code> is one value for the whole query.</dd>
       <dt>reducer</dt>
-      <dd>An aggregate (<code>SUM</code>, <code>AVG</code>, <code>MIN</code>, <code>MAX</code>, <code>COUNT</code>) over
-        decisions. DeciDB's own word for it, so it is never confused with a SQL aggregate over data.</dd>
+      <dd>An aggregate (<code>SUM</code>, <code>AVG</code>, <code>MIN</code>, <code>MAX</code>) over decisions.
+        DeciDB's own word for it, so it is never confused with a SQL aggregate over data. <code>COUNT</code> reads data
+        only.</dd>
       <dt>scope</dt>
       <dd>The <code><span class="tk-d">when</span></code>, <code><span class="tk-d">per</span></code> and <code><span class="tk-d">by</span></code> that decide which rows a clause reads and how many
         copies of it the query generates.</dd>
@@ -456,6 +473,10 @@
       <dd>The plan operator that carries a DECIDE clause through planning and optimization.</dd>
       <dt><code>PhysicalDecide</code></dt>
       <dd>The operator that executes it: buffer, evaluate, build, solve, read back.</dd>
+      <dt>clause tree</dt>
+      <dd>The tree <code>PhysicalDecide</code> evaluates, built with the physical plan. Its nodes are the clauses'
+        scopes, reducers, frames and helper functions. One pass reads the rows into it from the top, then each node is
+        computed from its children.</dd>
       <dt>pipeline breaker</dt>
       <dd>An operator that reads all of its input before it emits a row, as a sort or a hash aggregate does.</dd>
       <dt><code>SolverInput</code>, <code>SolverModel</code></dt>
@@ -467,9 +488,10 @@
       <dt>query rewriting</dt>
       <dd>Replacing a DECIDE node by a plan of DuckDB operators that computes the optimum, when a rule proves that it
         does. The engine's name for it is direct solve.</dd>
-      <dt>IR</dt>
-      <dd>Intermediate representation: the neutral form of a DECIDE node that the rewrite rules read, as a compiler's
-        passes read an IR instead of the source.</dd>
+      <dt>reader</dt>
+      <dd>A shared function a rewrite rule calls to read part of the DECIDE node, such as a clause's left side as a sum
+        of parts. It returns false for anything it cannot read exactly, and the rule then declines. Rules read the
+        operator itself, as DuckDB's optimizer rules read the operator they match.</dd>
       <dt>rule, applicability condition</dt>
       <dd>A rewrite rule in the Volcano and Cascades sense: a condition it checks, then the plan it substitutes. Here
         the condition includes a proof that the plan is optimal.</dd>
@@ -516,10 +538,10 @@
       </tbody>
     </table></div>
     <p>The repository's internal documentation goes further than these pages. Each stage has a <code>done.md</code>
-      under <a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/context/docs/pipeline"><code>context/docs/pipeline/</code></a> that describes it in full.</p>
+      under <a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/context/docs/pipeline"><code>context/docs/pipeline/</code></a> that describes it in full.</p>
   </section>
 
-<nav class="pager" aria-label="Documentation"><a class="pager__next" href="life-of-a-query.html"><small>Next</small>Life of a query</a></nav></article>
+<nav class="pager" aria-label="How it works pages"><a class="pager__next" href="life-of-a-query.html"><small>Next</small>Life of a query</a></nav></article>
 
 </div></div>
 </main>
@@ -538,7 +560,7 @@
           <a class="nav__logo" href="../index.html"><img src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
           <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
-        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Get started</a></li><li><a href="../demo.html">Live demo</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../docs/index.html">Documentation</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Install</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li><li><a href="../demo.html">Live demo</a></li><li><a href="../docs/index.html">How it works</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="../examples/knapsack.html">Knapsack</a></li><li><a href="../examples/facility-location.html">Depots</a></li><li><a href="../examples/fair-allocation.html">Fair allocation</a></li><li><a href="../examples/diagnose.html">DIAGNOSE</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Project</h3><ul><li><a href="../about.html">About</a></li><li><a href="../about.html#research">Papers</a></li><li><a href="https://github.com/huda-lab/decidb">GitHub</a></li><li><a href="https://huda-lab.github.io/">HUDA Lab</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Contact</h3><ul><li><a href="mailto:support@decidb.com">Email the team</a></li><li><a href="https://github.com/huda-lab/decidb/issues">Report an issue</a></li></ul></div>

@@ -1,5 +1,5 @@
 <!--meta
-title: Performance: DeciDB documentation
+title: Performance: how DeciDB works
 description: How DeciDB is benchmarked, on which machine and data, where a DECIDE query spends its time, what query rewriting saves, and which questions are open.
 h1: Performance
 lede: The benchmarks that measure DeciDB, the machine and data behind each number, and what they show about where a DECIDE query spends its time.
@@ -40,6 +40,9 @@ lede: The benchmarks that measure DeciDB, the machine and data behind each numbe
           example query on each backend?</td><td><code>python3 benchmark/decide/diagnose_examples/run.py</code></td></tr>
         <tr><td>Archived profilers</td><td>One question about one rewrite rule each, such as result delivery through
           the C++ API</td><td><code>benchmark/decide/direct_solve/archive/</code>, each with <code>-h</code></td></tr>
+        <tr><td>Scope-language scaling</td><td>Does DeciDB's own time, the optimizer and the model construction, grow
+          linearly with the rows on reducers inside reducers, variants and frame selectors?</td>
+          <td><code>python3 benchmark/decide/anr_scaling.py</code></td></tr>
         <tr><td>Scale tests</td><td>Does DECIDE still match an independent solver on a few hundred to a few thousand
           rows?</td><td><code>./test/decide/run_tests.sh -m large_scale</code></td></tr>
       </tbody>
@@ -68,8 +71,9 @@ lede: The benchmarks that measure DeciDB, the machine and data behind each numbe
         read-only, under <code>/usr/bin/time</code>. Wall time therefore includes process start, opening the database
         and printing the result. The runner keeps every run and reports the median wall time, its standard deviation
         and the median peak memory.</li>
-      <li><strong>Stage timers.</strong> With <code>DECIDB_BENCH=1</code> the engine prints
-        <code>optimizer_ms</code>, <code>model_construction_ms</code>, <code>solver_ms</code> and the model's size:
+      <li><strong>Stage timers.</strong> <code>make decide-bench</code> sets <code>DECIDB_PROFILE=1</code>, and the
+        engine prints its timing spans and counters (the profiler below reads the same lines). The runner turns them
+        into <code>optimizer_ms</code>, <code>model_construction_ms</code>, <code>solver_ms</code> and the model's size:
         variables, clauses handed to the builder (<code>total_constraint_specs</code>) and matrix rows
         (<code>total_constraint_rows</code>). A clause with <code>per</code> becomes one row per class, so the two
         counts are different units and are never added.</li>
@@ -86,7 +90,7 @@ lede: The benchmarks that measure DeciDB, the machine and data behind each numbe
       a bounded LP (P1), a separable convex QP (P2), the same QP with one budget that couples every decision (P3),
       and a Boolean problem with one row per <code>l_orderkey</code> (P4).</p>
     <p>The run sets <code>DECIDB_PROFILE=1</code>, and the engine prints one JSON line per span: a named, nested
-      interval of work such as <code>execution.evaluate_constraints</code>. Markers around the measured statement keep
+      interval of work such as <code>execution.tree_descent</code>. Markers around the measured statement keep
       setup out. The query runs as <code>CREATE TEMP TABLE result AS ...</code>, which produces every output row
       without formatting millions of them for a terminal. The script sums the spans into one column per stage:</p>
     <div class="table-wrap"><table>
@@ -97,7 +101,8 @@ lede: The benchmarks that measure DeciDB, the machine and data behind each numbe
         <tr><td><code>rewrite_ms</code></td><td>the DECIDE optimizer: the choice between a rewrite rule and a solver,
           and the formulation passes</td></tr>
         <tr><td><code>input_ms</code></td><td>collecting the input rows</td></tr>
-        <tr><td><code>extraction_ms</code></td><td>evaluating the clauses into coefficients, and formulating</td></tr>
+        <tr><td><code>extraction_ms</code></td><td>routing the rows through the plan's tree, evaluating the clauses into
+          coefficients, and formulating</td></tr>
         <tr><td><code>model_build_ms</code></td><td>building the solver-neutral model</td></tr>
         <tr><td><code>backend_load_ms</code></td><td>handing the model to Gurobi or HiGHS</td></tr>
         <tr><td><code>solve_ms</code></td><td>the solver's own call</td></tr>
@@ -137,9 +142,11 @@ lede: The benchmarks that measure DeciDB, the machine and data behind each numbe
     </ul>
 
     <h3 id="machine"><a class="anchor" href="#machine">Machine and scale</a></h3>
-    <p>The direct-solve measurements name their machine: an 11-core Apple M3 Pro, where Gurobi uses 32 threads by
-      default. The pipeline profiler's numbers all come from one machine with 18 GiB of memory. Load, the 1-minute
-      load average, is reported beside each measurement, because other work often ran beside it.</p>
+    <p>Each set of numbers names its machine. The pipeline profiler's numbers all come from one machine with 18 GiB of
+      memory. The per-rule direct-solve numbers come from an 11-core Apple M3 Pro. The one direct-solve sweep in the
+      repository ran on a server with an 80-core Intel Xeon Gold 6230 and 376 GiB of memory, where the rewritten plans
+      used DuckDB's default of 160 threads and Gurobi its own default, up to 32. Load, the 1-minute load average, is
+      reported beside each measurement, because other work often ran beside it.</p>
     <div class="table-wrap"><table>
       <thead><tr><th>Benchmark</th><th>Data</th><th>Repeats</th></tr></thead>
       <tbody>
@@ -148,7 +155,8 @@ lede: The benchmarks that measure DeciDB, the machine and data behind each numbe
         <tr><td>Pipeline profiler</td><td><code>large.db</code>: 1,000,000 <code>lineitem</code> rows</td><td>3 per
           query and backend, median</td></tr>
         <tr><td>Direct-solve benchmark</td><td><code>partsupp</code> at 100,000 to 800,000 rows (scale 0.125 to 1) in
-          the published runs</td><td>3 per mode and size, median</td></tr>
+          the per-rule runs; 100,000 to 204,800,000 rows (scale 0.125 to 256) in the sweep in the repository</td><td>3
+          per mode and size, median</td></tr>
         <tr><td>Scale tests</td><td>about 500 and about 2,200 rows, checked against the oracle solver</td><td>with the
           test suite</td></tr>
       </tbody>
@@ -162,8 +170,11 @@ lede: The benchmarks that measure DeciDB, the machine and data behind each numbe
       <li><code>benchmark/decide/direct_solve/run.py</code>, <code>direct_solve/queries/</code>,
         <code>direct_solve/hand/</code>: the direct-solve benchmark and its hand-written plans</li>
       <li><code>src/include/duckdb/common/decide_profile.hpp</code>: <code>DecideProfileScope</code>, the spans;
-        <code>src/execution/operator/decide/physical_decide.cpp</code> and
-        <code>src/optimizer/decide/decide_optimizer.cpp</code>: the <code>DECIDB_BENCH</code> lines</li>
+        <code>src/optimizer/decide/decide_optimizer.cpp</code> and
+        <code>src/execution/operator/decide/physical_decide.cpp</code>: the <code>optimizer.decide</code>,
+        <code>execution.*</code> and <code>model.*</code> spans and counters the stage timers read;
+        <code>run_benchmarks.py</code>: <code>parse_stage_output</code></li>
+      <li><code>benchmark/decide/anr_scaling.py</code>: the scope-language scaling benchmark</li>
       <li><code>test/decide/tests/test_pipeline_profile.py</code>: span summing, stage columns and the objective
         check; <code>test_direct_comparators.py</code>; <code>test_large_scale.py</code>: the scale tests</li>
     </ul></div>
@@ -178,6 +189,10 @@ lede: The benchmarks that measure DeciDB, the machine and data behind each numbe
       October 2026, one query at a time with a 3-second solver limit, as the median of three interleaved runs.
       Instrumentation is not a factor: the same statements with and without profiling differ by -1.3% to +2.6%, with
       no consistent sign, inside run-to-run noise, and peak memory is unchanged.</p>
+    <p><strong>Which engine.</strong> Every number on this page was measured before DeciDB 1.0. Since then, 1.0 has replaced the step that evaluates clauses: one pass over the buffered rows
+      routes them through the plan's tree, and each node then evaluates its clauses into coefficients. No number here
+      has been measured again on 1.0, and the repository holds no newer pipeline measurements, so read the figures
+      below as the older engine's.</p>
 
     <h3 id="fixed-costs"><a class="anchor" href="#fixed-costs">Fixed costs</a></h3>
     <p>Each process and each statement pays a few costs before any data is read. Measured in fresh processes at a load
@@ -207,9 +222,9 @@ lede: The benchmarks that measure DeciDB, the machine and data behind each numbe
     <p>Follow a query through the solver path. The medians below are Gurobi's, on <code>large.db</code>, from builds of
       30 October 2026.</p>
     <ol class="steps">
-      <li><strong>Extraction</strong> turns clauses into coefficients. Its cost follows grouping: on P4, whose
-        <code>per l_orderkey</code> clause has 250,000 classes, 114 of its 121 ms of constraint evaluation go to the
-        <code>when</code>, <code>per</code> and <code>by</code> grouping (load 2.2 to 3.0).</li>
+      <li><strong>Extraction</strong> turns clauses into coefficients. This is the step 1.0 rewrote, and the older
+        engine's figures for it are not kept: they were read from spans the 1.0 engine no longer emits. Its cost on
+        1.0 is not yet measured.</li>
       <li><strong>Formulation</strong> lowers constructs such as <code>ABS</code> and <code>MIN</code>/<code>MAX</code>
         into rows. By cost: <code>ABS</code>, then composed <code>MIN</code>/<code>MAX</code>, then products of
         decisions, then <code>&lt;&gt;</code>, then a <code>MIN</code>/<code>MAX</code> objective. Q10, the heaviest
@@ -243,31 +258,26 @@ lede: The benchmarks that measure DeciDB, the machine and data behind each numbe
 
     <h3 id="design"><a class="anchor" href="#design">Designs measured against an alternative</a></h3>
     <p>Several choices in the pipeline are standard database techniques. Each one below is measured against the plain
-      alternative on the same query and machine. These ran with a 3-second solver limit, often beside other work, at
-      loads from 2.5 to 18, where single spans can swing up to 3 times, so read them as large effects, not small
-      ones.</p>
+      alternative on the same query and machine, on the older engine from 30 October 2026. These ran with a 3-second
+      solver limit, often beside other work, at loads from 2.5 to 18, where single spans can swing up to 3 times, so
+      read them as large effects, not small ones. Each figure gives the alternative first, then the design.</p>
     <div class="table-wrap"><table>
-      <thead><tr><th>Design</th><th>Against</th><th>Measured</th></tr></thead>
+      <thead><tr><th>Design</th><th>Against</th><th>Measured: the alternative against the design</th></tr></thead>
       <tbody>
-        <tr><td>Group ids from DuckDB's aggregate hash table; a label formatted only for a group a message names</td>
-          <td>comparing each row with its group's stored value; a label for every group</td><td>Q8 keyed mapping 1,169
-          ms against 257 ms; peak 1,172 MiB against about 860 MiB</td></tr>
-        <tr><td>A group keeps its first row and reads its key values from it when printed (late materialization)</td>
-          <td>one stored value per group per key column (250,000 groups × 9 columns on Q8)</td><td>Q8 keyed mapping
-          264 ms against 167 ms; peak 834 MiB against 526 MiB</td></tr>
-        <tr><td>Composed <code>MIN</code>/<code>MAX</code> coefficients read a chunk at a time, like every other
-          clause</td><td>one value at a time, with a cast per value</td><td>Q4, 489 ms against 21 ms</td></tr>
+        <tr><td>A <code>MIN</code>/<code>MAX</code> helper's member coefficients read a chunk at a time, like every
+          other clause</td><td>one value at a time, with a cast per value</td><td>Q4, 489 ms against 21 ms</td></tr>
         <tr><td>Row buffers that grow geometrically</td><td>reserving exactly the needed size at each flush, which
           copies the whole buffer each time</td><td>a 1,000,000-row join with a <code>per l_orderkey</code> clause,
           6.2 s against 0.98 s</td></tr>
-        <tr><td>A determination check as a grouped aggregate on its own read of the source</td><td>three window
-          operators over the DECIDE source, each holding every row and column</td><td>the same join, passing: 0.98 s
-          and 1,543 MiB against 0.56 s and 817 MiB</td></tr>
         <tr><td>Rows packed once into HiGHS's compressed row matrix and moved into the solver</td><td>packing through
           intermediate copies of the matrix</td><td>Q10 load 1,164 ms against 699 ms; memory added during load 1,816
           MiB against 1,026 MiB</td></tr>
       </tbody>
     </table></div>
+    <p>Two more designs are kept in 1.0 but no longer carry a figure, because the older engine's step they were
+      measured on is gone: group ids come from DuckDB's aggregate hash table, with a label formatted only for a group
+      a message names; and a group keeps its first row and reads its key values from it when printed (late
+      materialization), rather than storing one value per group per key column.</p>
     <p>One idea measured to save nothing: folding constant subexpressions in a rewritten plan. DuckDB evaluates a
       constant subtree once per chunk of rows, not once per row, so on 1,000,000 <code>lineitem</code> rows (medians of
       9) the A1 plan took 0.119 s without the fold and 0.118 s with it, and S1 0.044 s both ways. What does cost per
@@ -278,9 +288,11 @@ lede: The benchmarks that measure DeciDB, the machine and data behind each numbe
     <p>A rewritten query builds no model, so it pays for none of the stages above: no extraction into a matrix, no
       formulation, no load, no solve. On P1, a bounded LP over 1,000,000 rows of <code>large.db</code>, the default
       configuration answers by rewriting in 113 to 119 ms, against 315 to 340 ms with Gurobi forced and 246 to 256 ms
-      with HiGHS forced (one process running the statement three times, load 2.2 to 2.6).</p>
-    <p>The direct-solve benchmark measures each rule against Gurobi. On the 11-core Apple M3 Pro, 9 to 12 November
-      2026, at 800,000 <code>partsupp</code> rows, median of 3 fresh processes, with every objective agreeing:</p>
+      with HiGHS forced (one process running the statement three times, load 2.2 to 2.6, builds of 30 October
+      2026).</p>
+    <p>The direct-solve benchmark measures each rule against Gurobi. Each rule's own notes record a run on the 11-core
+      Apple M3 Pro, 9 to 12 November 2026, on the older engine. At 800,000 <code>partsupp</code> rows, median of 3
+      fresh processes, with every objective agreeing:</p>
     <div class="table-wrap"><table>
       <thead><tr><th>Rule</th><th>Query</th><th>Rewritten</th><th>Gurobi</th><th>Speedup</th><th>Peak memory,
         rewritten / Gurobi</th></tr></thead>
@@ -302,11 +314,16 @@ lede: The benchmarks that measure DeciDB, the machine and data behind each numbe
       </tbody>
     </table></div>
     <p>The solver's time grows with the rows, while the rewritten plan stays close to the cost of starting a process
-      and opening the database, about 20 ms, which these times include. Across the published sweeps every rewritten
-      query is ahead of Gurobi at every size measured; at 800,000 rows the speedups run from 3.0x to 313x. Two more
-      rules use other data: <a href="rewrite-rules.html#o1">O1</a>, pairing 1,600 suppliers with 1,600 (2,560,000
-      pairs), takes 0.057 s against Gurobi's 11.732 s, 206x; <a href="rewrite-rules.html#s2">S2</a>, over 150,000
-      <code>customer</code> rows, 0.052 s against 0.425 s, 8.2x.</p>
+      and opening the database, about 20 ms, which these times include. At 800,000 rows the speedups run from 3.0x to
+      313x. Two more rules use other data: <a href="rewrite-rules.html#o1">O1</a>, pairing 1,600 suppliers with 1,600
+      (2,560,000 pairs), takes 0.057 s against Gurobi's 11.732 s, 206x; <a href="rewrite-rules.html#s2">S2</a>, over
+      150,000 <code>customer</code> rows, 0.052 s against 0.425 s, 8.2x.</p>
+    <p>The one sweep kept in the repository, in <code>benchmark/decide/results/direct_solve/</code>, goes much
+      larger. It ran on 2 November 2026, also on the older engine, on the Xeon server: five queries (A1, S1 and R1,
+      each also with one global bound) at sizes that double from 100,000 to 204,800,000 <code>partsupp</code> rows,
+      with every objective agreeing. At 204,800,000 rows the rewritten plans ran about 7 to 277 times as fast as
+      Gurobi, in 2.6 to 163 times less memory: A1 took 0.95 s against 264 s. Rewriting is not always ahead. At 100,000
+      rows, R1 ran at 0.9x, a little slower than Gurobi, the one cell of the sweep where it lost.</p>
     <p>Against a plan written by hand in SQL for the same answer, the plans of A1, A2, N1, O1, R1, S1, S2 and S3 use
       from 0.96 to 2.87 times the hand plan's summed operator CPU, on the same machine at scale 1 (O1 at 3,200
       suppliers a side, S2 at scales 1 and 2). The extra is the work a general rule owes: checks over every row or
@@ -315,16 +332,12 @@ lede: The benchmarks that measure DeciDB, the machine and data behind each numbe
 
     <h3 id="open"><a class="anchor" href="#open">Open questions</a></h3>
     <ul>
-      <li><strong>A second machine.</strong> Every number here comes from one machine. The sweep needs repeating on
-        another host before any number is read as general.</li>
-      <li><strong>Solver behavior at scale.</strong> Scale ladders and repetitions on both backends, with solver logs
-        for the slow cases, are not run. A timeout is never read as infeasibility, and small-model behavior is never
-        extrapolated.</li>
-      <li><strong>Where memory stops fitting.</strong> The <code>large.db</code> sweep of 30 October 2026 (90 runs: 63
-        finished, 18 at the solver's limit, 3 past the process limit, 6 refused by a backend) records peak memory
-        beside model size, but which stage holds the memory as models grow is not yet analyzed.</li>
-      <li><strong>Direct solve at large scale.</strong> The benchmark runs up to scale 512 (409.6 million rows), but
-        the published results stop at 800,000 <code>partsupp</code> rows (scale 1).</li>
+      <li><strong>The 1.0 engine.</strong> Every number here predates DeciDB 1.0. The pipeline profiler, the TPC-H
+        suite and the direct-solve benchmark all run on 1.0, but the repository holds no 1.0 measurement from any of
+        them.</li>
+      <li><strong>One machine per benchmark.</strong> The pipeline profiler's numbers come from one machine, and the
+        per-rule direct-solve numbers from another. None has been repeated on a second host, so no number should be
+        read as general.</li>
       <li><strong>Q9's prefix.</strong> Q9 solves near-linearly (120,000 rows in 2.8 s of solver time, measured 18
         August 2026), so the 15,000-row prefix it runs at on <code>large.db</code> is smaller than it needs to be. Its
         tier is not yet re-chosen.</li>
@@ -333,11 +346,14 @@ lede: The benchmarks that measure DeciDB, the machine and data behind each numbe
         bound decides the relaxation (many groups, an objective on the helper) is not measured.</li>
     </ul>
     <div class="src"><strong>In the source</strong><ul>
-      <li><code>benchmark/decide/results/pipeline_profile_large.csv</code> and
-        <code>pipeline_profile_raw_large/</code>: the profiler's results and raw spans, kept locally (not in the
-        repository)</li>
-      <li><code>benchmark/decide/results/direct_solve/</code>: each direct-solve sweep's CSV and a manifest with the
-        commit, binary, versions, thread count and machine</li>
+      <li><code>benchmark/decide/results/</code>: where every benchmark writes. Git ignores it, so the profiler's
+        <code>large.db</code> sweep (<code>pipeline_profile_large.csv</code>, with raw spans beside it) is kept on the
+        machine that ran it, not in the repository</li>
+      <li><code>benchmark/decide/results/direct_solve/</code>: the one sweep kept in the repository, of 2 November
+        2026: its CSV, a manifest with the commit, binary, versions, thread count and machine, and a README with its
+        caveats</li>
+      <li><code>context/docs/performance/findings.md</code>: the profiler's findings; each rule's
+        <code>done.md</code> under <code>context/docs/direct_solve/rules/</code>: its own measurements</li>
       <li><code>src/decidb/solver/ilp_solver.cpp</code>: <code>SolveModel</code>, whose spans separate the neutral
         build, the backend session and cleanup</li>
       <li><code>src/optimizer/decide/decide_answer_choice.cpp</code>: where a query takes a rewrite rule or the solver

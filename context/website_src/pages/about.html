@@ -9,7 +9,6 @@
         <li><a href="#research">Research</a></li>
         <li><a href="#team">Team</a></li>
         <li><a href="#how">How it is built</a></li>
-        <li><a href="#next">What comes next</a></li>
       </ul>
     </nav>
 
@@ -20,11 +19,12 @@
           decisions at once.</p>
         <p>Package queries asked a database for a <em>set</em> of rows that satisfies constraints over the set: a meal
           plan under a calorie budget, a portfolio within a risk limit. DeciDB generalizes them from choosing rows to
-          deciding values of any type (yes or no, whole quantities, continuous amounts), shared per row, per key or for
-          the whole query, and from linear rules to quadratic and bilinear ones.</p>
-        <p>The DECIDE language follows the language proposal developed with the project: three scope words
-          (<code>per</code>, <code>when</code>, <code>by</code>) that each answer one question about a rule, and a
-          determination rule that keeps every constraint well defined on the data it runs on.</p>
+          deciding numbers (yes or no, whole quantities, continuous amounts), one per row, per key or for the whole
+          query, and from linear rules to quadratic ones, such as a sum of squares or a product of two decisions.</p>
+        <p>Three scope words say which rows a rule covers: <code>when</code> keeps the rows where a condition holds,
+          <code>per</code> writes one copy of the rule for each group, and <code>by</code> says which rows each sum adds
+          up. They come from the DECIDE language proposal, which DeciDB builds in part; the guide lists
+          <a href="guide.html#roadmap">what is not built yet</a>.</p>
       </section>
 
       <section id="research">
@@ -98,25 +98,13 @@
           <dd>Rules that recognize nine problem classes with an exact relational answer and rewrite the query to
             compute it with relational operators, skipping the solver.</dd>
           <dt>Testing</dt>
-          <dd>More than 7,000 Python cases, each comparing DeciDB's answer with an independent Gurobi model, run with
-            each solver and with query rewriting on and off.</dd>
+          <dd>A Python suite that checks each answer against an independent model solved by Gurobi, and each refusal
+            against its message, run on each solver and with query rewriting on and off.</dd>
           <dt>Distribution</dt>
           <dd>Tagged releases ship command-line binaries for macOS, Linux and Windows, and Python wheels.</dd>
         </dl>
       </section>
 
-      <section id="next">
-        <h2><a class="anchor" href="#next">What comes next</a></h2>
-        <ul>
-          <li><strong>The rest of the language proposal:</strong> nested reducers at any depth, frame selectors for ordered
-            data, <code>if</code> on decisions, declaration bounds and lexicographic objectives
-            (<a href="guide.html#roadmap">details</a>).</li>
-          <li><strong>More query-rewriting classes:</strong> the catalogue lists further classes with exact relational answers,
-            such as discrete resource allocation and transportation on sorted costs.</li>
-          <li><strong>Sketch-Refine:</strong> scale past exact solving to very large inputs with a bounded approximation
-            error.</li>
-        </ul>
-      </section>
     </article>
   </div>
 </div>

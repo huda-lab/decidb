@@ -10,6 +10,7 @@
         <li><a href="#such-that">2. SUCH THAT</a></li>
         <li class="sub"><a href="#when">Some rows: when</a></li>
         <li class="sub"><a href="#per">Each group: per and by</a></li>
+        <li class="sub"><a href="#ordered">Ordered data: at, over</a></li>
         <li><a href="#objective">3. MAXIMIZE, MINIMIZE</a></li>
         <li><a href="#result">The result</a></li>
         <li><a href="#solvers">Solvers</a></li>
@@ -19,7 +20,7 @@
         <li class="sub"><a href="#nulls">NULL values</a></li>
         <li class="sub"><a href="#settings">Settings</a></li>
         <li class="sub"><a href="#migrating">Migrating from 0.2</a></li>
-        <li class="sub"><a href="#roadmap">Not supported yet</a></li>
+        <li class="sub"><a href="#roadmap">Not built yet</a></li>
       </ul>
     </nav>
 
@@ -63,11 +64,13 @@ MAXIMIZE SUM(x * value);<!--/sql-->
 <!--sql title="Syntax"-->SELECT columns
 FROM tables [JOIN ...] [WHERE ...]
 DECIDE [per key:] name(type) [, ...]
-SUCH THAT [when condition] [per key:] constraint [AND ...]
+SUCH THAT [[when condition] [per key]:] constraint [AND ...]
 [MAXIMIZE | MINIMIZE [when condition:] expression]<!--/sql-->
-        <p>Square brackets mark optional parts. <code>SUCH THAT</code> is required; the objective is not.
+        <p>Square brackets mark optional parts. <code>SUCH THAT</code> is required; the objective is not. A
+          <code>when</code> or <code>per</code> in front of a constraint ends with a colon.
           <code>DECIDE</code> may also come between <code>SELECT</code> and <code>FROM</code>, the order the DeciDB
-          paper uses; both orders mean the same.</p>
+          paper uses; both orders mean the same. Inside these clauses <code>when</code>, <code>per</code> and
+          <code>by</code> are keywords, so a column with one of those names is quoted there: <code>x &lt;= "per"</code>.</p>
       </section>
 
       <!-- ============================================================ DECIDE -->
@@ -104,7 +107,7 @@ DECIDE ship(INT), per D: open(BOOL), per (): biggest(INT)
 SUCH THAT ship <= S.demand * open
       AND ship <= biggest
       AND SUM(ship) >= 150
-MINIMIZE SUM(S.unit_cost * ship) + SUM(D: D.opening_cost * open) + 10 * biggest;<!--/sql-->
+MINIMIZE SUM(S.unit_cost * ship) + SUM(per D: D.opening_cost * open) + 10 * biggest;<!--/sql-->
         <p><code>ship</code> differs on every row. <code>open</code> repeats on every shipment of the same depot, because
           it is one decision. <code>biggest</code> is the same on every row: the largest single shipment, which the
           objective keeps small.</p>
@@ -141,6 +144,9 @@ MINIMIZE SUM(S.unit_cost * ship) + SUM(D: D.opening_cost * open) + 10 * biggest;
         </table></div>
         <p>Bounds can come from the data: a column, an expression, or a subquery.</p>
 <!--sql check="items" frag-->SUM(x * weight) <= (SELECT MAX(weight) * 2 FROM Items)<!--/sql-->
+        <p>A bound that differs from row to row, such as <code>SUM(x) &lt;= cap</code>, holds at its tightest: the
+          smallest <code>cap</code> for <code>&lt;=</code>, the largest for <code>&gt;=</code>. With <code>=</code> a bound
+          that differs is refused, since a total cannot equal two numbers.</p>
         <div class="note"><strong>No OR between constraints</strong>
           <p>Every constraint must hold. When an answer may follow one rule or another, that choice is itself a
             decision: add a <code>BOOL</code> that switches between them.</p></div>
@@ -187,13 +193,64 @@ MAXIMIZE SUM(pick * expected_return);<!--/sql-->
 AND per D.depotID: SUM(ship) by (D.depotID) <= D.capacity
 AND ship <= 0.6 * SUM(ship) by (D.depotID)
 AND per D.depotID: SUM(ship) by (D.region) <= D.capacity<!--/sql-->
-        <h3 id="refused">When a group rule is refused</h3>
-        <p>A rule written once per group can only read values that are the same across the group. If it reads one that
-          varies, DeciDB stops before solving and names it:</p>
-<!--sql check="deck" frag expect="does not determine" show-->per D.depotID: ship <= 10    -- ship is one decision per row, and a depot has several<!--/sql-->
-        <p>Put the varying value inside a sum, so the rule reads one total per depot:</p>
-<!--sql check="deck" frag-->per D.depotID: SUM(ship) by (D.depotID) <= 10<!--/sql-->
-        <p>or drop <code>per</code> to write the rule on every row (<code>ship &lt;= 10</code>).</p>
+        <p>Without <code>per</code>, a rule holds on each row, and rows that would give the same rule share one, so a
+          rule on a total is written once. Without <code>by</code>, a sum reads every row. Both defaults can be written
+          out, as the release notes do: <code>per ():</code> for one rule over the whole query, <code>by ()</code> for a
+          sum over every row. This is the first rule above, written in full:</p>
+<!--sql check="deck" frag-->per (): SUM(ship) by () <= 300<!--/sql-->
+        <h3 id="varies"><a class="anchor" href="#varies">When a value differs inside a group</a></h3>
+        <p>A rule written once per group may read a value that is not the same on every row of the group. DeciDB then
+          writes the rule once for each different value. A depot has several shipments, each with its own
+          <code>ship</code>, so this rule is one rule per shipment, the same as <code>ship &lt;= 10</code> on every
+          row:</p>
+<!--sql check="deck" frag-->per D.depotID: ship <= 10<!--/sql-->
+        <p>The North region has two depots, with capacities 100 and 80. Over that region, this rule is written once for
+          each capacity, so the smaller one, 80, is the limit that holds:</p>
+<!--sql check="deck" frag-->per D.region: SUM(ship) by (D.region) <= D.capacity<!--/sql-->
+        <p>To limit each depot's own total instead, sum inside the group:
+          <code>per D.depotID: SUM(ship) by (D.depotID) &lt;= 10</code>.</p>
+
+        <h3 id="nested"><a class="anchor" href="#nested">A reducer inside a reducer</a></h3>
+        <p>A reducer is a function such as <code>SUM</code> or <code>MAX</code> that turns many rows into one value.
+          One may read the results of another, to any depth. This rule takes each depot's largest shipment, then adds
+          those up:</p>
+<!--sql check="deck" frag-->SUM(per D.depotID: MAX(ship) by (D.depotID)) <= 50<!--/sql-->
+        <p>The inner reducer is computed once per group of its <code>by</code>, and the outer one adds one value per
+          depot. <code>SUM</code>, <code>AVG</code>, <code>MIN</code> and <code>MAX</code> nest this way in rules and in
+          the objective.</p>
+
+        <h3 id="ordered"><a class="anchor" href="#ordered">Ordered data: <code>at</code> and <code>over</code></a></h3>
+        <p>Some rules read another row in order, such as last week's stock. <code>at(previous: e) over (week)</code>
+          reads <code>e</code> on the row before, with the rows ordered by <code>week</code>. <code>else 0</code> gives
+          the value to use where there is no row before. Here a plant can make 60 units a week, and stock carries over
+          from one week to the next:</p>
+<!--sql run="weeks" dec="make,stock"-->SELECT week, demand, make, stock
+FROM Weeks
+DECIDE make(INT), stock(INT)
+SUCH THAT make <= capacity
+      AND stock = at(previous else 0: stock) over (week) + make - demand
+MINIMIZE SUM(make * make_cost + 0.25 * stock)
+ORDER BY week;<!--/sql-->
+        <p>Weeks 2 and 4 need more than 60, so the plant makes extra ahead of them and keeps it in stock. It makes the
+          stock for week 4 in week 3, not in the cheaper weeks 1 and 2, because those already run at capacity.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Write</th><th>Reads</th></tr></thead>
+          <tbody>
+            <tr><td><code>at(2 previous: e)</code>, <code>at(next: e)</code></td><td><code>e</code> two rows before, or one row after</td></tr>
+            <tr><td><code>at(first: e)</code>, <code>at(last: e)</code></td><td><code>e</code> on the first or the last row</td></tr>
+            <tr><td><code>SUM(from first to previous: e)</code></td><td>every row from the first to the one before; <code>AVG</code>, <code>MIN</code> and <code>MAX</code> work too, and <code>COUNT</code> over data</td></tr>
+            <tr><td><code>SUM(from first to last every 2: e)</code></td><td>every second row</td></tr>
+            <tr><td><code>SUM(from previous to next all: e)</code></td><td>nothing at all when one of those rows is missing</td></tr>
+            <tr><td><code>over (week desc)</code></td><td>the rows in reverse order</td></tr>
+            <tr><td><code>over (week cyclic)</code></td><td>the rows in a circle: the row before the first is the last</td></tr>
+            <tr><td><code>over (week within product)</code></td><td>each product's rows in their own order</td></tr>
+          </tbody>
+        </table></div>
+        <p>Where the row a frame reads does not exist and there is no <code>else</code>, the frame has no value, and the
+          rule is skipped on that row, as for a NULL. A range reads the rows that exist. Any three weeks in a row, with
+          the last week followed by the first, make at least 150:</p>
+<!--sql check="weeks" frag-->SUM(from previous to next: make) over (week cyclic) >= 150<!--/sql-->
+        <p>One frame reads at most 10,000,000 values; <code>SET decide_frame_limit</code> changes that.</p>
       </section>
 
       <!-- ============================================================ OBJECTIVE -->
@@ -205,17 +262,21 @@ AND per D.depotID: SUM(ship) by (D.region) <= D.capacity<!--/sql-->
 MINIMIZE SUM(S.unit_cost * ship)                 -- the lowest cost
 MAXIMIZE when S.priority: SUM(ship)              -- the most shipped, counting priority rows only<!--/sql-->
         <p>A query has one objective, computed once over all its rows. <code>when</code> in front of it limits the rows
-          it reads.</p>
+          it reads. A value it reads outside a sum must therefore be the same on every row: <code>MAXIMIZE SUM(x) +
+          cap</code> is refused when <code>cap</code> differs between rows.</p>
 
         <h3 id="fixed-costs">Costs counted once</h3>
         <p>Over a join, a depot's opening cost appears on every shipment row of that depot, so
-          <code>SUM(D.opening_cost * open)</code> would count it once per shipment. <code>SUM(D: e)</code> counts it once
+          <code>SUM(D.opening_cost * open)</code> would count it once per shipment. <code>SUM(per D: e)</code> counts it once
           per depot:</p>
 <!--sql run="deck" dec="open,ship"-->SELECT S.shipmentID, D.depotID, open, ship
 FROM Shipment S JOIN Depot D USING (depotID)
 DECIDE per D: open(BOOL), ship(INT)
 SUCH THAT ship <= S.demand * open AND SUM(ship) >= 120
-MINIMIZE SUM(S.unit_cost * ship) + SUM(D: D.opening_cost * open);<!--/sql-->
+MINIMIZE SUM(S.unit_cost * ship) + SUM(per D: D.opening_cost * open);<!--/sql-->
+        <p>Keep <code>e</code> to the depot's own values. If it also reads something that differs between a depot's
+          shipments, such as <code>S.unit_cost</code> or <code>ship</code>, the sum counts one term for each different
+          value, as <a href="#varies">a group rule does</a>.</p>
 
         <h3 id="worst-case">The worst case</h3>
         <p>To balance work, make the largest load as small as possible. <code>max(per M.machine: ...)</code> takes each
@@ -257,18 +318,33 @@ ORDER BY shift, nurse;<!--/sql-->
         <p class="lead">A DECIDE query returns rows like any query, with every decision filled in. You can join it, filter
           it, or use it in a larger query.</p>
         <h3 id="no-answer">When there is no answer</h3>
-        <p>If no choice can satisfy every constraint, the query stops with an error that says what to do next:</p>
-<!--sql check="knapsack" expect="Prefix the query with DIAGNOSE" show status="the solver found no answer"-->SELECT item, x FROM Items
+        <p>If no choice can satisfy every constraint, the query stops with an error that says so:</p>
+<!--sql check="knapsack" expect="the DECIDE query is infeasible" show status="the solver found no answer"-->SELECT item, x FROM Items
 DECIDE x(BOOL)
 SUCH THAT SUM(x * weight) <= 40 AND SUM(x) >= 4
 MAXIMIZE SUM(x * value);<!--/sql-->
         <p>Put <a href="features.html#diagnose"><code>DIAGNOSE</code></a> in front of the query to see which clause to
           change and by how much. A query whose objective could grow forever stops the same way, and
           <code>DIAGNOSE</code> names the decision that needs a limit.</p>
+        <h3 id="warnings">Warnings</h3>
+        <p>Some queries run as written but may not do what you meant. DeciDB answers them and prints a warning on the
+          error stream:</p>
+        <ul>
+          <li>a rule left with nothing to constrain, because the value it reads is missing on every row:
+            <code>DECIDE warning: 'make &lt;= at(5 previous: make) over (week)' constrains nothing: each of its 4
+            instances has no value, so each is skipped.</code></li>
+          <li>an objective that is 0 whatever the decisions, such as a sum whose weights are all zero or NULL, so any
+            answer that follows the rules is the best;</li>
+          <li>a very large or very small number, such as <code>1e10</code>, which can make the answer inaccurate.</li>
+        </ul>
+        <p>A query answered by <a href="features.html#rewriting">query rewriting</a> prints none of them.</p>
         <h3 id="long-solve">A long solve</h3>
-        <p>When a solve reaches its time limit or you press Ctrl-C, DeciDB reports how far it got. At a terminal it
-          offers to keep solving (Enter) or stop with the best answer so far (<code>s</code>). <code>SET decide_mip_gap =
-          1e-4</code> accepts an answer within 0.01% of the best one, which is often much faster.</p>
+        <p>Each solve stops after 300 seconds; the environment variable <code>DECIDB_TIME_LIMIT</code> sets another
+          limit, in seconds. When the limit is reached, DeciDB reports how far the solver got. At a terminal it then offers
+          to keep solving (Enter) or to stop with the best answer so far (<code>s</code>); anywhere else, such as Python or
+          a script, the query stops with an error. Ctrl-C returns the best answer found so far, marked as not proven
+          best, or an error if there is none yet. <code>SET decide_mip_gap = 1e-4</code> accepts an answer within 0.01%
+          of the best one, which is often much faster.</p>
       </section>
 
       <!-- ============================================================ SOLVERS -->
@@ -277,23 +353,30 @@ MAXIMIZE SUM(x * value);<!--/sql-->
         <p class="lead">You never name a solver or a problem type. DeciDB works out the type from your decisions and
           clauses and picks a solver that can take it.</p>
         <p>The bundled HiGHS solver needs no setup. When the Gurobi library and a license are present, DeciDB uses
-          Gurobi instead: it is faster on these models and takes a few that HiGHS cannot.</p>
+          Gurobi instead: it is faster on these models and takes a few that HiGHS cannot
+          (<a href="getting-started.html#install-gurobi">setting up Gurobi</a>).</p>
         <div class="table-wrap"><table>
           <thead><tr><th>Your query has</th><th>Type</th><th>HiGHS</th><th>Gurobi</th></tr></thead>
           <tbody>
             <tr><td><code>REAL</code> decisions, sums and bounds</td><td>LP</td><td class="yes">yes</td><td class="yes">yes</td></tr>
             <tr><td>some <code>INT</code> or <code>BOOL</code> decisions</td><td>ILP, MILP</td><td class="yes">yes</td><td class="yes">yes</td></tr>
             <tr><td>no objective</td><td>feasibility</td><td class="yes">yes</td><td class="yes">yes</td></tr>
-            <tr><td><code>MINIMIZE</code> a sum of squares, <code>REAL</code> decisions</td><td>convex QP</td><td class="yes">usually</td><td class="yes">yes</td></tr>
+            <tr><td><code>MINIMIZE</code> a sum of squares, <code>REAL</code> decisions</td><td>convex QP</td><td class="yes">when each square reads one decision and has a fixed weight</td><td class="yes">yes</td></tr>
             <tr><td>a sum of squares with <code>INT</code> or <code>BOOL</code> decisions</td><td>MIQP</td><td class="no">no</td><td class="yes">yes</td></tr>
             <tr><td><code>MAXIMIZE</code> a sum of squares, or a product <code>x * y</code> of two decisions</td><td>non-convex QP</td><td class="no">no</td><td class="yes">yes</td></tr>
             <tr><td>a square or a product inside <code>SUCH THAT</code></td><td>QCQP</td><td class="no">no</td><td class="yes">yes</td></tr>
           </tbody>
         </table></div>
-        <p>A product with one <code>BOOL</code> factor (<code>b * x</code>) is exact on both solvers. A query the available
-          solver cannot take is refused before any row is read, with a message that names the solver it needs. Some
-          queries need no solver at all: see <a href="features.html#rewriting">query rewriting</a>. How DeciDB builds the
-          model and hands it to each solver is in the <a href="docs/solving.html">documentation</a>.</p>
+        <p>A product with one <code>BOOL</code> factor (<code>b * x</code>) is exact on both solvers when <code>x</code>
+          has a finite upper bound. On HiGHS, three more forms need a finite bound on the decisions they read, written in
+          <code>SUCH THAT</code> or implied by other constraints: an <code>ABS</code> held from below
+          (<code>abs(x - 5) &gt;= 2</code>), a <code>&lt;&gt;</code> whose value lies inside the range, and a
+          <code>MIN</code> or <code>MAX</code> pushed the hard way (<code>MAX(x) &gt;= 3</code>, <code>MINIMIZE
+          MIN(x)</code>). The message names the decision that needs the bound.</p>
+        <p>A query the installed solver cannot take is refused before any row is read, with a message that ends "is not
+          supported on this installation". Some queries need no solver at all: see
+          <a href="features.html#rewriting">query rewriting</a>. How DeciDB builds the model and hands it to each solver
+          is in <a href="docs/solving.html">How it works</a>.</p>
       </section>
 
       <!-- ============================================================ EXPLAIN -->
@@ -308,10 +391,14 @@ SUCH THAT ship <= S.demand
       AND per D.depotID: SUM(ship) by (D.region) <= D.capacity
       AND abs(SUM(ship) by (D.region) - 40) <= 30
 MAXIMIZE SUM(ship);<!--/explain-->
-        <p>A line marked <code>↳</code> shows what DeciDB added to model a clause, such as a helper value for
-          <code>abs</code>. A query answered by <a href="features.html#rewriting">query rewriting</a> names the rule
-          instead. <code>EXPLAIN ANALYZE</code> and <code>EXPLAIN (FORMAT JSON)</code> work too. The
-          <a href="docs/life-of-a-query.html">documentation</a> follows one query through every step DeciDB takes.</p>
+        <p>A line marked <code>≡</code> shows a clause in the form DeciDB solves, when that differs from what you
+          wrote: <code>5 &gt;= x</code> becomes <code>x &lt;= 5</code>. A line marked <code>↳</code> shows what DeciDB
+          added to model a clause, such as a helper value for <code>abs</code>. A query answered by
+          <a href="features.html#rewriting">query rewriting</a> names the rule instead. <code>EXPLAIN ANALYZE</code> also
+          solves the query, and adds under a clause how many constraints its <code>per</code> wrote
+          (<code>↳ per g: 3 constraints</code>) and how many rows it skipped for a missing value.
+          <code>EXPLAIN (FORMAT JSON)</code> works too.
+          <a href="docs/life-of-a-query.html">Life of a query</a>, in How it works, follows one query through every step DeciDB takes.</p>
       </section>
 
       <!-- ============================================================ REFERENCE -->
@@ -328,13 +415,19 @@ MAXIMIZE SUM(ship);<!--/explain-->
             <tr><td><code>MIN(e)</code>, <code>MAX(e)</code></td><td>the smallest or largest value</td></tr>
             <tr><td><code>norm(e, p)</code></td><td>a distance: <code>1</code>, <code>2</code>, <code>'inf'</code> or <code>0</code> (see <a href="#distances">distances</a>)</td></tr>
             <tr><td><code>count(*)</code></td><td>the number of rows; count chosen rows with <code>SUM(x)</code></td></tr>
-            <tr><td><code>SUM(D: e)</code></td><td>one term per row of table <code>D</code>, not per joined row (see <a href="#fixed-costs">costs counted once</a>)</td></tr>
+            <tr><td><code>SUM(per D: e)</code></td><td>one term per row of table <code>D</code>, not per joined row (see <a href="#fixed-costs">costs counted once</a>)</td></tr>
+            <tr><td><code>SUM(per g: MAX(e) by (g))</code></td><td>a reducer over another reducer's results (see <a href="#nested">a reducer inside a reducer</a>)</td></tr>
+            <tr><td><code>at(previous else 0: e) over (t)</code></td><td><code>e</code> on the row before, in the order of <code>t</code> (see <a href="#ordered">ordered data</a>)</td></tr>
           </tbody>
         </table></div>
-        <p>Every reducer takes <code>by (...)</code> after it and <code>when</code> inside it, and a number may scale it
-          (<code>2 * SUM(x)</code>). Inside a reducer, a decision may be multiplied by data, squared
-          (<code>POWER(e, 2)</code>) or wrapped in <code>ABS</code>; a division by a decision or a cast of one is refused,
-          with a message quoting the clause.</p>
+        <p><code>SUM</code>, <code>AVG</code>, <code>MIN</code> and <code>MAX</code> take <code>by (...)</code> after
+          them and <code>when</code> or <code>per</code> inside; <code>norm</code> and <code>count(*)</code> take only
+          <code>by</code>. A number may scale a reducer (<code>2 * SUM(x)</code>), and so may a <code>BOOL</code>
+          decision (<code>b * SUM(x)</code>); an <code>INT</code> or <code>REAL</code> one may not, so write
+          <code>SUM(s * x)</code>. Inside a reducer, a decision may be multiplied by data or by one other decision,
+          squared (<code>POWER(e, 2)</code>) or wrapped in <code>ABS</code>. Anything else over a decision is refused:
+          another function such as <code>sqrt</code>, <code>CASE</code> or <code>COALESCE</code>, a term of degree 3 or
+          more, a division by a decision, and a cast of one.</p>
 <!--sql check="items" frag-->AVG(x * value) >= 20 AND SUM(x * weight) <= 2 * count(*) * 5<!--/sql-->
 
         <h3 id="nulls"><a class="anchor" href="#nulls">NULL values</a></h3>
@@ -349,25 +442,32 @@ MAXIMIZE SUM(ship);<!--/explain-->
             <tr><td>in an objective term</td><td>the term is left out</td></tr>
           </tbody>
         </table></div>
-        <p>To treat NULL as a value instead, say so: <code>SUM(x * COALESCE(w, 0))</code>.</p>
+        <p>To treat NULL as a value instead, say so: <code>SUM(x * COALESCE(w, 0))</code>. A NaN, or an infinite value
+          that multiplies a decision, is an error rather than a skipped row.</p>
 
         <h3 id="settings"><a class="anchor" href="#settings">Settings</a></h3>
         <div class="table-wrap"><table>
           <thead><tr><th>Setting</th><th>Default</th><th>Effect</th></tr></thead>
           <tbody>
-            <tr><td><code>decide_direct_solve</code></td><td><code>auto</code></td><td><a href="features.html#control">query rewriting</a>: <code>auto</code>, <code>off</code> or <code>require</code></td></tr>
-            <tr><td><code>decide_mip_gap</code></td><td><code>0</code></td><td>accept an answer within this relative gap of the best one</td></tr>
-            <tr><td><code>decide_l0_tolerance</code></td><td><code>1e-4</code></td><td>the size at which <code>norm(e, 0)</code> counts a value as changed</td></tr>
-            <tr><td><code>diagnose_decide_infeasible_slack_scope</code></td><td><code>query</code></td><td><a href="features.html#diagnose">DIAGNOSE</a>: one suggestion per clause, or <code>expanded</code>, one per row or group</td></tr>
+            <tr><td><code>decide_<wbr>direct_<wbr>solve</code></td><td><code>auto</code></td><td><a href="features.html#control">query rewriting</a>: <code>auto</code>, <code>off</code> or <code>require</code></td></tr>
+            <tr><td><code>decide_<wbr>mip_<wbr>gap</code></td><td><code>0</code></td><td>accept an answer within this relative gap of the best one</td></tr>
+            <tr><td><code>decide_<wbr>l0_<wbr>tolerance</code></td><td><code>1e-4</code></td><td>the size at which <code>norm(e, 0)</code> counts a value as changed</td></tr>
+            <tr><td><code>decide_<wbr>frame_<wbr>limit</code></td><td>10,000,000</td><td>the most values one <a href="#ordered">frame</a> may read</td></tr>
+            <tr><td><code>diagnose_<wbr>decide_<wbr>infeasible_<wbr>slack_<wbr>scope</code></td><td><code>query</code></td><td><a href="features.html#diagnose">DIAGNOSE</a>: one suggestion per clause, or <code>expanded</code>, one per row or group</td></tr>
+            <tr><td><code>diagnose_<wbr>decide_<wbr>escape_<wbr>rate</code></td><td><code>0.8</code></td><td>DIAGNOSE names a category of rows when at least this share of its decisions grow without limit</td></tr>
+            <tr><td><code>diagnose_<wbr>decide_<wbr>categorical_<wbr>ratio</code></td><td><code>0.1</code></td><td>a column counts as a category when its distinct values are at most this share of the rows</td></tr>
+            <tr><td><code>diagnose_<wbr>decide_<wbr>min_<wbr>categories</code></td><td><code>20</code></td><td>a column with this many distinct values or fewer always counts as a category</td></tr>
           </tbody>
         </table></div>
+        <p>Set each with <code>SET name = value</code>. The time limit is the environment variable
+          <code>DECIDB_TIME_LIMIT</code>, in seconds (300 by default; see <a href="#long-solve">a long solve</a>).</p>
 
         <h3 id="migrating"><a class="anchor" href="#migrating">Migrating from 0.2</a></h3>
         <p>DeciDB 0.2 wrote scopes after a constraint (<code>SUM(x) &lt;= 2 PER sector</code>) and tied declarations to a
           table (<code>T.x(INT)</code>, <code>scalar x(INT)</code>). Scopes now go in front, and a sum says which rows it
-          reads with <code>by</code>. Each old spelling is refused with a message that writes the new one from your own
-          query:</p>
-<!--sql check="diversification" expect="is removed" show-->SELECT ticker, pick FROM Stocks
+          reads with <code>by</code>. Each old spelling now stops the query with an error before it runs, most of them a
+          syntax error:</p>
+<!--sql check="diversification" expect="syntax error" show-->SELECT ticker, pick FROM Stocks
 DECIDE pick(BOOL)
 SUCH THAT SUM(pick) <= 2 PER sector
 MAXIMIZE SUM(pick * expected_return);<!--/sql-->
@@ -388,15 +488,22 @@ MAXIMIZE SUM(pick * expected_return);<!--/sql-->
           rows, once per <code>g</code>; write <code>by (g)</code> for each group's own total. And a NULL in the data no
           longer stops the query: it is <a href="#nulls">skipped</a>.</p>
 
-        <h3 id="roadmap"><a class="anchor" href="#roadmap">Not supported yet</a></h3>
-        <p>These are planned. A query that uses one is refused with a message, never answered differently:</p>
+        <h3 id="roadmap"><a class="anchor" href="#roadmap">Not built yet</a></h3>
+        <p>DeciDB does not build these yet; most come from the DECIDE language proposal. A query that uses one is refused
+          with a message, never answered differently:</p>
         <ul>
-          <li>sums nested inside sums to any depth (today <code>max(per g: SUM(e) by (g))</code> is the one nested
-            form);</li>
-          <li>rules on ordered data, such as the previous day's value;</li>
-          <li>constraints that apply only <code>if</code> a decision is 1, such as a capacity only if a depot opens;</li>
-          <li>bounds and allowed values written in the declaration;</li>
-          <li>several objectives in order of priority.</li>
+          <li>a rule that holds only when a condition on decisions holds (the proposal's <code>if</code>). With a
+            yes-or-no decision, multiplying by it often says the same: <code>ship &lt;= S.demand * open</code>;</li>
+          <li>bounds and allowed values written in the declaration, such as <code>x(INT) between 0 and 5</code>: write
+            them in <code>SUCH THAT</code>. The proposal's other decision types, <code>SEMIREAL</code>,
+            <code>SEMIINT</code> and <code>TEXT</code>, are not built either;</li>
+          <li>several objectives in order of priority (<code>MINIMIZE e1 THEN MAXIMIZE e2</code>), and
+            <code>SATISFY</code> (leave the objective out instead);</li>
+          <li>a table name on a decision, such as <code>D.open</code>: write the decision's own name;</li>
+          <li><code>norm</code> inside a reducer, or a reducer inside <code>norm</code>;</li>
+          <li>a distance that is the square root of a sum of squares. <code>norm(e, 2)</code> is the sum of squares itself,
+            so bound it by the square of the distance: <code>norm(x - w, 2) &lt;= 25</code> keeps <code>x</code> within 5
+            of <code>w</code>.</li>
         </ul>
       </section>
     </article>

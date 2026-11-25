@@ -1,5 +1,5 @@
 <!--meta
-title: Testing: DeciDB documentation
+title: Testing: how DeciDB works
 description: How DeciDB's tests judge an answer against an independent solver oracle, what each suite covers, the scope grid, the golden model dumps and branch coverage.
 h1: Testing
 lede: How a test decides that an answer is right, what each suite covers, and how DeciDB measures which code its tests reach.
@@ -83,7 +83,7 @@ MAXIMIZE SUM(x * l_extendedprice)<!--/sql-->
         reach the same objective: an alternate optimum, which is a right answer too.</li>
     </ul>
     <p>A query with no answer is judged the same way. <code>assert_infeasible</code> checks that DeciDB reports the
-      query infeasible or unbounded, and the test states the model to the oracle as well and checks that Gurobi agrees.
+      query infeasible, and the test states the model to the oracle as well and checks that Gurobi agrees.
       That catches DeciDB calling a feasible problem infeasible, not only the reverse.</p>
 
     <h3 id="independent"><a class="anchor" href="#independent">Why the oracle is independent</a></h3>
@@ -136,9 +136,10 @@ MAXIMIZE SUM(x * l_extendedprice)<!--/sql-->
       reads no SQL at all. It builds the model the language defines from a plain description of the clauses.</p>
     <p>A scope test describes its query to <code>ScopedModel</code> as Python data: the result rows, the decisions with
       their keys, and each clause with its scope. The oracle then follows the language's definition step by step. It
-      keeps the rows a <code>when</code> keeps, splits them into the classes of the <code>per</code> key, generates the
-      clause once per class, and evaluates each reducer over its <code>by</code> group. It solves the result with Gurobi
-      through the same interface as the main oracle.</p>
+      keeps the rows a <code>when</code> keeps, splits them into the classes of the <code>per</code> key, and evaluates
+      each reducer over its <code>by</code> group. It generates the clause once per <strong>variant</strong> of each
+      class: once per distinct combination of the values its body reads, so a class whose rows read two different
+      bounds gets two clauses. It solves the result with Gurobi through the same interface as the main oracle.</p>
     <p>The SQL string and the oracle's statement sit side by side. In the combination grid, each body is a pair of
       functions: one writes the SQL, the other states the same clause to the oracle.</p>
 <!--python title="test_scope_combinations.py: one clause, two statements"-->    "one-reducer": (
@@ -154,6 +155,13 @@ MAXIMIZE SUM(x * l_extendedprice)<!--/sql-->
       <code>AVG</code> under <code>&lt;&gt;</code>. For those, <code>_brute_force.py</code> gives each solver column a
       small whole-number domain, enumerates every assignment, and keeps the best one that satisfies the constraints,
       written as plain Python.</p>
+    <p>The newest parts of the language have an oracle of their own, built the same way: <code>_anr_oracle.py</code>
+      covers reducers inside reducers, frame selectors (<code>at(...) over (...)</code>, which read another row's
+      value) and variants, and reads no SQL either. <code>test_anr_oracle_selfcheck.py</code> checks it against hand
+      computations, brute force and the scope oracle, and the <code>test_anr_*.py</code> suites judge DeciDB against
+      it. A fuzzer in <code>test/decide/fuzz/</code> draws random queries of these shapes from a seed and judges each
+      one against the same oracle; <code>make decide-test</code> runs a few seeds of each
+      (<code>test_fuzz_smoke.py</code>).</p>
 
     <h3 id="grid"><a class="anchor" href="#grid">The combination grid</a></h3>
     <p><code>test_scope_combinations.py</code> crosses every part of the scope language with every other. A decision is
@@ -166,15 +174,19 @@ MAXIMIZE SUM(x * l_extendedprice)<!--/sql-->
       internal error. The grid exists to find bugs that only a combination shows. It is kept whole under one rule: no
       two cells reach the same set of branches in the DECIDE code.</p>
     <p>The other scope suites each cover one part of the language: declarations (<code>test_scope_declare.py</code>),
-      clause generation, reducers with a <code>by</code> and with their own scope, the objective, the rule that a key
-      must determine what its clause reads (<code>test_scope_determination.py</code>), the value rewrite, bare clauses,
-      the language specification's eight worked examples as written and in fully explicit form, the EXPLAIN and DIAGNOSE
-      text, and every removed spelling's message (<code>test_scope_removed_syntax.py</code>).</p>
+      clause generation, reducers with a <code>by</code> and with their own scope, the objective, variants
+      (<code>test_scope_variants.py</code>), the value rewrite, bare clauses, the language specification's eight worked
+      examples as written and in fully explicit form, the EXPLAIN and DIAGNOSE text, and the old spellings, which are
+      now ordinary syntax errors (<code>test_scope_old_forms.py</code>).</p>
     <div class="src"><strong>In the source</strong><ul>
       <li><code>test/decide/tests/_scope_oracle.py</code>: <code>ScopedModel</code>, <code>solve_scoped</code>,
         <code>judge_scoped</code>, <code>ScopeError</code></li>
       <li><code>test/decide/tests/_brute_force.py</code>: <code>optimum</code>, <code>judge</code></li>
       <li><code>test/decide/tests/_scope_cases.py</code>: the shared relations and helpers</li>
+      <li><code>test/decide/tests/_anr_oracle.py</code>, <code>test/decide/tests/_anr_cases.py</code>: the oracle for
+        nested reducers, frame selectors and variants, and its cases</li>
+      <li><code>test/decide/fuzz/</code>: the fuzzers, run with <code>python -m fuzz</code> from
+        <code>test/decide</code></li>
       <li><code>test/decide/tests/test_scope_*.py</code>: the suites</li>
       <li><code>context/docs/testing/scope_suite.md</code>: what each suite covers</li>
     </ul></div>
@@ -193,6 +205,8 @@ MAXIMIZE SUM(x * l_extendedprice)<!--/sql-->
           <td><code>test/decide/tests/test_*.py</code>, one file or more per area</td><td>The solver oracle</td></tr>
         <tr><td>The scope language</td><td><code>test_scope_*.py</code></td><td>The scope oracle, brute force, model
           size</td></tr>
+        <tr><td>Nested reducers, frame selectors and variants</td><td><code>test_anr_*.py</code>,
+          <code>test_fuzz_smoke.py</code></td><td>Their own oracle, <code>_anr_oracle.py</code></td></tr>
         <tr><td>Query rewriting</td><td><code>test_direct_*.py</code></td><td>The oracle, the solver path and the
           rewritten path must agree (<a href="#rewrite-tests">below</a>)</td></tr>
         <tr><td>DIAGNOSE</td><td><code>test_query_diagnostics_*.py</code>, <code>test_diagnosis_*.py</code></td>
@@ -204,7 +218,7 @@ MAXIMIZE SUM(x * l_extendedprice)<!--/sql-->
         <tr><td>The model DeciDB builds</td><td><code>test/decide/golden/</code></td><td>A diff against a committed
           model (<a href="#models">below</a>)</td></tr>
         <tr><td>Internal pieces: the canonical verifier, plan serialization, the DIAGNOSE router, the backend registry,
-          the IR and the rule driver</td><td><code>test/common/test_decidb_*.cpp</code>, run as
+          the rewrite rules' shared readers and the rule driver</td><td><code>test/common/test_decidb_*.cpp</code>, run as
           <code>unittest "[decidb]"</code></td><td>C++ assertions</td></tr>
         <tr><td>Every spelling parses and binds; parse errors are exact</td><td><code>test/decidb/*.test</code></td>
           <td>SQL logic tests</td></tr>
@@ -263,9 +277,10 @@ MAXIMIZE SUM(x * l_extendedprice)<!--/sql-->
         skipped, a total that stays the same between runs.</li>
       <li><strong>The leak guard.</strong> Every query run through the test wrapper fails its test if the output holds an
         internal error or an internal tag name.</li>
-      <li><strong>The removed-spelling guard.</strong> Every query fails its test if DeciDB answers that a spelling is
-        removed, except in the one suite written to check those messages. A scanner also keeps removed spellings out of
-        every test file, the golden corpus and the benchmark queries.</li>
+      <li><strong>Old spellings.</strong> A removed spelling is now an ordinary syntax error, so a test that still
+        wrote one would fail like any other bad query, and no guard of its own is needed.
+        <code>test_scope_old_forms.py</code> is the one file that writes old spellings, and checks that each fails at
+        the token the grammar cannot place.</li>
     </ul>
     <div class="src"><strong>In the source</strong><ul>
       <li><code>test/decide/golden/</code>: <code>corpus.sql</code>, <code>check.sh</code>, <code>capture.sh</code>, the
@@ -277,7 +292,7 @@ MAXIMIZE SUM(x * l_extendedprice)<!--/sql-->
         DIAGNOSE invariants</li>
       <li><code>test/decide/conftest.py</code>: <code>_DECLARED_SKIPS</code>, the skip audit</li>
       <li><code>test/decide/tests/_output_helpers.py</code>: <code>assert_no_internal_leak</code></li>
-      <li><code>test/decide/tests/test_no_old_spellings_remain.py</code>: the removed-spelling scanner</li>
+      <li><code>test/decide/tests/test_scope_old_forms.py</code>: the old spellings as syntax errors</li>
     </ul></div>
   </section>
 
@@ -302,6 +317,9 @@ MAXIMIZE SUM(x * l_extendedprice)<!--/sql-->
         <tr><td><code>build/release/test/unittest "[decidb]"</code></td><td>The C++ tests</td></tr>
         <tr><td><code>test/decide/run_direct_matrix.sh</code></td><td>The five checks from <code>make decide-test</code>
           down, with one summary line each</td></tr>
+        <tr><td><code>test/decide/capture_suite_log.sh</code> <code>capture</code>, then <code>compare OLD NEW</code></td>
+          <td>What every query of the suite prints in four of these settings, compared query by query with an earlier
+          capture, so a change to the engine can be checked against the output from before it</td></tr>
       </tbody>
     </table></div>
     <p>A forced backend name that DeciDB does not know is refused, never ignored, so a typo cannot run the default
@@ -311,6 +329,8 @@ MAXIMIZE SUM(x * l_extendedprice)<!--/sql-->
       <li><code>test/decide/run_tests.sh</code>: the virtual environment, the Gurobi license check, the runner</li>
       <li><code>test/decide/decidb_cli.py</code>: how each setting reaches every query</li>
       <li><code>test/decide/run_direct_matrix.sh</code>: the matrix</li>
+      <li><code>test/decide/capture_suite_log.sh</code>, <code>test/decide/suite_log.py</code>: the suite log and its
+        comparison</li>
       <li><code>Makefile</code>: <code>decide-test</code>, <code>decide-golden</code>,
         <code>decide-coverage</code></li>
     </ul></div>

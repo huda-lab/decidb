@@ -1,5 +1,5 @@
 <!--meta
-title: The rewrite rules: DeciDB documentation
+title: The rewrite rules: how DeciDB works
 description: The nine problem classes DeciDB answers by query rewriting: the shape each needs, its algorithm, why the answer is exact, and what it costs.
 h1: The rewrite rules
 lede: The nine classes DeciDB rewrites: the shape each needs, the algorithm that answers it, why the answer is exact, and what it costs.
@@ -55,7 +55,7 @@ lede: The nine classes DeciDB rewrites: the shape each needs, the algorithm that
     <div class="note"><strong>How the timings are measured</strong>
       <p>Every timing on this page comes from <code>benchmark/decide/direct_solve/run.py</code> on an 11-core Apple M3
         Pro, over TPC-H tables (most over the 800,000 rows of <code>partsupp</code> at scale factor 1), in November
-        2026. <em>Against Gurobi</em> runs a fresh <code>decidb</code> process per run and takes the median
+        2026, on the engine as it stood before release 1.0. <em>Against Gurobi</em> runs a fresh <code>decidb</code> process per run and takes the median
         of 3; the times include about 20 ms of process start and database open, and the two objectives agreed within
         1e-6. <em>Against a hand-written plan</em> sums the CPU time of every operator, best of 5 in one process, beside
         a SQL query an expert wrote for the same answer with the same checks; a ratio of 1.0 means the rule's plan costs
@@ -152,7 +152,7 @@ ORDER BY genre, rating DESC;<!--/sql-->
     </ul>
     <p>The nesting is proved from the query's text; the data is never consulted. <code>by (department)</code> beside
       <code>by (division)</code> declines even when every department lies in one division, because the rule is chosen
-      once, when the plan is built, and the IR holds no functional dependencies.</p>
+      once, when the plan is built, and the rule reads no functional dependencies.</p>
     <p><strong>The algorithm.</strong></p>
     <ol class="steps">
       <li><strong>Finest level.</strong> Rank each group's rows by score and keep those ranked within the group's
@@ -404,8 +404,8 @@ MINIMIZE SUM(POWER(depot - mile, 2));<!--/sql-->
     <p><strong>Cost.</strong> One sort of the narrow items, several hash aggregates and joins. With one budget over
       800,000 rows (measured 2026-11-09), the plan takes 0.96 times the CPU of a hand-written plan. With a budget per
       part it takes 1.93 times, because each group's checks must raise before any row is released, even under
-      <code>LIMIT</code>, so the plan aggregates every row of each group and joins the verdict back. Against Gurobi it
-      at 800,000 rows: 0.092 s against 1.132 s with one budget, and 0.120 s against 1.386 s with a budget per
+      <code>LIMIT</code>, so the plan aggregates every row of each group and joins the verdict back. Against Gurobi at
+      800,000 rows: 0.092 s against 1.132 s with one budget, and 0.120 s against 1.386 s with a budget per
       part, 11.5 to 12.3 times faster.</p>
 <!--sql title="Fill a 1,000 kg truck by value per kg" run="r1" direct="R1_CONTINUOUS_KNAPSACK" dec="kg"-->SELECT good, value_per_kg, available_kg, ROUND(kg, 1) AS kg
 FROM Cargo
@@ -565,8 +565,9 @@ ORDER BY driver;<!--/sql-->
     <div class="src"><strong>In the source</strong><ul>
       <li><code>src/optimizer/decide/direct/o1_monge_assignment_rule.cpp</code>: the rule; <code>CheckPairs</code>
         is the verdict over the pairs</li>
-      <li><code>src/optimizer/decide/direct/direct_ir.cpp</code>: the IR's <code>cross_product</code>,
-        <code>not_null</code> and <code>keys</code></li>
+      <li><code>src/optimizer/decide/direct/direct_source_facts.cpp</code>: <code>DirectSourceFacts</code>, the two
+        sides of the cross product (<code>left</code>, <code>right</code>), the columns declared <code>NOT NULL</code>
+        (<code>not_null</code>) and the table keys (<code>keys</code>)</li>
       <li><code>test/decide/tests/test_direct_o1_monge_assignment.py</code>: the differential test</li>
     </ul></div>
   </section>

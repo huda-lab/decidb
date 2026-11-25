@@ -391,14 +391,6 @@ ORDER BY n.name, s.shift_date;""",
         ],
         "answer": "<p>Bob, Carol and Dan: 56 hours and a combined skill of 19. Alice is the most skilled nurse, but her "
         "36 hours leave room for only one other nurse, and no such pair reaches 19.</p>",
-        "after": """<h3>The colon form</h3>
-<p><code>SUM(n: e)</code> is shorthand for <code>SUM(per n: e)</code>: one term per tuple of the named relation. This objective is
-the same as the one above:</p>
-<!--sql check="keyed-decisions"-->SELECT n.name, keep
-FROM nurses n JOIN shifts s ON n.id = s.nurse_id
-DECIDE per n: keep(BOOL)
-SUCH THAT SUM(keep * s.hours) <= 60
-MAXIMIZE SUM(n: keep * n.skill_score);<!--/sql-->""",
     },
     {
         "slug": "facility-location",
@@ -406,7 +398,7 @@ MAXIMIZE SUM(n: keep * n.skill_score);<!--/sql-->""",
         "group": "Groups and keys",
         "class": "MILP",
         "filters": ["keyed", "scopes"],
-        "card_tags": ["per D: open(BOOL)", "colon form"],
+        "card_tags": ["per D: open(BOOL)", "SUM(per D: …)"],
         "features": [
             "two decisions with different keys",
             "per C / per D with by",
@@ -414,7 +406,7 @@ MAXIMIZE SUM(n: keep * n.skill_score);<!--/sql-->""",
         ],
         "summary": "Open depots and route shipments so every customer's demand is met, paying a fixed cost for each open depot plus a cost per unit shipped.",
         "summary_plain": "Capacitated facility location in one DeciDB query with keyed decisions.",
-        "snippet": "DECIDE per D: open(BOOL), ship(INT)\nSUCH THAT per C: SUM(ship) by (C) >= C.demand\n  AND per D: SUM(ship) by (D) <= D.capacity * open\nMINIMIZE SUM(R.unit_cost * ship) + SUM(D: D.opening_cost * open)",
+        "snippet": "DECIDE per D: open(BOOL), ship(INT)\nSUCH THAT per C: SUM(ship) by (C) >= C.demand\n  AND per D: SUM(ship) by (D) <= D.capacity * open\nMINIMIZE SUM(R.unit_cost * ship) + SUM(per D: D.opening_cost * open)",
         "story": "<p>Three depots can serve four customers along the routes listed in <code>Routes</code>. A depot ships "
         "nothing unless it is open, and opening it has a fixed cost. Two decisions with different keys: "
         "<code>open</code> is one per depot, <code>ship</code> one per route.</p>",
@@ -436,7 +428,7 @@ JOIN Customers C USING (customerID)
 DECIDE per D: open(BOOL), ship(INT)
 SUCH THAT per C: SUM(ship) by (C) >= C.demand
       AND per D: SUM(ship) by (D) <= D.capacity * open
-MINIMIZE SUM(R.unit_cost * ship) + SUM(D: D.opening_cost * open);""",
+MINIMIZE SUM(R.unit_cost * ship) + SUM(per D: D.opening_cost * open);""",
         "dec": ["open", "ship"],
         "on": "ship",
         "explain": [
@@ -455,8 +447,8 @@ MINIMIZE SUM(R.unit_cost * ship) + SUM(D: D.opening_cost * open);""",
                 "One constraint per depot. A closed depot has capacity 0.",
             ),
             (
-                "SUM(D: D.opening_cost * open)",
-                "The colon form: one term per depot, so each fixed cost counts once even "
+                "SUM(per D: D.opening_cost * open)",
+                "A reducer with its own <code>per</code>: one term per depot, so each fixed cost counts once even "
                 "though a depot appears on several routes.",
             ),
         ],
@@ -874,7 +866,7 @@ MINIMIZE SUM(ABS(depot - mile));""",
         "story": "<p>The bag from the first example, with a lower weight limit and a new rule: take at least four items. "
         "Without the prefix, the query stops with an error:</p>"
         '<div class="code"><div class="code-head"><span class="code-title">Output</span></div><pre><code class="language-none">'
-        "Invalid Input Error: DECIDE optimization is infeasible. Prefix the query with DIAGNOSE to see which clause to change."
+        "Invalid Input Error: the DECIDE query is infeasible"
         "</code></pre></div>",
         "setup": """CREATE TABLE Items (item VARCHAR, value INT, weight INT);
 INSERT INTO Items VALUES

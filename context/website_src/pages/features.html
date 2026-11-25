@@ -24,8 +24,8 @@
           compute. When DeciDB recognizes one, it rewrites the query into those operations and never
           starts a solver. You write the same SQL; it returns sooner.</p>
         <div class="note note--direct"><strong>Faster, exact, and no license needed</strong>
-          <p>A fair allocation over 800,000 decisions takes 0.026 s rewritten, against 2,158 s in Gurobi. Every rewritten
-            class was faster than Gurobi at every size measured. The answer is exact, with no solver tolerance, and a
+          <p>A fair allocation over 800,000 decisions takes 0.026 s rewritten, against 2,158 s in Gurobi. Rewriting beat
+            Gurobi in every benchmark but one, a budget problem at 100,000 rows, where it took about 10% longer. The answer is exact, with no solver tolerance, and a
             quadratic class needs no Gurobi license.</p></div>
         <p>A query DeciDB cannot prove to be one of these shapes goes to the solver unchanged, so rewriting never changes
           what a query means.</p>
@@ -87,7 +87,7 @@ MAXIMIZE SUM(score * x);<!--/sql-->
         </table></div>
         <p>When several answers are equally good, the rewritten query may return a different one than the solver would;
           the objective is the same.</p>
-        <p>How DeciDB proves a query's shape and builds the plan that replaces the solver is in the documentation:
+        <p>How DeciDB proves a query's shape and builds the plan that replaces the solver is in How it works:
           <a href="docs/rewriting.html">query rewriting</a> and <a href="docs/rewrite-rules.html">the rewrite rules</a>.</p>
       </section>
 
@@ -97,7 +97,7 @@ MAXIMIZE SUM(score * x);<!--/sql-->
         <p class="lead">A query with no answer usually has one rule that is too tight. Put <code>DIAGNOSE</code> in front
           of it and DeciDB tells you which clause to change and by how much.</p>
         <p>This bag must weigh 40 kg or less and hold at least four items, and no four items are that light:</p>
-<!--sql check="knapsack" expect="Prefix the query with DIAGNOSE" show status="the solver found no answer"-->SELECT item, x FROM Items
+<!--sql check="knapsack" expect="the DECIDE query is infeasible" show status="the solver found no answer"-->SELECT item, x FROM Items
 DECIDE x(BOOL)
 SUCH THAT SUM(x * weight) <= 40 AND SUM(x) >= 4
 MAXIMIZE SUM(x * value);<!--/sql-->
@@ -115,21 +115,51 @@ MAXIMIZE SUM(x * value);<!--/sql-->
           <thead><tr><th>Column</th><th>Holds</th></tr></thead>
           <tbody>
             <tr><td><code>state</code></td><td><code>infeasible</code>, <code>unbounded</code> or <code>feasible</code></td></tr>
-            <tr><td><code>clause</code></td><td>the clause as you wrote it</td></tr>
+            <tr><td><code>clause</code></td><td>the clause as you wrote it, or the decision that grows without limit</td></tr>
             <tr><td><code>suggested_change</code></td><td>the smallest edit that makes the query answerable</td></tr>
-            <tr><td><code>amount</code></td><td>how far the bound moves, or the objective you would reach</td></tr>
-            <tr><td><code>edit_source</code></td><td>the kind of finding, such as <code>achievable_objective</code></td></tr>
+            <tr><td><code>amount</code></td><td>how far the bound moves, how many values grow without limit, or the objective you would reach</td></tr>
+            <tr><td><code>total</code></td><td>out of how many values, for a decision that grows without limit</td></tr>
+            <tr><td><code>scope</code></td><td><code>row</code>, or <code>keyed</code> for a decision declared with <code>per</code>, beside that count</td></tr>
+            <tr><td><code>edit_source</code></td><td>the kind of finding (below)</td></tr>
+            <tr><td><code>group</code></td><td>the group a finding covers, as the query writes it (<code>category = 'gear'</code>)</td></tr>
+            <tr><td><code>row</code></td><td>the row a finding covers, counted from 1</td></tr>
+          </tbody>
+        </table></div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Kind</th><th>The finding</th></tr></thead>
+          <tbody>
+            <tr><td><code>source_literal</code></td><td>a number you wrote, loosened in place</td></tr>
+            <tr><td><code>virtual_offset</code></td><td>a bound read from the data, moved by an amount (<code>x &lt;= col + 5</code>)</td></tr>
+            <tr><td><code>expanded_row</code>, <code>expanded_group</code></td><td>one row's or one group's own change</td></tr>
+            <tr><td><code>remove_only</code></td><td>a clause that can only be deleted, such as a <code>&lt;&gt;</code> or an <code>IN</code></td></tr>
+            <tr><td><code>unreachable_bound</code></td><td>a bound no answer can reach</td></tr>
+            <tr><td><code>rigid_conflict</code></td><td>no loosening of the clauses you wrote makes the query answerable</td></tr>
+            <tr><td><code>runaway_+inf</code>, <code>runaway_-inf</code></td><td>a decision that grows without limit</td></tr>
+            <tr><td><code>achievable_objective</code></td><td>the objective once the changes are made</td></tr>
+            <tr><td><code>unbounded_after_fix</code></td><td>the change works, but the objective then grows without limit</td></tr>
+            <tr><td><code>undiagnosed</code></td><td>the state is known, but no cause was found</td></tr>
           </tbody>
         </table></div>
         <p>A query that already has an answer returns one row with <code>state = 'feasible'</code>. To get one suggestion
-          per row or group instead of per clause, <code>SET diagnose_decide_infeasible_slack_scope = 'expanded'</code>.
-          <code>DIAGNOSE</code> costs nothing until you write it, and it always uses a solver.</p>
+          per row or group instead of per clause, <code>SET diagnose_decide_infeasible_slack_scope = 'expanded'</code>;
+          <code>group</code> and <code>row</code> then say which. The result is a table like any other, so a query can
+          filter it:</p>
+<!--sql run="knapsack" dec="suggested_change,amount"-->SELECT clause, suggested_change, amount
+FROM (DIAGNOSE
+      SELECT item, x FROM Items
+      DECIDE x(BOOL)
+      SUCH THAT SUM(x * weight) <= 40 AND SUM(x) >= 4
+      MAXIMIZE SUM(x * value))
+WHERE edit_source = 'source_literal';<!--/sql-->
+        <p><code>DIAGNOSE</code> takes a query with exactly one <code>DECIDE</code>. A query that fails before it is
+          solved, from a syntax error to a model the installed solver cannot take, stops with the same error as without
+          <code>DIAGNOSE</code>. It costs nothing until you write it, and it always uses a solver.</p>
 
         <h3 id="unbounded"><a class="anchor" href="#unbounded">No limit on the objective</a></h3>
         <p>When nothing stops the objective from growing forever, the query stops and <code>DIAGNOSE</code> names the
           decision that needs a limit, with how many of its values escape. The
           <a href="examples/diagnose.html">DIAGNOSE example</a> shows the full answer for the bag above.</p>
-        <p>How DeciDB finds the smallest change is in the documentation: <a href="docs/diagnose.html">inside DIAGNOSE</a>.</p>
+        <p>How DeciDB finds the smallest change is in How it works: <a href="docs/diagnose.html">inside DIAGNOSE</a>.</p>
       </section>
     </article>
   </div>

@@ -1,5 +1,5 @@
 <!--meta
-title: How DeciDB works: DeciDB documentation
+title: How DeciDB works
 description: How DeciDB adds constrained optimization to DuckDB: where it hooks in, the eight stages of a DECIDE query, where the code lives and what to read first.
 h1: How DeciDB works
 lede: DeciDB is DuckDB with one more path through it. This page shows where that path joins DuckDB, its eight stages, and where to read next.
@@ -49,11 +49,12 @@ MAXIMIZE SUM(x * value);<!--/plan-->
     <ol class="steps">
       <li><strong>Keywords.</strong> <code>DECIDE</code>, <code>SUCH</code> (as in <code>SUCH THAT</code>),
         <code>MAXIMIZE</code>, <code>MINIMIZE</code> and <code>DIAGNOSE</code> are reserved words. The clause's
-        <code>when</code>, <code>per</code> and <code>by</code> are not: the lexer turns them into DECIDE-only tokens
-        inside the clause (<a href="#gated-tokens">below</a>).</li>
+        <code>when</code>, <code>per</code> and <code>by</code> are not, nor are the frame words <code>at</code>,
+        <code>over</code> and <code>within</code>: the lexer turns them into DECIDE-only tokens inside the clause
+        (<a href="#gated-tokens">below</a>).</li>
       <li><strong>Grammar.</strong> New productions in DuckDB's Bison grammar read the clause. The parser stores it in
-        five new fields of DuckDB's <code>SelectNode</code>: the decisions, the constraints, the sense, the objective,
-        and the clause's own text for error messages.</li>
+        one new field of DuckDB's <code>SelectNode</code>, a <code>ParsedDecide</code> that holds the decisions, the
+        constraints, the sense, the objective, and the clause's own text for error messages.</li>
       <li><strong>Binder.</strong> DuckDB's binder for a <code>SELECT</code> has one DECIDE branch: a call to
         <code>DecideDeclarationsBinder::BindDeclarations</code>, which binds the whole clause with DeciDB's own
         expression binders.</li>
@@ -79,17 +80,21 @@ MAXIMIZE SUM(x * value);<!--/plan-->
       <code>per</code> is a legal column name. Making them reserved words would break existing queries.</p>
     <p>DeciDB settles this in the lexer, the step that cuts SQL text into tokens before the grammar sees it. The lexer
       keeps a flag. The <code>DECIDE</code> or <code>SUCH</code> token sets it, and the grammar clears it when the clause
-      ends. Only while the flag is set does the lexer turn the three words into DECIDE-only tokens:</p>
+      ends. Only while the flag is set does the lexer turn these words into DECIDE-only tokens:</p>
     <ul>
-      <li><code>WHEN</code> becomes <code>WHEN_DECIDE</code>, or <code>WHEN_DECIDE_OBJECTIVE</code> after
-        <code>MAXIMIZE</code> or <code>MINIMIZE</code>. A <code>CASE</code> inside the clause raises a depth counter, so
-        its own <code>WHEN</code> stays SQL's.</li>
+      <li><code>WHEN</code> becomes <code>WHEN_DECIDE</code>. A <code>CASE</code> inside the clause raises a depth
+        counter, so its own <code>WHEN</code> stays SQL's.</li>
       <li><code>PER</code> becomes <code>PER_DECIDE_PAREN</code> before <code>(</code>, <code>PER_DECIDE_ROW</code> before
         <code>ROW</code>, and <code>PER_DECIDE</code> otherwise. One token of lookahead tells <code>per ()</code>,
         <code>per row</code> and <code>per key</code> apart, which the grammar alone cannot.</li>
       <li><code>BY</code> becomes <code>BY_DECIDE</code> directly after <code>)</code>, as in <code>SUM(x) by (g)</code>.
         <code>GROUP BY</code>, <code>ORDER BY</code> and <code>PARTITION BY</code> always follow a keyword, so they stay
         SQL's.</li>
+      <li><code>AT</code> becomes <code>AT_DECIDE</code> before <code>(</code>, <code>OVER</code> becomes
+        <code>OVER_DECIDE</code> directly after <code>)</code>, and <code>WITHIN</code> inside that <code>OVER (...)</code>
+        becomes <code>WITHIN_DECIDE</code>. They spell a frame selector, such as <code>at(previous: x) over
+        (t.period)</code>, which reads a value at another row. These three apply only after <code>SUCH THAT</code> and
+        outside any subquery written there, so a SQL window keeps its <code>OVER</code> and <code>WITHIN GROUP</code>.</li>
     </ul>
     <p>Outside a DECIDE clause the flag is clear and nothing changes. The lexer saves the flag before a nested clause
       and restores it after, so a DECIDE query written as a subquery inside another one hands the outer clause back its
@@ -101,7 +106,7 @@ MAXIMIZE SUM(x * value);<!--/plan-->
       <li><strong>The scope words are tokens only inside the clause</strong>, as above.</li>
       <li><strong>Every grammar conflict is local to DECIDE.</strong> Bison expects four shift-reduce conflicts, all from
         the optional declaration slot of the clause, and both readings build the same node. The <code>WHEN</code>
-        conflicts are settled by precedence on tokens the lexer emits only inside DECIDE.</li>
+        conflict is settled by precedence on a token the lexer emits only inside DECIDE.</li>
       <li><strong>A decision's type is read as a name</strong>, not a keyword. DuckDB quotes every keyword when it
         prints a name, so a keyword <code>BOOL</code> would quote every column named <code>bool</code>.</li>
       <li><strong>A stored query writes the DECIDE fields only when they are set</strong>, so a database file or view
@@ -112,11 +117,13 @@ MAXIMIZE SUM(x * value);<!--/plan-->
 
     <h3 id="duckdb-edits"><a class="anchor" href="#duckdb-edits">Edits to DuckDB itself</a></h3>
     <p>Query rewriting replaces a DECIDE node with ordinary DuckDB operators, so its plans run only as fast as DuckDB's
-      own rules make them. Seven edits to DuckDB's expression rewriter, statistics propagation and perfect hash join
-      make those plans run as DuckDB would run the same answer written by hand in SQL. None of them names DECIDE, each
-      helps any query with the shape it handles, and a standard query returns the same rows. One more edit corrects a
-      DuckDB defect in how catalog names are ordered. Each edit, its reason and its test are on
-      <a href="rewriting.html#duckdb-edits">Query rewriting</a>.</p>
+      own rules make them. Ten edits to DuckDB make those plans run as DuckDB would run the same answer written by
+      hand in SQL. The first eight, to the expression rewriter, statistics propagation, the perfect hash join and
+      unused-column removal, name nothing of DECIDE: each helps any query with the shape it handles, and a standard
+      query returns the same rows. The last two hook query rewriting's own passes into unused-column removal, and a
+      standard query reaches neither. Two more edits fix DuckDB defects: the order of catalog names, and a hang while a
+      thread waits for a batch of tasks. A few small ones let an error point at the place in the query it is about.
+      Each edit, its reason and its test are on <a href="rewriting.html#duckdb-edits">Query rewriting</a>.</p>
 
     <div class="src"><strong>In the source</strong><ul>
       <li><code>third_party/libpg_query/grammar/keywords/reserved_keywords.list</code>: the reserved words</li>
@@ -141,27 +148,28 @@ MAXIMIZE SUM(x * value);<!--/plan-->
     <div class="table-wrap"><table>
       <thead><tr><th>Stage</th><th>Owns</th><th>Explained in</th></tr></thead>
       <tbody>
-        <tr><td>01 Parser</td><td>The grammar, the gated keywords, and the refusal of spellings the language
-          removed</td><td><a href="front-end.html#parser">Parser, binder and plan</a></td></tr>
+        <tr><td>01 Parser</td><td>The grammar, the gated keywords, and the parsed form of the clause
+          (<code>ParsedDecide</code>)</td><td><a href="front-end.html#parser">Parser, binder and plan</a></td></tr>
         <tr><td>02 Binder</td><td>Decisions and their keys, where <code>when</code>, <code>per</code> and
           <code>by</code> may stand, types, reducers, and the refusals only binding can make</td>
           <td><a href="front-end.html#binder">Parser, binder and plan</a></td></tr>
-        <tr><td>03 Logical plan</td><td><code>LogicalDecide</code>, subqueries in a clause, the only two ways to add a
-          clause after planning, serialization</td>
+        <tr><td>03 Logical plan</td><td><code>LogicalDecide</code>, subqueries in a clause, the only ways to add or
+          change a clause after planning, serialization</td>
           <td><a href="front-end.html#logical-plan">Parser, binder and plan</a></td></tr>
         <tr><td>04 Canonicalizer</td><td>The one shape of every clause: decisions on the left, the bound on the right,
           one spelling per product, and the check of each clause's algebra and degree</td>
           <td><a href="canonical-form.html#canonicalizer">Canonicalizer and optimizer</a></td></tr>
         <tr><td>05 Optimizer</td><td>How each construct reaches the solver (Big-M, McCormick, MIN and MAX, AVG,
-          <code>&lt;&gt;</code>), the choice of solver, and the entry to query rewriting</td>
+          <code>&lt;&gt;</code>), the choice of solver, the entry to query rewriting, and the lowering of each clause
+          into terms in the clause tree</td>
           <td><a href="canonical-form.html#optimizer">Canonicalizer and optimizer</a></td></tr>
         <tr><td>06 Model</td><td>From evaluated clauses to a model that names no solver: variable layout,
           coefficients, bounds, the quadratic matrix</td>
           <td><a href="solving.html#model">Model, solvers and execution</a></td></tr>
         <tr><td>07 Solver</td><td>Gurobi and HiGHS behind one interface, their statuses mapped to one set, time
           limits</td><td><a href="solving.html#solvers">Model, solvers and execution</a></td></tr>
-        <tr><td>08 Execution</td><td>Buffering the rows, evaluating coefficients, mapping keyed decisions, reading the
-          answer back as columns</td><td><a href="solving.html#execution">Model, solvers and execution</a></td></tr>
+        <tr><td>08 Execution</td><td>Buffering the rows, evaluating the clause tree over them, mapping keyed
+          decisions, reading the answer back as columns</td><td><a href="solving.html#execution">Model, solvers and execution</a></td></tr>
       </tbody>
     </table></div>
     <p>Two exits leave this path: query rewriting inside stage 05, and DIAGNOSE after stage 07. They are the
@@ -170,11 +178,14 @@ MAXIMIZE SUM(x * value);<!--/plan-->
 
     <h3 id="when-stages-run"><a class="anchor" href="#when-stages-run">When each stage runs</a></h3>
     <p>The numbers give the order of ownership, not of time. Stages 01 to 05 run while DuckDB prepares the statement,
-      before a row is read. Stage 08 runs when the plan executes, in three phases:</p>
+      before a row is read. When DuckDB builds the physical plan, stage 05's last step lowers each clause into the
+      clause tree: a tree whose nodes are the clauses' scopes, reducers, frames and helper functions, each recording what
+      it reads per row.
+      Stage 08 runs when the plan executes, in three phases:</p>
     <ol class="steps">
       <li><strong>Sink.</strong> <code>PhysicalDecide</code> buffers every input row.</li>
-      <li><strong>Finalize.</strong> It evaluates every coefficient over the buffer, then builds the model (stage 06)
-        and solves it (stage 07).</li>
+      <li><strong>Finalize.</strong> It reads the buffer once, from the top of the clause tree, into each node. Then it
+        computes each node from its children, builds the model (stage 06) and solves it (stage 07).</li>
       <li><strong>Source.</strong> It scans the buffer again and appends each decision's value to its row.</li>
     </ol>
     <p>So stages 06 and 07 run inside stage 08. They are separate stages because they keep separate contracts: stage 06
@@ -185,8 +196,8 @@ MAXIMIZE SUM(x * value);<!--/plan-->
     <ul>
       <li><strong>Shape is decided once.</strong> Which side of a comparison a term sits on, and how a product is
         spelled, is decided by stage 04 and by no other stage. The optimizer reads canonical clauses and returns
-        canonical clauses: every clause it adds re-enters through <code>LogicalDecide::AddConstraint</code> or
-        <code>SetObjective</code>, which canonicalize it again. This is a canonical form in the compiler sense, as an
+        canonical clauses: every clause it adds or changes re-enters through <code>LogicalDecide::AddClause</code>,
+        <code>CanonicalizeClause</code> or <code>SetObjective</code>, which canonicalize it again. This is a canonical form in the compiler sense, as an
         LLVM canonicalization pass writes one form per meaning.</li>
       <li><strong>A promise is checked where it is read.</strong> When a stage relies on what an earlier one guarantees
         (the shape check refuses a degree above 2, the canonicalizer writes each marker once), the reader checks it with
@@ -202,10 +213,10 @@ MAXIMIZE SUM(x * value);<!--/plan-->
     </ul>
 
     <div class="src"><strong>In the source</strong><ul>
-      <li><code>src/planner/binder/query_node/plan_select_node.cpp</code>: builds <code>LogicalDecide</code> and runs
-        stage 04 on what the user wrote</li>
-      <li><code>src/planner/operator/decide/logical_decide.cpp</code>: <code>AddConstraint</code> and
-        <code>SetObjective</code>, the only ways in after planning</li>
+      <li><code>src/planner/binder/query_node/plan_decide.cpp</code>: <code>Binder::PlanDecide</code> builds
+        <code>LogicalDecide</code> and runs stage 04 on what the user wrote</li>
+      <li><code>src/planner/operator/decide/logical_decide.cpp</code>: <code>AddClause</code>,
+        <code>CanonicalizeClause</code> and <code>SetObjective</code>, the only ways in after planning</li>
       <li><code>src/execution/operator/decide/physical_decide.cpp</code>: <code>Sink</code>, <code>Finalize</code>,
         <code>GetData</code></li>
       <li><code>src/planner/decide/decide_source_provenance.cpp</code>: <code>RenderDecideSource</code>, the one
@@ -224,9 +235,10 @@ MAXIMIZE SUM(x * value);<!--/plan-->
     <h3 id="exit-rewriting"><a class="anchor" href="#exit-rewriting">Query rewriting</a></h3>
     <p>Some optimization problems are solved exactly by sorting, ranking and running totals. Picking the most valuable
       item in each category is one: rank the items of each category by value and take the first. Before stage 05 writes
-      anything for a solver, it reads the DECIDE node into an intermediate representation (IR), a neutral form of the
-      query that the rewrite rules read instead of the operator. It offers the IR to every registered rule. A rule
-      applies only when it can prove that its algorithm returns the optimum, and at most one rule may apply. When one
+      anything for a solver, it offers the DECIDE node to every registered rule. A rule reads the node's clauses and
+      objective through shared reader functions. A reader returns false for anything it cannot read exactly, and the
+      rule then declines. A rule applies only when it can prove that its algorithm returns the optimum, and at most one
+      rule may apply. When one
       does, its plan of ordinary DuckDB operators replaces the DECIDE node, and no model is built. The engine calls this
       feature direct solve.</p>
 <!--plan check="items" title="The best item per category: no DECIDE node"-->SELECT item, category, x
@@ -245,7 +257,7 @@ MAXIMIZE SUM(x * value);<!--/plan-->
     <h3 id="exit-diagnose"><a class="anchor" href="#exit-diagnose">DIAGNOSE</a></h3>
     <p>A solve can fail. The constraints may contradict each other (infeasible), or the objective may grow without
       limit (unbounded). Without help the query stops with an error:</p>
-<!--sql check="diagnose" expect="DECIDE optimization is infeasible" show status="the solver found no answer" title="Four items in 40 kg"-->SELECT item, x
+<!--sql check="diagnose" expect="the DECIDE query is infeasible" show status="the solver found no answer" title="Four items in 40 kg"-->SELECT item, x
 FROM Items
 DECIDE x(BOOL)
 SUCH THAT SUM(x * weight) <= 40
@@ -285,20 +297,23 @@ MAXIMIZE SUM(x * value);<!--/sql-->
       <tbody>
         <tr><td><code>third_party/libpg_query/grammar/</code></td><td>The DECIDE grammar, tokens and keywords</td>
           <td>01</td></tr>
-        <tr><td><code>src/parser/decide/</code></td><td>Predicates over the parsed clause; the refusal of removed
-          spellings</td><td>01</td></tr>
+        <tr><td><code>src/parser/decide/</code></td><td>The parsed form of the clause: <code>ParsedDecide</code> and its
+          declarations, clauses and scopes</td><td>01</td></tr>
         <tr><td><code>src/planner/expression_binder/decide/</code></td><td>The DECIDE binders: declarations,
           <code>SUCH THAT</code>, the objective, reducers and scopes</td><td>02</td></tr>
+        <tr><td><code>src/planner/binder/query_node/plan_decide.cpp</code></td><td><code>Binder::PlanDecide</code>:
+          builds <code>LogicalDecide</code>, flattens its subqueries, calls the canonicalizer</td><td>03, 04</td></tr>
         <tr><td><code>src/planner/operator/decide/</code></td><td><code>LogicalDecide</code> and the DIAGNOSE plan
           node</td><td>03</td></tr>
         <tr><td><code>src/planner/decide/</code></td><td>The canonicalizer, the product spelling, the shape check, source
-          spans and the message renderer</td><td>03, 04</td></tr>
+          spans, the message renderer, and the clause tree</td><td>03, 04, 08</td></tr>
         <tr><td><code>src/optimizer/decide/</code></td><td>The optimizer passes (<code>decide_rewrite_*.cpp</code>), the
-          choice of answer and solver, the flattening into terms</td><td>05</td></tr>
-        <tr><td><code>src/optimizer/decide/direct/</code></td><td>Query rewriting: the IR, the rule driver, one file per
-          rule, the plan fragments and the result adapter</td><td>05</td></tr>
+          choice of answer and solver, the lowering of each clause into terms</td><td>05</td></tr>
+        <tr><td><code>src/optimizer/decide/direct/</code></td><td>Query rewriting: the readers, the rule driver, one file
+          per rule, the plan fragments and the result adapter</td><td>05</td></tr>
         <tr><td><code>src/execution/physical_plan/plan_decide.cpp</code></td><td>From <code>LogicalDecide</code> to
-          <code>PhysicalDecide</code></td><td>03, 08</td></tr>
+          <code>PhysicalDecide</code>: builds the clause tree and checks the model against the solver</td>
+          <td>05, 08</td></tr>
         <tr><td><code>src/decidb/formulation/</code></td><td><code>SolverModel::Build</code>, Big-M and the other
           lowerings into solver rows</td><td>06</td></tr>
         <tr><td><code>src/decidb/solver/</code></td><td>The solve facade, the backend registry, statuses, time
@@ -308,8 +323,8 @@ MAXIMIZE SUM(x * value);<!--/sql-->
         <tr><td><code>third_party/highs/</code></td><td>The vendored HiGHS solver</td><td>07</td></tr>
         <tr><td><code>src/decidb/diagnostics/</code></td><td>The DIAGNOSE router, engines and report</td>
           <td>after 07</td></tr>
-        <tr><td><code>src/execution/operator/decide/</code></td><td><code>PhysicalDecide</code> and the DIAGNOSE
-          operator</td><td>08</td></tr>
+        <tr><td><code>src/execution/operator/decide/</code></td><td><code>PhysicalDecide</code>, the DIAGNOSE operator,
+          and the evaluation of the clause tree over the buffered rows</td><td>08</td></tr>
         <tr><td><code>test/decide/</code></td><td>The Python suite, its oracles and the golden model dumps</td>
           <td>all</td></tr>
         <tr><td><code>test/common/test_decidb_*.cpp</code>, <code>test/decidb/</code></td><td>C++ unit tests and SQL
@@ -318,8 +333,9 @@ MAXIMIZE SUM(x * value);<!--/sql-->
         <tr><td><code>context/docs/</code></td><td>The internal documentation these pages draw on</td><td>all</td></tr>
       </tbody>
     </table></div>
-    <p>One header serves every stage: <code>src/include/duckdb/common/enums/decide.hpp</code> holds the scope kinds,
-      the senses, and every tag the stages use to mark bound expressions.</p>
+    <p>One header serves every stage: <code>src/include/duckdb/common/enums/decide.hpp</code> holds the enums the
+      stages share, such as the scope kinds, the senses, the decision types and the reducer kinds, and the name
+      prefixes of auxiliary variables.</p>
     <div class="src"><strong>In the source</strong><ul>
       <li><code>context/docs/pipeline/code_structure.md</code>: the file-by-file map, with each file's stage</li>
       <li><code>context/docs/README.md</code>: the map of the internal docs</li>
@@ -339,8 +355,9 @@ MAXIMIZE SUM(x * value);<!--/sql-->
       <dd>A decision with one value per class of a key, <code>per K: x(TYPE)</code>, shared by every row of the class.
         <code>per (): x(TYPE)</code> is one value for the whole query.</dd>
       <dt>reducer</dt>
-      <dd>An aggregate (<code>SUM</code>, <code>AVG</code>, <code>MIN</code>, <code>MAX</code>, <code>COUNT</code>) over
-        decisions. DeciDB's own word for it, so it is never confused with a SQL aggregate over data.</dd>
+      <dd>An aggregate (<code>SUM</code>, <code>AVG</code>, <code>MIN</code>, <code>MAX</code>) over decisions.
+        DeciDB's own word for it, so it is never confused with a SQL aggregate over data. <code>COUNT</code> reads data
+        only.</dd>
       <dt>scope</dt>
       <dd>The <code>when</code>, <code>per</code> and <code>by</code> that decide which rows a clause reads and how many
         copies of it the query generates.</dd>
@@ -373,6 +390,10 @@ MAXIMIZE SUM(x * value);<!--/sql-->
       <dd>The plan operator that carries a DECIDE clause through planning and optimization.</dd>
       <dt><code>PhysicalDecide</code></dt>
       <dd>The operator that executes it: buffer, evaluate, build, solve, read back.</dd>
+      <dt>clause tree</dt>
+      <dd>The tree <code>PhysicalDecide</code> evaluates, built with the physical plan. Its nodes are the clauses'
+        scopes, reducers, frames and helper functions. One pass reads the rows into it from the top, then each node is
+        computed from its children.</dd>
       <dt>pipeline breaker</dt>
       <dd>An operator that reads all of its input before it emits a row, as a sort or a hash aggregate does.</dd>
       <dt><code>SolverInput</code>, <code>SolverModel</code></dt>
@@ -384,9 +405,10 @@ MAXIMIZE SUM(x * value);<!--/sql-->
       <dt>query rewriting</dt>
       <dd>Replacing a DECIDE node by a plan of DuckDB operators that computes the optimum, when a rule proves that it
         does. The engine's name for it is direct solve.</dd>
-      <dt>IR</dt>
-      <dd>Intermediate representation: the neutral form of a DECIDE node that the rewrite rules read, as a compiler's
-        passes read an IR instead of the source.</dd>
+      <dt>reader</dt>
+      <dd>A shared function a rewrite rule calls to read part of the DECIDE node, such as a clause's left side as a sum
+        of parts. It returns false for anything it cannot read exactly, and the rule then declines. Rules read the
+        operator itself, as DuckDB's optimizer rules read the operator they match.</dd>
       <dt>rule, applicability condition</dt>
       <dd>A rewrite rule in the Volcano and Cascades sense: a condition it checks, then the plan it substitutes. Here
         the condition includes a proof that the plan is optimal.</dd>

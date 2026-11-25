@@ -102,7 +102,7 @@ MAXIMIZE SUM(book * crowd);<!--/live-->
         <h2><a class="anchor" href="#impossible">An impossible request</a></h2>
         <p class="lead">A sponsor asks for two acts of every genre, and a late bill cuts the budget to $90k.</p>
         <p>No lineup meets both, so the query has no answer. DeciDB says so, and does not guess.</p>
-<!--live id="impossible" fixture="demo-festival" dec="book" expect="Prefix the query with DIAGNOSE" title="Two of every genre for $90k"-->SELECT act, genre, fee, crowd, book
+<!--live id="impossible" fixture="demo-festival" dec="book" expect="the DECIDE query is infeasible" title="Two of every genre for $90k"-->SELECT act, genre, fee, crowd, book
 FROM Acts
 DECIDE book(BOOL)
 SUCH THAT SUM(book * fee) <= 90
@@ -198,7 +198,7 @@ SUCH THAT SUM(book * fee) <= 120
       AND SUM(book) by (genre) BETWEEN 1 AND 2
 MAXIMIZE SUM(book * crowd);<!--/live-->
         <p>The <a href="guide.html">guide</a> explains every clause, and the <a href="examples.html">examples</a>
-          have 22 problems to copy from. To run DeciDB on your own data, <a href="getting-started.html">install it</a>:
+          have 20 problems to copy from. To run DeciDB on your own data, <a href="getting-started.html">install it</a>:
           the same queries run there on every core, with your files and databases.</p>
       </section>
     </div>

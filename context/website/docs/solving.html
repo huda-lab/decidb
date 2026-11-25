@@ -5,10 +5,10 @@
 <script>(function(){var r=document.documentElement,t;try{t=localStorage.getItem('decidb-theme')}catch(e){}if(!r.dataset.theme)r.dataset.theme=t==='dark'?'dark':'light'})()</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <script>document.documentElement.classList.add('m-enter');setTimeout(()=>document.documentElement.classList.add('m-enter-done'),700)</script>
-<title>Model, solvers and execution: DeciDB documentation</title>
+<title>Model, solvers and execution: how DeciDB works</title>
 <meta name="description" content="How DeciDB builds the solver model from a DECIDE query&#x27;s rows, chooses and runs Gurobi or HiGHS, and writes each decision&#x27;s value back into the result rows.">
 <meta property="og:type" content="website">
-<meta property="og:title" content="Model, solvers and execution: DeciDB documentation">
+<meta property="og:title" content="Model, solvers and execution: how DeciDB works">
 <meta property="og:description" content="How DeciDB builds the solver model from a DECIDE query&#x27;s rows, chooses and runs Gurobi or HiGHS, and writes each decision&#x27;s value back into the result rows.">
 <meta property="og:image" content="../assets/images/share.jpg">
 <meta name="twitter:card" content="summary_large_image">
@@ -57,7 +57,7 @@
     <a class="skip-link" href="#top">Skip to content</a>
     <a class="nav__logo" href="../index.html"><img class="logo logo--light" src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42"><img class="logo logo--dark" src="../assets/images/logo-dark.svg" alt="DeciDB" width="140" height="42" loading="lazy"><img class="logo logo--mark" src="../assets/images/mark.svg" alt="DeciDB" width="40" height="32" loading="lazy"></a>
     <nav class="nav__links" aria-label="Main">
-      <div class="nav__item"><a class="nav__link" href="../getting-started.html">Get started</a></div><div class="nav__item"><a class="nav__link" href="../demo.html">Live demo</a></div><div class="nav__item"><a class="nav__link" href="../guide.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="../examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="../examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="../examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="../examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="../examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="../examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="../examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="../examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="../examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="../examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="../features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="../about.html">About</a></div><div class="nav__item"><a class="nav__link" href="../docs/index.html" aria-current="page"><span class="nav__full">Documentation</span><span class="nav__short" aria-hidden="true">Docs</span></a></div><div class="nav__item"><a class="nav__link" href="../features.html"><span class="nav__full">Novel features</span><span class="nav__short" aria-hidden="true">Features</span></a></div>
+      <div class="nav__item"><a class="nav__link" href="../guide.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="../examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="../examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="../examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="../examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="../examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="../examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="../examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="../examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="../examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="../examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="../features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="../demo.html">Live demo</a></div><div class="nav__item"><a class="nav__link" href="../docs/index.html" aria-current="page">How it works</a></div><div class="nav__item"><a class="nav__link" href="../about.html">About</a></div>
     </nav>
     <div class="nav__actions">
       <button class="btn btn--secondary theme-toggle" type="button" aria-pressed="false" data-theme-toggle hidden><svg class="theme-toggle__sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="theme-toggle__moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg><span class="theme-toggle__label">Dark theme</span></button>
@@ -72,7 +72,7 @@
 <main id="top">
 <section class="hero hero--page" data-enter aria-labelledby="page-h">
   <div class="wrap"><div class="hero-text hero-split grid">
-    <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a><span aria-hidden="true">/</span><a href="../docs/index.html">Documentation</a><span aria-hidden="true">/</span>Model, solvers and execution</nav><h1 id="page-h">Model, solvers, execution</h1><p class="hero__lead">How the DECIDE operator turns its input rows into a solver model, runs Gurobi or HiGHS on it, and writes each decision's value back into its row.</p></div>
+    <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a><span aria-hidden="true">/</span><a href="../docs/index.html">How it works</a><span aria-hidden="true">/</span>Model, solvers and execution</nav><h1 id="page-h">Model, solvers, execution</h1><p class="hero__lead">How the DECIDE operator turns its input rows into a solver model, runs Gurobi or HiGHS on it, and writes each decision's value back into its row.</p></div>
     <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="25" data-ui-pause-host><div class="ui ui-hw hw hw--page hw--mid" role="img" aria-label="A query with per-row, per-category and query-wide decisions, and the model DeciDB builds for it: 8 columns and 6 rows."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · DECIDB_DUMP_MODEL=1</span></div><div class="hw__page"><div class="hw__split hw__split--model"><div><div class="hw__col">the query</div><pre class="hw__sql"><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span>, <span class="tk-v">open</span>, <span class="tk-v">cap</span>
 <span class="tk-k">FROM</span> Items
 <span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">BOOL</span>),
@@ -86,7 +86,7 @@
   - <span class="tk-v">cap</span></code></pre></div><div><div class="hw__col">the model</div><div class="hw__dumps" data-ly-steps="140"><div class="hw__dump" data-step>col 0 bin  0 to 1, obj -100</div><div class="hw__dump" data-step>col 1 bin  0 to 1, obj -60</div><div class="hw__dump" data-step>col 2 bin  0 to 1, obj -120</div><div class="hw__dump" data-step>col 3 bin  0 to 1, obj -40</div><div class="hw__dump" data-step>col 4 bin  0 to 1, obj -75</div><div class="hw__dump" data-step>col 5 bin  0 to 1, obj 30</div><div class="hw__dump" data-step>col 6 bin  0 to 1, obj 30</div><div class="hw__dump" data-step>col 7 int  0 to 40, obj 1</div><div class="hw__dump" data-step>row 0 0:1 6:-1 ≤ 0</div><div class="hw__dump" data-step>row 1 1:1 6:-1 ≤ 0</div><div class="hw__dump" data-step>row 2 2:1 6:-1 ≤ 0</div><div class="hw__dump" data-step>row 3 3:1 5:-1 ≤ 0</div><div class="hw__dump" data-step>row 4 4:1 5:-1 ≤ 0</div><div class="hw__dump" data-step>row 5 0:20 1:10 2:30 3:15 4:12 7:-1 ≤ 0</div></div></div></div></div></div></div>
   </div></div>
 </section>
-<div class="container"><div class="doc-layout doc-layout--docs"><nav class="docnav" aria-label="Documentation pages"><div class="toc-title">Documentation</div><p class="docnav__group">Start here</p><ul><li><a href="index.html">Overview</a></li><li><a href="life-of-a-query.html">Life of a query</a></li></ul><p class="docnav__group">The pipeline</p><ul><li><a href="front-end.html">Parser, binder and plan</a></li><li><a href="canonical-form.html">Canonicalizer and optimizer</a></li><li><a href="solving.html" aria-current="page">Model, solvers and execution</a></li></ul><p class="docnav__group">Novel features</p><ul><li><a href="rewriting.html">Query rewriting</a></li><li><a href="rewrite-rules.html">The rewrite rules</a></li><li><a href="diagnose.html">DIAGNOSE</a></li></ul><p class="docnav__group">Quality</p><ul><li><a href="testing.html">Testing</a></li><li><a href="performance.html">Performance</a></li></ul></nav>
+<div class="container"><div class="doc-layout doc-layout--docs"><nav class="docnav" aria-label="How it works pages"><div class="toc-title">How it works</div><p class="docnav__group">Start here</p><ul><li><a href="index.html">Overview</a></li><li><a href="life-of-a-query.html">Life of a query</a></li></ul><p class="docnav__group">The pipeline</p><ul><li><a href="front-end.html">Parser, binder and plan</a></li><li><a href="canonical-form.html">Canonicalizer and optimizer</a></li><li><a href="solving.html" aria-current="page">Model, solvers and execution</a></li></ul><p class="docnav__group">Novel features</p><ul><li><a href="rewriting.html">Query rewriting</a></li><li><a href="rewrite-rules.html">The rewrite rules</a></li><li><a href="diagnose.html">DIAGNOSE</a></li></ul><p class="docnav__group">Quality</p><ul><li><a href="testing.html">Testing</a></li><li><a href="performance.html">Performance</a></li></ul></nav>
 <nav class="toc" aria-label="On this page">
   <div class="toc-title">On this page</div>
   <ul>
@@ -107,7 +107,7 @@
     <li class="sub"><a href="#time-limits">Time limits and the gap</a></li>
     <li><a href="#execution">Execution</a></li>
     <li class="sub"><a href="#materialization">Materialization</a></li>
-    <li class="sub"><a href="#scope-checks">Scope checks at run time</a></li>
+    <li class="sub"><a href="#value-checks">Value checks at run time</a></li>
     <li class="sub"><a href="#keyed-mapping">Keyed decisions: rows to classes</a></li>
     <li class="sub"><a href="#coefficients">Coefficient evaluation</a></li>
     <li class="sub"><a href="#readback">Reading the solution back</a></li>
@@ -129,12 +129,15 @@
       <li><strong>Materialize.</strong> <code>Sink</code> buffers every input row. The operator is a pipeline breaker:
         a blocking operator that reads all of its input before it emits a row. It has to be one, because the best value
         of one decision depends on every row.</li>
-      <li><strong>Evaluate.</strong> <code>Finalize</code> maps each row to its class for every keyed decision, makes
-        the scope checks that need those classes, and evaluates every coefficient, bound, filter and group key on the
-        buffered rows. The result is a <code>SolverInput</code>: numbers, with no expression left in it.</li>
-      <li><strong>Formulate (stage 06).</strong> <code>SolverModel::Build</code> and the linearization passes turn the
-        <code>SolverInput</code> into a <code>SolverModel</code>: columns with types and bounds, a linear objective, an
-        optional Q matrix, and rows.</li>
+      <li><strong>Evaluate.</strong> <code>Finalize</code> calls <code>EvaluateTree</code>. The DECIDE tree is the
+        plan's clauses, lowered into nodes when the physical plan was built
+        (<a href="canonical-form.html#lowering">lowering into the tree</a>). One pass reads the buffered rows top-down
+        through the tree; then each node's programs run bottom-up. Together they map each row to its class for every
+        key, make the value checks, and evaluate every coefficient, bound, filter and group key. The result is a
+        <code>SolverInput</code>: numbers, with no expression left in it.</li>
+      <li><strong>Formulate (stage 06).</strong> <code>FormulateModel</code> runs the linearization passes on the
+        <code>SolverInput</code>, and <code>SolverModel::Build</code> turns it into a <code>SolverModel</code>: columns
+        with types and bounds, a linear objective, an optional Q matrix, and rows.</li>
       <li><strong>Solve (stage 07).</strong> <code>SolveModel</code> hands the model to the backend chosen at plan time,
         Gurobi or HiGHS, and normalizes its answer into a <code>SolverResult</code>.</li>
       <li><strong>Read back (stage 08).</strong> <code>GetData</code> scans the buffered rows again and appends each
@@ -170,12 +173,12 @@
       back</a>.</p>
 
     <div class="src"><strong>In the source</strong><ul>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/execution/operator/decide/physical_decide.cpp"><code>src/execution/operator/decide/physical_decide.cpp</code></a>: <code>PhysicalDecide</code>, with
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/execution/operator/decide/physical_decide.cpp"><code>src/execution/operator/decide/physical_decide.cpp</code></a>: <code>PhysicalDecide</code>, with
         <code>Sink</code>, <code>Combine</code>, <code>Finalize</code> and <code>GetData</code></li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/execution/operator/decide/physical_decide.hpp"><code>src/include/duckdb/execution/operator/decide/physical_decide.hpp</code></a>: the operator's fields and its
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/include/duckdb/execution/operator/decide/physical_decide.hpp"><code>src/include/duckdb/execution/operator/decide/physical_decide.hpp</code></a>: the operator's fields and its
         phase methods</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/execution/physical_plan/plan_decide.cpp"><code>src/execution/physical_plan/plan_decide.cpp</code></a>: builds the operator and the projection above it</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/decidb/formulation/solver_input.hpp"><code>src/include/duckdb/decidb/formulation/solver_input.hpp</code></a>: <code>SolverInput</code>, the hand-off
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/execution/physical_plan/plan_decide.cpp"><code>src/execution/physical_plan/plan_decide.cpp</code></a>: builds the operator and the projection above it</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/include/duckdb/decidb/formulation/solver_input.hpp"><code>src/include/duckdb/decidb/formulation/solver_input.hpp</code></a>: <code>SolverInput</code>, the hand-off
         from execution to formulation</li>
     </ul></div>
   </section>
@@ -205,9 +208,11 @@
           <td>appended after the three blocks above</td></tr>
       </tbody>
     </table></div>
-    <p>One function, <code>VarIndexer::Get(decision, row)</code>, resolves a data row to a column. The objective, every
-      row of the model and the readback all go through it. That is why rows share a keyed or query-wide column with no
-      special case anywhere: they resolve to the same index, and what they add to it accumulates.</p>
+    <p>Execution writes each term as a decision and one of its instances, and one function,
+      <code>VarIndexer::InstanceColumn(decision, instance)</code>, turns that pair into a column. The objective and every
+      row of the model go through it, and the readback first finds a data row's instance (<code>InstanceOf</code>). That
+      is why rows share a keyed or query-wide column with no special case anywhere: they name the same instance, and
+      what they add to its column accumulates.</p>
     <p>A class id is the rank of the class's key value, sorted the way <code><span class="tk-k">ORDER</span> <span class="tk-k">BY</span></code> sorts the key. It does not
       depend on the order rows arrive in, so the same data in a different order builds the same columns.</p>
 
@@ -249,7 +254,8 @@
       its class's rows.</p>
     <p>A term with no decision in it, such as a data column or a constant, moves no optimum. It goes into the objective's
       constant, which no backend receives. The solver session adds it back to every objective value it reads, so a
-      reported objective is the one the query wrote.</p>
+      reported objective is the one the query wrote. The objective is produced once, so a data term must take one value
+      over the kept rows; one that takes more stops the query (<a href="#value-checks">value checks</a>).</p>
     <p>A decision beside the reducers (the aggregates over decisions, such as <code>SUM</code>) counts once. In
       <code><span class="tk-f">SUM</span>(x * weight) &lt;= cap</code>, <code>cap</code> stands on every row of the clause, but execution keeps
       its coefficient on one row and zeroes the rest (<code>CountOnce</code>). The row holds −1 times <code>cap</code>,
@@ -268,10 +274,11 @@
       </tbody>
     </table></div>
     <p>Terms that hold no decision move to the right-hand side. <code>&lt;=</code>, <code>&gt;=</code> and
-      <code>=</code> map directly (<code>ApplyComparisonSense</code>). A strict comparison steps its bound to the next
+      <code>=</code> map directly (<code>ApplyComparison</code>). A strict comparison steps its bound to the next
       integer: <code>&gt; K</code> becomes <code>&gt;= <span class="tk-f">floor</span>(K) + <span class="tk-n">1</span></code>, and <code>&lt; K</code> becomes
-      <code>&lt;= <span class="tk-f">ceil</span>(K) − <span class="tk-n">1</span></code>. That step is exact only when the left side takes whole values, and the binder
-      admits a strict comparison on no other left side (<a href="front-end.html#binder">the binder</a>).</p>
+      <code>&lt;= <span class="tk-f">ceil</span>(K) − <span class="tk-n">1</span></code>. That step is exact only when the left side takes whole values, and the shape check
+      refuses a strict comparison on any other left side (<a href="canonical-form.html#shape-check">the shape
+      check</a>).</p>
     <p>After folding and cancellation, a row can be left with no coefficient. One that always holds, such as
       <code><span class="tk-n">0</span> &lt;= <span class="tk-n">3</span></code>, is dropped. One that never holds, as <code><span class="tk-f">SUM</span>(<span class="tk-n">0</span> * x) &lt;= -<span class="tk-n">1</span></code> writes, is kept with
       its source clause. <code>SolverModel::ProvesInfeasible</code> then answers INFEASIBLE without calling a solver, and
@@ -379,14 +386,16 @@
     <h3 id="linearization"><a class="anchor" href="#linearization">Linearization: Big-M from the data</a></h3>
     <p>Some constructs are not linear: <code>&lt;&gt;</code>, a <code>MIN</code> or <code>MAX</code> that has to be
       pinned to one member, <code>ABS</code> under <code><span class="tk-d">MAXIMIZE</span></code>, and a product of a <code><span class="tk-t">BOOL</span></code> and a
-      number. Stage 05 has chosen an encoding for each and tagged the clause. Stage 06 writes the rows, because the
-      constants they need come from evaluated data.</p>
+      number. Stage 05 has recorded each one and allocated no binary. Stage 06 writes the rows, because the constants
+      they need come from evaluated data.</p>
     <p>The standard encoding is Big-M: a row that must hold only when a binary switch <var>z</var> is on gets a term
       M·<var>z</var>, with M large enough that the row is slack when the switch is off. DeciDB has no preset M. Each M is
       computed from the range the row's terms can reach, given the boxes of their columns. When a contributing decision
-      has no finite bound, no M exists, and the query is refused with a message that names the decision to bound. A
-      guessed constant would be worse: if the true range exceeds it, the solver cuts off feasible answers and reports a
-      wrong optimum with no sign of error. The refusal is the same on both backends.</p>
+      has no finite bound, no M exists. A backend that states the construct whole (<a href="#capabilities">below</a>)
+      still answers; any other refuses the query with a message that names the decision to bound. On HiGHS,
+      <code><span class="tk-f">MAX</span>(x) &gt;= <span class="tk-n">3</span></code> over an unbounded <code><span class="tk-t">INT</span></code> reads "'x' has no finite bound, which MIN or MAX
+      needs", and Gurobi answers it. A guessed constant would be worse: if the true range exceeds it, the solver cuts
+      off feasible answers and reports a wrong optimum with no sign of error.</p>
     <p>ABS is linearized first. Its pass narrows the ABS helper column to the range it can reach, and every later pass
       sizes its M from column boxes, so a MIN, MAX or <code>&lt;&gt;</code> over an ABS finds a finite column.</p>
     <div class="table-wrap"><table>
@@ -421,9 +430,9 @@
 <span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value)</code></pre></div><div class="code" data-lang="model"><div class="code__head"><span class="code__title">DECIDB_DUMP_MODEL=1 on Gurobi: two indicator constraints</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">row 0:</span> <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>40 <span class="tk-g">nnz=</span>5 | 0:20 1:10 2:30 3:15 4:12
 <span class="tk-k">ind 0:</span> <span class="tk-g">bin=</span><span class="tk-g">5=</span>=0 <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>1 | 0:1 1:1 2:1 3:1 4:1
 <span class="tk-k">ind 1:</span> <span class="tk-g">bin=</span><span class="tk-g">5=</span>=1 <span class="tk-g">sense=</span>&gt; <span class="tk-g">rhs=</span>3 | 0:1 1:1 2:1 3:1 4:1</code></pre></div>
-    <div class="code" data-lang="model"><div class="code__head"><span class="code__title">DECIDB_DUMP_MODEL=1 with DECIDB_FORCE_SOLVER=highs: two Big-M rows</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">row 0:</span> <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>40 <span class="tk-g">nnz=</span>5 | 0:20 1:10 2:30 3:15 4:12
-<span class="tk-k">row 1:</span> <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>1 <span class="tk-g">nnz=</span>6 | 0:1 1:1 2:1 3:1 4:1 5:-5
-<span class="tk-k">row 2:</span> <span class="tk-g">sense=</span>&gt; <span class="tk-g">rhs=</span>-1 <span class="tk-g">nnz=</span>6 | 0:1 1:1 2:1 3:1 4:1 5:-4</code></pre></div>
+    <div class="code" data-lang="model"><div class="code__head"><span class="code__title">DECIDB_DUMP_MODEL=1 with DECIDB_FORCE_SOLVER=highs: two Big-M rows</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">row 0:</span> <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>1 <span class="tk-g">nnz=</span>6 | 0:1 1:1 2:1 3:1 4:1 5:-5
+<span class="tk-k">row 1:</span> <span class="tk-g">sense=</span>&gt; <span class="tk-g">rhs=</span>-1 <span class="tk-g">nnz=</span>6 | 0:1 1:1 2:1 3:1 4:1 5:-4
+<span class="tk-k">row 2:</span> <span class="tk-g">sense=</span>&lt; <span class="tk-g">rhs=</span>40 <span class="tk-g">nnz=</span>5 | 0:20 1:10 2:30 3:15 4:12</code></pre></div>
     <p>Both dumps declare the same six columns, left out above: the five <code>x</code> columns and column 5, the
       switch. HiGHS declares no construct, so both halves become rows, and each half gets its own M:
       the distance from its bound to the far end of what its left side reaches, plus one unit. The sum of five binaries
@@ -441,24 +450,24 @@
       here, where the clause is still known, rather than at the solver, where only a matrix row is.</p>
 
     <div class="src"><strong>In the source</strong><ul>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/formulation/ilp_model_builder.cpp"><code>src/decidb/formulation/ilp_model_builder.cpp</code></a>: <code>SolverModel::Build</code>, the three row
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/decidb/formulation/ilp_model_builder.cpp"><code>src/decidb/formulation/ilp_model_builder.cpp</code></a>: <code>SolverModel::Build</code>, the three row
         shapes, <code>AddProductGroupRow</code>, <code>ProvesInfeasible</code></li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/decidb/formulation/ilp_model.hpp"><code>src/include/duckdb/decidb/formulation/ilp_model.hpp</code></a>: <code>VarIndexer</code>,
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/include/duckdb/decidb/formulation/ilp_model.hpp"><code>src/include/duckdb/decidb/formulation/ilp_model.hpp</code></a>: <code>VarIndexer</code>,
         <code>SolverModel</code>, <code>ConstraintProvenance</code>, the Q convention</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/formulation/linearization_bigm.cpp"><code>src/decidb/formulation/linearization_bigm.cpp</code></a>: implied bounds and the range walks every M is
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/decidb/formulation/linearization_bigm.cpp"><code>src/decidb/formulation/linearization_bigm.cpp</code></a>: implied bounds and the range walks every M is
         sized from</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/formulation/linearization_minmax.cpp"><code>src/decidb/formulation/linearization_minmax.cpp</code></a>: <code>EmitExtremumLink</code> and the MIN and
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/decidb/formulation/linearization_minmax.cpp"><code>src/decidb/formulation/linearization_minmax.cpp</code></a>: <code>EmitExtremumLink</code> and the MIN and
         MAX encodings</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/formulation/linearization_not_equal.cpp"><code>src/decidb/formulation/linearization_not_equal.cpp</code></a>: <code>&lt;&gt;</code> and its range
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/decidb/formulation/linearization_not_equal.cpp"><code>src/decidb/formulation/linearization_not_equal.cpp</code></a>: <code>&lt;&gt;</code> and its range
         collapse</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/formulation/linearization_bilinear_abs.cpp"><code>src/decidb/formulation/linearization_bilinear_abs.cpp</code></a>: McCormick rows and ABS</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/formulation/ilp_linearization.cpp"><code>src/decidb/formulation/ilp_linearization.cpp</code></a>: <code>LowerDecideConstructs</code></li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/solver/ilp_solver.cpp"><code>src/decidb/solver/ilp_solver.cpp</code></a>: <code>DumpSolverModel</code>, read by
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/decidb/formulation/linearization_bilinear_abs.cpp"><code>src/decidb/formulation/linearization_bilinear_abs.cpp</code></a>: McCormick rows and ABS</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/decidb/formulation/ilp_linearization.cpp"><code>src/decidb/formulation/ilp_linearization.cpp</code></a>: <code>LowerDecideConstructs</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/decidb/solver/ilp_solver.cpp"><code>src/decidb/solver/ilp_solver.cpp</code></a>: <code>DumpSolverModel</code>, read by
         <code>DECIDB_DUMP_MODEL</code></li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/test/decide/golden"><code>test/decide/golden/</code></a>: a corpus of queries whose model dumps are compared with stored baselines,
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/test/decide/golden"><code>test/decide/golden/</code></a>: a corpus of queries whose model dumps are compared with stored baselines,
         one per solver (<a href="testing.html#oracle">testing</a>)</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_quadratic.py"><code>test/decide/tests/test_quadratic.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_bilinear.py"><code>test_bilinear.py</code></a>,
-        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_unbounded_bigm.py"><code>test_unbounded_bigm.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_native_constructs.py"><code>test_native_constructs.py</code></a></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/test_quadratic.py"><code>test/decide/tests/test_quadratic.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/test_bilinear.py"><code>test_bilinear.py</code></a>,
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/test_unbounded_bigm.py"><code>test_unbounded_bigm.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/test_native_constructs.py"><code>test_native_constructs.py</code></a></li>
     </ul></div>
   </section>
 
@@ -489,7 +498,7 @@
 
     <h3 id="capabilities"><a class="anchor" href="#capabilities">What each backend takes</a></h3>
     <p>Backends differ in two ways, and a "no" means opposite things in each, so they are two types in
-      <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/common/decide_solver_capabilities.hpp"><code>decide_solver_capabilities.hpp</code></a>:</p>
+      <a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/include/duckdb/common/decide_solver_capabilities.hpp"><code>decide_solver_capabilities.hpp</code></a>:</p>
     <dl class="reads">
       <dt><code>SolverConstructSupport</code></dt>
       <dd>The constructs a backend states whole: <code>abs</code>, <code>min_max</code>, <code>not_equal</code>,
@@ -537,15 +546,14 @@
       rule, and a stopped point would be returned as optimal. Refusing is the only way to keep that answer out.</p>
     <p>The refusal comes at plan time, when the physical plan is built and before any row is read
       (<code>RequireDecideSolverSupport</code>), so a query that cannot run costs no scan and no model build. The message
-      names what the query does, the solver that can run it, and an edit that avoids the need. The solver list comes
-      from the registry's model-class table, which needs no library, so Gurobi is named even on a machine without it.
-      The message never blames the query: the same SQL runs where Gurobi is installed. With
+      states what the query does and that this installation does not support it. It names no solver and never blames
+      the query: the same SQL runs where a backend that takes the class is installed. With
       <code>DECIDB_FORCE_SOLVER=highs</code> on a machine that has Gurobi, a maximized sum of squares reads:</p>
     <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">A maximized sum of squares on HiGHS</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> name, <span class="tk-v">x</span>
 <span class="tk-k">FROM</span> Signals
 <span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">REAL</span>)
 <span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span>) &lt;= <span class="tk-n">5</span>
-<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(<span class="tk-v">x</span>, <span class="tk-n">2</span>))</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>refused before solving</span></div><pre>Invalid Input Error: DECIDE: the objective MAXIMIZEs squared decision terms, which needs Gurobi, and DECIDB_FORCE_SOLVER selects HiGHS. Unset DECIDB_FORCE_SOLVER, or MINIMIZE the squared terms instead, or use a linear objective.</pre></div></div>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(<span class="tk-v">x</span>, <span class="tk-n">2</span>))</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>refused before solving</span></div><pre>Not implemented Error: maximizing a squared decision is not supported on this installation</pre></div></div>
     <p>After the build, <code>SolveModel</code> checks the built model's class against the backend again
       (<code>AssertBackendAcceptsBuiltModel</code>). The plan-time prediction errs toward demanding more, so a mismatch
       there is an internal error, never the user's.</p>
@@ -618,7 +626,7 @@
         add one of its own.</li>
       <li><strong>Warn.</strong> When a coefficient is 1e6 or more, a bound or right-hand side is about 4.5e9 or more,
         or a nonzero objective coefficient is 1e-6 or less, stderr gets one line, once per query: <code><span class="tk-d">DECIDE</span>: a very
-        large or very small number may make this answer inaccurate. Scale its data toward <span class="tk-n">1</span>.</code> The thresholds follow
+        large or very small number may make this answer inaccurate.</code> The thresholds follow
         from DeciDB's solver tolerances of 1e-6. The model and the answer do not change.</li>
       <li><strong>Answer without a solver.</strong> When <code>ProvesInfeasible</code> holds, the result is INFEASIBLE,
         and no backend loads the model.</li>
@@ -646,28 +654,28 @@
       without reaching one. The vendored copy adds a time-limit and interrupt check to each such loop, leaving through an
       exit the loop already has: the objective clique partition, symmetry detection, clique extraction, conflict
       analysis, and the dominated-columns, parallel rows and columns, dual fixing and singleton-column passes of presolve.
-      Each patch is marked in the source and listed in <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/third_party/highs/README.md"><code>third_party/highs/README.md</code></a>. In one measured case on
+      Each patch is marked in the source and listed in <a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/third_party/highs/README.md"><code>third_party/highs/README.md</code></a>. In one measured case on
       macOS arm64, a MIP of 840,000 columns and 1,560,001 rows stayed in presolve for 638 s under a 300 s limit; with the
       patch it stops at 301 s.</p>
 
     <div class="src"><strong>In the source</strong><ul>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/solver/solver_registry.cpp"><code>src/decidb/solver/solver_registry.cpp</code></a>: <code>REGISTERED_BACKENDS</code>, the
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/decidb/solver/solver_registry.cpp"><code>src/decidb/solver/solver_registry.cpp</code></a>: <code>REGISTERED_BACKENDS</code>, the
         <code>DECIDB_NATIVE_CONSTRUCTS</code> switch</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/common/decide_solver_capabilities.hpp"><code>src/include/duckdb/common/decide_solver_capabilities.hpp</code></a>: <code>SolverConstructSupport</code>,
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/include/duckdb/common/decide_solver_capabilities.hpp"><code>src/include/duckdb/common/decide_solver_capabilities.hpp</code></a>: <code>SolverConstructSupport</code>,
         <code>SolverModelClass</code>, <code>ClassifyDecideModel</code>, <code>FindModelClassGap</code></li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_answer_choice.cpp"><code>src/optimizer/decide/decide_answer_choice.cpp</code></a>: <code>ChooseDecideSolver</code></li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/decide_solver_gate.cpp"><code>src/optimizer/decide/decide_solver_gate.cpp</code></a>: <code>RequireDecideSolverSupport</code> and the
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/decide_answer_choice.cpp"><code>src/optimizer/decide/decide_answer_choice.cpp</code></a>: <code>ChooseDecideSolver</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/decide_solver_gate.cpp"><code>src/optimizer/decide/decide_solver_gate.cpp</code></a>: <code>RequireDecideSolverSupport</code> and the
         refusal text</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/solver/ilp_solver.cpp"><code>src/decidb/solver/ilp_solver.cpp</code></a>: <code>SelectSolverBackend</code>, <code>SolveModel</code>, the
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/decidb/solver/ilp_solver.cpp"><code>src/decidb/solver/ilp_solver.cpp</code></a>: <code>SelectSolverBackend</code>, <code>SolveModel</code>, the
         INF_OR_UNBD probe, the integer-ceiling check</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/gurobi/gurobi_solver.cpp"><code>src/decidb/gurobi/gurobi_solver.cpp</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/gurobi/gurobi_loader.cpp"><code>gurobi_loader.cpp</code></a>: the Gurobi adapter and its
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/decidb/gurobi/gurobi_solver.cpp"><code>src/decidb/gurobi/gurobi_solver.cpp</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/decidb/gurobi/gurobi_loader.cpp"><code>gurobi_loader.cpp</code></a>: the Gurobi adapter and its
         run-time loading</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/decidb/naive/deterministic_naive.cpp"><code>src/decidb/naive/deterministic_naive.cpp</code></a>: the HiGHS adapter, its scaling and Hessian
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/decidb/naive/deterministic_naive.cpp"><code>src/decidb/naive/deterministic_naive.cpp</code></a>: the HiGHS adapter, its scaling and Hessian
         conversion</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/decidb/solver/solver_result.hpp"><code>src/include/duckdb/decidb/solver/solver_result.hpp</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/decidb/solver/solver_session.hpp"><code>solver_session.hpp</code></a>,
-        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/decidb/solver/solver_config.hpp"><code>solver_config.hpp</code></a>: the outcome, the session, the time limits</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/third_party/highs/README.md"><code>third_party/highs/README.md</code></a>: the vendored version and its patches</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/common/test_decidb_solver_registry.cpp"><code>test/common/test_decidb_solver_registry.cpp</code></a>; <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_error_time_limit.py"><code>test/decide/tests/test_error_time_limit.py</code></a>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/include/duckdb/decidb/solver/solver_result.hpp"><code>src/include/duckdb/decidb/solver/solver_result.hpp</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/include/duckdb/decidb/solver/solver_session.hpp"><code>solver_session.hpp</code></a>,
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/include/duckdb/decidb/solver/solver_config.hpp"><code>solver_config.hpp</code></a>: the outcome, the session, the time limits</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/third_party/highs/README.md"><code>third_party/highs/README.md</code></a>: the vendored version and its patches</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/common/test_decidb_solver_registry.cpp"><code>test/common/test_decidb_solver_registry.cpp</code></a>; <a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/test_error_time_limit.py"><code>test/decide/tests/test_error_time_limit.py</code></a>
         for the HiGHS limit checks</li>
     </ul></div>
   </section>
@@ -688,49 +696,51 @@
     <div class="table-wrap"><table>
       <thead><tr><th scope="col">Method</th><th scope="col">What it does</th></tr></thead>
       <tbody>
-        <tr><td><code>BuildKeyedMappings</code></td><td>maps every row to its class, for each keyed decision</td></tr>
-        <tr><td><code>RunScopeChecks</code></td><td>the scope check that needs those maps</td></tr>
-        <tr><td><code>EvaluateConstraints</code>, <code>EvaluateObjective</code>, <code>EvaluateComposedClauses</code>,
-          <code>EvaluateReducerValueLinks</code></td><td>coefficients, bounds, filters and groups, for every clause</td></tr>
-        <tr><td><code>BuildSolverInput</code></td><td>assembles the <code>SolverInput</code> and settles every column's
+        <tr><td><code>EvaluateTree</code></td><td>reads the buffered rows once, top-down through the tree
+          (<code>DecideDescent</code>), which maps every row to its class for each key; runs each node's programs
+          bottom-up (<code>DecideTreeColumns</code>), which makes the value checks; and writes every clause, the
+          objective and the helpers' members into the <code>SolverInput</code> (<code>DecideModelEmitter</code>)</td></tr>
+        <tr><td><code>BuildSolverInput</code></td><td>completes the <code>SolverInput</code> and settles every column's
           box</td></tr>
         <tr><td><code>FormulateModel</code></td><td>the linearization of stage 06, against that box</td></tr>
-        <tr><td><code>FinalizeSolveResult</code></td><td>the solve of stage 07, then what its status leads to</td></tr>
+        <tr><td><code>FinalizeSolveResult</code></td><td>the solve of stage 07 (<code>SolveDecide</code>), then what its
+          status leads to</td></tr>
       </tbody>
     </table></div>
 
-    <h3 id="scope-checks"><a class="anchor" href="#scope-checks">Scope checks at run time</a></h3>
-    <p>Some rules of the language are about data, not syntax. <code><span class="tk-d">per</span> K:</code> in front of a clause says that what
-      the clause reads once per class is the same on every row of the class, and a bound has to be a number. These are
-      scope checks. They run on the data before any coefficient is read, and the first failure stops the query.</p>
-    <p>Most of them never reach the operator. The optimizer installs them as a plan under the DECIDE node: each check is
-      an aggregate over its own read of the source that comes to one row, its message or NULL, and a projection over all
-      of them raises the first message. The source's rows reach the operator only once that one-row verdict holds:
-      verify, then stream, the way DuckDB plans an uncorrelated scalar subquery. The same code installs the checks for
-      query rewriting (<a href="rewriting.html#plan">rewriting plans</a>), so both paths refuse the same data in the same
-      words. The side tables that compute a bound-side reducer, such as <code><span class="tk-f">max</span>(cap) <span class="tk-d">by</span> (g)</code>, sit in the same
-      plan. EXPLAIN shows all of it as operators under DECIDE.</p>
-    <p>One check needs a map the operator builds, so <code>RunScopeChecks</code> makes it: a clause scoped
-      <code><span class="tk-d">per</span> K:</code> that reads a keyed decision must find one instance of that decision in each class of K. Here the
-      clause is scoped by shift date, but <code>keep</code> is decided per nurse, and three nurses work on December 1:</p>
-    <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> n.name, s.shift_date, <span class="tk-v">keep</span>
-<span class="tk-k">FROM</span> nurses n <span class="tk-k">JOIN</span> shifts s <span class="tk-k">ON</span> n.id = s.nurse_id
-<span class="tk-d">DECIDE</span> <span class="tk-d">per</span> n: <span class="tk-v">keep</span>(<span class="tk-t">BOOL</span>)
-<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-d">per</span> s.shift_date: <span class="tk-v">keep</span> &lt;= <span class="tk-n">1</span>
-<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-d">per</span> n: <span class="tk-v">keep</span> * n.skill_score)</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>refused before solving</span></div><pre>Invalid Input Error: DECIDE: per s.shift_date does not determine the decision keep (declared per n). s.shift_date = &#x27;2026-12-01&#x27; covers more than one keep.</pre></div></div>
-    <p>When several classes fail, the message names the least by key value, so it does not depend on row order.</p>
+    <h3 id="value-checks"><a class="anchor" href="#value-checks">Value checks at run time</a></h3>
+    <p>Some rules of the language are about data, not syntax. A bound has to be a number, an <code>=</code> bound must
+      take one value in each of its groups, and the objective is produced once. The first two are value checks
+      (<code>LogicalDecide::value_checks</code>), which the optimizer's bound-side and ABS rewrites add. The tree makes
+      them on the rows it reads, before any clause is read (<code>DecideTreeColumns::CheckData</code>), and the first
+      failure stops the query.</p>
+    <p>On the solver path no plan sits under DECIDE for this: EXPLAIN shows only DECIDE and its input. The tree also
+      computes each bound-side reducer, such as <code><span class="tk-f">max</span>(cap) <span class="tk-d">by</span> (g)</code>, as a node of its own. A query-rewriting
+      plan has no tree, so it makes the same checks as a plan on the source rows (<code>DirectAddRowChecks</code>) and
+      computes each bound-side reducer as a side table. Both paths refuse the same data in the same words
+      (<a href="rewriting.html#plan">rewriting plans</a>).</p>
+    <p>A <code><span class="tk-d">per</span> K:</code> clause that reads a value which differs inside a class is no error: it becomes one
+      constraint per variant (<a href="canonical-form.html#variants">variants</a>). The objective has one class, so
+      a value in it that differs over the kept rows stops the query when the model emitter reads the objective:</p>
+<div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">SQL</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, <span class="tk-v">x</span>
+<span class="tk-k">FROM</span> Items
+<span class="tk-d">DECIDE</span> <span class="tk-v">x</span>(<span class="tk-t">INT</span>)
+<span class="tk-d">SUCH</span> <span class="tk-d">THAT</span> <span class="tk-v">x</span> &lt;= <span class="tk-n">3</span>
+<span class="tk-d">MAXIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-v">x</span> * value) + weight</code></pre></div><div class="output output--error"><div class="output__head"><span>Error</span><span>refused before solving</span></div><pre>Invalid Input Error: &#x27;weight&#x27; takes more than one value over the kept rows (10, 30), so the objective would be produced more than once</pre></div></div>
+    <p>The message names the least and the greatest value, in the order <code><span class="tk-k">ORDER</span> <span class="tk-k">BY</span></code> places them, so it does
+      not depend on row order.</p>
 
     <h3 id="keyed-mapping"><a class="anchor" href="#keyed-mapping">Keyed decisions: rows to classes</a></h3>
-    <p><code>BuildKeyedMappings</code> gives each row its class for every keyed decision. It evaluates the key's
-      expressions on the buffered rows and finds each row's group in DuckDB's aggregate hash table, used with no
-      aggregates (<code>GroupedAggregateHashTable::FindOrCreateGroups</code>), as <code><span class="tk-k">GROUP</span> <span class="tk-k">BY</span></code> uses it. Each
-      group remembers its first row, and its key values are read back from that row only when a message names the
-      group (late materialization). The groups are then numbered by value with DuckDB's order-preserving sort key, as
-      <code><span class="tk-k">ORDER</span> <span class="tk-k">BY</span></code> compares rows. The result is a <code>KeyedMapping</code>: a class count and a
-      <code>row_to_class</code> vector, the map <code>VarIndexer</code> reads.</p>
-    <p>A key is computed once per query and cached (<code>PerGroupCache</code>), so every clause, check and objective
-      term that groups by it shares one numbering. A key over a collated column groups under its collation, as
-      <code><span class="tk-k">GROUP</span> <span class="tk-k">BY</span></code> does.</p>
+    <p>The descent gives each row its class for every key. It evaluates the key's expressions on the rows that reach
+      a node and finds each row's group in DuckDB's aggregate hash table, used with no aggregates
+      (<code>GroupedAggregateHashTable::FindOrCreateGroups</code>), as <code><span class="tk-k">GROUP</span> <span class="tk-k">BY</span></code> uses it. Each group
+      remembers its first row, and its key values are read back from that row only when a message names the group
+      (late materialization). The groups are then numbered by value with DuckDB's order-preserving sort key, as
+      <code><span class="tk-k">ORDER</span> <span class="tk-k">BY</span></code> compares rows. For a keyed decision the result is a <code>KeyedMapping</code>: a class
+      count and a <code>row_to_class</code> vector, the map <code>VarIndexer</code> reads.</p>
+    <p>A key's groups are one dictionary (<code>DecideKeyMap</code>), filled once by the descent, so every clause,
+      check and objective term that groups by it shares one numbering. A key over a collated column groups under its
+      collation, as <code><span class="tk-k">GROUP</span> <span class="tk-k">BY</span></code> does.</p>
     <p>A row with NULL in a key column the query wrote is in no class: it has no decision. It maps to one spare class,
       <code>absent_class</code> (the Null Object pattern), so every row still resolves to a column. The model pins that
       column to 0, a reducer skips the row, and the result shows NULL there. The
@@ -745,24 +755,27 @@
       compute it.</p>
     <p>Each clause is read in this order:</p>
     <ol class="steps">
-      <li><strong>Kept rows.</strong> The clause's <code><span class="tk-d">when</span></code> is read first, on every row (<code>KeptRows</code>).
-        Nothing else is computed on a row it drops.</li>
+      <li><strong>Kept rows.</strong> The clause's <code><span class="tk-d">when</span></code> is read first, on every row, as the descent passes
+        rows down the tree (<code>DecideDescent::Gate</code>); the emitter then lists the rows the clause kept
+        (<code>DecideModelEmitter::Keep</code>). Nothing else is computed on a row the <code><span class="tk-d">when</span></code> drops.</li>
       <li><strong>Groups.</strong> A <code><span class="tk-d">by</span></code> key gives each kept row its group, and <code><span class="tk-d">per</span> K:</code> over a
         clause with no reducer keeps one row per class. The result is one vector, <code>row_group_ids</code>, that sends
         each row to the model row it feeds, or to none.</li>
       <li><strong>Term filters.</strong> A reducer's own <code><span class="tk-d">when</span></code> becomes a mask on its own terms. A reducer's
-        own <code><span class="tk-d">per</span></code>, and the colon form <code><span class="tk-f">SUM</span>(D: e)</code>, keep the first row of each class and zero the
-        rest (<code>BuildQualifierKeepMask</code>). A scope check has proved every row of the class carries the same
-        value, so any row gives the same answer.</li>
-      <li><strong>AVG.</strong> The optimizer has rewritten <code>AVG</code> as <code>SUM</code>. Each such term is
-        divided here by the number of rows its reducer reads in the row's group (<code>ScaleAvgRows</code>).</li>
+        own <code><span class="tk-d">per</span></code> keeps the first row of each class and zeroes the rest (<code>FirstOfEachInstance</code>).
+        A reducer whose body reads more than its key holds has variants of its own
+        (<a href="canonical-form.html#variants">variants</a>), so every row of a kept class carries the same value,
+        and any row gives the same answer.</li>
+      <li><strong>AVG.</strong> An <code>AVG</code> stays an <code>AVG</code>, and the linear form has marked its
+        terms. Each such term is divided here by the number of rows its reducer reads in the row's group
+        (<code>ScaleAvgRows</code>).</li>
       <li><strong>Count once.</strong> A term outside every reducer keeps its coefficient on one row of each group
-        (<code>CountOnce</code>).</li>
+        (<code>CountOnce</code>; in the objective, <code>CountTupleTermsOnce</code>).</li>
     </ol>
     <p>Values are checked as they are read. A NULL coefficient or bound skips the instance it reaches: the row of a
       clause with no reducer, the group of one with a reducer (<a href="../guide.html#nulls">NULLs in the Guide</a>). A
-      NaN or infinite coefficient raises an error that names the expression as written and the <code><span class="tk-d">when</span></code> that
-      would skip such rows. An infinite bound is allowed,
+      NaN or infinite coefficient raises an error that names the value as written, with a caret on it:
+      <code><span class="tk-s">&#x27;w&#x27;</span> is NaN or infinite on some rows</code>. An infinite bound is allowed,
       because it has a meaning: <code>x &lt;= +inf</code> holds for every value, and <code>x &gt;= +inf</code> for
       none.</p>
     <p>The output is the <code>SolverInput</code>. A coefficient column with one value on every row, such as a constant
@@ -776,8 +789,10 @@
     <h3 id="readback"><a class="anchor" href="#readback">Reading the solution back</a></h3>
     <p><code>GetData</code> scans the buffered rows a second time, in the order they are stored. Its source runs on one
       thread, so the running row offset matches the row numbers the model is built on. The input columns are
-      referenced into the output without a copy. Row r of decision d reads <code>solution[VarIndexer::Get(d, r)]</code>,
-      through the same function that built the model. A per-row decision gets a value of its own on each row. A keyed
+      referenced into the output without a copy. Row r of decision d reads
+      <code>solution[VarIndexer::ColumnOrNone(d, r)]</code>, through the same instances that built the model; a row whose
+      instance has no column, such as a row with a NULL key, shows NULL. A per-row decision gets a value of its own on
+      each row. A keyed
       decision gets one value per class, repeated on every row of the class. A query-wide decision gets one value,
       repeated on every row.</p>
     <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">The running example&#x27;s answer</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> item, category, <span class="tk-v">x</span>, <span class="tk-v">open</span>, <span class="tk-v">cap</span>
@@ -834,22 +849,31 @@ DECIDE hit the &lt;limit&gt; time limit without finding a solution yet.
       whether it already holds an error, and if it does, prints nothing and raises that error.</p>
 
     <div class="src"><strong>In the source</strong><ul>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/execution/operator/decide/physical_decide.cpp"><code>src/execution/operator/decide/physical_decide.cpp</code></a>: <code>Finalize</code> and its phases,
-        <code>BuildGroupIds</code>, <code>KeptRows</code>, <code>CountOnce</code>, <code>ScaleAvgRows</code>,
-        <code>DecideSolutionToInteger</code>, <code>PrintDecideTimeoutReport</code>, the continuation prompt</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_row_checks.cpp"><code>src/optimizer/decide/direct/direct_row_checks.cpp</code></a>: the scope checks as a plan under DECIDE
-        (<code>DirectInstallRowChecks</code>)</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/decidb/formulation/solver_input.hpp"><code>src/include/duckdb/decidb/formulation/solver_input.hpp</code></a>: <code>KeyedMapping</code>,
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/execution/operator/decide/physical_decide.cpp"><code>src/execution/operator/decide/physical_decide.cpp</code></a>: <code>Finalize</code> and its phases,
+        <code>EvaluateTree</code>, <code>DecideSolutionToInteger</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/execution/operator/decide/decide_descent.cpp"><code>src/execution/operator/decide/decide_descent.cpp</code></a>: <code>DecideDescent</code>, the top-down
+        pass; <a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/execution/operator/decide/decide_key_map.cpp"><code>decide_key_map.cpp</code></a>: <code>DecideKeyMap</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/execution/operator/decide/decide_tree_columns.cpp"><code>src/execution/operator/decide/decide_tree_columns.cpp</code></a>: <code>DecideTreeColumns</code>,
+        <code>CheckData</code>, <code>FirstOfEachInstance</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/execution/operator/decide/decide_model_emitter.cpp"><code>src/execution/operator/decide/decide_model_emitter.cpp</code></a>: <code>DecideModelEmitter</code>,
+        <code>Keep</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/execution/operator/decide/decide_value_extraction.cpp"><code>src/execution/operator/decide/decide_value_extraction.cpp</code></a>: <code>CountOnce</code>,
+        <code>CountTupleTermsOnce</code>, <code>ScaleAvgRows</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/decidb/solver/decide_solve.cpp"><code>src/decidb/solver/decide_solve.cpp</code></a>: <code>SolveDecide</code>,
+        <code>PrintDecideTimeoutReport</code>, the continuation prompt</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/direct_row_checks.cpp"><code>src/optimizer/decide/direct/direct_row_checks.cpp</code></a>: the value checks of a query-rewriting plan
+        (<code>DirectAddRowChecks</code>)</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/include/duckdb/decidb/formulation/solver_input.hpp"><code>src/include/duckdb/decidb/formulation/solver_input.hpp</code></a>: <code>KeyedMapping</code>,
         <code>CoefficientColumn</code>, <code>EvaluatedConstraint</code></li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/include/duckdb/planner/decide/decide_prepared_model.hpp"><code>src/include/duckdb/planner/decide/decide_prepared_model.hpp</code></a>: the terms execution receives</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_keyed_scope.py"><code>test/decide/tests/test_keyed_scope.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_scope_check_plan.py"><code>test_scope_check_plan.py</code></a>,
-        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_scope_determination.py"><code>test_scope_determination.py</code></a></li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_query_diagnostics_slow.py"><code>test/decide/tests/test_query_diagnostics_slow.py</code></a>: the report, the prompt through a
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/include/duckdb/planner/decide/decide_tree_terms.hpp"><code>src/include/duckdb/planner/decide/decide_tree_terms.hpp</code></a>: the terms execution receives</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/test_keyed_scope.py"><code>test/decide/tests/test_keyed_scope.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/test_scope_variants.py"><code>test_scope_variants.py</code></a>,
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/test_scope_objective.py"><code>test_scope_objective.py</code></a>, <a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/test_one_pass_tree.py"><code>test_one_pass_tree.py</code></a></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/test_query_diagnostics_slow.py"><code>test/decide/tests/test_query_diagnostics_slow.py</code></a>: the report, the prompt through a
         pseudo-terminal, and Ctrl-C on both backends</li>
     </ul></div>
   </section>
 
-<nav class="pager" aria-label="Documentation"><a class="pager__prev" href="canonical-form.html"><small>Previous</small>Canonicalizer and optimizer</a><a class="pager__next" href="rewriting.html"><small>Next</small>Query rewriting</a></nav></article>
+<nav class="pager" aria-label="How it works pages"><a class="pager__prev" href="canonical-form.html"><small>Previous</small>Canonicalizer and optimizer</a><a class="pager__next" href="rewriting.html"><small>Next</small>Query rewriting</a></nav></article>
 
 </div></div>
 </main>
@@ -868,7 +892,7 @@ DECIDE hit the &lt;limit&gt; time limit without finding a solution yet.
           <a class="nav__logo" href="../index.html"><img src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
           <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
-        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Get started</a></li><li><a href="../demo.html">Live demo</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../docs/index.html">Documentation</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Install</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li><li><a href="../demo.html">Live demo</a></li><li><a href="../docs/index.html">How it works</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="../examples/knapsack.html">Knapsack</a></li><li><a href="../examples/facility-location.html">Depots</a></li><li><a href="../examples/fair-allocation.html">Fair allocation</a></li><li><a href="../examples/diagnose.html">DIAGNOSE</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Project</h3><ul><li><a href="../about.html">About</a></li><li><a href="../about.html#research">Papers</a></li><li><a href="https://github.com/huda-lab/decidb">GitHub</a></li><li><a href="https://huda-lab.github.io/">HUDA Lab</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Contact</h3><ul><li><a href="mailto:support@decidb.com">Email the team</a></li><li><a href="https://github.com/huda-lab/decidb/issues">Report an issue</a></li></ul></div>

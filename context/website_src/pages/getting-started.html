@@ -7,11 +7,7 @@
       <ul>
         <li><a href="#install">Install</a></li>
         <li><a href="#first-query">Your first query</a></li>
-        <li><a href="#anatomy">Anatomy of a DECIDE query</a></li>
-        <li><a href="#decisions">Decisions</a></li>
-        <li><a href="#groups">Rules about groups</a></li>
         <li><a href="#python">From Python</a></li>
-        <li><a href="#solvers">Solvers</a></li>
         <li><a href="#next">Next steps</a></li>
       </ul>
     </nav>
@@ -38,16 +34,22 @@ chmod +x decidb
         <div class="note"><strong>Unsigned binaries</strong>
           <p>On macOS, right-click the binary, choose Open and confirm. On Windows, choose "More info" and then "Run
             anyway" in SmartScreen.</p></div>
-        <div class="note"><strong>Release 0.2 and this site</strong>
-          <p>The current release, 0.2, uses the earlier spellings, such as <code>PER</code> after a constraint. The
-            queries on this site use the new ones; the guide's <a href="guide.html#migrating">migration
-            table</a> lists each change.</p></div>
+        <div class="note"><strong>Coming from 0.2</strong>
+          <p>Release 1.0 uses the spellings on this site. A query written for 0.2, such as one with <code>PER</code>
+            after a constraint, is a syntax error in 1.0; the guide's <a href="guide.html#migrating">migration
+            table</a> gives the new spelling of each.</p></div>
         <h3 id="install-python">Python</h3>
-        <p>Wheels are published for Python 3.11, 3.12 and 3.13 on macOS (Apple Silicon), Linux (x86-64) and Windows
+        <p>Wheels are published for Python 3.11 to 3.15 on macOS (Apple Silicon), Linux (x86-64) and Windows
           (x86-64).</p>
 <!--bash-->pip install decidb<!--/bash-->
 <!--python-->import decidb
-decidb.connect().sql("SELECT 42").fetchall()<!--/python-->
+con = decidb.connect()
+con.sql("SELECT 42").fetchall()<!--/python-->
+        <h3 id="install-gurobi">Gurobi (optional)</h3>
+        <p>Every build solves with HiGHS, which is bundled. DeciDB also uses Gurobi 9.5 to 13 when it finds one, with
+          its license: Gurobi is faster on large models and takes a few that HiGHS cannot (see the guide's
+          <a href="guide.html#solvers">solvers</a>). DeciDB finds Gurobi through <code>GUROBI_HOME</code>, the library
+          path, or Gurobi's default install folder.</p>
         <h3 id="install-source">Build from source</h3>
         <p>You need a C++17 compiler, CMake 3.15+, Python 3 and Git; Ninja is used when present.</p>
 <!--bash-->git clone {{GITHUB}}.git
@@ -78,83 +80,7 @@ MAXIMIZE SUM(x * value);<!--/sql-->
         <p>The query returns every row, with the decision <code>x</code> filled in: 1 for the laptop, camera and
           lens, 0 for the rest. Together they weigh 42 kg and are worth 235, and no other choice under 50 kg is worth
           more.</p>
-      </section>
-
-      <section id="anatomy">
-        <h2>Anatomy of a DECIDE query</h2>
-        <p>A DECIDE query is a <code>SELECT</code> with three more clauses. In the query above:</p>
-        <dl class="reads">
-          <dt><code>DECIDE x(BOOL)</code></dt>
-          <dd>declares the decisions: here one yes-or-no value <code>x</code> per row. Every decision has a name and a
-            type in parentheses.</dd>
-          <dt><code>SUCH THAT SUM(x * weight) &lt;= 50</code></dt>
-          <dd>states the constraints, joined by <code>AND</code>. A constraint with a sum holds over many rows; one
-            without, such as <code>x &lt;= cap</code>, holds on every row.</dd>
-          <dt><code>MAXIMIZE SUM(x * value)</code></dt>
-          <dd>states the objective. Write <code>MINIMIZE</code> for a cost, or leave it out to ask for any answer that
-            satisfies the constraints.</dd>
-          <dt><code>SELECT</code>, <code>FROM</code>, <code>WHERE</code></dt>
-          <dd>are ordinary SQL. <code>FROM</code> and <code>WHERE</code> run first and pick the rows that get decisions;
-            <code>SELECT</code> and <code>ORDER BY</code> run after the solve and read the decisions like columns.</dd>
-        </dl>
-        <p>The declaration can also sit between <code>SELECT</code> and <code>FROM</code>, the order the DeciDB paper
-          uses. Both orders mean the same:</p>
-<!--sql check="items"-->SELECT item, x
-DECIDE x(BOOL)
-FROM Items
-SUCH THAT SUM(x * weight) <= 50
-MAXIMIZE SUM(x * value);<!--/sql-->
-      </section>
-
-      <section id="decisions">
-        <h2>Decisions</h2>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Type</th><th>Values</th><th>Returned as</th><th>Use it for</th></tr></thead>
-          <tbody>
-            <tr><td><code>BOOL</code></td><td>0 or 1</td><td><code>INTEGER</code></td><td>pick or skip, open or closed</td></tr>
-            <tr><td><code>INT</code></td><td>0, 1, 2, … by default</td><td><code>BIGINT</code></td><td>whole quantities</td></tr>
-            <tr><td><code>REAL</code></td><td>0 or more by default</td><td><code>DOUBLE</code></td><td>amounts, shares, positions</td></tr>
-          </tbody>
-        </table></div>
-        <p>Zero is a default lower bound, not a floor: a constraint such as <code>x &gt;= -10</code> or
-          <code>x BETWEEN -5 AND 5</code> lets an <code>INT</code> or <code>REAL</code> decision go negative.</p>
-        <p>A decision can also be shared. <code>per K:</code> in front of a declaration makes one decision per distinct
-          value of <code>K</code>, and <code>per ():</code> makes exactly one for the whole query. Over shipments joined
-          to the depots they leave from:</p>
-<!--sql check="deck"-->SELECT S.shipmentID, D.depotID, ship, open, biggest
-FROM Shipment S JOIN Depot D USING (depotID)
-DECIDE ship(INT), per D: open(BOOL), per (): biggest(INT)
-SUCH THAT ship <= S.demand * open
-      AND ship <= biggest
-      AND SUM(ship) >= 150
-MINIMIZE SUM(S.unit_cost * ship) + SUM(D: D.opening_cost * open) + 10 * biggest;<!--/sql-->
-        <p><code>ship</code> is one decision per shipment row, <code>open</code> one per depot, shared by that depot's
-          shipments, and <code>biggest</code> one for the whole query: the largest single shipment, which the objective
-          keeps small. <a href="guide.html#decide">More on decisions</a>.</p>
-      </section>
-
-      <section id="groups">
-        <h2>Rules about groups</h2>
-        <p>Constraints often apply group by group. Three keywords, written in front of a constraint or after a reducer,
-          say which rows a rule covers:</p>
-        <div class="table-wrap"><table>
-          <thead><tr><th>Write</th><th>Meaning</th></tr></thead>
-          <tbody>
-            <tr><td><code>when category = 'A': SUM(x) &gt;= 2</code></td><td>Look only at the rows where the condition holds.</td></tr>
-            <tr><td><code>per sector: SUM(x) by (sector) &lt;= 2</code></td><td>One constraint per sector; each sum reads its own sector's rows.</td></tr>
-            <tr><td><code>SUM(when morning: x * hours) &lt;= 20</code></td><td>A condition on one sum only.</td></tr>
-            <tr><td><code>x &lt;= 0.25 * SUM(x) by (region)</code></td><td>Each row at most a quarter of its region's total.</td></tr>
-          </tbody>
-        </table></div>
-        <p>Try one on the bag: at most one tech item.</p>
-<!--sql title="At most one tech item" run="items" dec="x" on="x"-->SELECT item, category, value, weight, x
-FROM Items
-DECIDE x(BOOL)
-SUCH THAT SUM(x * weight) <= 50
-      AND when category = 'tech': SUM(x) <= 1
-MAXIMIZE SUM(x * value);<!--/sql-->
-        <p>The <a href="guide.html#per">guide</a> covers group rules step by step, and the
-          <a href="examples.html">examples</a> show each pattern on a full problem.</p>
+        <p>The <a href="guide.html">guide</a> takes this query apart clause by clause and builds on it.</p>
       </section>
 
       <section id="python">
@@ -173,22 +99,12 @@ answer = con.sql("""
 """).df()<!--/python-->
       </section>
 
-      <section id="solvers">
-        <h2>Solvers</h2>
-        <p>DeciDB carries the bundled HiGHS solver and needs nothing else for linear, integer and convex quadratic
-          models. When the Gurobi library and a license are present, DeciDB uses Gurobi: it is faster on these workloads
-          and also takes non-convex and mixed-integer quadratic models and quadratic constraints. A model that only
-          Gurobi can solve is refused, with a message, when Gurobi is not available. Some problems need neither:
-          <a href="features.html#rewriting">query rewriting</a> answers them with sorting, ranking and aggregation instead. The
-          <a href="guide.html#solvers">guide</a> lists which solver takes which kind of query.</p>
-      </section>
-
       <section id="next">
         <h2>Next steps</h2>
         <div class="refs refs--3">
           <a class="ref" href="guide.html"><h3>Guide</h3><p>Each clause in the order you write it: DECIDE, SUCH THAT, then the objective.</p></a>
-          <a class="ref" href="features.html"><h3>Novel features</h3><p>Query rewriting, and DIAGNOSE for a query with no answer.</p></a>
           <a class="ref" href="examples.html"><h3>Examples</h3><p>Twenty complete problems with data, query and answer.</p></a>
+          <a class="ref" href="demo.html"><h3>Live demo</h3><p>Edit and run DECIDE queries in the browser, with nothing to install.</p></a>
         </div>
       </section>
     </article>

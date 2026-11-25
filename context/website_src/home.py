@@ -158,7 +158,7 @@ PROBLEMS = [
         "facility-location",
         "Depot decisions",
         "Which depots open, and what ships.",
-        "DECIDE per D: open(BOOL), ...\nSUCH THAT per D: SUM(ship)\n  by (D) <= D.capacity * open\nMINIMIZE ... +\n  SUM(D: D.opening_cost * open)",
+        "DECIDE per D: open(BOOL), ...\nSUCH THAT per D: SUM(ship)\n  by (D) <= D.capacity * open\nMINIMIZE ... +\n  SUM(per D: D.opening_cost * open)",
         ["depotID", "open"],
     ),
 ]
@@ -336,7 +336,7 @@ def solvers(b):
     <div class="wrap grid grid--top">
       <div class="span-5 split-col">
         <h2 id="solvers-h">Built on DuckDB, solved by Gurobi or HiGHS</h2>
-        <p class="t-lead">DeciDB reads tables, Parquet and CSV files where they are. HiGHS ships in every build; Gurobi is used when its license is present.</p>
+        <p class="t-lead">DeciDB reads tables, Parquet and CSV files where they are. HiGHS ships in every build; Gurobi is used when it is installed with its license.</p>
         <ul class="facts">
           <li>The data never leaves the database: the model is built from the query's own rows</li>
           <li>Python: <code>pip install decidb</code>, then <code>decidb.connect()</code></li>

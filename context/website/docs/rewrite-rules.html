@@ -5,10 +5,10 @@
 <script>(function(){var r=document.documentElement,t;try{t=localStorage.getItem('decidb-theme')}catch(e){}if(!r.dataset.theme)r.dataset.theme=t==='dark'?'dark':'light'})()</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <script>document.documentElement.classList.add('m-enter');setTimeout(()=>document.documentElement.classList.add('m-enter-done'),700)</script>
-<title>The rewrite rules: DeciDB documentation</title>
+<title>The rewrite rules: how DeciDB works</title>
 <meta name="description" content="The nine problem classes DeciDB answers by query rewriting: the shape each needs, its algorithm, why the answer is exact, and what it costs.">
 <meta property="og:type" content="website">
-<meta property="og:title" content="The rewrite rules: DeciDB documentation">
+<meta property="og:title" content="The rewrite rules: how DeciDB works">
 <meta property="og:description" content="The nine problem classes DeciDB answers by query rewriting: the shape each needs, its algorithm, why the answer is exact, and what it costs.">
 <meta property="og:image" content="../assets/images/share.jpg">
 <meta name="twitter:card" content="summary_large_image">
@@ -57,7 +57,7 @@
     <a class="skip-link" href="#top">Skip to content</a>
     <a class="nav__logo" href="../index.html"><img class="logo logo--light" src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42"><img class="logo logo--dark" src="../assets/images/logo-dark.svg" alt="DeciDB" width="140" height="42" loading="lazy"><img class="logo logo--mark" src="../assets/images/mark.svg" alt="DeciDB" width="40" height="32" loading="lazy"></a>
     <nav class="nav__links" aria-label="Main">
-      <div class="nav__item"><a class="nav__link" href="../getting-started.html">Get started</a></div><div class="nav__item"><a class="nav__link" href="../demo.html">Live demo</a></div><div class="nav__item"><a class="nav__link" href="../guide.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="../examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="../examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="../examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="../examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="../examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="../examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="../examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="../examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="../examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="../examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="../features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="../about.html">About</a></div><div class="nav__item"><a class="nav__link" href="../docs/index.html" aria-current="page"><span class="nav__full">Documentation</span><span class="nav__short" aria-hidden="true">Docs</span></a></div><div class="nav__item"><a class="nav__link" href="../features.html"><span class="nav__full">Novel features</span><span class="nav__short" aria-hidden="true">Features</span></a></div>
+      <div class="nav__item"><a class="nav__link" href="../guide.html">Guide</a></div><div class="nav__item"><a class="nav__link" href="../examples.html">Examples <svg class="chev" viewBox="0 0 12 12" aria-hidden="true"><path d="M3 4.5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></a><div class="nav__menu"><div class="wrap grid"><div class="menu-col span-3"><p class="t-label">First problems</p><a href="../examples/knapsack.html">Knapsack<span>Pick items under a weight limit</span></a><a href="../examples/production.html">Production<span>Meet demand at lowest cost</span></a><a href="../examples/diet.html">Diet<span>Cheapest meals that meet targets</span></a></div><div class="menu-col span-3"><p class="t-label">Groups and keys</p><a href="../examples/shift-coverage.html">Shift coverage<span>Staff every shift</span></a><a href="../examples/facility-location.html">Depots<span>Open depots, then ship</span></a><a href="../examples/keyed-decisions.html">Keyed decisions<span>One decision per nurse</span></a></div><div class="menu-col span-3"><p class="t-label">Query rewriting</p><a href="../examples/fair-allocation.html">Fair allocation<span>Max-min shares of a budget</span></a><a href="../examples/matching.html">Matching<span>Drivers to pickups</span></a><a href="../examples/shortlist.html">Shortlist<span>The best two per genre</span></a></div><a class="menu-card span-3" href="../features.html"><div class="panel"><div class="stage stage--fade-br"><div class="at-corner"><div class="sq sq--menu" aria-hidden="true"><span class="sq__k">Direct solve rule:</span><span>R4_MAX_MIN_FAIRNESS</span></div></div></div></div><span class="t-card">Novel features</span><span class="t-small muted">Query rewriting and DIAGNOSE</span></a></div></div></div><div class="nav__item"><a class="nav__link" href="../demo.html">Live demo</a></div><div class="nav__item"><a class="nav__link" href="../docs/index.html" aria-current="page">How it works</a></div><div class="nav__item"><a class="nav__link" href="../about.html">About</a></div>
     </nav>
     <div class="nav__actions">
       <button class="btn btn--secondary theme-toggle" type="button" aria-pressed="false" data-theme-toggle hidden><svg class="theme-toggle__sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32l1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg><svg class="theme-toggle__moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg><span class="theme-toggle__label">Dark theme</span></button>
@@ -72,11 +72,11 @@
 <main id="top">
 <section class="hero hero--page" data-enter aria-labelledby="page-h">
   <div class="wrap"><div class="hero-text hero-split grid">
-    <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a><span aria-hidden="true">/</span><a href="../docs/index.html">Documentation</a><span aria-hidden="true">/</span>The rewrite rules</nav><h1 id="page-h">The rewrite rules</h1><p class="hero__lead">The nine classes DeciDB rewrites: the shape each needs, the algorithm that answers it, why the answer is exact, and what it costs.</p></div>
+    <div class="hero-copy span-5"><nav class="crumbs" aria-label="Breadcrumb"><a href="../index.html">Home</a><span aria-hidden="true">/</span><a href="../docs/index.html">How it works</a><span aria-hidden="true">/</span>The rewrite rules</nav><h1 id="page-h">The rewrite rules</h1><p class="hero__lead">The nine classes DeciDB rewrites: the shape each needs, the algorithm that answers it, why the answer is exact, and what it costs.</p></div>
     <div class="hero-visual hero__window span-6 start-7" data-fx="grain-gradient" data-fx-seed="24" data-ui-pause-host><div class="ui ui-hw hw hw--page hw--mid" role="img" aria-label="The nine rewrite rules: S1_UNIFORM_MATROID, S2_LAMINAR_MATROID, S3_MAX_CARDINALITY_KNAPSACK, A1_SEPARABLE_BOX, A2_SINGLE_FACILITY_LOCATION, R1_CONTINUOUS_KNAPSACK, R4_MAX_MIN_FAIRNESS, N1_EUCLIDEAN_BALL, O1_MONGE_ASSIGNMENT."><div class="hw__bar"><span class="hw__dots"><i></i><i></i><i></i></span><span><b>decidb</b> · EXPLAIN · the rule each example fires</span></div><div class="hw__page"><div class="hw__rules" data-ly-steps="200"><div class="hw__rule" data-step><b>S1</b><code>UNIFORM_MATROID</code><span>the best rows by score</span></div><div class="hw__rule" data-step><b>S2</b><code>LAMINAR_MATROID</code><span>the best rows under nested quotas</span></div><div class="hw__rule" data-step><b>S3</b><code>MAX_CARDINALITY_KNAPSACK</code><span>as many rows as fit a budget</span></div><div class="hw__rule" data-step><b>A1</b><code>SEPARABLE_BOX</code><span>each row on its own</span></div><div class="hw__rule" data-step><b>A2</b><code>SINGLE_FACILITY_LOCATION</code><span>one value closest to every row</span></div><div class="hw__rule" data-step><b>R1</b><code>CONTINUOUS_KNAPSACK</code><span>fill a budget by value per unit</span></div><div class="hw__rule" data-step><b>R4</b><code>MAX_MIN_FAIRNESS</code><span>a fair split of a budget</span></div><div class="hw__rule" data-step><b>N1</b><code>EUCLIDEAN_BALL</code><span>stay inside one sum of squares</span></div><div class="hw__rule" data-step><b>O1</b><code>MONGE_ASSIGNMENT</code><span>match two tables one to one</span></div></div></div></div></div>
   </div></div>
 </section>
-<div class="container"><div class="doc-layout doc-layout--docs"><nav class="docnav" aria-label="Documentation pages"><div class="toc-title">Documentation</div><p class="docnav__group">Start here</p><ul><li><a href="index.html">Overview</a></li><li><a href="life-of-a-query.html">Life of a query</a></li></ul><p class="docnav__group">The pipeline</p><ul><li><a href="front-end.html">Parser, binder and plan</a></li><li><a href="canonical-form.html">Canonicalizer and optimizer</a></li><li><a href="solving.html">Model, solvers and execution</a></li></ul><p class="docnav__group">Novel features</p><ul><li><a href="rewriting.html">Query rewriting</a></li><li><a href="rewrite-rules.html" aria-current="page">The rewrite rules</a></li><li><a href="diagnose.html">DIAGNOSE</a></li></ul><p class="docnav__group">Quality</p><ul><li><a href="testing.html">Testing</a></li><li><a href="performance.html">Performance</a></li></ul></nav>
+<div class="container"><div class="doc-layout doc-layout--docs"><nav class="docnav" aria-label="How it works pages"><div class="toc-title">How it works</div><p class="docnav__group">Start here</p><ul><li><a href="index.html">Overview</a></li><li><a href="life-of-a-query.html">Life of a query</a></li></ul><p class="docnav__group">The pipeline</p><ul><li><a href="front-end.html">Parser, binder and plan</a></li><li><a href="canonical-form.html">Canonicalizer and optimizer</a></li><li><a href="solving.html">Model, solvers and execution</a></li></ul><p class="docnav__group">Novel features</p><ul><li><a href="rewriting.html">Query rewriting</a></li><li><a href="rewrite-rules.html" aria-current="page">The rewrite rules</a></li><li><a href="diagnose.html">DIAGNOSE</a></li></ul><p class="docnav__group">Quality</p><ul><li><a href="testing.html">Testing</a></li><li><a href="performance.html">Performance</a></li></ul></nav>
 <nav class="toc" aria-label="On this page">
   <div class="toc-title">On this page</div>
   <ul>
@@ -126,23 +126,23 @@
       </tbody>
     </table></div>
     <div class="note"><strong>How the timings are measured</strong>
-      <p>Every timing on this page comes from <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/benchmark/decide/direct_solve/run.py"><code>benchmark/decide/direct_solve/run.py</code></a> on an 11-core Apple M3
+      <p>Every timing on this page comes from <a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/benchmark/decide/direct_solve/run.py"><code>benchmark/decide/direct_solve/run.py</code></a> on an 11-core Apple M3
         Pro, over TPC-H tables (most over the 800,000 rows of <code>partsupp</code> at scale factor 1), in November
-        2026. <em>Against Gurobi</em> runs a fresh <code>decidb</code> process per run and takes the median
+        2026, on the engine as it stood before release 1.0. <em>Against Gurobi</em> runs a fresh <code>decidb</code> process per run and takes the median
         of 3; the times include about 20 ms of process start and database open, and the two objectives agreed within
         1e-6. <em>Against a hand-written plan</em> sums the CPU time of every operator, best of 5 in one process, beside
         a SQL query an expert wrote for the same answer with the same checks; a ratio of 1.0 means the rule's plan costs
         what that SQL costs. <a href="performance.html#benchmarks">Performance</a> describes the harness.</p></div>
     <div class="src"><strong>In the source</strong><ul>
       <li><code>src/optimizer/decide/direct/&lt;id&gt;_&lt;slug&gt;_rule.cpp</code>: one file per rule, such as
-        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp"><code>s1_uniform_matroid_rule.cpp</code></a></li>
+        <a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp"><code>s1_uniform_matroid_rule.cpp</code></a></li>
       <li><code>test/decide/tests/test_direct_&lt;id&gt;_&lt;slug&gt;.py</code>: each rule's differential test against
         an independent oracle</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/_direct_rule_fixtures.py"><code>test/decide/tests/_direct_rule_fixtures.py</code></a>: each rule's fixture for the shared conformance
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/_direct_rule_fixtures.py"><code>test/decide/tests/_direct_rule_fixtures.py</code></a>: each rule's fixture for the shared conformance
         suite</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/common/test_decidb_direct_decline.cpp"><code>test/common/test_decidb_direct_decline.cpp</code></a>: each rule's applying and declining shapes
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/common/test_decidb_direct_decline.cpp"><code>test/common/test_decidb_direct_decline.cpp</code></a>: each rule's applying and declining shapes
         (<code>S1AppliesShapes</code>, <code>S1DeclineShapes</code>, and so on)</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/benchmark/decide/direct_solve/queries"><code>benchmark/decide/direct_solve/queries/</code></a> and <a class="src-link" href="https://github.com/huda-lab/decidb/tree/direct-solve-prototype/benchmark/decide/direct_solve/hand"><code>hand/</code></a>: the benchmark queries and their
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/benchmark/decide/direct_solve/queries"><code>benchmark/decide/direct_solve/queries/</code></a> and <a class="src-link" href="https://github.com/huda-lab/decidb/tree/master/benchmark/decide/direct_solve/hand"><code>hand/</code></a>: the benchmark queries and their
         hand-written comparators</li>
     </ul></div>
   </section>
@@ -198,11 +198,11 @@
       <em>p</em> = 0 and the lower limit sets <em>k</em> = 1: its best film, Second Helping at exactly 8, is chosen at
       no cost to the objective.</p>
     <div class="src"><strong>In the source</strong><ul>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp"><code>src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp</code></a>: the rule</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_ranked_prefix.cpp"><code>src/optimizer/decide/direct/direct_ranked_prefix.cpp</code></a>: the ranked-prefix plan it builds on</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_bound_reader.cpp"><code>src/optimizer/decide/direct/direct_bound_reader.cpp</code></a>: <code>DirectReadCountBody</code>,
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp"><code>src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp</code></a>: the rule</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/direct_ranked_prefix.cpp"><code>src/optimizer/decide/direct/direct_ranked_prefix.cpp</code></a>: the ranked-prefix plan it builds on</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/direct_bound_reader.cpp"><code>src/optimizer/decide/direct/direct_bound_reader.cpp</code></a>: <code>DirectReadCountBody</code>,
         <code>DirectReadFixedValues</code>, the count-limit readers</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_s1_uniform_matroid.py"><code>test/decide/tests/test_direct_s1_uniform_matroid.py</code></a>: the differential test</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/test_direct_s1_uniform_matroid.py"><code>test/decide/tests/test_direct_s1_uniform_matroid.py</code></a>: the differential test</li>
     </ul></div>
   </section>
 
@@ -225,7 +225,7 @@
     </ul>
     <p>The nesting is proved from the query's text; the data is never consulted. <code><span class="tk-d">by</span> (department)</code> beside
       <code><span class="tk-d">by</span> (division)</code> declines even when every department lies in one division, because the rule is chosen
-      once, when the plan is built, and the IR holds no functional dependencies.</p>
+      once, when the plan is built, and the rule reads no functional dependencies.</p>
     <p><strong>The algorithm.</strong></p>
     <ol class="steps">
       <li><strong>Finest level.</strong> Rank each group's rows by score and keep those ranked within the group's
@@ -257,11 +257,11 @@
     <p>The team level drops Bo, Fa and Io, the second candidates of their teams. The division level keeps Ada and Jo
       in Product, above Cy. The company level keeps the four best survivors, Ed, Ada, Jo and Hu, and drops Gu.</p>
     <div class="src"><strong>In the source</strong><ul>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/s2_laminar_matroid_rule.cpp"><code>src/optimizer/decide/direct/s2_laminar_matroid_rule.cpp</code></a>: the rule; <code>Contains</code>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/s2_laminar_matroid_rule.cpp"><code>src/optimizer/decide/direct/s2_laminar_matroid_rule.cpp</code></a>: the rule; <code>Contains</code>
         proves that one scope nests in another</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_ranked_prefix.cpp"><code>src/optimizer/decide/direct/direct_ranked_prefix.cpp</code></a>: one level of the builder per quota
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/direct_ranked_prefix.cpp"><code>src/optimizer/decide/direct/direct_ranked_prefix.cpp</code></a>: one level of the builder per quota
         scope</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_s2_laminar_matroid.py"><code>test/decide/tests/test_direct_s2_laminar_matroid.py</code></a>: the differential test, including the
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/test_direct_s2_laminar_matroid.py"><code>test/decide/tests/test_direct_s2_laminar_matroid.py</code></a>: the differential test, including the
         counter-example above</li>
     </ul></div>
   </section>
@@ -313,9 +313,9 @@
     <p>The running totals of the sorted points are 1, 3, 6, 9, 14 and 19. The next ticket brings the total to 27, so
       the six smallest tickets are the answer.</p>
     <div class="src"><strong>In the source</strong><ul>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/s3_max_cardinality_knapsack_rule.cpp"><code>src/optimizer/decide/direct/s3_max_cardinality_knapsack_rule.cpp</code></a>: the rule</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_plan_fragments.cpp"><code>src/optimizer/decide/direct/direct_plan_fragments.cpp</code></a>: <code>DirectRunningSum</code></li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_s3_max_cardinality_knapsack.py"><code>test/decide/tests/test_direct_s3_max_cardinality_knapsack.py</code></a>: the differential test, with
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/s3_max_cardinality_knapsack_rule.cpp"><code>src/optimizer/decide/direct/s3_max_cardinality_knapsack_rule.cpp</code></a>: the rule</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/direct_plan_fragments.cpp"><code>src/optimizer/decide/direct/direct_plan_fragments.cpp</code></a>: <code>DirectRunningSum</code></li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/test_direct_s3_max_cardinality_knapsack.py"><code>test/decide/tests/test_direct_s3_max_cardinality_knapsack.py</code></a>: the differential test, with
         ties under a parallel sort</li>
     </ul></div>
   </section>
@@ -367,12 +367,12 @@
     <p>A-100 peaks at 16 and C-300 at 10, both inside their ranges. B-200 and D-400 have negative margins, so their
       peaks lie below their ranges and each takes its lower end.</p>
     <div class="src"><strong>In the source</strong><ul>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/a1_separable_box_rule.cpp"><code>src/optimizer/decide/direct/a1_separable_box_rule.cpp</code></a>: the rule</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_bound_reader.cpp"><code>src/optimizer/decide/direct/direct_bound_reader.cpp</code></a>: <code>DirectRowBox</code>,
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/a1_separable_box_rule.cpp"><code>src/optimizer/decide/direct/a1_separable_box_rule.cpp</code></a>: the rule</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/direct_bound_reader.cpp"><code>src/optimizer/decide/direct/direct_bound_reader.cpp</code></a>: <code>DirectRowBox</code>,
         <code>DirectStaticFloor</code>, the per-row bounds</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_plan_fragments.cpp"><code>src/optimizer/decide/direct/direct_plan_fragments.cpp</code></a>: <code>DirectTurningPoint</code>,
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/direct_plan_fragments.cpp"><code>src/optimizer/decide/direct/direct_plan_fragments.cpp</code></a>: <code>DirectTurningPoint</code>,
         <code>DirectMinimizeOnInterval</code></li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_a1_separable_box.py"><code>test/decide/tests/test_direct_a1_separable_box.py</code></a>: the differential test, with exact
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/test_direct_a1_separable_box.py"><code>test/decide/tests/test_direct_a1_separable_box.py</code></a>: the differential test, with exact
         <code>Fraction</code> arithmetic on random rows</li>
     </ul></div>
   </section>
@@ -428,11 +428,11 @@
       I-95. The store at mile 40 pulls the I-95 depot to 16. With the absolute distance of the
       <a href="../examples/depot-placement.html">depot example</a>, the depot moves to the median, mile 6.</p>
     <div class="src"><strong>In the source</strong><ul>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/a2_single_facility_location_rule.cpp"><code>src/optimizer/decide/direct/a2_single_facility_location_rule.cpp</code></a>: the rule, its
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/a2_single_facility_location_rule.cpp"><code>src/optimizer/decide/direct/a2_single_facility_location_rule.cpp</code></a>: the rule, its
         <code>PlanBuilder</code> and the three losses</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_plan_fragments.cpp"><code>src/optimizer/decide/direct/direct_plan_fragments.cpp</code></a>: <code>DirectJoinClassAnswers</code>,
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/direct_plan_fragments.cpp"><code>src/optimizer/decide/direct/direct_plan_fragments.cpp</code></a>: <code>DirectJoinClassAnswers</code>,
         <code>DirectClassKey</code></li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_a2_single_facility_location.py"><code>test/decide/tests/test_direct_a2_single_facility_location.py</code></a>: the differential test, one case
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/test_direct_a2_single_facility_location.py"><code>test/decide/tests/test_direct_a2_single_facility_location.py</code></a>: the differential test, one case
         per branch of the plan</li>
     </ul></div>
   </section>
@@ -477,8 +477,8 @@
     <p><strong>Cost.</strong> One sort of the narrow items, several hash aggregates and joins. With one budget over
       800,000 rows (measured 2026-11-09), the plan takes 0.96 times the CPU of a hand-written plan. With a budget per
       part it takes 1.93 times, because each group's checks must raise before any row is released, even under
-      <code><span class="tk-k">LIMIT</span></code>, so the plan aggregates every row of each group and joins the verdict back. Against Gurobi it
-      at 800,000 rows: 0.092 s against 1.132 s with one budget, and 0.120 s against 1.386 s with a budget per
+      <code><span class="tk-k">LIMIT</span></code>, so the plan aggregates every row of each group and joins the verdict back. Against Gurobi at
+      800,000 rows: 0.092 s against 1.132 s with one budget, and 0.120 s against 1.386 s with a budget per
       part, 11.5 to 12.3 times faster.</p>
 <div class="qr"><div class="code" data-lang="sql"><div class="code__head"><span class="code__title">Fill a 1,000 kg truck by value per kg</span><span class="code__ok">Runs as shown</span><button class="code__copy" type="button" hidden>Copy</button></div><pre><code><span class="tk-k">SELECT</span> good, value_per_kg, available_kg, <span class="tk-f">ROUND</span>(<span class="tk-v">kg</span>, <span class="tk-n">1</span>) <span class="tk-k">AS</span> <span class="tk-v">kg</span>
 <span class="tk-k">FROM</span> Cargo
@@ -488,11 +488,11 @@
     <p>Saffron, coffee and tea come first by value per kg and are taken whole, 502 kg. Rice is the item at the price:
       it fills the remaining 498 kg. Sugar, below the price, stays at 0.</p>
     <div class="src"><strong>In the source</strong><ul>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/r1_continuous_knapsack_rule.cpp"><code>src/optimizer/decide/direct/r1_continuous_knapsack_rule.cpp</code></a>: the rule and its five
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/r1_continuous_knapsack_rule.cpp"><code>src/optimizer/decide/direct/r1_continuous_knapsack_rule.cpp</code></a>: the rule and its five
         stages</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_bound_reader.cpp"><code>src/optimizer/decide/direct/direct_bound_reader.cpp</code></a>: <code>DirectReadLimit</code>, the budget's
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/direct_bound_reader.cpp"><code>src/optimizer/decide/direct/direct_bound_reader.cpp</code></a>: <code>DirectReadLimit</code>, the budget's
         limits</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_r1_continuous_knapsack.py"><code>test/decide/tests/test_direct_r1_continuous_knapsack.py</code></a>: the differential test</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/test_direct_r1_continuous_knapsack.py"><code>test/decide/tests/test_direct_r1_continuous_knapsack.py</code></a>: the differential test</li>
     </ul></div>
   </section>
 
@@ -534,9 +534,9 @@
     <p>The needs add up to 110, so the budget alone would allow a level of 100 / 110 = 0.909. Shelter's cap allows only
       25 / 30 = 0.833, which is smaller, so every program gets 83.3% of its need and 8.33 units stay unspent.</p>
     <div class="src"><strong>In the source</strong><ul>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/r4_max_min_fairness_rule.cpp"><code>src/optimizer/decide/direct/r4_max_min_fairness_rule.cpp</code></a>: the rule; the comment above
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/r4_max_min_fairness_rule.cpp"><code>src/optimizer/decide/direct/r4_max_min_fairness_rule.cpp</code></a>: the rule; the comment above
         <code>PlanBuilder</code> lays out its stages</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_r4_max_min_fairness.py"><code>test/decide/tests/test_direct_r4_max_min_fairness.py</code></a>: the differential test</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/test_direct_r4_max_min_fairness.py"><code>test/decide/tests/test_direct_r4_max_min_fairness.py</code></a>: the differential test</li>
     </ul></div>
   </section>
 
@@ -579,10 +579,10 @@
 <span class="tk-d">MINIMIZE</span> <span class="tk-f">SUM</span>(<span class="tk-f">POWER</span>(<span class="tk-v">x</span> - score, <span class="tk-n">2</span>));</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>3 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">name</th><th scope="col" class="num">score</th><th scope="col" class="num dec">x</th></tr></thead><tbody><tr><td>alpha</td><td class="num">3.0</td><td class="num dec">1.2</td></tr><tr><td>beta</td><td class="num">4.0</td><td class="num dec">1.6</td></tr><tr><td>gamma</td><td class="num">0.0</td><td class="num dec">0.0</td></tr></tbody></table></div></div></div>
     <p>The target (3, 4, 0) has length 5, outside the ball of radius 2, so it is scaled by 2 / 5 to (1.2, 1.6, 0).</p>
     <div class="src"><strong>In the source</strong><ul>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/n1_euclidean_ball_rule.cpp"><code>src/optimizer/decide/direct/n1_euclidean_ball_rule.cpp</code></a>: the rule</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_plan_fragments.cpp"><code>src/optimizer/decide/direct/direct_plan_fragments.cpp</code></a>: <code>DirectProveSharedScope</code>, the
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/n1_euclidean_ball_rule.cpp"><code>src/optimizer/decide/direct/n1_euclidean_ball_rule.cpp</code></a>: the rule</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/direct_plan_fragments.cpp"><code>src/optimizer/decide/direct/direct_plan_fragments.cpp</code></a>: <code>DirectProveSharedScope</code>, the
         ball's scope</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_n1_euclidean_ball.py"><code>test/decide/tests/test_direct_n1_euclidean_ball.py</code></a>: the differential test</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/test_direct_n1_euclidean_ball.py"><code>test/decide/tests/test_direct_n1_euclidean_ball.py</code></a>: the differential test</li>
     </ul></div>
   </section>
 
@@ -636,11 +636,12 @@
 <span class="tk-k">ORDER</span> <span class="tk-k">BY</span> driver;</code></pre></div><div class="output"><div class="output__head"><span>Result</span><span>4 rows</span></div><div class="output__scroll"><table><thead><tr><th scope="col" class="">driver</th><th scope="col" class="">pickup</th><th scope="col" class="num">driver_km</th><th scope="col" class="num">pickup_km</th></tr></thead><tbody><tr><td>Ana</td><td>P1</td><td class="num">1.0</td><td class="num">2.0</td></tr><tr><td>Ben</td><td>P2</td><td class="num">4.5</td><td class="num">3.0</td></tr><tr><td>Cai</td><td>P3</td><td class="num">7.0</td><td class="num">9.5</td></tr><tr><td>Dee</td><td>P4</td><td class="num">12.0</td><td class="num">11.0</td></tr></tbody></table></div></div></div>
     <p>Both sides sorted by kilometer and paired by rank: 1 + 1.5 + 2.5 + 1 = 6 km in total.</p>
     <div class="src"><strong>In the source</strong><ul>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/o1_monge_assignment_rule.cpp"><code>src/optimizer/decide/direct/o1_monge_assignment_rule.cpp</code></a>: the rule; <code>CheckPairs</code>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/o1_monge_assignment_rule.cpp"><code>src/optimizer/decide/direct/o1_monge_assignment_rule.cpp</code></a>: the rule; <code>CheckPairs</code>
         is the verdict over the pairs</li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/src/optimizer/decide/direct/direct_ir.cpp"><code>src/optimizer/decide/direct/direct_ir.cpp</code></a>: the IR's <code>cross_product</code>,
-        <code>not_null</code> and <code>keys</code></li>
-      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/direct-solve-prototype/test/decide/tests/test_direct_o1_monge_assignment.py"><code>test/decide/tests/test_direct_o1_monge_assignment.py</code></a>: the differential test</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/src/optimizer/decide/direct/direct_source_facts.cpp"><code>src/optimizer/decide/direct/direct_source_facts.cpp</code></a>: <code>DirectSourceFacts</code>, the two
+        sides of the cross product (<code>left</code>, <code>right</code>), the columns declared <code><span class="tk-k">NOT</span> <span class="tk-k">NULL</span></code>
+        (<code>not_null</code>) and the table keys (<code>keys</code>)</li>
+      <li><a class="src-link" href="https://github.com/huda-lab/decidb/blob/master/test/decide/tests/test_direct_o1_monge_assignment.py"><code>test/decide/tests/test_direct_o1_monge_assignment.py</code></a>: the differential test</li>
     </ul></div>
   </section>
 
@@ -672,7 +673,7 @@
         example, recognition, construction and correctness argument</li>
     </ul></div>
   </section>
-<nav class="pager" aria-label="Documentation"><a class="pager__prev" href="rewriting.html"><small>Previous</small>Query rewriting</a><a class="pager__next" href="diagnose.html"><small>Next</small>DIAGNOSE</a></nav></article>
+<nav class="pager" aria-label="How it works pages"><a class="pager__prev" href="rewriting.html"><small>Previous</small>Query rewriting</a><a class="pager__next" href="diagnose.html"><small>Next</small>DIAGNOSE</a></nav></article>
 
 </div></div>
 </main>
@@ -691,7 +692,7 @@
           <a class="nav__logo" href="../index.html"><img src="../assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
           <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
-        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Get started</a></li><li><a href="../demo.html">Live demo</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../docs/index.html">Documentation</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li></ul></div>
+        <div class="span-2 footer__col"><h3>Learn</h3><ul><li><a href="../getting-started.html">Install</a></li><li><a href="../guide.html">Guide</a></li><li><a href="../features.html">Novel features</a></li><li><a href="../examples.html">Examples</a></li><li><a href="../demo.html">Live demo</a></li><li><a href="../docs/index.html">How it works</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Examples</h3><ul><li><a href="../examples/knapsack.html">Knapsack</a></li><li><a href="../examples/facility-location.html">Depots</a></li><li><a href="../examples/fair-allocation.html">Fair allocation</a></li><li><a href="../examples/diagnose.html">DIAGNOSE</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Project</h3><ul><li><a href="../about.html">About</a></li><li><a href="../about.html#research">Papers</a></li><li><a href="https://github.com/huda-lab/decidb">GitHub</a></li><li><a href="https://huda-lab.github.io/">HUDA Lab</a></li></ul></div>
         <div class="span-2 footer__col"><h3>Contact</h3><ul><li><a href="mailto:support@decidb.com">Email the team</a></li><li><a href="https://github.com/huda-lab/decidb/issues">Report an issue</a></li></ul></div>

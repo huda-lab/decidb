@@ -56,7 +56,7 @@ def getting_started(b):
     rows = b.rows_of("getting-started.html hero", ex["setup"], KNAPSACK)
     taken = [r["item"].lower() for r in rows if r["take"]]
     shell = (
-        '<pre class="hw__cmd"><code><span class="hw__prompt">$</span> pip install decidb\n'
+        '<pre class="hw__cmd"><code><span class="hw__prompt">$</span> unzip decidb_cli-osx-universal.zip\n'
         '<span class="hw__prompt">$</span> ./decidb shop.db</code></pre>'
     )
     picture = run_window(
@@ -72,12 +72,12 @@ def getting_started(b):
     return hero(
         b,
         "",
-        ["Get started"],
-        "Get started",
-        "Install DeciDB, run a first optimization query, and learn the parts every DECIDE query has.",
+        ["Install"],
+        "Install DeciDB",
+        "Download the command-line shell or the Python package, then run a first DECIDE query to check it works.",
         picture,
         11,
-        btn("#install", "Install DeciDB", True) + btn("#first-query", "Your first query"),
+        btn("#install", "See the downloads", True) + btn("#first-query", "Run a first query"),
     )
 
 
@@ -542,7 +542,7 @@ DOC_PICTURES = {
 def docs(b, slug, label, meta):
     """A documentation page's opening: the page's words, and its picture: the DECIDE path with the stages it covers
     lit, or the page's own window drawn from what the build runs."""
-    trail = ["Documentation"] if slug == "index.html" else [("docs/index.html", "Documentation"), label]
+    trail = ["How it works"] if slug == "index.html" else [("docs/index.html", "How it works"), label]
     draw = DOC_PICTURES.get(slug)
     picture = (draw(b) if draw else "") or pipeline_window(slug)
     return hero(b, "../", trail, meta.get("h1", label), meta.get("lede", ""), picture, 20 + len(slug) % 7)

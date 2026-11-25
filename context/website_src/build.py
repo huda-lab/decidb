@@ -776,17 +776,17 @@ ARROW = (
     '<svg class="m-arrow" viewBox="0 0 12 12" aria-hidden="true"><path class="m-arrow__stem" d="M1 6h8"/>'
     '<path class="m-arrow__head" d="M4.5 2.5 8 6l-3.5 3.5"/></svg>'
 )
+# five words: using DeciDB (the guide, the examples, the demo), then how it is built, then who makes it. Installing is
+# the bar's button; the Novel features page is reached from the home page, the guide and the Examples menu.
 NAV_WORDS = [
-    ("getting-started.html", "Get started"),
-    ("demo.html", "Live demo"),
     ("guide.html", "Guide"),
     ("examples.html", "Examples"),
+    ("demo.html", "Live demo"),
+    ("docs/index.html", "How it works"),
     ("about.html", "About"),
-    ("docs/index.html", "Documentation"),
-    ("features.html", "Novel features"),
 ]
-# on a small laptop the bar shows these shorter words (the full word stays the link's name)
-NAV_SHORT = {"Documentation": "Docs", "Novel features": "Features"}
+# on a small laptop the bar can show a shorter word (the full word stays the link's name); none is needed at five words
+NAV_SHORT = {}
 
 
 def nav_word(word):
@@ -930,7 +930,7 @@ def footer_links(root):
           <a class="nav__logo" href="{root}index.html"><img src="{root}assets/images/logo.svg" alt="DeciDB" width="140" height="42" loading="lazy" decoding="async"></a>
           <p class="footer__lede">Constrained optimization in SQL.</p>
         </div>
-        {col("Learn", [(f"{root}getting-started.html", "Get started"), (f"{root}demo.html", "Live demo"), (f"{root}guide.html", "Guide"), (f"{root}docs/index.html", "Documentation"), (f"{root}features.html", "Novel features"), (f"{root}examples.html", "Examples")])}
+        {col("Learn", [(f"{root}getting-started.html", "Install"), (f"{root}guide.html", "Guide"), (f"{root}features.html", "Novel features"), (f"{root}examples.html", "Examples"), (f"{root}demo.html", "Live demo"), (f"{root}docs/index.html", "How it works")])}
         {col("Examples", [(f"{root}examples/knapsack.html", "Knapsack"), (f"{root}examples/facility-location.html", "Depots"), (f"{root}examples/fair-allocation.html", "Fair allocation"), (f"{root}examples/diagnose.html", "DIAGNOSE")])}
         {col("Project", [(f"{root}about.html", "About"), (f"{root}about.html#research", "Papers"), (GITHUB, "GitHub"), ("https://huda-lab.github.io/", "HUDA Lab")])}
         {col("Contact", [("mailto:support@decidb.com", "Email the team"), (f"{GITHUB}/issues", "Report an issue")])}
@@ -1111,8 +1111,8 @@ def examples_index():
 PAGES = [
     (
         "getting-started.html",
-        "Install DeciDB: your first DECIDE query",
-        "Install DeciDB and write your first DECIDE query: decisions, constraints, objectives and the scope words per, when and by.",
+        "Install DeciDB",
+        "Install DeciDB as a command-line shell or a Python package, or build it from source, then run a first DECIDE query.",
         "getting-started.html",
     ),
     (
@@ -1196,7 +1196,7 @@ def docs_nav(current):
         )
         groups.append(f'<p class="docnav__group">{esc(group)}</p><ul>{links}</ul>')
     return (
-        '<nav class="docnav" aria-label="Documentation pages"><div class="toc-title">Documentation</div>'
+        '<nav class="docnav" aria-label="How it works pages"><div class="toc-title">How it works</div>'
         + "".join(groups)
         + "</nav>"
     )
@@ -1211,11 +1211,11 @@ def docs_pager(i):
     if i + 1 < len(DOC_PAGES):
         slug, label = DOC_PAGES[i + 1]
         cells.append(f'<a class="pager__next" href="{slug}"><small>Next</small>{esc(label)}</a>')
-    return f'<nav class="pager" aria-label="Documentation">{"".join(cells)}</nav>'
+    return f'<nav class="pager" aria-label="How it works pages">{"".join(cells)}</nav>'
 
 
 # the branch the documentation describes: every file or folder name it writes links to that branch on GitHub
-SOURCE_REF = "direct-solve-prototype"
+SOURCE_REF = "master"
 SOURCE_ROOTS = ("src/", "test/", "third_party/", "benchmark/", "context/", "scripts/", "tools/", "extension/")
 _SOURCE_TREE = []
 
